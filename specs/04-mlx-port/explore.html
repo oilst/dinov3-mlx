@@ -1,0 +1,788 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Step 4 MLX port: Explore</title>
+<style>
+/* Spec page. White page, black text, no dark mode. */
+:root { --bg: #ffffff; --fg: #111414; --muted: #4a5655; --rule: #d6dedd; --panel: #f5f8f7; --accent: #057379; --pass: #1d7a3a; --fail: #b3261e; color-scheme: light; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif; }
+main { max-width: 64rem; margin: 0 auto; padding: 40px 20px 64px; display: grid; gap: 1.75rem; }
+main > *, section > * { min-width: 0; }
+h1 { font-size: 1.9rem; line-height: 1.15; margin: 0; }
+h2 { font-size: 1.3rem; margin: 0; }
+h3 { font-size: 1.05rem; margin: 0; }
+h4 { font-size: 0.95rem; margin: 0; }
+section { display: grid; gap: 0.8rem; }
+p, ul, ol { margin: 0; max-width: 46rem; }
+li + li { margin-top: 0.25rem; }
+code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.86em; }
+p code, li code, td code { overflow-wrap: anywhere; }
+pre { margin: 0; background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 0.8rem 1rem; overflow-x: auto; }
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+th, td { text-align: left; vertical-align: top; padding: 0.45rem 0.7rem 0.45rem 0; border-bottom: 1px solid var(--rule); }
+th { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); border-bottom: 1.5px solid var(--fg); }
+td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+tr.group td { background: var(--panel); font-weight: 600; }
+.caption { font-size: 0.88rem; color: var(--muted); }
+.fail { color: var(--fail); font-weight: 600; }
+.pass { color: var(--pass); font-weight: 600; }
+.rec { color: var(--accent); font-weight: 600; }
+.box { border: 1.5px solid var(--accent); border-radius: 6px; padding: 0.8rem 1rem; display: grid; gap: 0.5rem; }
+figure { margin: 0; display: grid; gap: 0.4rem; }
+.fig { border: 1px solid var(--rule); border-radius: 6px; padding: 0.5rem; overflow-x: auto; }
+.fig svg { display: block; width: 100%; height: auto; min-width: 640px; }
+figcaption { font-size: 0.88rem; color: var(--muted); }
+a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+<header>
+  <h1>Step 4 MLX port: Explore</h1>
+  <p>Roadmap step 4. Status: options and recommendations. The user asked the agent on 2026-11-06 to decide; the recommended options are the choice. Date: 2026-11-06.</p>
+</header>
+
+<section id="goal">
+  <h2>1 Goal and context</h2>
+  <p>Step 4 builds the ViT-S/16 backbone in MLX, one part at a time, with a test for each part. The step ends when ViT-S/16 on the backend <code>mlx</code> passes the parity tests in fp32 (Step 4 in Section 6 of <code>docs/plan.html</code>). This page gives the decisions with real options, the trade-offs and one recommendation for each decision.</p>
+  <p>These points are fixed. They are not options:</p>
+  <ul>
+    <li>Source of the code: we write the MLX backbone from the Hugging Face file <code>modeling_dinov3_vit.py</code> (Apache-2.0) and the paper. We read the official Meta code only to check facts (ADR 0002).</li>
+    <li>Weights: the Hugging Face safetensors of <code>facebook/dinov3-vits16-pretrain-lvd1689m</code> in the Hugging Face cache. <code>weights_dir</code> finds them. The weights stay outside the repo.</li>
+    <li>Reference output: the Hugging Face backbone on <code>torch-cpu</code> in fp32, in the reference files of Step 2. The fp32 thresholds are 0.9999 for the frame embedding, the patch mean and the patch 1st percentile (<code>THRESHOLDS["fp32"]</code>, ADR 0003).</li>
+    <li>Versions: mlx 0.32.4, transformers 5.22.1, torch 2.15.0. Hardware: M5 Max (GPU <code>applegpu_g17s</code>), macOS 26.5.2.</li>
+    <li>Run rules: one heavy job at a time. A memory check before each model load. <code>mx.set_memory_limit</code> for MLX.</li>
+    <li>Later steps: Step 5 adds SwiGLU, all six model sizes, fp16 and bf16. Step 6 adds <code>mx.compile</code>, the cache of the RoPE tables, the <code>mlx</code> benchmark and quantized weights. Step 8 adds LoRA on <code>q_proj</code> and <code>v_proj</code>. The Step 4 design must not block these steps.</li>
+  </ul>
+
+  <h3>1.1 What the readers found</h3>
+  <p>Four readers read the code on 2026-11-06: the Hugging Face code, the official code, the MLX API and this repo. They loaded no model. Table 1 gives the ViT-S/16 values that the port must reproduce.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Part</th><th>Value in ViT-S/16</th><th>Where it comes from</th></tr></thead>
+      <tbody>
+        <tr><td>Embedding dimension, heads, head dimension</td><td>384, 6, 64</td><td><code>hidden_size</code>, <code>num_attention_heads</code></td></tr>
+        <tr><td>Blocks</td><td>12</td><td><code>num_hidden_layers</code></td></tr>
+        <tr><td>Patch embedding</td><td>Conv2d(3, 384, kernel 16, stride 16) with bias. Weight [384, 3, 16, 16]</td><td><code>patch_size</code> 16</td></tr>
+        <tr><td>Prefix tokens</td><td>CLS token, then 4 register tokens, before the patch tokens. No absolute position embedding</td><td><code>num_register_tokens</code> 4</td></tr>
+        <tr><td>Layer norms</td><td>norm1 and norm2 in each block, one final norm. eps 1e-5, with weight and bias</td><td><code>layer_norm_eps</code></td></tr>
+        <tr><td>Attention</td><td>q, k, v and o projections, 384 → 384. Bias on q, v and o. <b>No bias on k.</b> Scale 64<sup>−0.5</sup> = 0.125. No mask</td><td><code>key_bias</code> false</td></tr>
+        <tr><td>RoPE</td><td>Base 100. 16 frequencies 100<sup>−k/16</sup>. Patch-center coordinates in (−1, 1). y for the pairs 0 to 15, x for the pairs 16 to 31. Half-split rotation. The prefix tokens are not rotated. The frequencies are not in the weights file</td><td><code>rope_theta</code> 100</td></tr>
+        <tr><td>LayerScale</td><td>A trained factor for each of the 384 channels, on each branch. Example: −0.80 to 0.10 in block 0, attention branch</td><td><code>lambda1</code> in the file</td></tr>
+        <tr><td>MLP</td><td>384 → 1536 → 384, with biases. Exact GELU (erf), not the tanh form</td><td><code>hidden_act</code> "gelu", <code>use_gated_mlp</code> false</td></tr>
+        <tr><td>Not used at inference</td><td>Mask token, drop path (rate 0), attention dropout, RoPE-box jittering (<code>pos_embed_rescale</code> 2.0, train mode only)</td><td><code>pos_embed_rescale</code></td></tr>
+        <tr><td>Weights file</td><td>211 tensors, all fp32, 21,596,544 values. Keys <code>embeddings.…</code>, <code>layer.{i}.…</code>, <code>norm.…</code></td><td><code>model.safetensors</code> header</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 1.</b> ViT-S/16 values for the port. Source: Hugging Face transformers 5.22.1 and <code>config.json</code> of snapshot <code>114c137</code> of the Hub repo. The LayerScale range comes from the Meta checkpoint. Its tensors are equal to the Hub tensors (<code>tech-stack.md</code>).</p>
+  <p>Five findings shape the decisions:</p>
+  <ol>
+    <li>The linear weights in the file have the layout (out, in). <code>mlx.nn.Linear</code> uses the same layout. Only the patch embedding weight [384, 3, 16, 16] needs a new layout (D2, D4).</li>
+    <li><code>mx.fast.rope</code> cannot compute the DINOv3 RoPE in one call. This confirms risk R5 of <code>docs/plan.html</code> (D3).</li>
+    <li>The Meta checkpoints store the RoPE periods in bf16. We read the pickle header of the ViT-S/16 Meta checkpoint again: <code>rope_embed.periods</code> is a <code>BFloat16Storage</code> of 16 values. The Hugging Face code computes exact fp32 frequencies. The two sets of angles differ by up to 0.0079 rad at 224 px. Table 1 of <code>docs/learn/01-prior-ports.html</code> says "same angles" for the Meta hub code. That row is wrong (D3, R11).</li>
+    <li>MLX turns on TF32 by default: <code>MLX_ENABLE_TF32</code> has the default value 1. mlx 0.32.4 ships fp32 matmul kernels for the Neural Accelerators that request relaxed precision. This can cost fp32 parity (D7, R10).</li>
+    <li>No file in <code>src/</code> imports mlx yet. The functions that read the stored pixels and the reference files are in <code>reference.py</code>, which imports torch (D6, R12).</li>
+  </ol>
+</section>
+
+<section id="forward">
+  <h2>2 The forward pass in MLX</h2>
+  <p>Figure 1 shows the forward pass of ViT-S/16 for one image at 224 × 224 px, with the recommended options of Section 3. Table 2 gives the shapes.</p>
+  <figure>
+    <div class="fig"><svg viewBox="0 0 960 560" role="img" aria-label="Forward pass of ViT-S/16 in MLX at 224 px: stored pixels, patch embedding, token sequence, 12 blocks, final layer norm, frame embedding and patch embeddings; below, the parts of one block" font-family="-apple-system, Helvetica Neue, Arial, sans-serif">
+      <defs><marker id="arrow1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#4a5655"/></marker></defs>
+      <rect width="960" height="560" fill="#ffffff"/>
+      <g font-size="12.5" fill="#111414" text-anchor="middle">
+        <rect x="20" y="30" width="150" height="90" rx="6" fill="#f5f8f7" stroke="#4a5655"/>
+        <text x="95" y="56" font-weight="600">Stored pixels</text>
+        <text x="95" y="78">(1, 3, 224, 224)</text>
+        <text x="95" y="98">fp32, NCHW</text>
+
+        <rect x="195" y="30" width="180" height="90" rx="6" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="285" y="56" font-weight="600">Patch embedding</text>
+        <text x="285" y="78">patches (1, 196, 768)</text>
+        <text x="285" y="98">× Wᵀ + b, W (384, 768)</text>
+
+        <rect x="400" y="30" width="215" height="90" rx="6" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="507" y="52" font-weight="600">Token sequence</text>
+        <rect x="414" y="62" width="12" height="14" fill="#057379"/>
+        <rect x="430" y="62" width="12" height="14" fill="#e0a336"/>
+        <rect x="444" y="62" width="12" height="14" fill="#e0a336"/>
+        <rect x="458" y="62" width="12" height="14" fill="#e0a336"/>
+        <rect x="472" y="62" width="12" height="14" fill="#e0a336"/>
+        <rect x="492" y="62" width="12" height="14" fill="#9fd3d1"/>
+        <rect x="506" y="62" width="12" height="14" fill="#9fd3d1"/>
+        <rect x="520" y="62" width="12" height="14" fill="#9fd3d1"/>
+        <rect x="534" y="62" width="12" height="14" fill="#9fd3d1"/>
+        <rect x="548" y="62" width="12" height="14" fill="#9fd3d1"/>
+        <text x="574" y="74">…</text>
+        <rect x="588" y="62" width="12" height="14" fill="#9fd3d1"/>
+        <text x="507" y="96">(1, 201, 384)</text>
+        <text x="507" y="112" font-size="11" fill="#4a5655">5 prefix tokens, 196 patch tokens</text>
+
+        <rect x="640" y="30" width="120" height="90" rx="6" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="700" y="60" font-weight="600">12 blocks</text>
+        <text x="700" y="80">(1, 201, 384)</text>
+        <text x="700" y="100" font-size="11" fill="#4a5655">detail below</text>
+
+        <rect x="785" y="30" width="155" height="90" rx="6" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="862" y="60" font-weight="600">Final layer norm</text>
+        <text x="862" y="80">all 201 tokens</text>
+        <text x="862" y="100">(1, 201, 384)</text>
+
+        <rect x="290" y="145" width="220" height="80" rx="6" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="400" y="170" font-weight="600">RoPE tables (cache)</text>
+        <text x="400" y="190">cos, sin (201, 64), fp32</text>
+        <text x="400" y="208">rows 0–4: cos 1, sin 0</text>
+        <text x="190" y="178" font-size="11" fill="#4a5655">grid 14 × 14</text>
+
+        <rect x="785" y="145" width="140" height="46" rx="6" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="855" y="165" font-weight="600">Frame embedding</text>
+        <text x="855" y="183">row 0 → (1, 384)</text>
+        <rect x="785" y="203" width="140" height="62" rx="6" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="855" y="223" font-weight="600">Patch embeddings</text>
+        <text x="855" y="241">rows 5–200 →</text>
+        <text x="855" y="257">(1, 14, 14, 384)</text>
+        <text x="855" y="282" font-size="11" fill="#4a5655">rows 1–4 are dropped</text>
+
+        <rect x="20" y="292" width="920" height="256" rx="6" fill="none" stroke="#057379" stroke-width="1.2" stroke-dasharray="6 4"/>
+        <text x="520" y="314" font-weight="600" text-anchor="start">One block, 12 times. One image at 224 px.</text>
+
+        <text x="34" y="373" font-weight="600">x</text>
+        <rect x="60" y="340" width="85" height="58" rx="6" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="102" y="364" font-weight="600">norm1</text>
+        <text x="102" y="382" font-size="11.5">LayerNorm</text>
+        <rect x="165" y="340" width="160" height="58" rx="6" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="245" y="357" font-weight="600">q, k, v proj</text>
+        <text x="245" y="373" font-size="11.5">3 × (1, 201, 384)</text>
+        <text x="245" y="389" font-size="11.5">k: no bias</text>
+        <rect x="345" y="340" width="110" height="58" rx="6" fill="#e6f2f2" stroke="#057379" stroke-width="2.5"/>
+        <text x="400" y="357" font-weight="600">RoPE</text>
+        <text x="400" y="373" font-size="11.5">q, k rows 5–200</text>
+        <text x="400" y="389" font-size="11.5">(1, 6, 201, 64)</text>
+        <rect x="475" y="340" width="130" height="58" rx="6" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="540" y="357" font-weight="600">SDPA</text>
+        <text x="540" y="373" font-size="11.5">mx.fast, no mask</text>
+        <text x="540" y="389" font-size="11.5">scale 0.125</text>
+        <rect x="625" y="340" width="120" height="58" rx="6" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="685" y="357" font-weight="600">o_proj</text>
+        <text x="685" y="373" font-size="11.5">merge 6 heads</text>
+        <text x="685" y="389" font-size="11.5">(1, 201, 384)</text>
+        <rect x="765" y="340" width="110" height="58" rx="6" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="820" y="364" font-weight="600">LayerScale1</text>
+        <text x="820" y="382" font-size="11.5">× λ1, 384 values</text>
+        <circle cx="905" cy="369" r="11" fill="#ffffff" stroke="#4a5655" stroke-width="1.5"/>
+        <path d="M899,369 H911 M905,363 V375" stroke="#111414" stroke-width="1.5"/>
+        <text x="932" y="373" font-weight="600">h</text>
+        <text x="470" y="430" font-size="11" fill="#4a5655">residual</text>
+
+        <text x="34" y="485" font-weight="600">h</text>
+        <rect x="60" y="452" width="85" height="58" rx="6" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="102" y="476" font-weight="600">norm2</text>
+        <text x="102" y="494" font-size="11.5">LayerNorm</text>
+        <rect x="165" y="452" width="160" height="58" rx="6" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="245" y="476" font-weight="600">up_proj</text>
+        <text x="245" y="494" font-size="11.5">(1, 201, 1536)</text>
+        <rect x="345" y="452" width="110" height="58" rx="6" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="400" y="476" font-weight="600">GELU</text>
+        <text x="400" y="494" font-size="11.5">exact (erf)</text>
+        <rect x="475" y="452" width="130" height="58" rx="6" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="540" y="476" font-weight="600">down_proj</text>
+        <text x="540" y="494" font-size="11.5">(1, 201, 384)</text>
+        <rect x="625" y="452" width="120" height="58" rx="6" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="685" y="476" font-weight="600">LayerScale2</text>
+        <text x="685" y="494" font-size="11.5">× λ2, 384 values</text>
+        <circle cx="775" cy="481" r="11" fill="#ffffff" stroke="#4a5655" stroke-width="1.5"/>
+        <path d="M769,481 H781 M775,475 V487" stroke="#111414" stroke-width="1.5"/>
+        <text x="806" y="485" text-anchor="start">next block</text>
+        <text x="470" y="542" font-size="11" fill="#4a5655">residual</text>
+      </g>
+      <g stroke="#4a5655" stroke-width="1.5" fill="none">
+        <path d="M170,75 H191" marker-end="url(#arrow1)"/>
+        <path d="M375,75 H396" marker-end="url(#arrow1)"/>
+        <path d="M615,75 H636" marker-end="url(#arrow1)"/>
+        <path d="M760,75 H781" marker-end="url(#arrow1)"/>
+        <path d="M95,120 V185 H286" stroke-dasharray="4 3" marker-end="url(#arrow1)"/>
+        <path d="M855,120 V141" marker-end="url(#arrow1)"/>
+        <path d="M934,120 V234 H929" marker-end="url(#arrow1)"/>
+        <path d="M700,120 V292" stroke="#057379" stroke-dasharray="6 4"/>
+        <path d="M400,225 V336" marker-end="url(#arrow1)"/>
+        <path d="M44,369 H56" marker-end="url(#arrow1)"/>
+        <path d="M145,369 H161" marker-end="url(#arrow1)"/>
+        <path d="M325,369 H341" marker-end="url(#arrow1)"/>
+        <path d="M455,369 H471" marker-end="url(#arrow1)"/>
+        <path d="M605,369 H621" marker-end="url(#arrow1)"/>
+        <path d="M745,369 H761" marker-end="url(#arrow1)"/>
+        <path d="M875,369 H890" marker-end="url(#arrow1)"/>
+        <path d="M916,369 H926"/>
+        <path d="M50,369 V414 H905 V384" marker-end="url(#arrow1)"/>
+        <path d="M44,481 H56" marker-end="url(#arrow1)"/>
+        <path d="M145,481 H161" marker-end="url(#arrow1)"/>
+        <path d="M325,481 H341" marker-end="url(#arrow1)"/>
+        <path d="M455,481 H471" marker-end="url(#arrow1)"/>
+        <path d="M605,481 H621" marker-end="url(#arrow1)"/>
+        <path d="M745,481 H760" marker-end="url(#arrow1)"/>
+        <path d="M786,481 H800" marker-end="url(#arrow1)"/>
+        <path d="M50,481 V528 H775 V496" marker-end="url(#arrow1)"/>
+      </g>
+    </svg></div>
+    <figcaption><b>Figure 1.</b> The forward pass of ViT-S/16 in MLX for one image at 224 × 224 px, with the recommended options. Top: the path from the stored pixels to the two outputs. The grid of the input (14 × 14 patches) selects the RoPE tables from the cache. Bottom: the parts of one block. Only the queries and keys of the 196 patch tokens get RoPE (thick box). Token colors: CLS token teal, register tokens amber, patch tokens light teal. Teal boxes are new code of Step 4. The grey box is a file of Step 2.</figcaption>
+  </figure>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Tensor</th><th>Shape</th><th>Note</th></tr></thead>
+      <tbody>
+        <tr><td>Stored pixels</td><td><code>(1, 3, 224, 224)</code></td><td>fp32 NumPy, NCHW, from <code>inputs.safetensors</code></td></tr>
+        <tr><td>Patches</td><td><code>(1, 196, 768)</code></td><td>Reshape and transpose. Order inside one patch: channel, row, column (D4)</td></tr>
+        <tr><td>Patch tokens</td><td><code>(1, 196, 384)</code></td><td>patches × W<sup>T</sup> + b. Row-major: token n = 14 i + j</td></tr>
+        <tr><td>Token sequence</td><td><code>(1, 201, 384)</code></td><td>CLS token, 4 register tokens, 196 patch tokens</td></tr>
+        <tr><td>RoPE tables</td><td><code>(201, 64)</code> each</td><td>fp32. Rows 0 to 4: cos 1, sin 0. They broadcast over batch and heads (D3)</td></tr>
+        <tr><td>q, k, v after the split into heads</td><td><code>(1, 6, 201, 64)</code></td><td>Head h holds the channels 64 h to 64 h + 63</td></tr>
+        <tr><td>Attention output after o_proj</td><td><code>(1, 201, 384)</code></td><td>Heads merged back before o_proj</td></tr>
+        <tr><td>MLP hidden values</td><td><code>(1, 201, 1536)</code></td><td>After up_proj and GELU</td></tr>
+        <tr><td>Block output</td><td><code>(1, 201, 384)</code></td><td>12 times. The input of block 0 and the 12 outputs are the 13 hidden states</td></tr>
+        <tr><td>After the final layer norm</td><td><code>(1, 201, 384)</code></td><td>The output of <code>run_mlx</code>, fp32 NumPy</td></tr>
+        <tr><td>Frame embedding</td><td><code>(1, 384)</code></td><td>Row 0</td></tr>
+        <tr><td>Patch embeddings</td><td><code>(1, 14, 14, 384)</code></td><td>Rows 5 to 200, reshaped by <code>split_tokens</code>. Rows 1 to 4 are dropped</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 2.</b> Shapes of the forward pass at 224 × 224 px and batch size 1. At 512 × 512 px the grid is 32 × 32: 1,024 patch tokens and 1,029 tokens. The batch size is always the first axis, except in the RoPE tables.</p>
+</section>
+
+<section id="decisions">
+  <h2>3 Decisions</h2>
+  <p>Seven decisions have real options. Each subsection gives the options, a table of trade-offs and a recommendation. Section 5 lists the chosen options.</p>
+
+  <h3>3.1 D1: code structure</h3>
+  <p>The MLX backbone needs a form. The form sets the converter, the tests and the hooks for Steps 5, 6 and 8.</p>
+  <p><b>Option A: <code>mlx.nn.Module</code> classes that mirror the Hugging Face module tree and names.</b> An <code>embeddings</code> module, a list <code>layer</code> of 12 blocks and a final <code>norm</code>. Each block has <code>norm1</code>, <code>attention</code> (<code>q_proj</code>, <code>k_proj</code>, <code>v_proj</code>, <code>o_proj</code>), <code>layer_scale1</code>, <code>norm2</code>, <code>mlp</code> (<code>up_proj</code>, <code>down_proj</code>) and <code>layer_scale2</code>. The parameter names are the keys of the safetensors file.</p>
+  <p><b>Option B: functions over a dict of weights.</b> One function <code>forward(weights, pixels)</code> reads each array by its name.</p>
+  <p><b>Option C: reuse or fork a prior MLX port.</b> Step 1 found four ports (Table 1 of <code>specs/01-scope/explore.html</code>).</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Criterion</th><th>A: modules with the Hugging Face names</th><th>B: functions over a dict</th><th>C: a prior port</th></tr></thead>
+      <tbody>
+        <tr><td>Converter</td><td>Identity for 209 of 211 keys. The patch embedding weight changes its layout. The mask token goes away</td><td>The same key map</td><td>A map from the Hugging Face names to the names of the port. mlx-image uses the Meta names (<code>storage_tokens</code>, fused qkv)</td></tr>
+        <tr><td>Check of names and shapes at load</td><td><code>load_weights(strict=True)</code> checks the key set and the shapes</td><td>Own code</td><td>Depends on the port</td></tr>
+        <tr><td>Tests for each part</td><td>Each module is a unit. The same split as <code>block_parts</code> of Step 3</td><td>Each function is a unit</td><td>mlx_dinov3 and mlx-image have no parity test</td></tr>
+        <tr><td>Step 5: dtypes</td><td><code>set_dtype</code> casts the parameters</td><td>Own cast code</td><td>RoPE tables in bf16 by default (mlx_dinov3, mlx-image)</td></tr>
+        <tr><td>Step 6: compile and quantized weights</td><td><code>mx.compile</code> works. <code>nn.quantize</code> replaces the <code>nn.Linear</code> modules</td><td><code>mx.compile</code> is simplest. Quantized matmuls need own code</td><td>mlx_dinov3 has <code>nn.quantize</code></td></tr>
+        <tr><td>Step 8: LoRA and gradients</td><td>LoRA wraps the <code>nn.Linear</code> modules <code>q_proj</code> and <code>v_proj</code>. These are the names of the target modules of the reference fine-tuning setup. <code>nn.value_and_grad</code> and <code>freeze</code> work on the tree</td><td>Own adapter code on the dict</td><td>No adapters in any port</td></tr>
+        <tr><td>License (ADR 0002)</td><td>Our code, MIT. Files that adapt Hugging Face code keep an attribution line</td><td>The same as A</td><td><span class="fail">mlx_dinov3: DINOv3 License; a fork makes our code a derivative work. mlx-image: MIT, but it ports the Meta classes. MLXDINOv3: MIT, but Swift</span></td></tr>
+        <tr><td>Effort</td><td>Medium</td><td>Low</td><td>Low at first, high to close the gaps of Step 1</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 3.</b> Trade-offs of D1. The prior ports: MLXDINOv3 (Swift, commit 3122d79), mlx_dinov3 (commit 43d139b), mlx-image (commit da92532) and mlx-dinov3 (commit 0bdeaa0, no ViT model).</p>
+  <div class="box">
+    <p><b>Recommendation: Option A.</b></p>
+    <ul>
+      <li>Mirror the keys of the safetensors file: <code>layer.{i}.…</code>. Do not mirror the renamed tree of transformers 5 (<code>model.layer.{i}.…</code>, from <code>conversion_mapping.py</code>). The key map accepts both spellings, because a Hugging Face model in memory uses the second one.</li>
+      <li>Keep <code>q_proj</code>, <code>k_proj</code> and <code>v_proj</code> apart in Step 4. Step 6 can fuse them at load if the <code>mlx</code> block profile shows a gain.</li>
+      <li>Store the RoPE tables in attributes whose names start with "_". MLX does not treat these attributes as parameters.</li>
+      <li>Option C is closed. In Step 1 the user rejected a port as the backend (ADR 0002). MLXDINOv3 stays a design reference to read.</li>
+    </ul>
+  </div>
+
+  <h3>3.2 D2: weights</h3>
+  <p>The MLX backbone reads the Hugging Face safetensors. Two changes are necessary. The patch embedding weight gets a new layout (D4). The mask token goes away, because only training uses it. Table 5 gives the key map. The question is when the key map runs, and if its result goes into a file.</p>
+  <p><b>Option A: convert at load time.</b> <code>mx.load</code> reads each safetensors file of <code>weights_dir</code>. The read is lazy. The key map runs in memory. No new file.</p>
+  <p><b>Option B: a converted MLX file in a cache folder outside the repo</b>, for example <code>~/.cache/dinov3-apple/mlx/&lt;Hugging Face id&gt;/&lt;snapshot&gt;/&lt;dtype&gt;.safetensors</code>. A command writes it once. The loader reads only this file.</p>
+  <p><b>Option C: both.</b> The first load converts and writes the file. The next loads read the file.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Criterion</th><th>A: at load time</th><th>B: converted file</th><th>C: convert on first use, then file</th></tr></thead>
+      <tbody>
+        <tr><td>Extra files</td><td>None</td><td>One for each model size and dtype. ViT-7B/16 in bf16: 13.4 GB</td><td>The same as B</td></tr>
+        <tr><td>Bytes read for each load</td><td>The fp32 file: 86.4 MB for ViT-S/16, 26.9 GB in six shards for ViT-7B/16</td><td>The file in the target dtype: half of fp32 for fp16 and bf16</td><td>The same as B after the first load</td></tr>
+        <tr><td>Old files</td><td>Not possible</td><td>A new snapshot or a new key map needs a new file. The path must hold the snapshot and a version</td><td>The same as B</td></tr>
+        <tr><td>Benchmark workers in separate subprocesses, one after the other</td><td>No problem</td><td>No problem: the command runs first</td><td>The first worker writes the file. A worker that stops during the write can leave a broken file. This needs a temporary file and a rename</td></tr>
+        <tr><td>Step 5: shards and dtypes</td><td>Read all shards of the index file. Cast each tensor at load, one after the other</td><td>The file is already in the dtype</td><td>The same as B</td></tr>
+        <tr><td>Step 6: quantized weights</td><td><code>nn.quantize</code> at each load</td><td>Can store quantized weights</td><td>Can store quantized weights</td></tr>
+        <tr><td>Code</td><td>Smallest</td><td>A command and a loader</td><td>Largest</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 4.</b> Trade-offs of D2. The byte counts come from the safetensors headers (21,596,544 fp32 values for ViT-S/16) and from <code>tech-stack.md</code>. No load time is measured yet.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Key in the Hugging Face file</th><th>Shape in the file</th><th>MLX parameter</th><th>Change</th></tr></thead>
+      <tbody>
+        <tr><td><code>embeddings.cls_token</code></td><td><code>[1, 1, 384]</code></td><td>same name</td><td>none</td></tr>
+        <tr><td><code>embeddings.register_tokens</code></td><td><code>[1, 4, 384]</code></td><td>same name</td><td>none</td></tr>
+        <tr><td><code>embeddings.mask_token</code></td><td><code>[1, 1, 384]</code></td><td>none</td><td>dropped: training only</td></tr>
+        <tr><td><code>embeddings.patch_embeddings.weight</code></td><td><code>[384, 3, 16, 16]</code></td><td>same name, <code>[384, 768]</code></td><td>reshape only (D4)</td></tr>
+        <tr><td><code>embeddings.patch_embeddings.bias</code></td><td><code>[384]</code></td><td>same name</td><td>none</td></tr>
+        <tr><td><code>layer.{i}.norm1</code>, <code>norm2</code> (weight, bias)</td><td><code>[384]</code></td><td>same names</td><td>none</td></tr>
+        <tr><td><code>layer.{i}.attention.{q,v,o}_proj</code> (weight, bias)</td><td><code>[384, 384]</code>, <code>[384]</code></td><td>same names</td><td>none: <code>nn.Linear</code> uses (out, in)</td></tr>
+        <tr><td><code>layer.{i}.attention.k_proj.weight</code></td><td><code>[384, 384]</code></td><td>same name, <code>nn.Linear(bias=False)</code></td><td>none</td></tr>
+        <tr><td><code>layer.{i}.layer_scale{1,2}.lambda1</code></td><td><code>[384]</code></td><td>same names</td><td>none</td></tr>
+        <tr><td><code>layer.{i}.mlp.up_proj</code> (weight, bias)</td><td><code>[1536, 384]</code>, <code>[1536]</code></td><td>same names</td><td>none</td></tr>
+        <tr><td><code>layer.{i}.mlp.down_proj</code> (weight, bias)</td><td><code>[384, 1536]</code>, <code>[384]</code></td><td>same names</td><td>none</td></tr>
+        <tr><td><code>norm.weight</code>, <code>norm.bias</code></td><td><code>[384]</code></td><td>same names</td><td>none</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 5.</b> The key map for ViT-S/16. The file has 211 tensors. The MLX backbone has 210 parameters. Each block has 17 tensors. The key map also accepts <code>model.layer.{i}.…</code> (D1).</p>
+  <div class="box">
+    <p><b>Recommendation: Option A for Steps 4 and 5.</b> One function gives the MLX weights of one model size and dtype. Step 6 can put a cache file behind this function (Option C) if the load time or the quantized weights need it. The load runs in these steps:</p>
+    <ol>
+      <li>Run the memory check: <code>check_free_memory(load_bytes(…), "ViT-S/16 mlx fp32")</code>.</li>
+      <li>Set <code>mx.set_memory_limit</code> to the need of the memory check.</li>
+      <li>Read <code>config.json</code> and every <code>*.safetensors</code> file of <code>weights_dir(model_size)</code> with <code>mx.load</code>.</li>
+      <li>Apply the key map of Table 5. Cast to the dtype of the dtype mode (only fp32 in Step 4).</li>
+      <li>Call <code>model.load_weights(pairs, strict=True)</code> with a list of (name, array) pairs. Do not pass a <code>pathlib.Path</code>: <code>load_weights</code> reads only a <code>str</code> as a path.</li>
+      <li>Call <code>mx.eval(model.parameters())</code>. Then the load cost does not move into the first forward pass.</li>
+    </ol>
+    <p>New term: GLOSSARY.md uses "converted weights" for a Meta checkpoint converted to a Hugging Face folder. So the result of the key map gets its own term, "MLX weights". The module name <code>mlx_weights.py</code> follows the term.</p>
+  </div>
+
+  <h3>3.3 D3: RoPE</h3>
+  <p>Figure 2 shows the layout of RoPE in one head. RoPE needs four things: the patch-center coordinates (y, x) of each patch token, 16 frequencies, a cos table and a sin table. Then it computes q · cos + rotate_half(q) · sin, and the same for k.</p>
+  <figure>
+    <div class="fig"><svg viewBox="0 0 960 330" role="img" aria-label="RoPE layout in one head of 64 values: pairs i and i plus 32 rotate by one angle; the first 16 pairs use the y coordinate, the next 16 the x coordinate" font-family="-apple-system, Helvetica Neue, Arial, sans-serif">
+      <rect width="960" height="330" fill="#ffffff"/>
+      <g font-size="12.5" fill="#111414">
+        <text x="272" y="38" text-anchor="middle" font-weight="600">first half: values 0–31</text>
+        <text x="688" y="38" text-anchor="middle" font-weight="600">second half: values 32–63</text>
+        <path d="M64,52 V46 H478 V52 M482,52 V46 H896 V52" stroke="#4a5655" stroke-width="1.2" fill="none"/>
+        <rect x="64" y="60" width="208" height="32" fill="#3f9ea4"/>
+        <rect x="272" y="60" width="208" height="32" fill="#a8d5d8"/>
+        <rect x="480" y="60" width="208" height="32" fill="#3f9ea4"/>
+        <rect x="688" y="60" width="208" height="32" fill="#a8d5d8"/>
+        <path d="M77,62V90M90,62V90M103,62V90M116,62V90M129,62V90M142,62V90M155,62V90M168,62V90M181,62V90M194,62V90M207,62V90M220,62V90M233,62V90M246,62V90M259,62V90M285,62V90M298,62V90M311,62V90M324,62V90M337,62V90M350,62V90M363,62V90M376,62V90M389,62V90M402,62V90M415,62V90M428,62V90M441,62V90M454,62V90M467,62V90M493,62V90M506,62V90M519,62V90M532,62V90M545,62V90M558,62V90M571,62V90M584,62V90M597,62V90M610,62V90M623,62V90M636,62V90M649,62V90M662,62V90M675,62V90M701,62V90M714,62V90M727,62V90M740,62V90M753,62V90M766,62V90M779,62V90M792,62V90M805,62V90M818,62V90M831,62V90M844,62V90M857,62V90M870,62V90M883,62V90" stroke="#ffffff" stroke-width="1" fill="none"/>
+        <text x="168" y="112" text-anchor="middle">0–15: angle from y</text>
+        <text x="376" y="112" text-anchor="middle">16–31: angle from x</text>
+        <text x="584" y="112" text-anchor="middle">32–47: angle from y</text>
+        <text x="792" y="112" text-anchor="middle">48–63: angle from x</text>
+        <path d="M70.5,92 Q278.5,200 486.5,92" stroke="#057379" stroke-width="1.5" fill="none"/>
+        <path d="M330.5,92 Q538.5,200 746.5,92" stroke="#057379" stroke-width="1.5" fill="none"/>
+        <text x="278" y="166" text-anchor="middle" fill="#057379">pair (0, 32): θ0 = 2π · y · f0</text>
+        <text x="560" y="166" text-anchor="middle" fill="#057379">pair (20, 52): θ20 = 2π · x · f4</text>
+        <g font-size="12">
+        <text x="64" y="210">Rotation of the pair (i, i + 32): out_i = q_i · cos θ_i − q_(i+32) · sin θ_i, and out_(i+32) = q_(i+32) · cos θ_i + q_i · sin θ_i.</text>
+        <text x="64" y="232">Angles: θ_i = 2π · y · f_i for i &lt; 16, and θ_i = 2π · x · f_(i−16) for 16 ≤ i &lt; 32. Frequencies: f_k = 100^(−k/16), k = 0 … 15.</text>
+        <text x="64" y="254">The cos and sin tables have 64 columns. The columns i and i + 32 hold the same angle.</text>
+        <text x="64" y="288">Rows 0–4 (CLS token and 4 register tokens): cos = 1 and sin = 0. The rotation does not change them.</text>
+        <text x="64" y="310">Rows 5–200 (patch tokens, row-major): y = (2r + 1)/14 − 1 and x = (2c + 1)/14 − 1 for the patch in row r and column c.</text>
+        </g>
+      </g>
+    </svg></div>
+    <figcaption><b>Figure 2.</b> The RoPE layout in one head of ViT-S/16 (64 values), at 224 px. Dark teal: values whose angle comes from the y coordinate. Light teal: values whose angle comes from the x coordinate. The arcs show two of the 32 pairs. Each pair rotates by one angle. This is the half-split layout of <code>rotate_half</code>, not the interleaved layout.</figcaption>
+  </figure>
+
+  <h4>3.3.1 Can <code>mx.fast.rope</code> compute it?</h4>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>DINOv3 needs</th><th><code>mx.fast.rope</code> in mlx 0.32.4 gives</th><th>Fit</th></tr></thead>
+      <tbody>
+        <tr><td>Pairs (i, i + 32), half-split</td><td><code>traditional=False</code> rotates the pairs (i, i + dims/2)</td><td class="pass">yes</td></tr>
+        <tr><td>Two coordinates for each token: y for the pairs 0 to 15, x for the pairs 16 to 31</td><td>One position for each token, for all pairs</td><td class="fail">no</td></tr>
+        <tr><td>Fractional position (2r + 1)/H<sub>p</sub> − 1</td><td>Position (t + offset) · scale. t is the index on axis −2. <code>offset</code> must be an integer: a float raises <code>ValueError</code></td><td class="fail">no: the offset must be (1 − H<sub>p</sub>)/2. That is a half-integer for the even grids 14, 28 and 32</td></tr>
+        <tr><td>Angle 2π · c / period</td><td>Angle scale · (t + offset) / freqs. <code>freqs</code> divides; it does not multiply</td><td class="pass">yes, with freqs = H<sub>p</sub> · period / 2π</td></tr>
+        <tr><td>No rotation for the 5 prefix tokens</td><td>Every token with a position other than 0 rotates</td><td class="fail">no: split and join needed</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 6.</b> The fit of <code>mx.fast.rope</code>. Evidence: the docstring of mlx 0.32.4 and a probe of the MLX reader on the CPU stream against NumPy (largest error 2e-7). The probe also showed that <code>freqs</code> acts as a divisor: the multiplier reading gave an error of 5.5.</p>
+  <p>Result: one call of <code>mx.fast.rope</code> cannot compute the DINOv3 RoPE. An exact workaround exists. It puts each patch token on the first axis with T = 1. Each token gets its own integer offset m = 2r + 1 − H<sub>p</sub>, and freqs = H<sub>p</sub> · period / 2π. It needs one call for the y half and one call for the x half, plus gathers, transposes and a join. The MLX reader checked it on the CPU stream only (largest error 3e-7). Nobody checked the GPU kernel with T = 1 and a vector offset.</p>
+  <p><b>Option A: <code>mx.fast.rope</code> with the two-call workaround.</b></p>
+  <p><b>Option B: tables from MLX operations on the GPU</b>, with the Hugging Face formula, in fp32.</p>
+  <p><b>Option C: tables from NumPy</b>, with the Hugging Face formula, then one <code>mx.array</code> for each table. Variant C1: fp32, in the order of the Hugging Face operations. Variant C2: float64, then a cast to fp32.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Criterion</th><th>A: <code>mx.fast.rope</code></th><th>B: tables, MLX operations</th><th>C: tables, NumPy</th></tr></thead>
+      <tbody>
+        <tr><td>Difference to the Hugging Face tables</td><td>Other formula and other rounding. Not measured</td><td>The error of the GPU cos and sin kernels is not measured</td><td>C1 and C2 differ by at most 5.4e-7 on the six grids of the parity tests (our NumPy computation). Hugging Face uses the fp32 order, so C1 is the closest form</td></tr>
+        <tr><td>Work in each block</td><td>Two calls for q and two for k, plus gathers, transposes and a join</td><td colspan="2">One expression: x · cos + rotate_half(x) · sin. <code>mx.compile</code> can fuse it (Step 6)</td></tr>
+        <tr><td>Prefix tokens</td><td>Split and join</td><td colspan="2">5 rows with cos 1 and sin 0 on top of the tables. No split. Exact for finite values: x · 1 + r · 0 = x</td></tr>
+        <tr><td>Cost of the tables</td><td>None</td><td>A small GPU job for each new grid</td><td>201 × 64 values on the CPU for each new grid, once</td></tr>
+        <tr><td>Step 5: half precision</td><td>On the GPU, the rotation runs in fp32 and casts back to the dtype of q once. The kernel computes cos and sin with <code>metal::fast::cos</code> and <code>metal::fast::sin</code>. Only the CPU fallback rotates in the dtype of q</td><td colspan="2">The tables stay fp32. The rotation runs in fp32 and casts back to the dtype of q, as the Meta code does. Step 5 in <code>docs/plan.html</code> asks for RoPE in fp32</td></tr>
+        <tr><td>Step 6: cache and compile</td><td>No tables</td><td colspan="2">A dict cache with the key (H<sub>p</sub>, W<sub>p</sub>). The tables enter the compiled function as inputs</td></tr>
+        <tr><td>Step 8: RoPE-box jittering in training</td><td><code>scale</code> carries it exactly. The integer offsets do not change</td><td colspan="2">Multiply the coordinates before the angles. One flag</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 7.</b> Trade-offs of D3. The six grids: 14 × 14, 28 × 28, 32 × 32, 14 × 25, 14 × 19 and 19 × 14 patches. We computed the C1 and C2 tables with NumPy 2.4 on 2026-11-06. No model and no torch ran.</p>
+
+  <h4>3.3.2 Which tables are "the official tables"?</h4>
+  <p>Table 9 of <code>docs/plan.html</code> defines <code>test_rope_tables</code>: "the MLX RoPE tables against the official tables", largest difference ≤ 1e-6 in fp32. Two official sources exist, and they do not agree. The Hugging Face code computes the frequencies 100<sup>−k/16</sup> exactly in fp32. The Meta hub code loads the periods 100<sup>k/16</sup> from the checkpoint, and the checkpoint stores them in bf16. The hub code then computes in fp32 with the rounded periods. Table 8 gives the values.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>k</th><th>Exact period 100<sup>k/16</sup></th><th>Period in the Meta checkpoint (bf16)</th><th>Relative error</th><th>Angle difference for c = 1, rad</th></tr></thead>
+      <tbody>
+        <tr><td class="num">0</td><td class="num">1.00000</td><td class="num">1</td><td class="num">0</td><td class="num">0</td></tr>
+        <tr><td class="num">1</td><td class="num">1.33352</td><td class="num">1.3359375</td><td class="num">1.81e-3</td><td class="num">0.00852</td></tr>
+        <tr><td class="num">2</td><td class="num">1.77828</td><td class="num">1.78125</td><td class="num">1.67e-3</td><td class="num">0.00589</td></tr>
+        <tr><td class="num">3</td><td class="num">2.37137</td><td class="num">2.375</td><td class="num">1.53e-3</td><td class="num">0.00405</td></tr>
+        <tr><td class="num">4</td><td class="num">3.16228</td><td class="num">3.15625</td><td class="num">1.91e-3</td><td class="num">0.00379</td></tr>
+        <tr><td class="num">5</td><td class="num">4.21697</td><td class="num">4.21875</td><td class="num">4.23e-4</td><td class="num">0.00063</td></tr>
+        <tr><td class="num">6</td><td class="num">5.62341</td><td class="num">5.625</td><td class="num">2.82e-4</td><td class="num">0.00032</td></tr>
+        <tr><td class="num">7</td><td class="num">7.49894</td><td class="num">7.5</td><td class="num">1.41e-4</td><td class="num">0.00012</td></tr>
+        <tr><td class="num">8</td><td class="num">10.00000</td><td class="num">10</td><td class="num">0</td><td class="num">0</td></tr>
+        <tr><td class="num">9</td><td class="num">13.33521</td><td class="num">13.3125</td><td class="num">1.70e-3</td><td class="num">0.00080</td></tr>
+        <tr><td class="num">10</td><td class="num">17.78279</td><td class="num">17.75</td><td class="num">1.84e-3</td><td class="num">0.00065</td></tr>
+        <tr><td class="num">11</td><td class="num">23.71374</td><td class="num">23.75</td><td class="num">1.53e-3</td><td class="num">0.00040</td></tr>
+        <tr><td class="num">12</td><td class="num">31.62278</td><td class="num">31.625</td><td class="num">7.03e-5</td><td class="num">0.00001</td></tr>
+        <tr><td class="num">13</td><td class="num">42.16965</td><td class="num">42.25</td><td class="num">1.91e-3</td><td class="num">0.00028</td></tr>
+        <tr><td class="num">14</td><td class="num">56.23413</td><td class="num">56.25</td><td class="num">2.82e-4</td><td class="num">0.00003</td></tr>
+        <tr><td class="num">15</td><td class="num">74.98942</td><td class="num">75</td><td class="num">1.41e-4</td><td class="num">0.00001</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 8.</b> RoPE periods of the Hugging Face code (exact) and of the Meta checkpoint (bf16). The official reader read the 16 bf16 values from the ViT-S/16 and ViT-H+/16 Meta checkpoints. They equal the bf16 rounding of the exact values. The angle difference is 2π · |1/p<sub>bf16</sub> − 1/p| for a coordinate of 1. The largest coordinate is 13/14 at 224 px and 31/32 at 512 px. So the largest angle difference is 0.0079 rad at 224 px and 0.0083 rad at 512 px. Nobody measured the effect on parity.</p>
+  <p>A test against the Meta tables with a target of 1e-6 must fail. The reference output comes from the Hugging Face code. So the Hugging Face tables are the correct target for our port.</p>
+  <div class="box">
+    <p><b>Recommendation: Option C, variant C1.</b></p>
+    <ol>
+      <li>Compute the frequencies, the coordinates, the angles, cos and sin in NumPy fp32, in the order of the Hugging Face operations. NumPy 2 keeps a Python float weak, so each step stays fp32.</li>
+      <li>Put 5 rows with cos 1 and sin 0 on top. The tables then have 5 + N rows.</li>
+      <li>Keep one pair of <code>mx.array</code> tables for each (H<sub>p</sub>, W<sub>p</sub>) in a dict cache of the backbone. The cache is not a parameter.</li>
+      <li>Apply the rotation in fp32. Then cast the result to the dtype of q.</li>
+      <li>Leave RoPE-box jittering out of Step 4. The flag stays off. Step 8 decides.</li>
+    </ol>
+    <p><code>test_rope_tables</code> compares the MLX tables with the module <code>DINOv3ViTRopePositionEmbedding</code> of Hugging Face on <code>torch-cpu</code>, for the six grids, with the target ≤ 1e-6. A second, report-only test gives the difference to the Meta formula with the bf16 periods. The plan records the new wording of Table 9. The Learn stage corrects Table 1 of <code>docs/learn/01-prior-ports.html</code>.</p>
+  </div>
+  <pre><code># src/dinov3_apple/mlx_model.py (shape of the code, not final)
+def rope_tables(grid_h: int, grid_w: int, head_dim: int, theta: float) -&gt; tuple[np.ndarray, np.ndarray]:
+    inv_freq = 1 / theta ** np.arange(0, 1, 4 / head_dim, dtype=np.float32)   # (head_dim / 4,)
+    coord_h = np.arange(0.5, grid_h, dtype=np.float32) / grid_h
+    coord_w = np.arange(0.5, grid_w, dtype=np.float32) / grid_w
+    coords = np.stack(np.meshgrid(coord_h, coord_w, indexing="ij"), axis=-1).reshape(-1, 2)
+    coords = 2.0 * coords - 1.0                                                  # (N, 2): y, x
+    angles = (2 * np.pi * coords[:, :, None] * inv_freq[None, None, :]).reshape(len(coords), -1)
+    angles = np.tile(angles, 2)                                                  # (N, head_dim)
+    ones = np.ones((NUM_PREFIX_TOKENS, head_dim), np.float32)
+    return np.concatenate([ones, np.cos(angles)]), np.concatenate([0 * ones, np.sin(angles)])
+
+
+def apply_rope(x: mx.array, cos: mx.array, sin: mx.array) -&gt; mx.array:
+    """x: (B, heads, 5 + N, head_dim). cos and sin: (5 + N, head_dim), fp32."""
+    half = x.shape[-1] // 2
+    rotated = mx.concatenate([-x[..., half:], x[..., :half]], axis=-1)
+    return (x * cos + rotated * sin).astype(x.dtype)</code></pre>
+
+  <h3>3.4 D4: patch embedding</h3>
+  <p>The patch embedding is a convolution with kernel 16 and stride 16. So each patch token is a linear map of the 768 pixel values of its patch. The stored pixels are fp32 NumPy arrays in NCHW layout. MLX convolutions take NHWC input and a weight in the layout (out, kh, kw, in).</p>
+  <p><b>Option A: <code>nn.Conv2d</code> with NHWC input.</b> Transpose the pixels to NHWC. Transpose the weight once at load: (384, 3, 16, 16) → (384, 16, 16, 3). Run the convolution. Reshape to (B, N, 384).</p>
+  <p><b>Option B: cut the image into patches, then one matmul.</b> Reshape the NCHW pixels to (B, 3, H<sub>p</sub>, 16, W<sub>p</sub>, 16). Transpose to (B, H<sub>p</sub>, W<sub>p</sub>, 3, 16, 16). Reshape to (B, N, 768). Multiply by the weight, reshaped to (384, 768), and add the bias. An <code>nn.Linear(768, 384)</code> holds the weight. The weight needs no transpose.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Criterion</th><th>A: <code>nn.Conv2d</code>, NHWC</th><th>B: patches and one matmul</th></tr></thead>
+      <tbody>
+        <tr><td>Work on the pixels</td><td>One transpose to NHWC</td><td>One transpose of six axes. The same number of values</td></tr>
+        <tr><td>Work on the weight</td><td>Transpose at load</td><td>Reshape only</td></tr>
+        <tr><td>Kernel</td><td>The MLX convolution kernel for stride = kernel. Its path on the GPU is not checked</td><td>The matmul kernel of all other linear layers. D7 covers its precision</td></tr>
+        <tr><td>Input that is not a multiple of 16</td><td>Crops the rest without a message, as torch does</td><td>The reshape fails. The code raises <code>ValueError</code> with a clear message. The repo uses multiples of 16 only (glossary: input resolution)</td></tr>
+        <tr><td>Probe against a NumPy convolution, fp32, CPU stream</td><td colspan="2">Largest error 1.4e-6 to 1.9e-6 for both paths (MLX reader). Normal for a different order of the sums</td></tr>
+        <tr><td>Share of the FLOPs</td><td colspan="2">The same: 0.12 of 9.4 GFLOP for ViT-S/16 at 224 px (1.2 %)</td></tr>
+        <tr><td>Step 6: preprocessing in MLX</td><td>Works</td><td>The cut into patches can join the preprocessing</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 9.</b> Trade-offs of D4. The FLOP count: 196 × 768 × 384 × 2 = 0.12 GFLOP, against 9.4 GFLOP for one image (Table 2 of <code>specs/03-baseline/explore.html</code>).</p>
+  <div class="box">
+    <p><b>Recommendation: Option B.</b> One matmul with the same kernel as the other linear layers. No convolution kernel to check. The weight only gets a reshape. A wrong input resolution gives a clear error. The parameter keeps the name <code>embeddings.patch_embeddings.weight</code>, with the shape (384, 768). The test for this part compares it with the Hugging Face <code>Conv2d</code> on <code>torch-cpu</code>.</p>
+  </div>
+
+  <h3>3.5 D5: attention</h3>
+  <p>Each block runs full attention over all 5 + N tokens: 6 heads of 64 values, no mask, scale 0.125. Hugging Face calls the torch SDPA with no mask, dropout 0 and <code>is_causal=False</code>.</p>
+  <p><b>Option A: <code>mx.fast.scaled_dot_product_attention(q, k, v, scale=0.125, mask=None)</code>.</b></p>
+  <p><b>Option B: explicit softmax(q · k<sup>T</sup> · 0.125) · v with MLX operations.</b></p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Criterion</th><th>A: <code>mx.fast</code> SDPA</th><th>B: explicit</th></tr></thead>
+      <tbody>
+        <tr><td>Memory</td><td>The fused kernel keeps no T × T matrix in memory</td><td>The score matrix B × heads × T × T: 25.4 MB for each image in fp32 at 512 px for ViT-S/16, 813 MB at batch size 32</td></tr>
+        <tr><td>Softmax precision</td><td>fp32 for every input dtype (docstring)</td><td>The dtype of the scores, unless the code casts. Step 5 must cast</td></tr>
+        <tr><td>Kernels</td><td>Fused kernels in <code>mlx.metallib</code> for fp32, fp16 and bf16, head dimensions 64 and 128 (128 for ViT-7B/16)</td><td>Matmul, softmax, matmul</td></tr>
+        <tr><td>Scale</td><td colspan="2">On the GPU, at 201 or 1,029 queries, MLX runs the full-attention kernel. This kernel multiplies the fp32 scores q · k<sup>T</sup> by scale × log<sub>2</sub>(e) and uses exp2. The factor 0.125 × log<sub>2</sub>(e) is not a power of two, so the scale step rounds once in fp32 for every head dimension, also for 64 and 128. The step is always in fp32, also for fp16 and bf16 inputs. Only the CPU fallback (the diagnostic of D7) and the vector kernel for short queries (8 or fewer) multiply the queries by the scale</td></tr>
+        <tr><td>Step 8: gradients</td><td>A VJP exists</td><td>Gradients of the single operations</td></tr>
+        <tr><td>As a test oracle</td><td>—</td><td>Not independent: it uses the same MLX matmul kernels</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 10.</b> Trade-offs of D5. Memory: 6 heads × 1,029<sup>2</sup> × 4 bytes = 25.4 MB. On the Neural Accelerators, the fp32 attention kernel needs TF32 (a message in <code>libmlx.dylib</code>). With TF32 off it takes another path (D7).</p>
+  <div class="box">
+    <p><b>Recommendation: Option A in the backbone.</b> No explicit attention in <code>src/</code>. Two oracles check the attention. The test for this part compares it with the Hugging Face attention module on <code>torch-cpu</code>. One small test compares <code>mx.fast.scaled_dot_product_attention</code> on the GPU with a NumPy float64 formula, to measure the kernel error (D7).</p>
+  </div>
+
+  <h3>3.6 D6: tests, names and the place of <code>mlx</code> in the harness</h3>
+  <p>D6 answers two questions. What do the tests compare with? Where does the backend <code>mlx</code> plug into the parity tests and, in Step 6, the benchmark harness?</p>
+  <p><b>Option A: end-to-end parity only.</b> The 12 configurations and the batch of 8, against the reference files.</p>
+  <p><b>Option B: a test for each part against the Hugging Face modules on <code>torch-cpu</code>, a check of each block against the stored hidden states, and the end-to-end parity of Option A.</b></p>
+  <p><b>Option C: a test for each part against our own NumPy float64 code, and Option A.</b></p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Criterion</th><th>A: end-to-end only</th><th>B: parts against Hugging Face, blocks, end-to-end</th><th>C: parts against NumPy, end-to-end</th></tr></thead>
+      <tbody>
+        <tr><td>Finds the wrong part</td><td>No. A failure says only that the output is wrong</td><td>Yes. The part tests name the part. The hidden states name the first wrong block</td><td>Yes</td></tr>
+        <tr><td>Independent of our reading of the Hugging Face code</td><td>Yes</td><td>Yes: the oracle runs the Hugging Face code</td><td>No: a NumPy copy can repeat our error</td></tr>
+        <tr><td>Needs the gated weights</td><td>Yes</td><td>The part tests no: they use a Hugging Face model with random weights. CI in Step 7 has no weights. The block check and the end-to-end tests yes</td><td>The part tests no</td></tr>
+        <tr><td>Reuse of Step 3</td><td>—</td><td>The same 11 part names as <code>block_profile.block_parts</code>. The same MLX split serves the <code>mlx</code> block profile of Step 6</td><td>—</td></tr>
+        <tr><td>Code</td><td>Least</td><td>Medium</td><td>Most</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 11.</b> Trade-offs of D6. The 11 parts of <code>block_parts</code>: norm1, qkv_proj, rope, sdpa, o_proj, layer_scale1, norm2, ff_in, activation, ff_out, layer_scale2.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>No.</th><th>Test</th><th>Compares</th><th>Target</th></tr></thead>
+      <tbody>
+        <tr class="group"><td colspan="4">Without the gated weights (random weights, small Hugging Face model on <code>torch-cpu</code>)</td></tr>
+        <tr><td>1</td><td><code>test_mlx_weights_key_map</code></td><td>Key set and shapes after the key map (Table 5). Both spellings of the block keys</td><td>Exact</td></tr>
+        <tr><td>2</td><td><code>test_rope_tables</code></td><td>MLX tables against <code>DINOv3ViTRopePositionEmbedding</code>, the six grids</td><td>≤ 1e-6 (Table 9 of the plan)</td></tr>
+        <tr><td>3</td><td><code>test_rope_tables_meta_difference</code></td><td>MLX tables against the Meta formula with bf16 periods</td><td>Report only</td></tr>
+        <tr><td>4</td><td><code>test_mlx_part_*</code></td><td>Each part against the Hugging Face module: patch embedding, RoPE rotation, attention, LayerScale, MLP, block, final norm and the two outputs. fp32</td><td>The plan sets the targets</td></tr>
+        <tr><td>5</td><td><code>test_mlx_sdpa_float64</code></td><td><code>mx.fast</code> SDPA on the GPU against NumPy float64, small shapes</td><td>The plan sets the target (D7)</td></tr>
+        <tr><td>6</td><td><code>test_mlx_modules_do_not_import_torch</code></td><td>Import of the mlx modules in a subprocess</td><td>No torch in <code>sys.modules</code></td></tr>
+        <tr class="group"><td colspan="4">With the weights of ViT-S/16 (a heavy job)</td></tr>
+        <tr><td>7</td><td><code>test_mlx_hidden_states</code></td><td>The 13 hidden states of <code>iss-kibo-lab/224x224</code> against the reference file</td><td>Report the parity of each block</td></tr>
+        <tr><td>8</td><td><code>test_parity</code> in <code>test_mlx_parity.py</code></td><td>The 12 configurations against the reference files</td><td><code>THRESHOLDS["fp32"]</code></td></tr>
+        <tr><td>9</td><td><code>test_batch_consistency</code> in <code>test_mlx_parity.py</code></td><td>A batch of 8 against 8 single runs (<code>BATCH_CONFIGS</code>)</td><td><code>THRESHOLDS["fp32"]</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 12.</b> Tests of the recommended Option B. The test ids of tests 7 to 9 contain "mlx", the model size, the dtype mode and the configuration (Table 9 of <code>docs/plan.html</code>). The small model of tests 1 to 6 has the embedding dimension (384), the number of heads (6) and the MLP hidden width (1536) of ViT-S/16, and 2 blocks.</p>
+  <figure>
+    <div class="fig"><svg viewBox="0 0 960 400" role="img" aria-label="Where the mlx backend plugs in: new modules mlx_weights, mlx_model and stored, the new test files, the existing parity module and block profile, and the Step 6 benchmark worker" font-family="-apple-system, Helvetica Neue, Arial, sans-serif">
+      <defs><marker id="arrow3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#4a5655"/></marker></defs>
+      <rect width="960" height="400" fill="#ffffff"/>
+      <g font-size="12.5" fill="#111414" text-anchor="middle">
+        <rect x="20" y="30" width="190" height="70" rx="6" fill="#f5f8f7" stroke="#4a5655"/>
+        <text x="115" y="54" font-weight="600">Hugging Face cache</text>
+        <text x="115" y="72" font-size="11.5">config.json and</text>
+        <text x="115" y="88" font-size="11.5">model.safetensors</text>
+        <rect x="260" y="30" width="200" height="70" rx="6" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="360" y="54" font-weight="600">mlx_weights.py</text>
+        <text x="360" y="72" font-size="11.5">key map, memory check,</text>
+        <text x="360" y="88" font-size="11.5">load_mlx_backbone</text>
+        <rect x="510" y="30" width="200" height="70" rx="6" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="610" y="54" font-weight="600">mlx_model.py</text>
+        <text x="610" y="72" font-size="11.5">MlxBackbone, rope_tables,</text>
+        <text x="610" y="88" font-size="11.5">run_mlx</text>
+        <rect x="760" y="30" width="180" height="70" rx="6" fill="#ffffff" stroke="#057379" stroke-width="1.5" stroke-dasharray="6 4"/>
+        <text x="850" y="54" font-weight="600">Step 6: mlx_bench.py</text>
+        <text x="850" y="72" font-size="11.5">benchmark.py</text>
+        <text x="850" y="88" font-size="11.5">--backend mlx</text>
+
+        <rect x="20" y="150" width="190" height="70" rx="6" fill="#f5f8f7" stroke="#4a5655"/>
+        <text x="115" y="174" font-weight="600">Stored pixels and</text>
+        <text x="115" y="192" font-size="11.5">reference files</text>
+        <text x="115" y="208" font-size="11.5">(Step 2)</text>
+        <rect x="260" y="150" width="200" height="70" rx="6" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="360" y="174" font-weight="600">stored.py</text>
+        <text x="360" y="192" font-size="11.5">read_inputs, read_reference,</text>
+        <text x="360" y="208" font-size="11.5">configurations, no torch</text>
+        <rect x="510" y="150" width="200" height="70" rx="6" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="610" y="174" font-weight="600">test_mlx_parity.py</text>
+        <text x="610" y="192" font-size="11.5">12 configurations and</text>
+        <text x="610" y="208" font-size="11.5">the batch of 8, fp32</text>
+        <rect x="760" y="150" width="180" height="70" rx="6" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="850" y="174" font-weight="600">parity/mlx.jsonl</text>
+        <text x="850" y="192" font-size="11.5">parity_table.py</text>
+        <text x="850" y="208" font-size="11.5">→ results/parity-mlx.md</text>
+
+        <rect x="20" y="270" width="190" height="70" rx="6" fill="#f5f8f7" stroke="#4a5655"/>
+        <text x="115" y="294" font-weight="600">Hugging Face model</text>
+        <text x="115" y="312" font-size="11.5">torch-cpu, random</text>
+        <text x="115" y="328" font-size="11.5">weights, 2 blocks</text>
+        <rect x="260" y="270" width="200" height="70" rx="6" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="360" y="294" font-weight="600">test_mlx_parts.py</text>
+        <text x="360" y="312" font-size="11.5">each part: MLX against</text>
+        <text x="360" y="328" font-size="11.5">Hugging Face, fp32</text>
+        <rect x="510" y="270" width="200" height="70" rx="6" fill="#f5f8f7" stroke="#4a5655"/>
+        <text x="610" y="294" font-weight="600">block_profile.py</text>
+        <text x="610" y="312" font-size="11.5">the 11 part names</text>
+        <text x="610" y="328" font-size="11.5">(Step 3)</text>
+        <rect x="760" y="270" width="180" height="70" rx="6" fill="#f5f8f7" stroke="#4a5655"/>
+        <text x="850" y="294" font-weight="600">parity.py</text>
+        <text x="850" y="312" font-size="11.5">measure_parity,</text>
+        <text x="850" y="328" font-size="11.5">THRESHOLDS</text>
+
+        <rect x="20" y="364" width="16" height="12" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="44" y="374" text-anchor="start" font-size="11.5">new in Step 4</text>
+        <rect x="160" y="364" width="16" height="12" fill="#f5f8f7" stroke="#4a5655"/>
+        <text x="184" y="374" text-anchor="start" font-size="11.5">exists (Steps 2 and 3)</text>
+        <rect x="350" y="364" width="16" height="12" fill="#ffffff" stroke="#057379" stroke-width="1.5" stroke-dasharray="4 2"/>
+        <text x="374" y="374" text-anchor="start" font-size="11.5">later step</text>
+      </g>
+      <g stroke="#4a5655" stroke-width="1.5" fill="none">
+        <path d="M210,65 H256" marker-end="url(#arrow3)"/>
+        <path d="M460,65 H506" marker-end="url(#arrow3)"/>
+        <path d="M710,65 H756" stroke-dasharray="5 4" marker-end="url(#arrow3)"/>
+        <path d="M210,185 H256" marker-end="url(#arrow3)"/>
+        <path d="M460,185 H506" marker-end="url(#arrow3)"/>
+        <path d="M710,185 H756" marker-end="url(#arrow3)"/>
+        <path d="M610,100 V146" marker-end="url(#arrow3)"/>
+        <path d="M850,270 V245 H620 V224" marker-end="url(#arrow3)"/>
+        <path d="M210,305 H256" marker-end="url(#arrow3)"/>
+        <path d="M510,305 H464" marker-end="url(#arrow3)"/>
+      </g>
+    </svg></div>
+    <figcaption><b>Figure 3.</b> Where the backend <code>mlx</code> plugs in. Top row: the load path from the Hugging Face cache to the backbone. Middle row: the end-to-end parity tests read the stored data through <code>stored.py</code>, which imports no torch, and write one log line for each configuration. Bottom row: the tests for each part use a small Hugging Face model with random weights and the part names of Step 3. They also use <code>mlx_weights.py</code> and <code>mlx_model.py</code> (arrows left out). The dashed box is the <code>mlx</code> benchmark worker of Step 6.</figcaption>
+  </figure>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Name</th><th>Place</th><th>What it does</th></tr></thead>
+      <tbody>
+        <tr><td>backend <code>mlx</code></td><td>GLOSSARY.md</td><td>The name in test ids, log lines and result files</td></tr>
+        <tr><td><code>MlxBackbone</code>, <code>rope_tables</code>, <code>apply_rope</code>, the part modules</td><td><code>src/dinov3_apple/mlx_model.py</code></td><td>The backbone of D1, D3, D4 and D5</td></tr>
+        <tr><td><code>run_mlx(model, pixels, dtype_mode) -&gt; np.ndarray</code></td><td><code>mlx_model.py</code></td><td>The contract of <code>run_torch</code>. In: stored pixels (B, 3, H, W), fp32, NCHW. Out: all tokens after the final layer norm, (B, 5 + N, D), fp32 NumPy. It casts to fp32 before <code>np.array</code>, because a bf16 <code>mx.array</code> does not convert to NumPy</td></tr>
+        <tr><td><code>run_mlx_hidden_states(model, pixels) -&gt; np.ndarray</code></td><td><code>mlx_model.py</code></td><td>(L + 1, 5 + N, D) before the final layer norm. Test 7 and the Step 5 record of the largest token value in each block</td></tr>
+        <tr><td><code>load_mlx_backbone(model_size, dtype_mode)</code>, <code>MLX_DTYPE_MODES</code></td><td><code>src/dinov3_apple/mlx_weights.py</code></td><td>D2. Raises <code>WeightsNotFoundError</code> and <code>InsufficientMemoryError</code>, as the torch loader does, so that the fixture skips. <code>MLX_DTYPE_MODES</code> holds only "fp32" in Step 4. Each key must be a key of <code>THRESHOLDS</code> and <code>DTYPE_OF_MODE</code></td></tr>
+        <tr><td><code>read_inputs</code>, <code>read_reference</code>, <code>configurations</code>, <code>own_aspect_size</code></td><td><code>src/dinov3_apple/stored.py</code></td><td>Moved out of <code>reference.py</code> and <code>preprocess.py</code>, without torch. Both old modules re-export them, so the imports of Steps 2 and 3 keep working</td></tr>
+        <tr><td><code>backbone</code>, <code>record</code> fixtures</td><td><code>tests/conftest.py</code></td><td>The device "mlx" goes to <code>load_mlx_backbone</code>. <code>free()</code> also calls <code>mx.clear_cache()</code>. <code>record</code> takes the backend and writes <code>parity/mlx.jsonl</code>. The sort key of the tests includes the backend. conftest sets <code>MLX_ENABLE_TF32=0</code> before any import of mlx (D7)</td></tr>
+        <tr><td><code>--backend mlx</code></td><td><code>scripts/parity_table.py</code></td><td>Writes <code>results/parity-mlx.md</code></td></tr>
+        <tr><td><code>mlx_bench.run_worker</code>, <code>benchmark.py --backend mlx</code>, <code>results/bench-mlx.jsonl</code></td><td>Step 6</td><td>Not in Step 4. The timing keeps the four times of Step 3 with <code>mx.eval</code> in place of the synchronize</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 13.</b> Names and files of the backend <code>mlx</code>. The plan can change the file split. It must keep the contract of <code>run_mlx</code>.</p>
+  <div class="box">
+    <p><b>Recommendation: Option B.</b> Put the <code>mlx</code> tests in new files with a backend parameter in the shared fixtures. Do not parametrize <code>test_torch_mps_parity.py</code> over the backends: that keeps the test ids of Steps 2 and 3. Move the read functions without torch to <code>stored.py</code> in Step 4, so the Step 6 benchmark worker can run without torch in its process footprint.</p>
+  </div>
+
+  <h3>3.7 D7: fp32 precision on the Apple GPU</h3>
+  <p>The fp32 thresholds are 0.9999. On <code>torch-mps</code>, matmuls with a 10-bit mantissa (fp16-autocast) gave a worst patch 1st percentile of 0.999781 over five model sizes (Table 3 of <code>docs/learn/02-tokens-and-outputs.html</code>). That is below 0.9999. TF32 also keeps a 10-bit mantissa. Table 14 gives the evidence about TF32 in MLX.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Fact</th><th>Evidence in mlx 0.32.4</th><th>Checked</th></tr></thead>
+      <tbody>
+        <tr><td>TF32 is on by default</td><td><code>mlx/utils.h</code>: <code>enable_tf32()</code> reads <code>MLX_ENABLE_TF32</code> once, into a static value, with the default 1</td><td class="pass">yes, read again</td></tr>
+        <tr><td>fp32 matmul kernels for the Neural Accelerators exist</td><td>Kernel names <code>steel_gemm_fused_nax_*_float32_float32_*</code> in <code>mlx.metallib</code></td><td class="pass">yes, read again</td></tr>
+        <tr><td>These kernels ask for relaxed precision</td><td><code>steel/gemm/nax.h</code> and <code>steel/attn/nax.h</code> build <code>matmul2d_descriptor(16, 32, 16, …, true, …)</code>. In the Apple header <code>MPPTensorOpsMatMul2d.h</code>, this argument lets the hardware trade precision for speed</td><td class="pass">yes, read again</td></tr>
+        <tr><td>fp32 attention on the Neural Accelerators needs TF32</td><td>A message in <code>libmlx.dylib</code>: "float32 also requires TF32"</td><td class="pass">yes, read again</td></tr>
+        <tr><td>This GPU uses the Neural Accelerators</td><td>GPU <code>applegpu_g17s</code> (M5 family), macOS 26.5. The gate needs generation 17 or later and macOS 26.2 or later</td><td>very likely</td></tr>
+        <tr><td>Plain fp32 matmuls go to these kernels when TF32 is on</td><td><code>matmul.cpp</code> is not in the package</td><td class="fail">no</td></tr>
+        <tr><td>Size of the error</td><td>TF32 unit roundoff about 4.9e-4, fp32 about 6e-8. Estimate of the MLX reader: about 0.99988 for the patch 1st percentile, from the input of the patch embedding alone</td><td class="fail">no, an estimate</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 14.</b> Evidence about TF32 in mlx 0.32.4. "Read again": we read the installed headers, the kernel names and the library strings on 2026-11-06. No GPU computation ran, because a benchmark ran on this Mac.</p>
+  <p><b>Option A: the MLX defaults (TF32 on).</b></p>
+  <p><b>Option B: the fp32 dtype mode runs with <code>MLX_ENABLE_TF32=0</code>.</b> The value goes into the environment before the first use of mlx in each process: in <code>tests/conftest.py</code> and in the environment of each benchmark subprocess.</p>
+  <p><b>Option C: the fp32 parity tests run on the CPU stream</b> (<code>mx.cpu</code>, full fp32).</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Criterion</th><th>A: TF32 on</th><th>B: TF32 off for fp32</th><th>C: CPU stream</th></tr></thead>
+      <tbody>
+        <tr><td>Risk for the 0.9999 thresholds</td><td><span class="fail">Real: the estimate is below 0.9999</span></td><td>Low: full fp32 matmuls expected</td><td>Lowest</td></tr>
+        <tr><td>Speed of fp32</td><td>Fastest</td><td>Slower. Not measured</td><td>Much slower</td></tr>
+        <tr><td>What it tests</td><td>What a user of MLX gets by default</td><td>The fp32 backend on the GPU</td><td>Not the GPU backend: only a diagnostic</td></tr>
+        <tr><td>Process rule</td><td>None</td><td>MLX reads the value once. A switch needs a new process</td><td>None</td></tr>
+        <tr><td>Effect on fp16 and bf16 (Step 5)</td><td colspan="3">None: TF32 changes only fp32 matmuls</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 15.</b> Trade-offs of D7.</p>
+  <div class="box">
+    <p><b>Recommendation: Option B for the fp32 dtype mode, in all parity tests and benchmarks. Option C only as a diagnostic.</b></p>
+    <ol>
+      <li>Start the build with a probe, after the running benchmark ends: one small fp32 matmul in two subprocesses, with <code>MLX_ENABLE_TF32=0</code> and with <code>1</code>, each against NumPy float64.</li>
+      <li>Record the two relative errors in <code>verify.html</code>. The expected values are about 1e-7 with TF32 off and about 1e-4 with TF32 on.</li>
+      <li>If a configuration fails on the GPU with TF32 off, run it on <code>mx.cpu</code>. A pass on the CPU points to a kernel. A fail on the CPU points to the port.</li>
+    </ol>
+    <p>Step 6 can measure an fp32 row with TF32 on as a speed option. Its thresholds are a Step 6 decision. Other dtype traps for Step 5: <code>mx.array</code> of a float64 NumPy array silently gives float32. An fp16 array times an fp32 array gives fp32, so the RoPE tables and LayerScale need an explicit cast. A Python float stays weak.</p>
+  </div>
+</section>
+
+<section id="risks">
+  <h2>4 Risks</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>No.</th><th>Risk</th><th>Effect</th><th>Action</th><th>Step</th></tr></thead>
+      <tbody>
+        <tr><td>R5</td><td>2D RoPE in MLX (<code>docs/plan.html</code>)</td><td>Confirmed: <code>mx.fast.rope</code> cannot compute it in one call (Table 6). RoPE runs as element-wise operations with memory traffic</td><td>The fallback of R5: cached cos and sin tables (D3). <code>mx.compile</code> fuses the rotation in Step 6. Try the two-call form only if the <code>mlx</code> block profile shows a large RoPE share</td><td>4, 6</td></tr>
+        <tr><td>R6</td><td>fp16 overflow (<code>docs/plan.html</code>)</td><td>Register token values up to 157,130 (ViT-L/16) are above the fp16 maximum 65,504</td><td>The Step 4 design allows an fp32 residual stream: the dtype of each part is a choice of the dtype mode, not fixed in the code</td><td>5</td></tr>
+        <tr><td>R10</td><td>TF32 and relaxed precision in fp32 matmuls</td><td>fp32 parity below 0.9999 (estimate)</td><td>D7: <code>MLX_ENABLE_TF32=0</code> for fp32, a probe, the CPU stream as a diagnostic</td><td>4</td></tr>
+        <tr><td>R11</td><td>Two different "official" RoPE tables</td><td>A test against the Meta tables at 1e-6 fails: the angles differ by up to 0.0079 rad at 224 px</td><td>D3: test against the Hugging Face tables. Report the Meta difference. Correct Table 1 of <code>docs/learn/01-prior-ports.html</code></td><td>4</td></tr>
+        <tr><td>R12</td><td>torch in the process of an <code>mlx</code> worker</td><td>The torch import adds to the process footprint, so the <code>mlx</code> peak memory looks larger</td><td>D6: <code>stored.py</code> without torch and a test that the mlx modules do not import torch</td><td>4, 6</td></tr>
+        <tr><td>R13</td><td>The MLX memory limit is soft</td><td>The default limit on this Mac is 65.3 GB. An MLX job without a limit can take all memory. The limit is a guideline during evaluation</td><td>Memory check before each load. <code>mx.set_memory_limit</code> to the need. <code>mx.clear_cache()</code> between models. One heavy job at a time</td><td>4</td></tr>
+        <tr><td>R14</td><td>Lazy evaluation</td><td>A load without <code>mx.eval</code> moves its cost into the first forward pass. A forward pass without <code>mx.eval</code> computes nothing</td><td><code>mx.eval(model.parameters())</code> after the load. <code>run_mlx</code> evaluates its output</td><td>4, 6</td></tr>
+        <tr><td>R15</td><td>Wrong GELU form</td><td><code>nn.gelu_approx</code> (tanh) differs from erf by up to 4.7e-4 (near |x| = 2.7). That fails fp32</td><td>Use <code>nn.gelu</code>. The test of the MLP part catches the error</td><td>4</td></tr>
+        <tr><td>R16</td><td>Wrong pixel or weight layout</td><td>A wrong patch order gives tokens that look normal but are wrong</td><td>D4. The test of the patch embedding part against the Hugging Face <code>Conv2d</code></td><td>4</td></tr>
+        <tr><td>R17</td><td>RoPE-box jittering in train mode</td><td><code>model.train()</code> in Hugging Face turns on RoPE-box jittering (<code>pos_embed_rescale</code> 2.0). An MLX training run that does not match it learns other angles</td><td>A separate flag in the MLX backbone, off by default, not tied to the train mode of <code>nn.Module</code>. Step 8 decides</td><td>8</td></tr>
+        <tr><td>R18</td><td><code>load_weights</code> with a <code>pathlib.Path</code></td><td>Only a <code>str</code> is read as a path. A <code>Path</code> fails</td><td>D2: pass a list of (name, array) pairs</td><td>4</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 16.</b> Risks of Step 4. R5 and R6 come from Table 14 of <code>docs/plan.html</code>. R10 to R18 are new. The owner of each action is the agent.</p>
+</section>
+
+<section id="recommendation">
+  <h2>5 Recommendation</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>No.</th><th>Decision</th><th>Chosen option</th><th>Main reason</th></tr></thead>
+      <tbody>
+        <tr><td>D1</td><td>Code structure</td><td class="rec">A: <code>mlx.nn.Module</code> classes with the names of the safetensors file</td><td>Near-identity key map. <code>set_dtype</code>, <code>nn.quantize</code> and LoRA on <code>q_proj</code> and <code>v_proj</code> work on the tree</td></tr>
+        <tr><td>D2</td><td>Weights</td><td class="rec">A: convert at load time, no file</td><td>No extra files and no old files. A cache can come later behind the same function</td></tr>
+        <tr><td>D3</td><td>RoPE</td><td class="rec">C1: tables from NumPy fp32 in the Hugging Face order, 5 identity rows, cache by grid</td><td><code>mx.fast.rope</code> cannot do 2D RoPE in one call. C1 is the closest form to the reference output</td></tr>
+        <tr><td>D4</td><td>Patch embedding</td><td class="rec">B: patches from NCHW and one matmul</td><td>One kernel for all linear maps. The weight gets a reshape only</td></tr>
+        <tr><td>D5</td><td>Attention</td><td class="rec">A: <code>mx.fast.scaled_dot_product_attention</code></td><td>Fused kernels, softmax in fp32, a VJP for Step 8</td></tr>
+        <tr><td>D6</td><td>Tests and integration</td><td class="rec">B: parts against Hugging Face, blocks against the hidden states, end-to-end parity; new test files; <code>stored.py</code></td><td>A failure names the part. The part tests need no weights</td></tr>
+        <tr><td>D7</td><td>fp32 on the GPU</td><td class="rec">B: <code>MLX_ENABLE_TF32=0</code> for fp32; the CPU stream as a diagnostic</td><td>Removes the TF32 risk for the 0.9999 thresholds</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 17.</b> The chosen options. On 2026-11-06 the user asked the agent to decide. These options are the choice.</p>
+
+  <h3>5.1 What the design keeps open for later steps</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Step</th><th>Need</th><th>How the Step 4 design supports it</th></tr></thead>
+      <tbody>
+        <tr><td>5</td><td>SwiGLU (ViT-S+/16, ViT-H+/16, ViT-7B/16)</td><td>The block builds <code>mlp</code> from <code>config.json</code>: an MLP when <code>use_gated_mlp</code> is false, SwiGLU with <code>gate_proj</code>, <code>up_proj</code> and <code>down_proj</code> when it is true. The hidden width comes from <code>intermediate_size</code></td></tr>
+        <tr><td>5</td><td>Other biases and the head dimension</td><td>Each bias flag comes from the config (<code>query_bias</code>, <code>key_bias</code>, <code>value_bias</code>, <code>proj_bias</code>, <code>mlp_bias</code>). ViT-7B/16 has no q and no v bias. <code>rope_tables</code> takes the head dimension (128 for ViT-7B/16)</td></tr>
+        <tr><td>5</td><td>Six shards of ViT-7B/16</td><td>The loader reads every <code>*.safetensors</code> file of <code>weights_dir</code> and casts each tensor at load</td></tr>
+        <tr><td>5</td><td>fp16 and bf16, RoPE in fp32, an fp32 residual stream</td><td>The tables stay fp32 and <code>apply_rope</code> casts back. The dtype of each part follows the dtype mode. An MLX mode with an fp32 residual stream can use the name "fp16-autocast" or "bf16-autocast" and get the thresholds and the baseline join without new code</td></tr>
+        <tr><td>6</td><td><code>mx.compile</code>, RoPE cache, best batch size</td><td>The tables are inputs of the forward pass, cached by (H<sub>p</sub>, W<sub>p</sub>). The forward pass has no Python branch on values</td></tr>
+        <tr><td>6</td><td>Benchmark harness and block profile</td><td><code>run_mlx</code> keeps the contract of <code>run_torch</code>. The MLX parts carry the 11 part names of <code>block_parts</code></td></tr>
+        <tr><td>6</td><td>Quantized weights, fused qkv</td><td><code>nn.quantize</code> replaces the <code>nn.Linear</code> modules. A fused qkv can join the three weights at load</td></tr>
+        <tr><td>8</td><td>LoRA, gradients</td><td>The <code>nn.Linear</code> modules carry the names of the target modules. SDPA has a VJP. RoPE-box jittering has its own flag (R17)</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 18.</b> Hooks for Steps 5, 6 and 8.</p>
+
+  <h3>5.2 New terms in GLOSSARY.md</h3>
+  <ul>
+    <li><b>MLX weights</b>: the weights of one model size as MLX arrays, with the names and layouts of the MLX backbone. The key map makes them at load time from the Hugging Face safetensors.</li>
+    <li><b>RoPE tables</b>: the cos and sin arrays of one patch grid, with one row for each token and one column for each value of a head.</li>
+    <li><b>TF32</b>: a matmul mode that rounds the fp32 inputs to a 10-bit mantissa. MLX turns it on by default.</li>
+  </ul>
+
+  <h3>5.3 Open questions</h3>
+  <ul>
+    <li>Table 9 of <code>docs/plan.html</code>: the target of <code>test_rope_tables</code> becomes "the Hugging Face tables", plus a report-only difference to the Meta tables (D3). The plan records the change. The user can object.</li>
+    <li>Explainers: Step 4 asks for one page for each part (patch embedding, RoPE, attention, LayerScale, MLP). The numbers 01 to 03 follow the steps now. Recommendation: number the pages in order, from <code>04-patch-embedding.html</code> on. The user decides.</li>
+    <li>ADR: the fp32 dtype mode of <code>mlx</code> with TF32 off (D7) and the Hugging Face tables as the RoPE target (D3) are hard to reverse once results exist. Recommendation: ADR 0005 in the Close stage. The agent writes it.</li>
+    <li>Step 6: an fp32 row with TF32 on, and its thresholds. Step 6 decides.</li>
+  </ul>
+</section>
+
+<section id="sources">
+  <h2>6 Sources</h2>
+  <ul>
+    <li><code>docs/plan.html</code>: Step 4, Step 5 and Step 6 in Section 6, Table 9 (parity tests) and Table 14 (risk R5).</li>
+    <li><code>specs/01-scope/explore.html</code> (Table 1, the prior ports), <code>specs/03-baseline/explore.html</code>, <code>docs/learn/01-prior-ports.html</code>, <code>docs/learn/02-tokens-and-outputs.html</code>, ADR 0002 and ADR 0003.</li>
+    <li>Hugging Face transformers 5.22.1, Apache-2.0: <a href="https://github.com/huggingface/transformers/blob/main/src/transformers/models/dinov3_vit/modeling_dinov3_vit.py">src/transformers/models/dinov3_vit/modeling_dinov3_vit.py</a>, also <code>configuration_dinov3_vit.py</code>, <code>src/transformers/activations.py</code>, <code>src/transformers/integrations/sdpa_attention.py</code> and <code>src/transformers/conversion_mapping.py</code>. We read release 5.22.1; the main branch can differ.</li>
+    <li>Weights: <a href="https://huggingface.co/facebook/dinov3-vits16-pretrain-lvd1689m">huggingface.co/facebook/dinov3-vits16-pretrain-lvd1689m</a> (gated repo), snapshot <code>114c1379950215c8b35dfcd4e90a5c251dde0d32</code>: <code>config.json</code> and the header of <code>model.safetensors</code>.</li>
+    <li>Official DINOv3 code, read to check facts only (ADR 0002): <a href="https://github.com/facebookresearch/dinov3">github.com/facebookresearch/dinov3</a>, files <code>dinov3/layers/rope_position_encoding.py</code>, <code>dinov3/layers/attention.py</code>, <code>dinov3/hub/backbones.py</code>, <code>dinov3/models/vision_transformer.py</code> and <code>dinov3/models/__init__.py</code>. The released Meta checkpoint <code>dinov3_vits16_pretrain_lvd1689m-08c60483.pth</code>: the pickle header of <code>rope_embed.periods</code>.</li>
+    <li>MLX 0.32.4: <a href="https://github.com/ml-explore/mlx">github.com/ml-explore/mlx</a>. Docs: <a href="https://ml-explore.github.io/mlx/build/html/python/_autosummary/mlx.core.fast.rope.html">mlx.core.fast.rope</a>, <a href="https://ml-explore.github.io/mlx/build/html/python/_autosummary/mlx.core.fast.scaled_dot_product_attention.html">mlx.core.fast.scaled_dot_product_attention</a>, <a href="https://ml-explore.github.io/mlx/build/html/python/_autosummary/mlx.core.conv2d.html">mlx.core.conv2d</a>, <a href="https://ml-explore.github.io/mlx/build/html/python/nn/module.html">mlx.nn.Module</a>. Files of the installed package: <code>mlx/utils.h</code>, <code>mlx/backend/metal/kernels/steel/gemm/nax.h</code>, <code>mlx/backend/metal/kernels/steel/attn/nax.h</code>, the kernel names in <code>mlx.metallib</code> and the strings in <code>libmlx.dylib</code>.</li>
+    <li>Apple Metal Performance Primitives, header <code>MPPTensorOpsMatMul2d.h</code> of the macOS 26 SDK: the argument <code>relaxed_precision</code>.</li>
+    <li>Prior ports: <a href="https://github.com/vincentamato/MLXDINOv3">github.com/vincentamato/MLXDINOv3</a> (commit 3122d79, MIT), <a href="https://github.com/etornam45/mlx_dinov3">github.com/etornam45/mlx_dinov3</a> (commit 43d139b, DINOv3 License), <a href="https://github.com/riccardomusmeci/mlx-image">github.com/riccardomusmeci/mlx-image</a> (commit da92532, MIT, <code>src/mlxim/model/dinov3/</code>), <a href="https://github.com/sarveshmayil/mlx-dinov3">github.com/sarveshmayil/mlx-dinov3</a> (commit 0bdeaa0, MIT).</li>
+    <li>Siméoni et al., DINOv3, <a href="https://arxiv.org/abs/2508.10104">arXiv 2508.10104</a>.</li>
+    <li>Probes on 2026-11-06, outside the repo: the CPU-stream probes of the MLX reader (<code>mx.fast.rope</code>, SDPA, layer norm, GELU, the patch embedding paths), and our NumPy computations of Tables 7 and 8. No probe loaded a model or ran on the GPU.</li>
+  </ul>
+</section>
+</main>
+</body>
+</html>

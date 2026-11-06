@@ -1,0 +1,823 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Step 4 MLX port: Plan</title>
+<style>
+/* Spec page. White page, black text, no dark mode. */
+:root { --bg: #ffffff; --fg: #111414; --muted: #4a5655; --rule: #d6dedd; --panel: #f5f8f7; --accent: #057379; --pass: #1d7a3a; --fail: #b3261e; color-scheme: light; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif; }
+main { max-width: 64rem; margin: 0 auto; padding: 40px 20px 64px; display: grid; gap: 1.75rem; }
+main > *, section > * { min-width: 0; }
+h1 { font-size: 1.9rem; line-height: 1.15; margin: 0; }
+h2 { font-size: 1.3rem; margin: 0; }
+h3 { font-size: 1.05rem; margin: 0; }
+section { display: grid; gap: 0.8rem; }
+p, ul, ol { margin: 0; max-width: 46rem; }
+li + li { margin-top: 0.25rem; }
+code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.86em; }
+p code, li code, td code { overflow-wrap: anywhere; }
+pre { margin: 0; background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 0.8rem 1rem; overflow-x: auto; }
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+th, td { text-align: left; vertical-align: top; padding: 0.45rem 0.7rem 0.45rem 0; border-bottom: 1px solid var(--rule); }
+th { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); border-bottom: 1.5px solid var(--fg); }
+td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+tr.group td { background: var(--panel); font-weight: 600; }
+.caption { font-size: 0.88rem; color: var(--muted); }
+.box { border: 1.5px solid var(--accent); border-radius: 6px; padding: 0.8rem 1rem; display: grid; gap: 0.5rem; }
+figure { margin: 0; display: grid; gap: 0.4rem; }
+.fig { border: 1px solid var(--rule); border-radius: 6px; padding: 0.5rem; overflow-x: auto; }
+.fig svg { display: block; width: 100%; height: auto; min-width: 640px; }
+figcaption { font-size: 0.88rem; color: var(--muted); }
+a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+<header>
+  <h1>Step 4 MLX port: Plan</h1>
+  <p>Roadmap step 4. Status: draft, for the approval of the user. Date: 2026-11-06.</p>
+</header>
+
+<section id="goal">
+  <h2>1 Goal</h2>
+  <p>Step 4 builds the ViT-S/16 backbone in MLX, one part at a time, with a test for each part. It adds the key map from the Hugging Face safetensors to the MLX weights, and it adds the backend <code>mlx</code> to the parity tests. The step ends when ViT-S/16 on <code>mlx</code> passes the parity tests in fp32 on all 12 configurations. Step 5 adds SwiGLU, the other model sizes, fp16 and bf16. Step 6 adds speed. Step 8 adds LoRA. The Step 4 code must not block these steps.</p>
+  <p>On 2026-11-06 the user asked the agent to decide. So the recommended options of <code>explore.html</code> (Table 17) are the choice:</p>
+  <ul>
+    <li>D1: <code>mlx.nn.Module</code> classes. Their parameter names are the keys of the safetensors file (<code>layer.{i}.…</code>).</li>
+    <li>D2: the key map runs at load time. No converted file.</li>
+    <li>D3: the RoPE tables come from NumPy in fp32, in the order of the Hugging Face operations, with 5 identity rows for the prefix tokens and a cache for each patch grid.</li>
+    <li>D4: the patch embedding cuts the NCHW pixels into patches and does one matmul.</li>
+    <li>D5: the attention uses <code>mx.fast.scaled_dot_product_attention</code>.</li>
+    <li>D6: a test for each part against the Hugging Face modules on <code>torch-cpu</code>, a check of each block against the stored hidden states, and the end-to-end parity tests. New test files. The readers of the stored files move to <code>stored.py</code>, which imports no torch.</li>
+    <li>D7: the fp32 dtype mode of <code>mlx</code> runs with TF32 off (<code>MLX_ENABLE_TF32=0</code>). The CPU stream is only a diagnostic.</li>
+  </ul>
+  <p>A benchmark runs on this Mac while the agent writes this plan. So the agent loaded no model, ran no test and ran no GPU computation for this plan. The numbers come from <code>explore.html</code>, the headers of the stored files and the code. The build starts its first heavy job after the running benchmark ends.</p>
+</section>
+
+<section id="dinov3">
+  <h2>2 DINOv3 topic</h2>
+  <p>The topic is each part of a block, plus the patch embedding before the blocks: patch embedding, RoPE, attention, LayerScale and the feed-forward network (MLP with GELU in ViT-S/16). The Learn stage writes one explainer for each part. This plan decides the open question of Section 5.3 of <code>explore.html</code>: the file name of each explainer starts with the step number, then the part number. Step 5 continues with <code>05-…</code>.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Explainer in <code>docs/learn/</code></th><th>Part</th><th>Step 4 code that the explainer covers</th><th>Surprises that the explainer explains</th></tr></thead>
+      <tbody>
+        <tr><td><code>04-1-patch-embedding.html</code></td><td>Patch embedding, prefix tokens, weights</td><td><code>patchify</code>, <code>Embeddings</code>, <code>MlxConfig</code>, <code>map_key</code>, <code>mlx_weights</code>, <code>UnknownWeightError</code>, <code>required_mlx_load_bytes</code>, <code>load_mlx_backbone</code>, the readers in <code>stored.py</code></td><td>A convolution with stride = kernel is one matmul. The weight needs only a reshape. The mask token is for training only. The load is lazy until <code>mx.eval</code>.</td></tr>
+        <tr><td><code>04-2-rope.html</code></td><td>RoPE</td><td><code>rope_tables</code>, <code>rotate_half</code>, <code>apply_rope</code>, <code>MlxBackbone.rope</code></td><td>The half-split layout: y for the pairs 0 to 15, x for the pairs 16 to 31. <code>mx.fast.rope</code> cannot compute it in one call. The Meta checkpoints store the periods in bf16, so two "official" tables exist (R11). The explainer corrects the row "same angles" in Table 1 of <code>01-prior-ports.html</code>.</td></tr>
+        <tr><td><code>04-3-attention.html</code></td><td>Attention</td><td><code>Attention</code>, <code>tf32_enabled</code>, <code>TF32ModeError</code></td><td>The fused SDPA kernel multiplies the scores by scale × log2(e) and uses exp2. MLX turns TF32 on by default. The result of the TF32 probe.</td></tr>
+        <tr><td><code>04-4-layerscale.html</code></td><td>LayerScale and the block</td><td><code>LayerScale</code>, <code>Block</code></td><td>One learned factor for each channel, with values from −0.80 to 0.10 in block 0. The order pre-norm, branch, LayerScale, residual add. The LayerScale test is bit-equal.</td></tr>
+        <tr><td><code>04-5-mlp.html</code></td><td>MLP, final layer norm, the two outputs</td><td><code>MLP</code>, <code>MlxBackbone</code>, <code>run_mlx</code>, <code>run_mlx_hidden_states</code>, <code>MLX_DTYPE_MODES</code></td><td>Exact GELU (erf) against the tanh form (up to 4.7e-4 apart). A bf16 <code>mx.array</code> does not convert to NumPy. SwiGLU comes in Step 5.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 1.</b> The five explainers of the Learn stage. Together they cover every function that Step 4 adds to <code>src/</code>. Each explainer has a diagram, the annotated code and the surprises.</p>
+</section>
+
+<section id="design">
+  <h2>3 Design</h2>
+
+  <h3>3.1 Modules</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>File</th><th>New public names</th><th>Job</th></tr></thead>
+      <tbody>
+        <tr><td><code>src/dinov3_apple/stored.py</code></td><td><code>Configuration</code>, <code>configurations</code>, <code>own_aspect_size</code>, <code>read_inputs</code>, <code>read_reference</code>, <code>reference_path</code>, <code>model_slug</code>, <code>REPO_ROOT</code>, <code>IMAGES_DIR</code>, <code>REFERENCE_DIR</code>, <code>INPUTS_FILE</code>, <code>SQUARE_SIZES</code>, <code>HIDDEN_STATES_CONFIG</code></td><td>The readers of the stored pixels and the reference files, moved without change from <code>reference.py</code> and <code>preprocess.py</code>. No torch import (D6, R12).</td></tr>
+        <tr><td><code>src/dinov3_apple/mlx_model.py</code></td><td><code>MlxConfig</code>, <code>MLX_DTYPE_MODES</code>, <code>tf32_enabled</code>, <code>TF32ModeError</code>, <code>rope_tables</code>, <code>rotate_half</code>, <code>apply_rope</code>, <code>patchify</code>, <code>Embeddings</code>, <code>Attention</code>, <code>LayerScale</code>, <code>MLP</code>, <code>Block</code>, <code>MlxBackbone</code>, <code>run_mlx</code>, <code>run_mlx_hidden_states</code></td><td>The MLX backbone (D1, D3, D4, D5) and the run functions with the contract of <code>run_torch</code>. The module docstring names <code>modeling_dinov3_vit.py</code> of transformers (Apache-2.0) as the source (ADR 0002). No torch import.</td></tr>
+        <tr><td><code>src/dinov3_apple/mlx_weights.py</code></td><td><code>DROPPED_KEYS</code>, <code>UnknownWeightError</code>, <code>map_key</code>, <code>mlx_weights</code>, <code>required_mlx_load_bytes</code>, <code>load_mlx_backbone</code></td><td>The key map and the load (D2). Raises <code>WeightsNotFoundError</code> and <code>InsufficientMemoryError</code>, as the torch loader does, so the test fixture skips. No torch import.</td></tr>
+        <tr><td><code>scripts/bench_mlx_port.py</code></td><td>&ndash;</td><td>The small paired benchmark of Section 7. Options <code>--rounds</code>, <code>--dry-run</code>. The mlx worker imports no torch.</td></tr>
+        <tr><td><code>src/dinov3_apple/reference.py</code>, <code>preprocess.py</code></td><td>(changed)</td><td>Import the moved names from <code>stored.py</code> and re-export them in <code>__all__</code>. <code>reference.py</code> also keeps <code>TEST_IMAGES</code> in <code>__all__</code>, because <code>scripts/make_reference.py</code> imports it from <code>reference.py</code>. The imports of Steps 2 and 3 keep working.</td></tr>
+        <tr><td><code>scripts/parity_table.py</code></td><td>(changed)</td><td>Option <code>--backend {torch-mps,mlx}</code>. With <code>mlx</code> it reads <code>parity/mlx.jsonl</code> and writes <code>results/parity-mlx.md</code>. <code>record</code> writes the version under the name of the backend package (<code>"torch"</code> in torch-mps lines, <code>"mlx"</code> in mlx lines). <code>write_table</code> takes the backend, reads the version field of that package, and puts the backend name in the title, the batch text and the table captions.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 2.</b> New and changed code. <code>MLX_DTYPE_MODES</code> lives in <code>mlx_model.py</code> and not in <code>mlx_weights.py</code> (Table 13 of <code>explore.html</code>), because <code>run_mlx</code> needs it and <code>mlx_weights.py</code> imports <code>mlx_model.py</code>. The contract of <code>run_mlx</code> stays as <code>explore.html</code> gives it. Code of Steps 2 and 3 that the build reuses: <code>weights_dir</code>, <code>parameter_count</code>, <code>check_free_memory</code>, <code>load_bytes</code>, <code>LOAD_RATIO</code>, <code>measure_parity</code>, <code>THRESHOLDS</code>, <code>split_tokens</code>, <code>NUM_PREFIX_TOKENS</code>, <code>PATCH_SIZE</code>, <code>read_footprint</code> and the time budget, <code>make_batch</code>, <code>check_validity</code> and <code>summarize</code> of <code>bench.py</code>.</p>
+
+  <h3>3.2 The MLX backbone tree (D1)</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Name in the MLX tree = key in the file</th><th>Shape in ViT-S/16</th><th>MLX code</th><th>Hugging Face module (test oracle)</th></tr></thead>
+      <tbody>
+        <tr><td><code>embeddings.cls_token</code></td><td class="num">(1, 1, 384)</td><td><code>Embeddings</code></td><td><code>DINOv3ViTEmbeddings</code></td></tr>
+        <tr><td><code>embeddings.register_tokens</code></td><td class="num">(1, 4, 384)</td><td><code>Embeddings</code></td><td><code>DINOv3ViTEmbeddings</code></td></tr>
+        <tr><td><code>embeddings.patch_embeddings.weight</code>, <code>.bias</code></td><td class="num">(384, 768), (384)</td><td><code>nn.Linear(768, 384)</code> in <code>Embeddings</code></td><td><code>Conv2d(3, 384, 16, stride 16)</code>, weight (384, 3, 16, 16)</td></tr>
+        <tr><td><code>layer.{i}.norm1</code>, <code>layer.{i}.norm2</code> (weight, bias)</td><td class="num">(384)</td><td><code>nn.LayerNorm(384, eps=1e-5)</code></td><td><code>nn.LayerNorm</code></td></tr>
+        <tr><td><code>layer.{i}.attention.q_proj</code>, <code>v_proj</code>, <code>o_proj</code> (weight, bias)</td><td class="num">(384, 384), (384)</td><td><code>nn.Linear</code> in <code>Attention</code></td><td><code>DINOv3ViTAttention</code></td></tr>
+        <tr><td><code>layer.{i}.attention.k_proj.weight</code></td><td class="num">(384, 384)</td><td><code>nn.Linear(bias=False)</code></td><td><code>DINOv3ViTAttention</code> (<code>key_bias</code> false)</td></tr>
+        <tr><td><code>layer.{i}.layer_scale1.lambda1</code>, <code>layer_scale2.lambda1</code></td><td class="num">(384)</td><td><code>LayerScale</code></td><td><code>DINOv3ViTLayerScale</code></td></tr>
+        <tr><td><code>layer.{i}.mlp.up_proj</code> (weight, bias)</td><td class="num">(1536, 384), (1536)</td><td><code>nn.Linear</code> in <code>MLP</code></td><td><code>DINOv3ViTMLP</code></td></tr>
+        <tr><td><code>layer.{i}.mlp.down_proj</code> (weight, bias)</td><td class="num">(384, 1536), (384)</td><td><code>nn.Linear</code> in <code>MLP</code></td><td><code>DINOv3ViTMLP</code></td></tr>
+        <tr><td><code>norm.weight</code>, <code>norm.bias</code></td><td class="num">(384)</td><td><code>nn.LayerNorm</code></td><td><code>nn.LayerNorm</code></td></tr>
+        <tr><td>Not a parameter: <code>_rope_cache</code></td><td class="num">2 × (5 + N, 64) per grid</td><td><code>MlxBackbone.rope</code>, <code>rope_tables</code></td><td><code>DINOv3ViTRopePositionEmbedding</code> (<code>inv_freq</code> is a buffer, not in the file)</td></tr>
+        <tr><td>Dropped: <code>embeddings.mask_token</code></td><td class="num">(1, 1, 384)</td><td>&ndash;</td><td>Used only with <code>bool_masked_pos</code> in training</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 3.</b> The MLX backbone tree for ViT-S/16. The file has 12 × 17 block tensors + 5 embeddings tensors + 2 norm tensors = 211 tensors. The key map drops the mask token, so the MLX backbone has 210 parameters. Only the patch embedding weight changes its layout, by a reshape. <code>nn.Linear</code> of MLX uses the layout (out, in), as the file does. MLX lists give the names <code>layer.0</code> to <code>layer.11</code>. An attribute whose name starts with "_" is not a parameter, so <code>load_weights(strict=True)</code>, <code>set_dtype</code> and <code>nn.quantize</code> do not touch the RoPE tables.</p>
+
+  <h3>3.3 Weights (D2)</h3>
+  <p><code>map_key(name)</code> gives the MLX name of one Hugging Face tensor name. It accepts both spellings of the block keys: <code>layer.{i}.…</code> (the safetensors file) and <code>model.layer.{i}.…</code> (a transformers 5 model in memory, from <code>conversion_mapping.py</code>). It gives None for <code>embeddings.mask_token</code>. It raises <code>UnknownWeightError</code> for any other name, for example <code>rope_embeddings.inv_freq</code>. <code>mlx_weights(tensors, dtype)</code> applies <code>map_key</code>, reshapes the patch embedding weight and casts each array to the dtype of the dtype mode.</p>
+  <p><code>load_mlx_backbone(model_size, dtype_mode="fp32", tf32=False)</code> does these actions, in this order:</p>
+  <ol>
+    <li>For an fp32 dtype mode: compare <code>tf32</code> with <code>tf32_enabled()</code>. Raise <code>TF32ModeError</code> if they differ (Section 3.6).</li>
+    <li>Compute the need: <code>required_mlx_load_bytes</code> = <code>load_bytes(parameter_count × bytes per value)</code> = 1.2 × 86.4 MB + 4 GB = 4.10 GB for ViT-S/16 in fp32.</li>
+    <li>Run the memory check: <code>check_free_memory(need, "ViT-S/16 mlx fp32")</code>. The check writes one log line.</li>
+    <li>Set <code>mx.set_memory_limit(need)</code>.</li>
+    <li>Read <code>config.json</code> of <code>weights_dir(model_size)</code> into <code>MlxConfig</code>. A model size with SwiGLU raises <code>NotImplementedError</code> in Step 4.</li>
+    <li>Read each <code>*.safetensors</code> file with <code>mx.load(str(file))</code>. The read is lazy.</li>
+    <li>Call <code>model.load_weights(mlx_weights(tensors, dtype), strict=True)</code> with a list of (name, array) pairs, not with a path (R18). The strict load checks the key set and every shape.</li>
+    <li>Call <code>mx.eval(model.parameters())</code>, so the load cost does not move into the first forward pass (R14).</li>
+  </ol>
+
+  <h3>3.4 RoPE (D3)</h3>
+  <p><code>rope_tables(grid_h, grid_w, head_dim, theta)</code> computes the frequencies, the patch-center coordinates, the angles, cos and sin in NumPy fp32, in the order of <code>DINOv3ViTRopePositionEmbedding</code>. It puts 5 identity rows (cos 1, sin 0) on top. The result is two fp32 arrays of shape (5 + N, head_dim). <code>MlxBackbone.rope(grid_h, grid_w)</code> keeps one pair of <code>mx.array</code> tables for each grid in <code>_rope_cache</code>. <code>apply_rope</code> casts q or k to fp32, computes x · cos + rotate_half(x) · sin and casts back to the dtype of x. For the prefix tokens the result is x · 1 + r · 0 = x, so no split and no join is necessary.</p>
+  <p>The target of <code>test_rope_tables</code> is the Hugging Face tables, because the reference output comes from the Hugging Face code. The difference to the Meta formula with bf16 periods is report only (Table 8 of <code>explore.html</code>: up to 0.0079 rad at 224 px). The Close stage changes the row <code>test_rope_tables</code> in Table 9 of <code>docs/plan.html</code> to say so. RoPE-box jittering stays out of Step 4: the attribute <code>rope_box_jitter</code> is False and nothing reads it yet. Step 8 decides (R17).</p>
+
+  <h3>3.5 Patch embedding and attention (D4, D5)</h3>
+  <p><code>patchify(pixels, 16)</code> reshapes the NCHW pixels (B, 3, H, W) to (B, 3, Hp, 16, Wp, 16), transposes them to (B, Hp, Wp, 3, 16, 16) and reshapes them to (B, Hp · Wp, 768). The order inside one patch is channel, row, column, the same order as the reshaped weight. The token order is row-major (token n = Wp · i + j), as in <code>flatten(2)</code> of Hugging Face. An input resolution that is not a multiple of 16 raises <code>ValueError</code>. <code>Embeddings</code> applies the <code>nn.Linear</code>, then puts the CLS token and the 4 register tokens in front.</p>
+  <p><code>Attention</code> splits q, k and v into 6 heads of 64 values, applies RoPE to q and k, calls <code>mx.fast.scaled_dot_product_attention(q, k, v, scale=0.125, mask=None)</code>, merges the heads and applies <code>o_proj</code>. There is no explicit attention in <code>src/</code>. Two oracles check the attention: the Hugging Face module on <code>torch-cpu</code>, and NumPy in float64 for the kernel alone.</p>
+
+  <h3>3.6 Dtypes and TF32 (D7)</h3>
+  <ul>
+    <li>Step 4 has one dtype mode: <code>MLX_DTYPE_MODES = {"fp32": mx.float32}</code>. Each key is also a key of <code>THRESHOLDS</code> and <code>DTYPE_OF_MODE</code>, so the parity thresholds and the baseline join of Step 6 work without new code.</li>
+    <li>MLX reads <code>MLX_ENABLE_TF32</code> once, at its first use, into a static value. The default is 1 (TF32 on). The fp32 dtype mode needs 0. <code>tests/conftest.py</code> sets <code>MLX_ENABLE_TF32=0</code> before its first import of mlx. The benchmark driver sets the value in the environment of each mlx worker. The code in <code>src/</code> does not change the environment.</li>
+    <li><code>tf32_enabled()</code> reads the environment as MLX does. <code>load_mlx_backbone</code> raises <code>TF32ModeError</code> when the request and the environment differ. Limit: the check sees the environment, not the static value of MLX. A process that changes the environment after its first mlx matmul defeats the check. The TF32 probe test measures the real effect.</li>
+    <li>Diagnostic: with <code>DINOV3_MLX_DEVICE=cpu</code> the backbone fixture calls <code>mx.set_default_device(mx.cpu)</code>. The build uses it only when a parity test fails on the GPU. A pass on the CPU points to a kernel. A fail on the CPU points to the port.</li>
+    <li>Step 5 needs (R6): the RoPE tables stay fp32 and <code>apply_rope</code> casts back. <code>run_mlx</code> casts the fp32 pixels to the dtype of the mode, because <code>mx.array</code> of a float64 array gives fp32 without a message. An fp16 array times an fp32 array gives fp32 in MLX, so Step 5 casts <code>lambda1</code> explicitly. No part has a fixed dtype in its code, so an fp32 residual stream is a Step 5 option.</li>
+  </ul>
+
+  <h3>3.7 Memory and run rules</h3>
+  <ul>
+    <li>Memory check before each model load: <code>load_mlx_backbone</code> calls <code>check_free_memory</code> with the need of Section 3.3. A load that does not fit raises <code>InsufficientMemoryError</code>, and the test skips with the reason.</li>
+    <li>MLX memory limit: <code>tests/conftest.py</code> sets <code>mx.set_memory_limit(4 GB)</code> at the start of the session. The tests without the gated weights need less than 100 MB. <code>load_mlx_backbone</code> then sets the limit to the need of its load. Each mlx subprocess of a test sets its own limit of 1 GB (T24). The MLX limit is soft (R13), so the memory check stays the main guard.</li>
+    <li>One model in memory: the backbone slot of Step 2 holds at most one backbone, torch or mlx. A new load frees the previous one first. <code>free()</code> also calls <code>mx.clear_cache()</code>.</li>
+    <li>One heavy job at a time: the test session with the weights, the TF32 probe and the benchmark run one after the other. None of them starts while another benchmark runs on this Mac.</li>
+    <li>The benchmark driver of Section 7 checks the machine state and the free memory before each worker, and starts each worker in its own subprocess. The torch workers get the MPS watermarks 0.8 and 0.6.</li>
+  </ul>
+
+  <h3>3.8 The backend mlx in the parity tests (D6)</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>File</th><th>Change</th></tr></thead>
+      <tbody>
+        <tr><td><code>tests/conftest.py</code></td><td>Sets <code>MLX_ENABLE_TF32=0</code> (a fixed value, not <code>setdefault</code>) before any import of mlx. Sets the MLX memory limit. The backbone slot sends the device <code>"mlx"</code> to <code>load_mlx_backbone</code>, and <code>free()</code> calls <code>mx.clear_cache()</code>. <code>record</code> gets the keyword arguments <code>backend="torch-mps"</code> and <code>values=None</code>: it writes to <code>parity/{backend}.jsonl</code> with the version of the backend package, and <code>values</code> carries report-only numbers. The sort key becomes (model size, backend, dtype mode); the backend is <code>"mlx"</code> for a test with the marker <code>mlx</code>.</td></tr>
+        <tr><td><code>tests/under_test.py</code></td><td><code>MLX_MODEL_SIZES_UNDER_TEST = ["ViT-S/16"]</code>. Step 5 sets it to <code>MODEL_SIZES_UNDER_TEST</code>.</td></tr>
+        <tr><td><code>tests/parity_checks.py</code> (new)</td><td><code>CONFIG_IDS</code>, <code>BATCH_CONFIGS</code>, <code>assert_thresholds</code>, <code>record_skip</code> and <code>min_token_cosine</code>. The first four move out of <code>test_torch_mps_parity.py</code>. In that file, the third and the fourth have the names <code>_assert_thresholds</code> and <code>_record_skip</code>; the move removes the leading underscore. <code>test_torch_mps_parity.py</code> imports the four names and keeps its test ids. <code>record_skip(record, *key, backend="torch-mps")</code> gives <code>backend=backend</code> to <code>record</code>, and the mlx tests call it with <code>backend="mlx"</code>.</td></tr>
+        <tr><td><code>tests/small_model.py</code> (new)</td><td><code>small_hf_model(seed)</code> and <code>small_mlx_model(hf_model)</code> of Section 6.1.</td></tr>
+        <tr><td><code>tests/test_mlx_weights.py</code>, <code>test_mlx_rope.py</code>, <code>test_mlx_parts.py</code>, <code>test_mlx_environment.py</code>, <code>test_mlx_parity.py</code> (new)</td><td>The tests of Section 6. Each file has <code>pytestmark = pytest.mark.mlx</code>. The parity test ids hold the backend, the model size, the dtype mode and the configuration, for example <code>mlx-ViT-S/16-fp32-forest/224x304</code> (Table 9 of <code>docs/plan.html</code>).</td></tr>
+        <tr><td><code>pyproject.toml</code></td><td>Registers the marker <code>mlx</code> in <code>[tool.pytest.ini_options]</code>. <code>uv run pytest -m mlx</code> runs only the mlx tests.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 4.</b> Changes to the tests. Step 4 does not parametrize <code>test_torch_mps_parity.py</code> over the backends, so the test ids of Steps 2 and 3 stay the same.</p>
+
+  <h3>3.9 Hooks for later steps</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Step</th><th>Need</th><th>How the Step 4 code supports it</th></tr></thead>
+      <tbody>
+        <tr><td>5</td><td>SwiGLU, other biases, head dimension 128</td><td><code>MlxConfig.from_hf</code> reads every bias flag and <code>use_gated_mlp</code>. <code>Block</code> builds its feed-forward network from the config; Step 5 replaces the <code>NotImplementedError</code> by a SwiGLU class with <code>gate_proj</code>, <code>up_proj</code> and <code>down_proj</code>. The key map already accepts <code>mlp.gate_proj</code>. <code>rope_tables</code> takes the head dimension.</td></tr>
+        <tr><td>5</td><td>Six shards of ViT-7B/16, fp16 and bf16</td><td>The loader reads every <code>*.safetensors</code> file and casts each tensor at load. <code>MLX_DTYPE_MODES</code> gets new keys from <code>THRESHOLDS</code>.</td></tr>
+        <tr><td>6</td><td><code>mx.compile</code>, benchmark harness, block profile</td><td>The RoPE tables enter the forward pass as inputs. The forward pass has no Python branch on values. <code>run_mlx</code> keeps the contract of <code>run_torch</code>. The part tests use the 11 part names of <code>block_parts</code>; Step 6 moves the MLX part functions of the test into <code>src/</code> for the mlx block profile.</td></tr>
+        <tr><td>6</td><td>Quantized weights, fused qkv</td><td><code>nn.quantize</code> replaces the <code>nn.Linear</code> modules. A fused qkv can join the three weights in <code>mlx_weights</code>.</td></tr>
+        <tr><td>8</td><td>LoRA on <code>q_proj</code> and <code>v_proj</code>, gradients</td><td>The <code>nn.Linear</code> modules carry the names of the target modules. <code>mx.fast.scaled_dot_product_attention</code> has a VJP. RoPE-box jittering has its own attribute (R17).</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 5.</b> Hooks for Steps 5, 6 and 8, from Table 18 of <code>explore.html</code>.</p>
+
+  <h3>3.10 Run order of the build</h3>
+  <ol>
+    <li>Wait until the benchmark that runs on this Mac now ends.</li>
+    <li>Write each test of Table 6. These tests load no gated weights.</li>
+    <li>Run the new tests and see them fail (red).</li>
+    <li>Write <code>stored.py</code>, <code>mlx_model.py</code> and <code>mlx_weights.py</code> until the tests pass (green).</li>
+    <li>Run <code>test_mlx_tf32_probe</code>: two subprocesses with one small matmul each.</li>
+    <li>Run the tests with the weights: <code>uv run pytest -m mlx</code>. This is one model load of ViT-S/16 in fp32 with a need of 4.10 GB.</li>
+    <li>If a parity test fails, do these steps, then stop:
+      <ol type="a">
+        <li>Run the failed test again with <code>DINOV3_MLX_DEVICE=cpu</code>.</li>
+        <li>Record the results of the GPU run and the CPU run.</li>
+        <li>Ask the user. Do not continue before the user answers.</li>
+      </ol>
+    </li>
+    <li>Run <code>uv run python scripts/parity_table.py --backend mlx</code>.</li>
+    <li>Run <code>uv run python scripts/bench_mlx_port.py --dry-run</code>.</li>
+    <li>Run <code>uv run python scripts/bench_mlx_port.py</code> (the benchmark of Section 7, about 4 min).</li>
+    <li>Run <code>uv run pytest</code>.</li>
+    <li>Run <code>DINOV3_SLOW=1 uv run pytest</code>.</li>
+    <li>Run <code>uv run ruff format</code>.</li>
+    <li>Run <code>uv run ruff check</code>.</li>
+  </ol>
+</section>
+
+<section id="flow">
+  <h2>4 Data flow</h2>
+  <figure>
+    <div class="fig"><svg viewBox="0 0 960 520" role="img" aria-label="Data flow of Step 4: weight load, parity tests, part tests and benchmark" font-family="-apple-system, Helvetica Neue, Arial, sans-serif">
+      <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#4a5655"/></marker></defs>
+      <rect width="960" height="520" fill="#ffffff"/>
+      <g font-size="12.5" fill="#111414">
+        <text x="20" y="22" font-weight="600" fill="#4a5655">Load, once for each model size and dtype mode</text>
+
+        <rect x="20" y="32" width="180" height="104" rx="6" fill="#f5f8f7" stroke="#4a5655"/>
+        <text x="110" y="58" text-anchor="middle" font-weight="600">Hugging Face cache</text>
+        <text x="110" y="80" text-anchor="middle">config.json</text>
+        <text x="110" y="96" text-anchor="middle">model.safetensors</text>
+        <text x="110" y="112" text-anchor="middle">211 tensors, fp32</text>
+
+        <rect x="230" y="32" width="290" height="104" rx="6" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="375" y="54" text-anchor="middle" font-weight="600">mlx_weights.load_mlx_backbone</text>
+        <text x="244" y="76">1 TF32 check    2 need: 4.10 GB</text>
+        <text x="244" y="92">3 memory check   4 mx.set_memory_limit</text>
+        <text x="244" y="108">5 mx.load (lazy)   6 key map 211 → 210</text>
+        <text x="244" y="124">7 load_weights(strict)   8 mx.eval</text>
+
+        <rect x="550" y="32" width="390" height="104" rx="6" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="745" y="52" text-anchor="middle" font-weight="600">MlxBackbone (mlx_model.py)</text>
+        <g font-size="10.5">
+          <rect x="562" y="62" width="90" height="28" fill="#ffffff" stroke="#057379"/>
+          <text x="607" y="80" text-anchor="middle">patch embedding</text>
+          <rect x="664" y="62" width="84" height="28" fill="#ffffff" stroke="#057379"/>
+          <text x="706" y="80" text-anchor="middle">prefix tokens</text>
+          <rect x="760" y="62" width="78" height="28" fill="#ffffff" stroke="#057379"/>
+          <text x="799" y="80" text-anchor="middle">12 × Block</text>
+          <rect x="850" y="62" width="80" height="28" fill="#ffffff" stroke="#057379"/>
+          <text x="890" y="80" text-anchor="middle">final norm</text>
+          <rect x="690" y="106" width="160" height="24" fill="#ffffff" stroke="#057379" stroke-dasharray="4 3"/>
+          <text x="770" y="122" text-anchor="middle">RoPE tables, cache by grid</text>
+        </g>
+
+        <text x="20" y="168" font-weight="600" fill="#4a5655">Parity tests (ViT-S/16 weights)</text>
+
+        <rect x="20" y="178" width="180" height="80" rx="6" fill="#f5f8f7" stroke="#4a5655"/>
+        <text x="110" y="200" text-anchor="middle" font-weight="600">Step 2 files</text>
+        <text x="110" y="218" text-anchor="middle">inputs.safetensors</text>
+        <text x="110" y="234" text-anchor="middle">reference-vits16</text>
+        <text x="110" y="250" text-anchor="middle">.safetensors</text>
+
+        <rect x="230" y="178" width="130" height="80" rx="6" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="295" y="200" text-anchor="middle" font-weight="600">stored.py</text>
+        <text x="295" y="218" text-anchor="middle">read_inputs</text>
+        <text x="295" y="234" text-anchor="middle">read_reference</text>
+        <text x="295" y="250" text-anchor="middle">no torch</text>
+
+        <rect x="390" y="178" width="180" height="80" rx="6" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="480" y="200" text-anchor="middle" font-weight="600">run_mlx</text>
+        <text x="480" y="218" text-anchor="middle">pixels (B, 3, H, W) fp32</text>
+        <text x="480" y="234" text-anchor="middle">→ tokens (B, 5 + N, D)</text>
+        <text x="480" y="250" text-anchor="middle">fp32 NumPy</text>
+
+        <rect x="600" y="178" width="160" height="80" rx="6" fill="#f5f8f7" stroke="#4a5655"/>
+        <text x="680" y="200" text-anchor="middle" font-weight="600">Step 2 code</text>
+        <text x="680" y="218" text-anchor="middle">split_tokens</text>
+        <text x="680" y="234" text-anchor="middle">measure_parity</text>
+        <text x="680" y="250" text-anchor="middle">THRESHOLDS["fp32"]</text>
+
+        <rect x="790" y="178" width="150" height="80" rx="6" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="865" y="200" text-anchor="middle" font-weight="600">parity/mlx.jsonl</text>
+        <text x="865" y="218" text-anchor="middle">parity_table.py</text>
+        <text x="865" y="234" text-anchor="middle">--backend mlx</text>
+        <text x="865" y="250" text-anchor="middle">parity-mlx.md</text>
+
+        <text x="488" y="290" text-anchor="middle" font-size="11" fill="#4a5655">reference tokens and stored hidden states</text>
+
+        <text x="20" y="314" font-weight="600" fill="#4a5655">Part tests (no gated weights)</text>
+
+        <rect x="20" y="324" width="180" height="80" rx="6" fill="#f5f8f7" stroke="#4a5655"/>
+        <text x="110" y="346" text-anchor="middle" font-weight="600">Small Hugging Face model</text>
+        <text x="110" y="364" text-anchor="middle">torch-cpu, 2 blocks</text>
+        <text x="110" y="380" text-anchor="middle">random weights</text>
+        <text x="110" y="396" text-anchor="middle">ViT-S/16 config values</text>
+
+        <rect x="230" y="324" width="130" height="80" rx="6" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="295" y="346" text-anchor="middle" font-weight="600">key map</text>
+        <g font-size="12">
+          <text x="295" y="364" text-anchor="middle">model.layer.{i}</text>
+          <text x="295" y="380" text-anchor="middle">spelling</text>
+          <text x="295" y="396" text-anchor="middle">mask token dropped</text>
+        </g>
+
+        <rect x="390" y="324" width="180" height="80" rx="6" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="480" y="346" text-anchor="middle" font-weight="600">small MlxBackbone</text>
+        <text x="480" y="364" text-anchor="middle">the same weights</text>
+        <text x="480" y="380" text-anchor="middle">MLX GPU, fp32</text>
+        <text x="480" y="396" text-anchor="middle">TF32 off</text>
+
+        <rect x="600" y="324" width="340" height="80" rx="6" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="770" y="346" text-anchor="middle" font-weight="600">Part tests: largest difference (Table 7)</text>
+        <text x="770" y="364" text-anchor="middle">11 parts of block_parts, patch embedding,</text>
+        <text x="770" y="380" text-anchor="middle">attention, MLP, block, final norm, RoPE tables,</text>
+        <text x="770" y="396" text-anchor="middle">SDPA kernel against NumPy float64</text>
+
+        <text x="440" y="436" text-anchor="middle" font-size="11" fill="#4a5655">Hugging Face outputs: the oracle</text>
+
+        <text x="20" y="458" font-weight="600" fill="#4a5655">Benchmark (Section 7)</text>
+        <rect x="20" y="466" width="920" height="44" rx="6" fill="#ffffff" stroke="#057379" stroke-width="1.5" stroke-dasharray="6 4"/>
+        <g font-size="12">
+          <text x="34" y="484">scripts/bench_mlx_port.py: 3 rounds × 2 batch sizes × 2 workers, one subprocess each, the order alternates from round to round</text>
+          <text x="34" y="500">torch-mps fp32 · mlx fp32 TF32 off → results/bench-mlx-port.jsonl (paired ratios, peak memory)</text>
+        </g>
+      </g>
+      <g stroke="#4a5655" stroke-width="1.5" fill="none">
+        <path d="M200,84 H226" marker-end="url(#arrow)"/>
+        <path d="M520,84 H546" marker-end="url(#arrow)"/>
+        <path d="M652,76 H660" marker-end="url(#arrow)"/>
+        <path d="M748,76 H756" marker-end="url(#arrow)"/>
+        <path d="M838,76 H846" marker-end="url(#arrow)"/>
+        <path d="M799,106 V94" marker-end="url(#arrow)"/>
+        <path d="M745,136 V156 H480 V174" marker-end="url(#arrow)"/>
+        <path d="M200,218 H226" marker-end="url(#arrow)"/>
+        <path d="M360,218 H386" marker-end="url(#arrow)"/>
+        <path d="M570,218 H596" marker-end="url(#arrow)"/>
+        <path d="M760,218 H786" marker-end="url(#arrow)"/>
+        <path d="M295,258 V274 H680 V262" marker-end="url(#arrow)"/>
+        <path d="M200,364 H226" marker-end="url(#arrow)"/>
+        <path d="M360,364 H386" marker-end="url(#arrow)"/>
+        <path d="M570,364 H596" marker-end="url(#arrow)"/>
+        <path d="M110,404 V420 H770 V408" marker-end="url(#arrow)"/>
+      </g>
+    </svg></div>
+    <figcaption><b>Figure 1.</b> Data flow of Step 4. Top: the load path from the Hugging Face cache to the MLX backbone, with the memory check before the read. The RoPE tables (dashed) are not parameters; the backbone makes them once for each patch grid. Middle: the parity tests read the stored pixels and the reference file through <code>stored.py</code>, run <code>run_mlx</code> and compare with the Step 2 code. Bottom: the part tests build a small Hugging Face model with random weights on <code>torch-cpu</code>, give the same weights to a small MLX backbone through the key map, and compare each part. The benchmark (dashed frame) uses the same load and the same forward pass. Teal: new code or new files of Step 4. Grey: files and code of earlier steps, and the Hugging Face oracle.</figcaption>
+  </figure>
+</section>
+
+<section id="code">
+  <h2>5 Key code</h2>
+  <p>These snippets show the shape of the code. The build can change the details. It must keep the public names, the contract of <code>run_mlx</code> and the order of the operations in <code>rope_tables</code>.</p>
+  <pre><code># src/dinov3_apple/mlx_weights.py
+DROPPED_KEYS = frozenset({"embeddings.mask_token"})  # training only
+PATCH_WEIGHT = "embeddings.patch_embeddings.weight"
+OUTER_KEYS = frozenset({"embeddings.cls_token", "embeddings.register_tokens", PATCH_WEIGHT,
+                        "embeddings.patch_embeddings.bias", "norm.weight", "norm.bias"})
+# layer.{i}.… in the safetensors file, model.layer.{i}.… in a transformers 5 model in memory.
+BLOCK_KEY = re.compile(r"(?:model\.)?(layer\.\d+\.[a-z0-9_.]+\.(?:weight|bias|lambda1))")
+
+
+class UnknownWeightError(KeyError):
+    """A tensor name of the weights has no place in the MLX backbone."""
+
+
+def map_key(name: str) -&gt; str | None:
+    """Return the MLX parameter name of one Hugging Face tensor name, or None for a dropped tensor.
+
+    Raises:
+        UnknownWeightError: If the name is not a tensor of a DINOv3 backbone.
+    """
+    if name in DROPPED_KEYS:
+        return None
+    if name in OUTER_KEYS:
+        return name
+    if match := BLOCK_KEY.fullmatch(name):
+        return match.group(1)
+    raise UnknownWeightError(name)
+
+
+def mlx_weights(tensors: Mapping[str, mx.array], dtype: mx.Dtype) -&gt; list[tuple[str, mx.array]]:
+    """Return the MLX weights as (name, array) pairs for load_weights(strict=True).
+
+    The patch embedding weight (D, 3, 16, 16) becomes (D, 768): channel, row, column, as in patchify.
+    """
+    pairs = []
+    for name, array in tensors.items():
+        if (key := map_key(name)) is None:
+            continue
+        if key == PATCH_WEIGHT:
+            array = array.reshape(array.shape[0], -1)
+        pairs.append((key, array.astype(dtype)))
+    return pairs</code></pre>
+  <pre><code># src/dinov3_apple/mlx_weights.py
+def load_mlx_backbone(
+    model_size: str, dtype_mode: str = "fp32", tf32: bool = False, ratio: float = LOAD_RATIO
+) -&gt; MlxBackbone:
+    """Load the MLX backbone of one model size after a memory check (Section 3.3).
+
+    Raises:
+        TF32ModeError: If the fp32 dtype mode asks for another TF32 state than MLX_ENABLE_TF32.
+        InsufficientMemoryError: If the memory check fails.
+        WeightsNotFoundError: If the weights are not on this Mac.
+        NotImplementedError: For a model size with SwiGLU (Step 5).
+    """
+    dtype = MLX_DTYPE_MODES[dtype_mode]
+    if dtype == mx.float32 and tf32_enabled() != tf32:
+        raise TF32ModeError(f"set MLX_ENABLE_TF32={int(tf32)} before the first use of mlx")
+    need = required_mlx_load_bytes(model_size, dtype_mode, ratio)
+    check_free_memory(need, f"{model_size} mlx {dtype_mode}")
+    mx.set_memory_limit(need)
+    folder = weights_dir(model_size)
+    model = MlxBackbone(MlxConfig.from_hf(json.loads((folder / "config.json").read_text())))
+    tensors: dict[str, mx.array] = {}
+    for file in sorted(folder.glob("*.safetensors")):
+        tensors |= mx.load(str(file))                    # lazy; a str, not a Path (R18)
+    model.load_weights(mlx_weights(tensors, dtype), strict=True)
+    mx.eval(model.parameters())                          # the load cost stays out of the first call (R14)
+    return model</code></pre>
+  <pre><code># src/dinov3_apple/mlx_model.py
+def rope_tables(grid_h: int, grid_w: int, head_dim: int, theta: float) -&gt; tuple[np.ndarray, np.ndarray]:
+    """Return the RoPE tables cos and sin of one patch grid, each (5 + Hp · Wp, head_dim), fp32.
+
+    The steps and their order follow DINOv3ViTRopePositionEmbedding of Hugging Face. NumPy 2 keeps
+    a Python float weak, so each step stays fp32. Rows 0 to 4 are identity rows for the prefix tokens.
+    """
+    inv_freq = 1 / theta ** np.arange(0, 1, 4 / head_dim, dtype=np.float32)      # (head_dim / 4,)
+    coord_h = np.arange(0.5, grid_h, dtype=np.float32) / grid_h
+    coord_w = np.arange(0.5, grid_w, dtype=np.float32) / grid_w
+    coords = np.stack(np.meshgrid(coord_h, coord_w, indexing="ij"), axis=-1).reshape(-1, 2)
+    coords = 2.0 * coords - 1.0                                                     # (N, 2): y, x
+    angles = (2 * np.pi * coords[:, :, None] * inv_freq[None, None, :]).reshape(len(coords), -1)
+    angles = np.tile(angles, 2)                                                     # (N, head_dim)
+    prefix = np.ones((NUM_PREFIX_TOKENS, head_dim), np.float32)
+    return np.concatenate([prefix, np.cos(angles)]), np.concatenate([0 * prefix, np.sin(angles)])
+
+
+def rotate_half(x: mx.array) -&gt; mx.array:
+    """Return (-x2, x1) for the halves x1 and x2 of the last axis (the half-split layout)."""
+    half = x.shape[-1] // 2
+    return mx.concatenate([-x[..., half:], x[..., :half]], axis=-1)
+
+
+def apply_rope(x: mx.array, cos: mx.array, sin: mx.array) -&gt; mx.array:
+    """Rotate queries or keys. x: (B, heads, 5 + N, head_dim). cos and sin: (5 + N, head_dim), fp32.
+
+    The rotation runs in fp32. The result has the dtype of x. The identity rows give x · 1 + r · 0 = x.
+    """
+    xf = x.astype(mx.float32)
+    return (xf * cos + rotate_half(xf) * sin).astype(x.dtype)</code></pre>
+  <pre><code># src/dinov3_apple/mlx_model.py
+def patchify(pixels: mx.array, patch_size: int) -&gt; mx.array:
+    """Cut NCHW pixels (B, C, H, W) into patches (B, Hp · Wp, C · p · p): channel, row, column.
+
+    Raises:
+        ValueError: If H or W is not a multiple of patch_size.
+    """
+    b, c, h, w = pixels.shape
+    if h % patch_size or w % patch_size:
+        raise ValueError(f"input resolution {h} x {w} is not a multiple of {patch_size}")
+    hp, wp = h // patch_size, w // patch_size
+    x = pixels.reshape(b, c, hp, patch_size, wp, patch_size).transpose(0, 2, 4, 1, 3, 5)
+    return x.reshape(b, hp * wp, c * patch_size * patch_size)
+
+
+class Embeddings(nn.Module):
+    """The patch embedding and the prefix tokens: CLS token, register tokens, patch tokens."""
+
+    def __init__(self, config: MlxConfig) -&gt; None:
+        super().__init__()
+        self.patch_size = config.patch_size
+        self.cls_token = mx.zeros((1, 1, config.dim))
+        self.register_tokens = mx.zeros((1, config.num_register_tokens, config.dim))
+        self.patch_embeddings = nn.Linear(3 * config.patch_size**2, config.dim)
+
+    def __call__(self, pixels: mx.array) -&gt; mx.array:
+        patches = self.patch_embeddings(patchify(pixels, self.patch_size))
+        prefix = mx.concatenate([self.cls_token, self.register_tokens], axis=1)
+        prefix = mx.broadcast_to(prefix, (pixels.shape[0], *prefix.shape[1:]))
+        return mx.concatenate([prefix, patches], axis=1)</code></pre>
+  <pre><code># src/dinov3_apple/mlx_model.py
+class Attention(nn.Module):
+    """Full attention over all tokens, with RoPE on the queries and keys of the patch tokens."""
+
+    def __init__(self, config: MlxConfig) -&gt; None:
+        super().__init__()
+        dim = config.dim
+        self.heads = config.heads
+        self.scale = config.head_dim**-0.5                       # 0.125 for head dimension 64
+        self.q_proj = nn.Linear(dim, dim, bias=config.query_bias)
+        self.k_proj = nn.Linear(dim, dim, bias=config.key_bias)   # no bias in ViT-S/16
+        self.v_proj = nn.Linear(dim, dim, bias=config.value_bias)
+        self.o_proj = nn.Linear(dim, dim, bias=config.proj_bias)
+
+    def __call__(self, x: mx.array, cos: mx.array, sin: mx.array) -&gt; mx.array:
+        b, t, d = x.shape
+
+        def heads(y: mx.array) -&gt; mx.array:                       # (B, T, D) -&gt; (B, heads, T, D / heads)
+            return y.reshape(b, t, self.heads, -1).transpose(0, 2, 1, 3)
+
+        q, k, v = heads(self.q_proj(x)), heads(self.k_proj(x)), heads(self.v_proj(x))
+        q, k = apply_rope(q, cos, sin), apply_rope(k, cos, sin)
+        a = mx.fast.scaled_dot_product_attention(q, k, v, scale=self.scale, mask=None)
+        return self.o_proj(a.transpose(0, 2, 1, 3).reshape(b, t, d))
+
+
+class LayerScale(nn.Module):
+    """A learned factor for each channel."""
+
+    def __init__(self, dim: int) -&gt; None:
+        super().__init__()
+        self.lambda1 = mx.ones((dim,))
+
+    def __call__(self, x: mx.array) -&gt; mx.array:
+        return x * self.lambda1
+
+
+class MLP(nn.Module):
+    """The feed-forward network of ViT-S/16, ViT-B/16 and ViT-L/16."""
+
+    def __init__(self, config: MlxConfig) -&gt; None:
+        super().__init__()
+        self.up_proj = nn.Linear(config.dim, config.ff, bias=config.mlp_bias)
+        self.down_proj = nn.Linear(config.ff, config.dim, bias=config.mlp_bias)
+
+    def __call__(self, x: mx.array) -&gt; mx.array:
+        return self.down_proj(nn.gelu(self.up_proj(x)))     # the erf form, not nn.gelu_approx (R15)
+
+
+class Block(nn.Module):
+    """One block: an attention branch and a feed-forward branch, each with a pre-norm, a LayerScale and a residual add."""
+
+    def __init__(self, config: MlxConfig) -&gt; None:
+        super().__init__()
+        self.norm1 = nn.LayerNorm(config.dim, eps=config.eps)
+        self.attention = Attention(config)
+        self.layer_scale1 = LayerScale(config.dim)
+        self.norm2 = nn.LayerNorm(config.dim, eps=config.eps)
+        self.mlp = MLP(config)                                  # Step 5: SwiGLU when config.gated
+        self.layer_scale2 = LayerScale(config.dim)
+
+    def __call__(self, x: mx.array, cos: mx.array, sin: mx.array) -&gt; mx.array:
+        x = self.layer_scale1(self.attention(self.norm1(x), cos, sin)) + x
+        return self.layer_scale2(self.mlp(self.norm2(x))) + x</code></pre>
+  <pre><code># src/dinov3_apple/mlx_model.py
+MLX_DTYPE_MODES: dict[str, mx.Dtype] = {"fp32": mx.float32}   # Step 5 adds fp16 and bf16 modes
+
+
+class MlxBackbone(nn.Module):
+    """The DINOv3 backbone in MLX. Its parameter names are the keys of the safetensors file."""
+
+    def __init__(self, config: MlxConfig) -&gt; None:
+        super().__init__()
+        self.config = config
+        self.embeddings = Embeddings(config)
+        self.layer = [Block(config) for _ in range(config.blocks)]
+        self.norm = nn.LayerNorm(config.dim, eps=config.eps)
+        self._rope_cache: dict[tuple[int, int], tuple[mx.array, mx.array]] = {}  # "_": no parameter
+        self.rope_box_jitter = False                                             # R17, Step 8
+
+    def rope(self, grid_h: int, grid_w: int) -&gt; tuple[mx.array, mx.array]:
+        """Return the RoPE tables of one patch grid from the cache."""
+        if (grid_h, grid_w) not in self._rope_cache:
+            cos, sin = rope_tables(grid_h, grid_w, self.config.head_dim, self.config.rope_theta)
+            self._rope_cache[(grid_h, grid_w)] = (mx.array(cos), mx.array(sin))
+        return self._rope_cache[(grid_h, grid_w)]
+
+    def __call__(self, pixels: mx.array) -&gt; mx.array:
+        """Return all tokens after the final layer norm, (B, 5 + N, D)."""
+        p = self.config.patch_size
+        cos, sin = self.rope(pixels.shape[2] // p, pixels.shape[3] // p)
+        x = self.embeddings(pixels)
+        for block in self.layer:
+            x = block(x, cos, sin)
+        return self.norm(x)
+
+
+def run_mlx(model: MlxBackbone, pixels: np.ndarray, dtype_mode: str) -&gt; np.ndarray:
+    """Run the backbone on stored pixels and return all tokens after the final layer norm.
+
+    The contract of run_torch in reference.py.
+
+    Args:
+        model: A backbone from load_mlx_backbone.
+        pixels: Normalized fp32 pixels with shape (B, 3, H, W), NCHW.
+        dtype_mode: A key of MLX_DTYPE_MODES. It must match the dtype of the model weights.
+
+    Returns:
+        The tokens with shape (B, 1 + 4 + N, D), cast to fp32.
+    """
+    tokens = model(mx.array(pixels).astype(MLX_DTYPE_MODES[dtype_mode]))
+    tokens = tokens.astype(mx.float32)          # a bf16 mx.array does not convert to NumPy
+    mx.eval(tokens)
+    return np.array(tokens)</code></pre>
+  <pre><code># tests/conftest.py (top of the file)
+os.environ.setdefault("PYTORCH_MPS_HIGH_WATERMARK_RATIO", "0.8")
+os.environ.setdefault("PYTORCH_MPS_LOW_WATERMARK_RATIO", "0.6")
+# D7: the fp32 dtype mode of mlx runs with TF32 off. MLX reads the value once, at its first use.
+os.environ["MLX_ENABLE_TF32"] = "0"
+
+import mlx.core as mx  # noqa: E402
+
+mx.set_memory_limit(MLX_SESSION_LIMIT_BYTES)    # 4 GB; load_mlx_backbone sets the need of each load
+
+
+class _BackboneSlot:
+    def get(self, model_size: str, device: str, dtype_mode: str) -&gt; torch.nn.Module | MlxBackbone:
+        key = (model_size, device, dtype_mode)
+        if self.key != key:
+            self.free()
+            try:
+                if device == "mlx":
+                    self.model = load_mlx_backbone(model_size, dtype_mode)
+                else:
+                    self.model = load_torch_backbone(model_size, device, dtype_mode)
+            except (WeightsNotFoundError, InsufficientMemoryError) as error:
+                pytest.skip(str(error))
+            self.key = key
+        return self.model</code></pre>
+  <pre><code># scripts/bench_mlx_port.py: the mlx worker imports no torch
+def time_batch_mlx(model: MlxBackbone, batch: np.ndarray) -&gt; tuple[float, float, float]:
+    """Return the device time, the frame time and the patch time of one batch (Table 4 of the Step 3 plan)."""
+    t0 = time.perf_counter()
+    tokens = model(mx.array(batch))
+    mx.eval(tokens)                              # mlx synchronizes with mx.eval
+    t1 = time.perf_counter()
+    np.array(tokens[:, 0])
+    t2 = time.perf_counter()
+    np.array(tokens[:, NUM_PREFIX_TOKENS:])
+    t3 = time.perf_counter()
+    return t1 - t0, t2 - t0, (t1 - t0) + (t3 - t2)
+
+
+WORKERS = [("torch-mps", None), ("mlx", False)]   # (backend, tf32); TF32 off in the fp32 dtype mode (D7)
+
+
+def worker_plan(rounds: int = 3) -&gt; list[tuple[int, int, str, bool | None]]:
+    """Return (round, batch size, backend, tf32) for each worker. The order alternates from round to round (F1)."""
+    plan = []
+    for r in range(rounds):
+        order = WORKERS[r % 2 :] + WORKERS[: r % 2]
+        for batch_size in (8, 1):
+            plan += [(r + 1, batch_size, backend, tf32) for backend, tf32 in order]
+    return plan</code></pre>
+</section>
+
+<section id="tests">
+  <h2>6 Tests</h2>
+  <p>The build writes each test first and sees it fail (red). The tests without the gated weights run on every machine with mlx. The tests with the weights skip with a reason when the weights, the stored files or the memory are missing. All mlx tests have the marker <code>mlx</code>. MLX runs on the GPU with TF32 off, unless a test says otherwise.</p>
+
+  <h3>6.1 Test inputs and the small model</h3>
+  <ul>
+    <li>The small model: <code>DINOv3ViTModel</code> on <code>torch-cpu</code> in fp32, eval mode, with the ViT-S/16 values of <code>config.json</code> (embedding dimension 384, 6 heads, MLP width 1,536, 4 register tokens, RoPE base 100, no k bias, eps 1e-5) and 2 blocks.</li>
+    <li>New random values for every parameter, seed 0. Each linear weight and the patch embedding weight: normal with standard deviation 1 / √fan_in, so each output has a scale of about 1. Each bias, the CLS token, the register tokens and the mask token: standard deviation 0.5. Each <code>lambda1</code>: standard deviation 0.3 (block 0 of ViT-S/16 has −0.80 to 0.10). Each layer-norm weight: mean 1, standard deviation 0.1; each layer-norm bias: standard deviation 0.1. Reason: the Hugging Face init sets the biases to 0 and <code>lambda1</code> to 1. With these values, a wrong bias or a wrong LayerScale axis does not show.</li>
+    <li>The small MLX backbone gets the same weights from <code>model.state_dict()</code> through <code>mlx_weights</code>. This state dict has the spelling <code>model.layer.{i}.…</code> and the mask token, so each part test also tests the key map.</li>
+    <li>Pixels: normal values, seed 1, shapes (2, 3, 224, 224), (1, 3, 224, 304) and (1, 3, 304, 224). The two non-square shapes find a swap of height and width. The inputs of the 11 part tests come from <code>run_parts</code> of Step 3 on block 1 of the small model, so each part gets realistic inputs.</li>
+    <li>The six grids of the RoPE tests: 14 × 14, 28 × 28, 32 × 32, 14 × 25, 14 × 19 and 19 × 14 patches. They are the grids of the 12 configurations.</li>
+  </ul>
+
+  <h3>6.2 Tests without the gated weights</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>No.</th><th>Test</th><th>What it checks</th><th>Target</th></tr></thead>
+      <tbody>
+        <tr class="group"><td colspan="4"><code>tests/test_mlx_weights.py</code></td></tr>
+        <tr><td>T1</td><td><code>test_map_key_both_spellings</code></td><td><code>layer.3.attention.q_proj.weight</code> and <code>model.layer.3.attention.q_proj.weight</code> give the same name. <code>embeddings.mask_token</code> gives None. <code>rope_embeddings.inv_freq</code> and <code>pooler.dense.weight</code> raise <code>UnknownWeightError</code>.</td><td>Exact</td></tr>
+        <tr><td>T2</td><td><code>test_mlx_weights_load_small_model</code></td><td>The state dict of the small model through <code>mlx_weights</code>: <code>load_weights(strict=True)</code> passes; each MLX array equals its torch tensor (the patch weight after the reshape).</td><td>Difference 0</td></tr>
+        <tr><td>T3</td><td><code>test_key_map_covers_vits16_file</code></td><td>The header of <code>model.safetensors</code> of ViT-S/16 (names and shapes only, no tensor data; skips without the file) against the parameter tree of <code>MlxBackbone</code> with the ViT-S/16 config. The tree is lazy, so the test computes no array.</td><td>211 names → 210 parameters; 1 dropped: <code>embeddings.mask_token</code>; 0 unknown; 0 missing; 0 shape differences</td></tr>
+        <tr><td>T4</td><td><code>test_mlx_dtype_modes_are_known</code></td><td>Each key of <code>MLX_DTYPE_MODES</code> is a key of <code>THRESHOLDS</code> and <code>DTYPE_OF_MODE</code>. Step 4 has only "fp32".</td><td>Exact</td></tr>
+        <tr><td>T5</td><td><code>test_mlx_config_from_hf</code></td><td>The ViT-S/16 <code>config.json</code> values (a dict in the test) give embedding dimension 384, 6 heads, head dimension 64, 12 blocks, MLP width 1,536, eps 1e-5, RoPE base 100, no k bias. A dict with <code>use_gated_mlp</code> true gives a config with the gated flag True, and <code>Block(config)</code> of that config raises <code>NotImplementedError</code>.</td><td>Exact</td></tr>
+        <tr><td>T6</td><td><code>test_load_mlx_backbone_refuses_tf32_mismatch</code></td><td><code>MLX_ENABLE_TF32=1</code> (monkeypatch) with <code>tf32=False</code> raises <code>TF32ModeError</code> before the memory check and before any file read.</td><td>Exact</td></tr>
+        <tr><td>T7</td><td><code>test_load_mlx_backbone_checks_memory_first</code></td><td><code>parameter_count</code> in <code>mlx_weights</code> (monkeypatch) gives 21,596,544, so the test reads no weights file. An available memory of 0 bytes (monkeypatch) raises <code>InsufficientMemoryError</code>. The log line has the label "ViT-S/16 mlx fp32" and the need 4.1 GB. The monkeypatch patches <code>dinov3_apple.mlx_weights.parameter_count</code>, the name that <code>mlx_weights</code> imports, and not <code>hub.parameter_count</code>.</td><td>Exact</td></tr>
+        <tr><td>T7b</td><td><code>test_load_mlx_backbone_sets_memory_limit_to_need</code></td><td><code>available_memory_bytes</code> (monkeypatch) gives a large value, and <code>parameter_count</code> in <code>mlx_weights</code> (monkeypatch) gives 21,596,544. A recorder replaces <code>mx.set_memory_limit</code>: it records its argument and then raises a sentinel error, so the test reads no weights file. The recorded limit equals <code>required_mlx_load_bytes("ViT-S/16", "fp32")</code>.</td><td>4,103,663,411 bytes, exact</td></tr>
+        <tr class="group"><td colspan="4"><code>tests/test_mlx_rope.py</code></td></tr>
+        <tr><td>T8</td><td><code>test_rope_tables</code></td><td><code>rope_tables</code> against <code>DINOv3ViTRopePositionEmbedding</code> on <code>torch-cpu</code>, six grids. Rows 5 and up against the Hugging Face rows. Rows 0 to 4 are cos 1 and sin 0. Dtype fp32. Shape (5 + N, 64).</td><td>Largest difference ≤ 1e-6; rows 0 to 4 exact</td></tr>
+        <tr><td>T9</td><td><code>test_rope_tables_meta_difference</code></td><td><code>rope_tables</code> against the Meta formula: angles 2π · c / p with the bf16 periods p = bf16(100<sup>k/16</sup>), six grids. Records the largest cos, sin and angle difference of each grid.</td><td>Report only</td></tr>
+        <tr class="group"><td colspan="4"><code>tests/test_mlx_parts.py</code></td></tr>
+        <tr><td>T10</td><td><code>test_mlx_block_part[name]</code></td><td>One test for each of the 11 part names of <code>block_parts</code>. The MLX part gets the inputs of the Hugging Face part and must give its outputs. The <code>rope</code> part uses the Hugging Face tables plus 5 identity rows, so it tests only the rotation.</td><td>Table 7</td></tr>
+        <tr><td>T11</td><td><code>test_mlx_part_patch_embedding</code></td><td><code>Embeddings</code> against <code>DINOv3ViTEmbeddings</code> on the three pixel shapes.</td><td>Patch rows ≤ 1e-5; prefix rows exact</td></tr>
+        <tr><td>T12</td><td><code>test_patchify_rejects_bad_size</code></td><td>Pixels of 224 × 230 raise <code>ValueError</code>.</td><td>Exact</td></tr>
+        <tr><td>T13</td><td><code>test_mlx_part_attention</code></td><td><code>Attention</code> against <code>DINOv3ViTAttention</code>, grids 14 × 14 and 14 × 19.</td><td>≤ 1e-5</td></tr>
+        <tr><td>T14</td><td><code>test_mlx_part_mlp</code></td><td><code>MLP</code> against <code>DINOv3ViTMLP</code>.</td><td>≤ 2e-5</td></tr>
+        <tr><td>T15</td><td><code>test_mlx_part_gelu_is_exact_form</code></td><td><code>nn.gelu</code> against <code>ACT2FN["gelu"]</code> on 200,001 values in [−6, 6]. A second assertion shows that <code>nn.gelu_approx</code> differs by 1e-4 or more there, so the test can see R15.</td><td>≤ 2e-6</td></tr>
+        <tr><td>T16</td><td><code>test_mlx_part_block</code></td><td><code>Block</code> against <code>DINOv3ViTLayer</code>, grids 14 × 14 and 14 × 19.</td><td>≤ 3e-5</td></tr>
+        <tr><td>T17</td><td><code>test_mlx_part_final_norm</code></td><td><code>MlxBackbone.norm</code> against <code>model.norm</code> of the small model.</td><td>≤ 1e-5</td></tr>
+        <tr><td>T18</td><td><code>test_mlx_small_model_tokens</code></td><td><code>run_mlx</code> against <code>last_hidden_state</code> on the three pixel shapes. <code>run_mlx_hidden_states</code> against <code>output_hidden_states</code> (image 0) on the two shapes with batch size 1, (1, 3, 224, 304) and (1, 3, 304, 224). <code>run_mlx_hidden_states</code> takes one image and returns (L + 1, 5 + N, D), as <code>run_torch_hidden_states</code> does.</td><td>≤ 5e-5</td></tr>
+        <tr><td>T19</td><td><code>test_run_mlx_contract</code></td><td><code>run_mlx</code> gives an fp32 <code>np.ndarray</code> of shape (B, 5 + N, D). <code>split_tokens</code> of it gives (B, D) and (B, Hp, Wp, D).</td><td>Exact</td></tr>
+        <tr><td>T20</td><td><code>test_mlx_sdpa_float64</code></td><td><code>mx.fast.scaled_dot_product_attention</code> on the GPU against softmax(q · k<sup>T</sup> · 0.125) · v in NumPy float64. Shapes (2, 6, 201, 64) and (1, 6, 1029, 64), normal values.</td><td>≤ 5e-6</td></tr>
+        <tr class="group"><td colspan="4"><code>tests/test_mlx_environment.py</code></td></tr>
+        <tr><td>T21</td><td><code>test_conftest_turns_tf32_off</code></td><td><code>os.environ["MLX_ENABLE_TF32"]</code> is "0" in the test process, and <code>tf32_enabled()</code> is False.</td><td>Exact</td></tr>
+        <tr><td>T22</td><td><code>test_mlx_modules_do_not_import_torch</code></td><td>A subprocess imports <code>stored</code>, <code>mlx_model</code> and <code>mlx_weights</code>, then checks <code>sys.modules</code>.</td><td>No torch, no transformers</td></tr>
+        <tr><td>T23</td><td><code>test_stored_readers_are_reexported</code></td><td><code>reference.read_inputs is stored.read_inputs</code>, and the same for the other moved names. <code>configurations()</code> gives the 12 ids of the stored files.</td><td>Exact</td></tr>
+        <tr><td>T24</td><td><code>test_mlx_tf32_probe</code></td><td>Two subprocesses, one after the other, with <code>MLX_ENABLE_TF32=0</code> and <code>=1</code>. Each subprocess first calls <code>mx.set_memory_limit</code> with 1 GB. Then it multiplies (512, 384) by (384, 1536) in fp32 on the GPU, seed 0, and compares with NumPy float64: largest difference / largest reference value. Records both values.</td><td>Report only; expected about 1e-7 (off) and 1e-4 (on)</td></tr>
+        <tr><td>T25</td><td><code>test_bench_mlx_port_dry_run</code></td><td><code>worker_plan(3)</code> gives 12 workers; the order of the two workers alternates from round to round; each mlx worker gets <code>MLX_ENABLE_TF32=0</code>. The dry run loads no model.</td><td>Exact</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 6.</b> Tests without the gated weights. T3 reads only the header of the weights file. T7 and T7b monkeypatch <code>parameter_count</code>, so they read no weights file. T24 runs two small matmuls of a few MB. The 11 part names of T10: norm1, qkv_proj, rope, sdpa, o_proj, layer_scale1, norm2, ff_in, activation, ff_out, layer_scale2.</p>
+
+  <h3>6.3 Targets of the part tests</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Part</th><th>MLX code</th><th>Target: largest difference</th><th>Reason</th></tr></thead>
+      <tbody>
+        <tr><td>norm1, norm2, final norm</td><td><code>nn.LayerNorm</code></td><td class="num">≤ 1e-5</td><td>Mean and variance of 384 values, in another order. Outputs up to about 5.</td></tr>
+        <tr><td>qkv_proj, o_proj, ff_in</td><td><code>nn.Linear</code></td><td class="num">≤ 1e-5</td><td>Sums of 384 products. Estimate: √384 × 6e-8 × the output scale gives about 1e-6, and up to about 5e-6 for the largest of 10<sup>5</sup> values.</td></tr>
+        <tr><td>ff_out</td><td><code>down_proj</code></td><td class="num">≤ 2e-5</td><td>Sums of 1,536 products: twice the estimate of 384.</td></tr>
+        <tr><td>rope</td><td><code>apply_rope</code></td><td class="num">≤ 2e-6</td><td>The same element-wise operations in the same order with the same tables. Expected 0. The margin covers a fused multiply-add.</td></tr>
+        <tr><td>sdpa</td><td><code>mx.fast.scaled_dot_product_attention</code></td><td class="num">≤ 5e-6</td><td>The kernel multiplies by the rounded factor 0.125 × log2(e) and uses exp2 (Table 10 of <code>explore.html</code>). Estimate below 1e-6 for outputs of about 1.</td></tr>
+        <tr><td>layer_scale1, layer_scale2</td><td><code>LayerScale</code> and the residual add</td><td class="num">0</td><td>One multiply and one add for each value. Both sides round each result correctly, and MLX does not fuse kernels without <code>mx.compile</code>.</td></tr>
+        <tr><td>activation</td><td><code>nn.gelu</code></td><td class="num">≤ 2e-6</td><td>The erf of MLX against the erf of torch. One unit in the last place is 4.8e-7 at 6. The tanh form differs by up to 4.7e-4.</td></tr>
+        <tr><td>Patch embedding</td><td><code>Embeddings</code></td><td class="num">≤ 1e-5</td><td>Sums of 768 products. The CPU-stream probe of <code>explore.html</code> gave 1.4e-6 to 1.9e-6.</td></tr>
+        <tr><td>Attention</td><td><code>Attention</code></td><td class="num">≤ 1e-5</td><td>qkv_proj, rope, sdpa and o_proj in a chain.</td></tr>
+        <tr><td>MLP</td><td><code>MLP</code></td><td class="num">≤ 2e-5</td><td>ff_in, activation and ff_out in a chain.</td></tr>
+        <tr><td>Block</td><td><code>Block</code></td><td class="num">≤ 3e-5</td><td>Both branches and both LayerScale factors.</td></tr>
+        <tr><td>Small model</td><td><code>run_mlx</code>, <code>run_mlx_hidden_states</code></td><td class="num">≤ 5e-5</td><td>2 blocks and the final layer norm.</td></tr>
+        <tr><td>SDPA kernel</td><td><code>mx.fast.scaled_dot_product_attention</code></td><td class="num">≤ 5e-6</td><td>As sdpa. The float64 oracle has no error of its own.</td></tr>
+        <tr><td>RoPE tables</td><td><code>rope_tables</code></td><td class="num">≤ 1e-6</td><td>Table 9 of <code>docs/plan.html</code>. The NumPy C1 and C2 tables differ by at most 5.4e-7 (Table 7 of <code>explore.html</code>).</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 7.</b> Targets of the part tests in fp32, with the inputs and weights of Section 6.1. The values have a magnitude of about 1 to 5. The estimates use the fp32 unit roundoff 6e-8 and the length of each sum. A matmul with TF32 on (unit roundoff 4.9e-4) misses each matmul target by a factor of about 100, so these targets also catch TF32. No GPU computation ran for this plan. So the build records each measured value next to its target. If a target misses, the build stops and asks the user.</p>
+
+  <h3>6.4 Tests with the ViT-S/16 weights</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>No.</th><th>Test in <code>tests/test_mlx_parity.py</code></th><th>What it checks</th><th>Target</th></tr></thead>
+      <tbody>
+        <tr><td>W1</td><td><code>test_mlx_embeddings_match_stored</code></td><td>MLX <code>Embeddings</code> on the stored pixels of iss-kibo-lab/224x224 against stored hidden state 0. Records the largest difference.</td><td>Prefix rows exact; min token cosine ≥ 0.99999</td></tr>
+        <tr><td>W2</td><td><code>test_mlx_block_matches_stored[block-0 … block-11]</code></td><td>MLX block i on stored hidden state i against stored hidden state i + 1, with the 14 × 14 RoPE tables. Each block gets the reference input, so a failure names one block. Records the largest difference and the largest difference relative to the largest value.</td><td>Min cosine over all 201 tokens ≥ 0.99999</td></tr>
+        <tr><td>W3</td><td><code>test_mlx_final_norm_matches_stored</code></td><td>The final layer norm on stored hidden state 12 against the stored tokens of iss-kibo-lab/224x224.</td><td>Min token cosine ≥ 0.99999</td></tr>
+        <tr><td>W4</td><td><code>test_mlx_hidden_states</code></td><td><code>run_mlx_hidden_states</code> against all 13 stored hidden states, in a chain. Records the parity and the largest difference of each state.</td><td>Each state: <code>THRESHOLDS["fp32"]</code></td></tr>
+        <tr><td>W5</td><td><code>test_parity</code></td><td>The 12 configurations: 3 test images × (224, 448 and 512 px square + own aspect ratio: forest 224 × 304, iss-conference 304 × 224, iss-kibo-lab 224 × 400). <code>run_mlx</code> against the reference file. One line in <code>parity/mlx.jsonl</code> for each.</td><td>frame, patch mean, patch 1st percentile ≥ 0.9999</td></tr>
+        <tr><td>W6</td><td><code>test_batch_consistency</code></td><td>A batch of 8 (<code>BATCH_CONFIGS</code>: the three 224 × 224 test images, repeated) against 8 single runs.</td><td><code>THRESHOLDS["fp32"]</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 8.</b> Tests with the weights. They need one model load of ViT-S/16 in fp32 (need 4.10 GB). The min token cosine runs in fp64, as <code>measure_parity</code> does. 0.99999 is ten times stricter on 1 − cosine than the fp32 threshold, because an isolated block has no error from the blocks before it. The hidden states hold the register tokens with values up to 1,708; the cosine of each token does not depend on its scale. Diagnostic only after a failure of W5: the same tests with <code>DINOV3_MLX_DEVICE=cpu</code>.</p>
+</section>
+
+<section id="benchmarks">
+  <h2>7 Benchmarks</h2>
+  <p>Step 4 runs one small benchmark. It is report only and has no target. Step 6 runs the full benchmark matrix. Finding F1 of <code>specs/03-baseline/verify.html</code> shows that the throughput of one configuration on this Mac changes by up to 2× from one run to the next. So the mlx workers and the torch-mps workers run in alternation in one session, and the result is the median of the paired ratios.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Item</th><th>Value</th></tr></thead>
+      <tbody>
+        <tr><td>Model size</td><td>ViT-S/16</td></tr>
+        <tr><td>Workers</td><td><code>torch-mps</code> fp32 (eager, <code>torch_bench.run_worker</code> of Step 3); <code>mlx</code> fp32 with TF32 off (D7). An fp32 row with TF32 on stays in Step 6.</td></tr>
+        <tr><td>Input resolution</td><td>224 px: the square stored pixels of the 3 test images, from <code>make_batch</code></td></tr>
+        <tr><td>Batch sizes</td><td>8 (priority configuration P1) and 1</td></tr>
+        <tr><td>Outputs</td><td>Frame embedding and patch embeddings. One worker gives both (the four times of Table 4 of the Step 3 plan).</td></tr>
+        <tr><td>Rounds</td><td>3. The order of the two workers alternates from round to round: round 1 torch-mps, mlx; round 2 mlx, torch-mps; round 3 torch-mps, mlx.</td></tr>
+        <tr><td>Worker count</td><td>3 rounds × 2 batch sizes × 2 workers = 12, each in its own subprocess, one after the other</td></tr>
+        <tr><td>Time budget</td><td><code>WARM_UP</code> and <code>TIMED</code> of Step 3: at least 3 batches and 2 s; at least 30 batches and 10 s, stop at 60 s</td></tr>
+        <tr><td>Memory</td><td>The driver checks the machine state and the free memory before each worker, with <code>required_bench_bytes</code> (4.17 GB for P1 in fp32). The worker runs the memory check of its load. Peak memory: the lifetime maximum of the process footprint. Extra counters: <code>mx.get_peak_memory()</code> and <code>torch.mps.driver_allocated_memory()</code>.</td></tr>
+        <tr><td>Validity</td><td><code>check_validity</code> of image 0 against the reference file with <code>THRESHOLDS["fp32"]</code>.</td></tr>
+        <tr><td>Environment</td><td>torch workers: the MPS watermarks 0.8 and 0.6. mlx workers: <code>MLX_ENABLE_TF32=0</code>, and <code>load_mlx_backbone(…, tf32=False)</code>. The mlx worker records if torch is in <code>sys.modules</code> at its end.</td></tr>
+        <tr><td>Estimated time</td><td>About 20 s for each worker, about 4 min in all</td></tr>
+        <tr><td>Output</td><td><code>results/bench-mlx-port.jsonl</code> (in git, about 2 KB per line). The per-batch times go to <code>tests/fixtures/generated/bench/mlx-port/</code>, which git ignores.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 9.</b> The benchmark of Step 4. Command: <code>uv run python scripts/bench_mlx_port.py</code>. Versions: mlx 0.32.4, torch 2.15.0, transformers 5.22.1, macOS 26.5.2.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Group</th><th>Fields</th></tr></thead>
+      <tbody>
+        <tr><td>As in Step 3</td><td>Every field of <code>LINE_FIELDS</code> of <code>bench.py</code> (Table 7 of the Step 3 plan), with <code>run</code> "step4", <code>backend</code> "torch-mps" or "mlx" and <code>dtype_mode</code> "fp32"</td></tr>
+        <tr><td>New</td><td><code>round</code>, <code>position</code> (1 or 2 in the round), <code>tf32</code> (false for mlx, null for torch-mps), <code>mlx_peak_bytes</code>, <code>torch_imported</code>, <code>mlx_memory_limit_bytes</code> (the value given to <code>mx.set_memory_limit</code>; null for torch-mps), <code>mps_watermarks</code> (the two <code>PYTORCH_MPS_*_WATERMARK_RATIO</code> values in the environment of the worker; null for mlx)</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 10.</b> Fields of one line of <code>results/bench-mlx-port.jsonl</code>.</p>
+  <p><code>verify.html</code> gets one table from these lines. The table has one row for each batch size and output. Each row gives these values: the median throughput of mlx over the three rounds; the median throughput of torch-mps over the three rounds; the paired ratio r<sub>i</sub> = mlx throughput / torch-mps throughput of each round i; the median of the three paired ratios; the median peak memory of each worker. The table calls this number "paired ratio", not "speedup": a speedup divides by the baseline row of ADR 0004, which at P1 is a compile row. Step 6 measures the speedup.</p>
+</section>
+
+<section id="criteria">
+  <h2>8 Acceptance criteria</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>No.</th><th>Criterion</th><th>Target</th><th>Checked by</th></tr></thead>
+      <tbody>
+        <tr><td>AC1</td><td>Parity of ViT-S/16 on <code>mlx</code> in fp32 (GPU, TF32 off), 12 configurations</td><td class="num">frame ≥ 0.9999, patch mean ≥ 0.9999, patch 1st percentile ≥ 0.9999 in each of 12</td><td>W5; <code>results/parity-mlx.md</code></td></tr>
+        <tr><td>AC2</td><td>Batch consistency: a batch of 8 against 8 single runs</td><td class="num">the same three thresholds</td><td>W6</td></tr>
+        <tr><td>AC3</td><td>Stored hidden states, each part alone: the embeddings, each of the 12 blocks and the final layer norm on the reference input</td><td class="num">14 checks; min token cosine ≥ 0.99999; prefix rows of state 0 exact</td><td>W1, W2, W3</td></tr>
+        <tr><td>AC4</td><td>Stored hidden states in a chain</td><td class="num">13 states, each ≥ <code>THRESHOLDS["fp32"]</code>; the largest difference of each state recorded</td><td>W4</td></tr>
+        <tr><td>AC5</td><td>RoPE tables against the Hugging Face tables</td><td class="num">six grids: largest difference ≤ 1e-6; rows 0 to 4 exact; fp32</td><td>T8</td></tr>
+        <tr><td>AC6</td><td>RoPE tables against the Meta formula with bf16 periods (report only)</td><td class="num">six grids recorded; largest angle difference within 5 % of Table 8 of <code>explore.html</code> (0.0079 rad at 14 × 14, 0.0083 rad at 32 × 32)</td><td>T9</td></tr>
+        <tr><td>AC7</td><td>Part tests</td><td class="num">11 parts and 5 modules within Table 7; LayerScale difference 0</td><td>T10, T11, T13 to T17</td></tr>
+        <tr><td>AC8</td><td>SDPA kernel against NumPy float64</td><td class="num">≤ 5e-6</td><td>T20</td></tr>
+        <tr><td>AC9</td><td>Small model, end to end</td><td class="num">tokens and hidden states ≤ 5e-5; output contract of <code>run_torch</code></td><td>T18, T19</td></tr>
+        <tr><td>AC10</td><td>The key map is complete</td><td class="num">211 tensors → 210 parameters; 1 dropped (<code>embeddings.mask_token</code>); 0 unknown; 0 missing; 0 shape differences; both spellings</td><td>T1, T2, T3</td></tr>
+        <tr><td>AC11</td><td>Load: strict load, memory check, MLX memory limit, evaluated parameters</td><td class="num">a log line "ViT-S/16 mlx fp32" before each mlx load; limit = need = 4.10 GB; <code>strict=True</code></td><td>T6, T7, T7b; <code>memory-checks.log</code></td></tr>
+        <tr><td>AC12</td><td>TF32: the fp32 tests run with TF32 off; a mismatch stops the load; the probe records both errors</td><td class="num">T21 and T6 green; 2 values recorded, expected about 1e-7 (off) and 1e-4 (on)</td><td>T21, T6, T24</td></tr>
+        <tr><td>AC13</td><td>No torch in the mlx modules and in the mlx benchmark workers</td><td class="num">torch and transformers not in <code>sys.modules</code>; <code>torch_imported</code> false in all 6 mlx lines</td><td>T22; <code>results/bench-mlx-port.jsonl</code></td></tr>
+        <tr><td>AC14</td><td>The interfaces of Steps 2 and 3 stay the same</td><td class="num">the old imports work; the set of torch-mps test ids is the same before and after (<code>pytest --collect-only</code>)</td><td>T23; a diff of the two id lists</td></tr>
+        <tr><td>AC15</td><td>Run rules: a memory check before each model load; one heavy job at a time; the MLX memory limit; the MPS watermarks for the torch workers</td><td class="num">0 violations; no overlap of the test session with the weights and the benchmark workers; inside a test session, T24 runs before the first model load (sort key −1 for a test without a model size)</td><td><code>memory-checks.log</code>; the times, <code>mlx_memory_limit_bytes</code> and <code>mps_watermarks</code> of the JSON lines; T7b</td></tr>
+        <tr><td>AC16</td><td>Benchmark (report only)</td><td class="num">12 lines "done" or "skipped" with the reason; each with frame and patch throughput, peak memory and validity; the median paired ratio for each of the 4 mlx rows (2 batch sizes × 2 outputs)</td><td><code>results/bench-mlx-port.jsonl</code>; <code>verify.html</code></td></tr>
+        <tr><td>AC17</td><td>Tests and lint</td><td class="num">pytest 0 failures (default and <code>DINOV3_SLOW=1</code>); ruff format and ruff check clean</td><td><code>uv run pytest</code>, <code>uv run ruff</code></td></tr>
+        <tr><td>AC18</td><td>Explainers <code>docs/learn/04-1-patch-embedding.html</code> to <code>04-5-mlp.html</code></td><td class="num">5 explainers; together they cover every function that Step 4 adds to <code>src/</code> (Table 1); Table 1 of <code>01-prior-ports.html</code> corrected</td><td>Learn stage</td></tr>
+        <tr><td>AC19</td><td>Steering files and ADRs</td><td class="num">GLOSSARY has "MLX weights", "RoPE tables", "TF32" and "Paired ratio"; Table 9 of <code>docs/plan.html</code> names the Hugging Face tables and the report-only Meta difference; R5 in Table 14 of <code>docs/plan.html</code> has its result; ADR 0005 (TF32 off in the fp32 dtype mode of mlx) and ADR 0006 (the Hugging Face tables as the RoPE target); <code>roadmap.md</code> status</td><td>Close stage</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 11.</b> Acceptance criteria. Rule for a missed target: the build stops and asks the user. The build never changes a target alone. The targets of Table 7 are estimates, so the build records each measured value next to its target.</p>
+</section>
+
+<section id="open">
+  <h2>9 Open questions</h2>
+  <ul>
+    <li>Approval of this plan: the user approves the plan. The build starts only after this approval.</li>
+    <li>Start of the build: a benchmark runs on this Mac now. The build starts its first heavy job after that benchmark ends (run rule).</li>
+    <li>Names of the explainers (Section 5.3 of <code>explore.html</code>): decided by the agent. <code>04-1-patch-embedding.html</code> to <code>04-5-mlp.html</code>, so the first number stays the step number.</li>
+    <li>Table 9 of <code>docs/plan.html</code>: the target of <code>test_rope_tables</code> becomes the Hugging Face tables, plus a report-only difference to the Meta tables (D3). The Close stage edits the file. The user can object.</li>
+    <li>ADRs: the agent writes ADR 0005 (TF32 off for fp32) and ADR 0006 (Hugging Face RoPE tables) in the Close stage. <code>explore.html</code> proposed one ADR for both; two files keep one decision in each file.</li>
+    <li>A parity failure with TF32 off on the GPU: the build runs the CPU diagnostic, records both results, then stops and asks the user.</li>
+    <li>The paired ratios of Section 7 compare with eager <code>torch-mps</code> in fp32. The baseline row of ADR 0004 at P1 is a compile row. Step 6 reports the speedup against it.</li>
+    <li>An fp32 row with TF32 on, and its thresholds: Step 6 decides. Step 4 runs no TF32-on benchmark worker (D7). T24 still records the TF32-on matmul error.</li>
+    <li>ViT-B/16 also has an MLP and could run with the Step 4 code. Step 4 keeps to ViT-S/16; Step 5 adds the other model sizes.</li>
+    <li>CI of Step 7: the tests without the gated weights need mlx and a Metal GPU, or the CPU stream. Step 7 decides the runner.</li>
+  </ul>
+</section>
+</main>
+</body>
+</html>
