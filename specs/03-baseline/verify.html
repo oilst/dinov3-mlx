@@ -1,0 +1,490 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Step 3 Baseline: Verify</title>
+<style>
+/* Spec page. White page, black text, no dark mode. */
+:root { --bg: #ffffff; --fg: #111414; --muted: #4a5655; --rule: #d6dedd; --panel: #f5f8f7; --accent: #057379; --pass: #1d7a3a; --fail: #b3261e; --partial: #8a5a00; --pending: #4a5655; color-scheme: light; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif; }
+main { max-width: 64rem; margin: 0 auto; padding: 40px 16px 64px; display: grid; gap: 1.75rem; }
+h1 { font-size: 1.9rem; line-height: 1.15; margin: 0; }
+h2 { font-size: 1.3rem; margin: 0; }
+h3 { font-size: 1.05rem; margin: 0; }
+section { display: grid; gap: 0.8rem; min-width: 0; }
+p, ul, ol { margin: 0; max-width: 48rem; }
+li + li { margin-top: 0.25rem; }
+code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.86em; }
+pre { margin: 0; background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 0.8rem 1rem; overflow-x: auto; }
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 0.92rem; }
+th, td { text-align: left; vertical-align: top; padding: 0.45rem 0.7rem 0.45rem 0; border-bottom: 1px solid var(--rule); }
+th { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); border-bottom: 1.5px solid var(--fg); }
+td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.caption { font-size: 0.88rem; color: var(--muted); }
+.pass { color: var(--pass); font-weight: 600; }
+.fail { color: var(--fail); font-weight: 600; }
+.partial { color: var(--partial); font-weight: 600; }
+.pending { color: var(--pending); font-weight: 600; font-style: italic; }
+figure { margin: 0; display: grid; gap: 0.5rem; }
+figure svg { width: 100%; height: auto; max-width: 760px; border: 1px solid var(--rule); border-radius: 6px; background: #ffffff; }
+a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+<header>
+  <h1>Step 3 Baseline: Verify</h1>
+  <p>Roadmap step 3. Status: verified, with one failed criterion that the user accepted. Date: 2026-11-06. Verifier: a separate agent, not the agent that built the step. Build commit: <code>1d20d42</code> ("Step 3 build: torch-mps baseline harness, block profile and results").</p>
+</header>
+
+<section id="summary">
+  <h2>1 Summary</h2>
+  <p>This file checks the 18 acceptance criteria of <code>specs/03-baseline/plan.html</code> (Table 9) against build commit <code>1d20d42</code>. The verifier read the spec folder, the diff <code>7f5dd59..1d20d42</code> and the hand-over note of the build. The verifier ran ruff and both test runs again, checked the JSON lines with an own script, made the two results tables again, ran three benchmark jobs again (B1 for ViT-S/16, P1 and P2, B5), ran the one skipped configuration and did three own tests (Section 2). The verifier did not change <code>src/</code>, <code>scripts/</code>, <code>tests/</code> or <code>results/</code>.</p>
+  <p><b>Result:</b> <span id="result-line">15 rows pass, 1 row fails (AC5), 2 rows are not in the scope of Verify (AC17, AC18).</span> AC5 fails as the build reported. On 2026-11-06 the user chose "accept and record" for AC5. AC10 passes with the 18 "deferred" lines, because the user deferred B4. AC12 passes because Section 6 explains the two gaps of the forward-pass check, and the gaps of the verifier re-run.</p>
+  <p>The re-runs give the same picture as the build, with one large limit: on this Mac the throughput of one configuration changes by up to 2&times; from one run to the next (Section 5). The single B1 run of each configuration carries this uncertainty. Section 9 gives 10 findings. Three need a decision before Step 6: the noise of the baseline (F1), the compile gain against a noisy row (F2) and a memory skip that the measured peaks do not support (F3).</p>
+</section>
+
+<section id="method">
+  <h2>2 Method</h2>
+  <p>The verifier read <code>CLAUDE.md</code>, <code>GLOSSARY.md</code>, <code>explore.html</code>, <code>plan.html</code>, <code>git diff 7f5dd59 1d20d42</code> and the hand-over note of the build. The working tree was clean at <code>1d20d42</code>. The verifier treated each number of the hand-over note as a claim and checked it (Section 10).</p>
+  <p>The verifier ran one heavy job at a time. Before each job, it read the free memory with <code>available_memory_bytes</code>. Before the re-runs, it copied the git-ignored folder <code>tests/fixtures/generated/bench/</code> (per-batch times and logs of the build) and both JSON files of <code>results/</code> to its scratch folder. After the re-runs, it put the copies back. Table 1 gives the order.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>No.</th><th>Heavy job</th><th>Free memory before</th><th>Wall time</th></tr></thead>
+      <tbody>
+        <tr><td>1</td><td><code>uv run pytest</code> (default test run)</td><td class="num">26.2 GB</td><td class="num">31.7 s</td></tr>
+        <tr><td>2</td><td><code>DINOV3_SLOW=1 uv run pytest</code></td><td class="num">26.1 GB</td><td class="num">57.3 s (pytest)</td></tr>
+        <tr><td>3</td><td><code>benchmark.py --model-size ViT-S/16 --results &lt;scratch&gt;</code> (45 workers)</td><td class="num">30.2 GB</td><td class="num">13 min 13 s</td></tr>
+        <tr><td>4</td><td><code>benchmark.py --priority --results &lt;scratch&gt;</code> (10 workers)</td><td class="num">29.4 GB</td><td class="num">5 min 38 s</td></tr>
+        <tr><td>5</td><td><code>profile_block.py</code> (4 subprocesses)</td><td class="num">28.9 GB</td><td class="num">33 min 54 s</td></tr>
+        <tr><td>6</td><td>B5 test 1 (4 processes, ViT-S/16; Section 6)</td><td class="num">25.8 GB</td><td class="num">5 min 42 s</td></tr>
+        <tr><td>7</td><td>Order test (14 workers, ViT-S/16; Section 5)</td><td class="num">25.3 GB</td><td class="num">3 min 56 s</td></tr>
+        <tr><td>8</td><td>AC11 check on torch-cpu (ViT-S/16, ViT-S+/16)</td><td class="num">25.0 GB</td><td class="num">4 s</td></tr>
+        <tr><td>9</td><td><code>benchmark.py --model-size ViT-H+/16 --only-skipped --results &lt;scratch copy&gt;</code> (1 worker; F3)</td><td class="num">25.3 GB</td><td class="num">1 min 30 s</td></tr>
+        <tr><td>10</td><td>B5 test 2 (2 processes, ViT-S/16; Section 6)</td><td class="num">24.9 GB</td><td class="num">about 2 min</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 1.</b> Heavy jobs of the verifier, in order. Each job started after the previous job ended. The two drivers also check the memory before each worker. ruff, the own checks and <code>baseline_table.py</code> load no model.</p>
+  <p>Own checks of the verifier, in addition to the tests:</p>
+  <ol>
+    <li>A script that reads every line of <code>results/baseline-torch-mps.jsonl</code> and checks AC1 to AC10 and AC14 without the code of the build: the latest line of each configuration, the time overlap of the workers, the validity set, the time budget, the spread, the memory fields, the need, an own pick of the baseline rows, the compile gains and the machine state.</li>
+    <li>The 257 memory checks of <code>driver.log</code> against the 257 worker starts of the five driver runs.</li>
+    <li>The environment of a running worker (<code>ps eww</code>) for the two MPS watermarks.</li>
+    <li>The FLOPs of Table 2 of <code>explore.html</code> from the <code>config.json</code> of each model size, without <code>flops.py</code>.</li>
+    <li><code>write_baseline_table</code> and <code>write_profile_table</code> into the scratch folder, against the committed <code>.md</code> files.</li>
+    <li>The per-batch times of P1 and P2 of the build, for the shape of the noise.</li>
+    <li>Two own tests for the forward-pass check of B5 (Section 6) and an order test for P1 (Section 5).</li>
+    <li>The largest difference of the block split on torch-cpu (AC11).</li>
+    <li>The peak memory of the configurations next to the one skipped configuration, and one run of the skipped configuration into a scratch copy of the results file (F3).</li>
+  </ol>
+  <p>Limits. The build is one commit, so the verifier cannot check that each test failed first (plan Section 6). The verifier did not run B4 (user decision) and did not re-run all of B1: it re-ran the 45 configurations of ViT-S/16 only.</p>
+</section>
+
+<section id="criteria">
+  <h2>3 Acceptance criteria</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>No.</th><th>Criterion</th><th>Target</th><th>Measured by the verifier</th><th>Result</th></tr></thead>
+      <tbody>
+        <tr><td>AC1</td><td>B1 is complete</td><td>225 + 18 configurations, 0 missing, 0 "error"; each skip listed with its need and the available memory</td><td>243 of 243 configurations have a latest line: 224 "done", 18 "deferred", 1 "skipped", 0 "error", 0 missing. The skip is ViT-H+/16, fp16-autocast, 512 px, batch size 32: need 16.83 GB; 16.80 GB available in the first try, 15.10 GB available in the one <code>--only-skipped</code> try (<code>driver.log</code>, 19:37:44 and 19:47:38 local time). The skip section of <code>baseline-torch-mps.md</code> lists the need and the available memory. The other skip of the first try (fp32, same size) is "done" after the <code>--only-skipped</code> try. See F3.</td><td class="pass">pass</td></tr>
+        <tr><td>AC2</td><td>Run rules</td><td>0 violations</td><td><code>driver.log</code> has 257 memory checks for 257 worker starts (135 + 90 + 2 + 20 + 10 in five driver runs). The 254 "done" lines do not overlap in time (<code>start_time</code> and <code>time</code>, 0 overlaps). The environment of a running worker of the verifier has <code>PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.8</code> and <code>PYTORCH_MPS_LOW_WATERMARK_RATIO=0.6</code>. No ViT-7B/16 line has a mode other than fp16-cast or bf16-cast. <code>test_worker_refuses_fp32_weights_for_7b</code> passes. <code>profile_block.log</code> has a memory check before each of the 4 B5 subprocesses.</td><td class="pass">pass</td></tr>
+        <tr><td>AC3</td><td>Validity</td><td>invalid = ViT-L/16 fp16-cast (9), ViT-H+/16 fp16-cast at 224 px (3)</td><td>Invalid latest lines: exactly these 12, all with the note "non-finite output" and no parity (a parity of non-finite values has no meaning; Section 3.5 asks for the reason). The other 242 "done" lines have a parity and the note "parity passes". No line needs the finite-only check, because B4 did not run. The 4 tests <code>test_check_validity_*</code> pass. The verifier re-run of ViT-S/16 gives the same validity in all 45 configurations.</td><td class="pass">pass</td></tr>
+        <tr><td>AC4</td><td>Time budget</td><td>timed &ge; 30 batches and &ge; 10 s, or &ge; 60 s and &ge; 10 batches; warm-up &ge; 3 batches and &ge; 2 s</td><td>254 of 254 "done" lines (main, repeats, compile) meet Table 5. 19 lines end at the 60 s limit with 10 to 29 batches (ViT-L/16 and ViT-H+/16 at large sizes). Timed batches: 10 to 1,721. Timed time: 10.0 to 150.3 s (ViT-H+/16 fp32 512 px batch size 32 needs 10 batches of about 15 s). Warm-up: at least 3 batches and 2.0002 s. The 4 tests <code>test_keep_going_*</code> and <code>test_warm_up_*</code> pass.</td><td class="pass">pass</td></tr>
+        <tr><td>AC5</td><td>Repeatability of P1 and P2</td><td>spread &le; 5 %</td><td>Build: P1 17.6 to 86.4 %, P2 7.9 to 28.3 % (Table 4). Only the two B2 repeats: P1 3.1 to 7.1 %, P2 8.1 to 26.4 %. With the two verifier runs added: P1 32.3 to 74.8 % (5 runs), P2 8.4 to 28.0 % (4 runs). The user chose "accept and record" on 2026-11-06. The cause is not only the B1 main run (Section 5, F1).</td><td class="fail">fail (accepted by the user)</td></tr>
+        <tr><td>AC6</td><td>Peak memory fields</td><td>all fields present</td><td>254 of 254 "done" lines have <code>peak_bytes</code>, <code>load_peak_bytes</code> and <code>mps_driver_max_bytes</code>. <code>run_peak_bytes</code> is set in 240 lines and null with the note "below the load peak" in 14 lines. In every line, base &le; load peak &le; peak. <code>test_worker_writes_all_fields</code> passes.</td><td class="pass">pass</td></tr>
+        <tr><td>AC7</td><td>The memory need is safe</td><td>0 lines above the need</td><td>0 of 254 lines. Largest peak / need: 0.62 (ViT-H+/16, fp32, 512 px, batch size 8, compile). By model size, the largest peak / need is 0.45 (ViT-S/16), 0.45 (ViT-S+/16), 0.48 (ViT-B/16), 0.59 (ViT-L/16), 0.62 (ViT-H+/16). The activation factor stays 1.0. Largest <code>mps_driver_max_bytes</code> / need: 0.54.</td><td class="pass">pass</td></tr>
+        <tr><td>AC8</td><td>Baseline rows</td><td>270 rows, each with a line or a reason; each names its dtype mode</td><td>The own pick of the verifier gives 135 rows for each output, 270 in all, all 270 with a line, and the same line as <code>baseline_rows</code>. Each row in <code>baseline-torch-mps.md</code> names its dtype mode. 5 rows of each output are compile rows (P1: fp16 and bf16; P2: fp32, fp16 and bf16). The table also has 36 empty ViT-7B/16 rows with the reason "deferred". The 4 tests <code>test_baseline_rows_*</code> pass.</td><td class="pass">pass</td></tr>
+        <tr><td>AC9</td><td>Compile rows</td><td>10 lines "done" or "error"; gain reported</td><td>10 lines "done", all valid. Gain against the main run of the same mode (as in the table): P1 &minus;22.6 to +248.1 %, P2 +9.4 to +67.9 %. Gain against the median of the three eager runs: P1 +41.0 to +152.5 %, P2 +11.3 to +67.9 % (F2). First call with compile: 4.3 to 5.1 s (P1), 9.6 to 12.7 s (P2).</td><td class="pass">pass</td></tr>
+        <tr><td>AC10</td><td>ViT-7B/16: 18 lines</td><td>"done", "skipped" or "deferred", each with its reason</td><td>18 lines "deferred" with the reason "ViT-7B/16 runs in its own session (D8)". The user deferred B4. The verifier did not run ViT-7B/16.</td><td class="pass">pass (deferred by the user)</td></tr>
+        <tr><td>AC11</td><td>The block split is exact</td><td>largest difference &le; 1e-5, fp32, ViT-S/16 and ViT-S+/16</td><td><code>test_run_parts_equals_block_output</code> passes for ViT-S/16 (default run) and ViT-S+/16 (<code>DINOV3_SLOW=1</code>). The verifier measured the largest difference on torch-cpu for the 3 test images at 224 px: 0.0 (bit-identical) in all 6 cases.</td><td class="pass">pass</td></tr>
+        <tr><td>AC12</td><td>Block profile</td><td>16 configurations with time share and FLOP share of 11 parts; sum of parts within 15 % of the block; L &times; block + outer parts within 15 % of the forward pass, or verify.html explains</td><td>16 lines, each with 11 part times, 11 FLOP counts and 11 byte counts; the table gives the time share and the FLOP share. Sum of parts / block: 16 of 16 within 15 % (0.872 to 1.081); verifier re-run: 15 of 16 (0.836 to 1.063; outside: ViT-H+/16, fp16-cast, 224 px, batch size 1, 0.836, build 0.874). (L &times; block + outer) / forward: 14 of 16 within 15 %; outside: ViT-S/16, 224 px, batch size 1, fp32 (1.358) and fp16-cast (1.643); verifier re-run: 12 of 16 (outside: the same two at 1.329 and 1.678, plus ViT-S/16 fp32 512 px batch size 1 at 0.800 and ViT-H+/16 fp32 512 px batch size 8 at 1.296). Section 6 explains the gap.</td><td class="pass">pass (explained)</td></tr>
+        <tr><td>AC13</td><td>FLOP counts</td><td>within 0.5 % of Table 2 of explore.html</td><td><code>test_part_flops_match_explore_table_2</code> passes for 6 model sizes. The test values are the corrected Table 2 (user decision). The own count of the verifier from <code>config.json</code>, without <code>flops.py</code>, is within 0.34 % of Table 2 in all 18 cells (the rest is the rounding of the table). <code>test_model_shapes_match_config</code> passes for 6 model sizes.</td><td class="pass">pass</td></tr>
+        <tr><td>AC14</td><td>Machine state</td><td>all lines; 3 tests green</td><td>275 of 275 lines of <code>baseline-torch-mps.jsonl</code> and 16 of 16 lines of <code>block-profile-torch-mps.jsonl</code> have the machine state: "AC Power", Low Power Mode "off", the three thermal notes, Apple M5 Max, 64 GiB, one set of versions (macOS 26.5.2, Python 3.12.13, torch 2.15.0, transformers 5.22.1). <code>test_machine_state_parses_pmset</code>, <code>test_check_machine_state_refuses_battery</code> and <code>test_check_machine_state_refuses_low_power_mode</code> pass (and 2 more machine tests).</td><td class="pass">pass</td></tr>
+        <tr><td>AC15</td><td>Results files in git</td><td>4 files, total &le; 1 MB</td><td>The 4 files are in commit <code>1d20d42</code>: 507,691 + 61,671 + 28,189 + 13,191 = 610,742 bytes (0.61 MB). The two <code>.md</code> files that the verifier made again from the JSON lines are byte-identical to the committed files.</td><td class="pass">pass</td></tr>
+        <tr><td>AC16</td><td>Tests and lint</td><td>pytest 0 failures (default and DINOV3_SLOW=1); ruff format and check clean</td><td><code>ruff format --check</code>: 56 files already formatted. <code>ruff check</code>: all checks passed. Default: 237 passed, 4 skipped. <code>DINOV3_SLOW=1</code>: 420 passed, 70 skipped, 20 xfailed, 0 failed. The skips: ViT-7B/16 (no reference file, fp32 weights refused, one memory check: 20.1 GB needed, 17.1 GB available) and 4 Step 2 converter tests. The xfails: the known fp16-cast overflow of Step 2.</td><td class="pass">pass</td></tr>
+        <tr><td>AC17</td><td>Explainer <code>docs/learn/03-where-the-compute-goes.html</code></td><td>covers every function that Step 3 adds to <code>src/</code></td><td>Not in the scope of Verify (Learn stage).</td><td class="pending">not in scope of Verify</td></tr>
+        <tr><td>AC18</td><td>Steering files and ADR</td><td>GLOSSARY "peak memory" names the footprint; ADR 0004 holds the D2 rule; roadmap.md status</td><td>Not in the scope of Verify (Close stage). Note for the Close stage: the GLOSSARY entry "Peak memory" does not name the footprint yet; the new entry "Process footprint" does. ADR 0004 must hold the changed D2 rule (compile rows join the baseline, F2, F5).</td><td class="pending">not in scope of Verify</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 2.</b> The 18 acceptance criteria of plan Table 9 with the values that the verifier measured.</p>
+</section>
+
+<section id="benchmarks">
+  <h2>4 Benchmarks run again</h2>
+  <h3>4.1 B1: ViT-S/16, 45 configurations</h3>
+  <p>Command: <code>uv run python scripts/benchmark.py --model-size ViT-S/16 --results &lt;scratch&gt;/b1-vits16.jsonl</code>. The run took 13 min 13 s, with 29.0 to 30.3 GB available. All 45 configurations are "done" and the driver wrote the 18 "deferred" ViT-7B/16 lines into the scratch file. Table 3 compares the frame throughput with the committed B1 lines.</p>
+  <div class="table-wrap">
+    <table>
+<thead><tr><th>Input resolution</th><th>Batch size</th><th>fp32</th><th>fp16-cast</th><th>bf16-cast</th><th>fp16-autocast</th><th>bf16-autocast</th></tr></thead>
+<tbody>
+<tr><td>224 px</td><td>1</td><td class="num">121.4 &rarr; 124.0 <b>1.02</b></td><td class="num">104.7 &rarr; 141.3 <b>1.35</b></td><td class="num">129.6 &rarr; 148.8 <b>1.15</b></td><td class="num">112.4 &rarr; 109.5 <b>0.97</b></td><td class="num">109.9 &rarr; 122.2 <b>1.11</b></td></tr>
+<tr><td>224 px</td><td>8</td><td class="num">608.4 &rarr; 584.7 <b>0.96</b></td><td class="num">382.9 &rarr; 496.1 <b>1.30</b></td><td class="num">487.4 &rarr; 521.0 <b>1.07</b></td><td class="num">702.5 &rarr; 691.8 <b>0.98</b></td><td class="num">608.8 &rarr; 750.1 <b>1.23</b></td></tr>
+<tr><td>224 px</td><td>32</td><td class="num">755.1 &rarr; 688.3 <b>0.91</b></td><td class="num">367.3 &rarr; 515.3 <b>1.40</b></td><td class="num">764.1 &rarr; 646.7 <b>0.85</b></td><td class="num">654.4 &rarr; 649.2 <b>0.99</b></td><td class="num">530.6 &rarr; 805.7 <b>1.52</b></td></tr>
+<tr><td>448 px</td><td>1</td><td class="num">100.3 &rarr; 99.4 <b>0.99</b></td><td class="num">72.6 &rarr; 99.5 <b>1.37</b></td><td class="num">108.9 &rarr; 106.8 <b>0.98</b></td><td class="num">104.8 &rarr; 99.7 <b>0.95</b></td><td class="num">100.8 &rarr; 101.6 <b>1.01</b></td></tr>
+<tr><td>448 px</td><td>8</td><td class="num">122.5 &rarr; 124.6 <b>1.02</b></td><td class="num">91.5 &rarr; 111.1 <b>1.21</b></td><td class="num">198.1 &rarr; 194.9 <b>0.98</b></td><td class="num">160.3 &rarr; 171.2 <b>1.07</b></td><td class="num">132.2 &rarr; 174.2 <b>1.32</b></td></tr>
+<tr><td>448 px</td><td>32</td><td class="num">104.5 &rarr; 103.3 <b>0.99</b></td><td class="num">86.4 &rarr; 107.4 <b>1.24</b></td><td class="num">187.4 &rarr; 166.1 <b>0.89</b></td><td class="num">128.7 &rarr; 138.8 <b>1.08</b></td><td class="num">129.3 &rarr; 137.2 <b>1.06</b></td></tr>
+<tr><td>512 px</td><td>1</td><td class="num">54.7 &rarr; 65.9 <b>1.21</b></td><td class="num">61.5 &rarr; 79.3 <b>1.29</b></td><td class="num">105.9 &rarr; 105.9 <b>1.00</b></td><td class="num">91.6 &rarr; 100.2 <b>1.09</b></td><td class="num">90.0 &rarr; 100.0 <b>1.11</b></td></tr>
+<tr><td>512 px</td><td>8</td><td class="num">49.9 &rarr; 62.7 <b>1.26</b></td><td class="num">80.6 &rarr; 89.1 <b>1.11</b></td><td class="num">165.3 &rarr; 150.4 <b>0.91</b></td><td class="num">102.3 &rarr; 111.8 <b>1.09</b></td><td class="num">102.3 &rarr; 116.8 <b>1.14</b></td></tr>
+<tr><td>512 px</td><td>32</td><td class="num">41.2 &rarr; 47.1 <b>1.14</b></td><td class="num">82.0 &rarr; 87.8 <b>1.07</b></td><td class="num">148.0 &rarr; 133.4 <b>0.90</b></td><td class="num">104.8 &rarr; 106.7 <b>1.02</b></td><td class="num">99.5 &rarr; 102.7 <b>1.03</b></td></tr>
+</tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 3.</b> Frame throughput of ViT-S/16 in images per second: build &rarr; verifier, and the ratio verifier / build in bold. The patch throughput gives the same ratios within 0.005. Build: 2026-11-06, 17:10 to 17:24 UTC. Verifier: 19:48 to 20:01 UTC (local time is UTC + 1 h).</p>
+  <ul>
+    <li><b>Peak memory reproduces.</b> Ratio verifier / build: 0.994 to 1.004 in all 45 configurations.</li>
+    <li><b>Validity reproduces.</b> The same <code>valid</code> value and the note "parity passes" in all 45 configurations.</li>
+    <li><b>Throughput does not reproduce to 5 %.</b> Ratio verifier / build: median 1.069, range 0.846 to 1.518. Within 5 %: 15 of 45. Within 10 %: 25 of 45. Within 25 %: 37 of 45. The device throughput gives the same ratios, so the change is in the GPU time, not in the copy to the host.</li>
+    <li><b>Baseline rows (D2).</b> Of the 27 baseline rows of ViT-S/16 for each output, 2 pick another dtype mode in the verifier run: 224 px batch size 1 fp16 (fp16-autocast &rarr; fp16-cast) and 224 px batch size 32 bf16 (bf16-cast &rarr; bf16-autocast). The baseline throughput changes by a ratio of 0.886 to 1.257 (median 1.017).</li>
+  </ul>
+  <h3>4.2 P1 and P2</h3>
+  <p>Command: <code>uv run python scripts/benchmark.py --priority --results &lt;scratch&gt;/priority.jsonl</code>. The run took 5 min 38 s, with 25.4 to 29.7 GB available. All 10 configurations are "done" and valid. The B1 run of Section 4.1 also holds the P1 configuration, so P1 has five runs and P2 has four runs in all.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Priority</th><th>Dtype mode</th><th>Build B1 (r0)</th><th>Build B2 r1</th><th>Build B2 r2</th><th>Verifier B1</th><th>Verifier <code>--priority</code></th><th>Spread of all runs</th><th>Compile row (build)</th></tr></thead>
+      <tbody>
+        <tr><td>P1</td><td>fp32</td><td class="num">608.4</td><td class="num">319.6</td><td class="num">334.1</td><td class="num">584.7</td><td class="num">386.2</td><td class="num">74.8 %</td><td class="num">471.1</td></tr>
+        <tr><td>P1</td><td>fp16-cast</td><td class="num">382.9</td><td class="num">671.4</td><td class="num">704.6</td><td class="num">496.1</td><td class="num">783.6</td><td class="num">59.7 %</td><td class="num">1,333.1</td></tr>
+        <tr><td>P1</td><td>bf16-cast</td><td class="num">487.4</td><td class="num">658.4</td><td class="num">706.9</td><td class="num">521.0</td><td class="num">775.5</td><td class="num">43.7 %</td><td class="num">1,377.2</td></tr>
+        <tr><td>P1</td><td>fp16-autocast</td><td class="num">702.5</td><td class="num">519.0</td><td class="num">536.4</td><td class="num">691.8</td><td class="num">567.1</td><td class="num">32.3 %</td><td class="num">1,108.9</td></tr>
+        <tr><td>P1</td><td>bf16-autocast</td><td class="num">608.8</td><td class="num">515.2</td><td class="num">531.7</td><td class="num">750.1</td><td class="num">576.3</td><td class="num">40.7 %</td><td class="num">1,342.4</td></tr>
+        <tr><td>P2</td><td>fp32</td><td class="num">2.57</td><td class="num">2.40</td><td class="num">2.60</td><td class="num">&ndash;</td><td class="num">2.62</td><td class="num">8.4 %</td><td class="num">2.86</td></tr>
+        <tr><td>P2</td><td>fp16-cast</td><td class="num">8.17</td><td class="num">6.95</td><td class="num">7.61</td><td class="num">&ndash;</td><td class="num">7.63</td><td class="num">16.0 %</td><td class="num">10.45</td></tr>
+        <tr><td>P2</td><td>bf16-cast</td><td class="num">8.26</td><td class="num">6.89</td><td class="num">7.60</td><td class="num">&ndash;</td><td class="num">7.55</td><td class="num">18.1 %</td><td class="num">9.04</td></tr>
+        <tr><td>P2</td><td>fp16-autocast</td><td class="num">6.21</td><td class="num">5.90</td><td class="num">7.61</td><td class="num">&ndash;</td><td class="num">6.50</td><td class="num">27.0 %</td><td class="num">10.42</td></tr>
+        <tr><td>P2</td><td>bf16-autocast</td><td class="num">6.32</td><td class="num">5.90</td><td class="num">7.69</td><td class="num">&ndash;</td><td class="num">6.48</td><td class="num">28.0 %</td><td class="num">10.12</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 4.</b> Throughput of P1 (frame embedding) and P2 (patch embeddings) in images per second, in each run. Spread = (largest &minus; smallest) / median of the eager runs of the row. The verifier P2 fp32 run is 2.62 img/s; against it, the P2 fp32 compile row is only 9.3 % faster (F2).</p>
+  <h3>4.3 B5: block profile</h3>
+  <p>Command: <code>uv run python scripts/profile_block.py</code>, after a copy of <code>results/block-profile-torch-mps.jsonl</code>. The run took 33 min 54 s, with 22.1 to 28.8 GB available. The 16 new lines went to the scratch folder, and the committed file went back to its first state (same SHA-1).</p>
+  <div class="table-wrap">
+    <table>
+<thead><tr><th>Model size</th><th>Dtype mode</th><th>Input resolution</th><th>Batch size</th><th>Block, build &rarr; verifier (ms)</th><th>Forward pass, build &rarr; verifier (ms)</th><th>Sum of parts / block, build</th><th>Verifier</th><th>(L &times; block + outer) / forward, build</th><th>Verifier</th></tr></thead><tbody>
+<tr><td>ViT-S/16</td><td>fp32</td><td>224 px</td><td>1</td><td class="num">0.427 &rarr; 0.457</td><td class="num">3.87 &rarr; 4.23</td><td class="num">0.872</td><td class="num">1.004</td><td class="num"><b class="fail">1.358</b></td><td class="num"><b class="fail">1.329</b></td></tr>
+<tr><td>ViT-S/16</td><td>fp32</td><td>224 px</td><td>8</td><td class="num">1.394 &rarr; 1.649</td><td class="num">19.76 &rarr; 20.90</td><td class="num">0.987</td><td class="num">0.951</td><td class="num">0.868</td><td class="num">0.970</td></tr>
+<tr><td>ViT-S/16</td><td>fp32</td><td>512 px</td><td>1</td><td class="num">1.313 &rarr; 1.315</td><td class="num">17.30 &rarr; 20.05</td><td class="num">0.997</td><td class="num">0.997</td><td class="num">0.926</td><td class="num"><b class="fail">0.800</b></td></tr>
+<tr><td>ViT-S/16</td><td>fp32</td><td>512 px</td><td>8</td><td class="num">10.434 &rarr; 12.066</td><td class="num">126.52 &rarr; 166.11</td><td class="num">0.967</td><td class="num">1.042</td><td class="num">1.006</td><td class="num">0.887</td></tr>
+<tr><td>ViT-S/16</td><td>fp16-cast</td><td>224 px</td><td>1</td><td class="num">0.289 &rarr; 0.292</td><td class="num">2.22 &rarr; 2.19</td><td class="num">0.933</td><td class="num">1.061</td><td class="num"><b class="fail">1.643</b></td><td class="num"><b class="fail">1.678</b></td></tr>
+<tr><td>ViT-S/16</td><td>fp16-cast</td><td>224 px</td><td>8</td><td class="num">0.714 &rarr; 0.870</td><td class="num">8.32 &rarr; 9.79</td><td class="num">1.055</td><td class="num">0.972</td><td class="num">1.076</td><td class="num">1.111</td></tr>
+<tr><td>ViT-S/16</td><td>fp16-cast</td><td>512 px</td><td>1</td><td class="num">0.548 &rarr; 0.666</td><td class="num">6.07 &rarr; 7.77</td><td class="num">1.081</td><td class="num">0.965</td><td class="num">1.132</td><td class="num">1.068</td></tr>
+<tr><td>ViT-S/16</td><td>fp16-cast</td><td>512 px</td><td>8</td><td class="num">4.031 &rarr; 4.901</td><td class="num">50.14 &rarr; 57.50</td><td class="num">0.948</td><td class="num">0.944</td><td class="num">0.997</td><td class="num">1.064</td></tr>
+<tr><td>ViT-H+/16</td><td>fp32</td><td>224 px</td><td>1</td><td class="num">2.147 &rarr; 3.615</td><td class="num">68.29 &rarr; 112.96</td><td class="num">1.066</td><td class="num">0.888</td><td class="num">1.010</td><td class="num">1.027</td></tr>
+<tr><td>ViT-H+/16</td><td>fp32</td><td>224 px</td><td>8</td><td class="num">16.080 &rarr; 24.293</td><td class="num">528.10 &rarr; 837.40</td><td class="num">0.982</td><td class="num">1.062</td><td class="num">0.978</td><td class="num">0.932</td></tr>
+<tr><td>ViT-H+/16</td><td>fp32</td><td>512 px</td><td>1</td><td class="num">11.498 &rarr; 17.161</td><td class="num">365.52 &rarr; 582.14</td><td class="num">0.950</td><td class="num">1.005</td><td class="num">1.009</td><td class="num">0.946</td></tr>
+<tr><td>ViT-H+/16</td><td>fp32</td><td>512 px</td><td>8</td><td class="num">95.972 &rarr; 166.056</td><td class="num">3,190.96 &rarr; 4,108.62</td><td class="num">1.001</td><td class="num">0.949</td><td class="num">0.965</td><td class="num"><b class="fail">1.296</b></td></tr>
+<tr><td>ViT-H+/16</td><td>fp16-cast</td><td>224 px</td><td>1</td><td class="num">0.937 &rarr; 1.319</td><td class="num">28.19 &rarr; 37.72</td><td class="num">0.874</td><td class="num"><b class="fail">0.836</b></td><td class="num">1.073</td><td class="num">1.127</td></tr>
+<tr><td>ViT-H+/16</td><td>fp16-cast</td><td>224 px</td><td>8</td><td class="num">6.138 &rarr; 6.784</td><td class="num">196.68 &rarr; 214.00</td><td class="num">0.884</td><td class="num">0.984</td><td class="num">1.006</td><td class="num">1.023</td></tr>
+<tr><td>ViT-H+/16</td><td>fp16-cast</td><td>512 px</td><td>1</td><td class="num">3.896 &rarr; 4.771</td><td class="num">123.06 &rarr; 147.78</td><td class="num">1.012</td><td class="num">0.934</td><td class="num">1.020</td><td class="num">1.040</td></tr>
+<tr><td>ViT-H+/16</td><td>fp16-cast</td><td>512 px</td><td>8</td><td class="num">33.313 &rarr; 36.879</td><td class="num">1,171.64 &rarr; 1,238.25</td><td class="num">1.021</td><td class="num">1.063</td><td class="num">0.915</td><td class="num">0.959</td></tr>
+</tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 5.</b> B5 of the build against the verifier re-run. Values outside 15 % are in red. Section 6 explains the gaps.</p>
+</section>
+
+<section id="repeatability">
+  <h2>5 Repeatability (AC5)</h2>
+  <figure>
+<svg viewBox="0 0 760 380" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Throughput of P1 and P2 in each run, relative to the median of the runs">
+<rect x="0" y="0" width="760" height="380" fill="#ffffff"/>
+<g font-family="-apple-system, Helvetica, Arial, sans-serif" font-size="11" fill="#111414">
+<rect x="70" y="170.0" width="300" height="23.6" fill="#e3f0ef"/>
+<line x1="70" x2="370" y1="276.4" y2="276.4" stroke="#d6dedd" stroke-width="1"/>
+<text x="64" y="280.4" text-anchor="end">0.6</text>
+<line x1="70" x2="370" y1="229.1" y2="229.1" stroke="#d6dedd" stroke-width="1"/>
+<text x="64" y="233.1" text-anchor="end">0.8</text>
+<line x1="70" x2="370" y1="181.8" y2="181.8" stroke="#111414" stroke-width="1.2"/>
+<text x="64" y="185.8" text-anchor="end">1.0</text>
+<line x1="70" x2="370" y1="134.5" y2="134.5" stroke="#d6dedd" stroke-width="1"/>
+<text x="64" y="138.5" text-anchor="end">1.2</text>
+<line x1="70" x2="370" y1="87.3" y2="87.3" stroke="#d6dedd" stroke-width="1"/>
+<text x="64" y="91.3" text-anchor="end">1.4</text>
+<line x1="70" x2="370" y1="40.0" y2="40.0" stroke="#d6dedd" stroke-width="1"/>
+<text x="64" y="44.0" text-anchor="end">1.6</text>
+<text x="70" y="22" font-weight="600" font-size="12">P1: ViT-S/16, 224 px, batch size 8, frame embedding</text>
+<text x="100.0" y="318" text-anchor="middle">fp32</text>
+<circle cx="84.0" cy="45.8" r="4" fill="#111414"/>
+<circle cx="92.0" cy="222.6" r="4" fill="#ffffff" stroke="#111414" stroke-width="1.5"/>
+<circle cx="100.0" cy="213.7" r="4" fill="#ffffff" stroke="#111414" stroke-width="1.5"/>
+<rect x="104.0" y="56.3" width="8" height="8" fill="#057379"/>
+<path d="M116.0 176.8 L121.0 181.8 L116.0 186.8 L111.0 181.8 Z" fill="#ffffff" stroke="#057379" stroke-width="1.5"/>
+<text x="160.0" y="318" text-anchor="middle"><tspan x="160.0">fp16-</tspan><tspan x="160.0" dy="12">cast</tspan></text>
+<circle cx="144.0" cy="283.4" r="4" fill="#111414"/>
+<circle cx="152.0" cy="181.8" r="4" fill="#ffffff" stroke="#111414" stroke-width="1.5"/>
+<circle cx="160.0" cy="170.1" r="4" fill="#ffffff" stroke="#111414" stroke-width="1.5"/>
+<rect x="164.0" y="239.5" width="8" height="8" fill="#057379"/>
+<path d="M176.0 137.3 L181.0 142.3 L176.0 147.3 L171.0 142.3 Z" fill="#ffffff" stroke="#057379" stroke-width="1.5"/>
+<text x="220.0" y="318" text-anchor="middle"><tspan x="220.0">bf16-</tspan><tspan x="220.0" dy="12">cast</tspan></text>
+<circle cx="204.0" cy="243.2" r="4" fill="#111414"/>
+<circle cx="212.0" cy="181.8" r="4" fill="#ffffff" stroke="#111414" stroke-width="1.5"/>
+<circle cx="220.0" cy="164.4" r="4" fill="#ffffff" stroke="#111414" stroke-width="1.5"/>
+<rect x="224.0" y="227.1" width="8" height="8" fill="#057379"/>
+<path d="M236.0 134.8 L241.0 139.8 L236.0 144.8 L231.0 139.8 Z" fill="#ffffff" stroke="#057379" stroke-width="1.5"/>
+<text x="280.0" y="318" text-anchor="middle"><tspan x="280.0">fp16-</tspan><tspan x="280.0" dy="12">autocast</tspan></text>
+<circle cx="264.0" cy="125.4" r="4" fill="#111414"/>
+<circle cx="272.0" cy="201.8" r="4" fill="#ffffff" stroke="#111414" stroke-width="1.5"/>
+<circle cx="280.0" cy="194.6" r="4" fill="#ffffff" stroke="#111414" stroke-width="1.5"/>
+<rect x="284.0" y="125.8" width="8" height="8" fill="#057379"/>
+<path d="M296.0 176.8 L301.0 181.8 L296.0 186.8 L291.0 181.8 Z" fill="#ffffff" stroke="#057379" stroke-width="1.5"/>
+<text x="340.0" y="318" text-anchor="middle"><tspan x="340.0">bf16-</tspan><tspan x="340.0" dy="12">autocast</tspan></text>
+<circle cx="324.0" cy="168.5" r="4" fill="#111414"/>
+<circle cx="332.0" cy="206.9" r="4" fill="#ffffff" stroke="#111414" stroke-width="1.5"/>
+<circle cx="340.0" cy="200.1" r="4" fill="#ffffff" stroke="#111414" stroke-width="1.5"/>
+<rect x="344.0" y="106.6" width="8" height="8" fill="#057379"/>
+<path d="M356.0 176.8 L361.0 181.8 L356.0 186.8 L351.0 181.8 Z" fill="#ffffff" stroke="#057379" stroke-width="1.5"/>
+<rect x="430" y="170.0" width="300" height="23.6" fill="#e3f0ef"/>
+<line x1="430" x2="730" y1="276.4" y2="276.4" stroke="#d6dedd" stroke-width="1"/>
+<text x="424" y="280.4" text-anchor="end">0.6</text>
+<line x1="430" x2="730" y1="229.1" y2="229.1" stroke="#d6dedd" stroke-width="1"/>
+<text x="424" y="233.1" text-anchor="end">0.8</text>
+<line x1="430" x2="730" y1="181.8" y2="181.8" stroke="#111414" stroke-width="1.2"/>
+<text x="424" y="185.8" text-anchor="end">1.0</text>
+<line x1="430" x2="730" y1="134.5" y2="134.5" stroke="#d6dedd" stroke-width="1"/>
+<text x="424" y="138.5" text-anchor="end">1.2</text>
+<line x1="430" x2="730" y1="87.3" y2="87.3" stroke="#d6dedd" stroke-width="1"/>
+<text x="424" y="91.3" text-anchor="end">1.4</text>
+<line x1="430" x2="730" y1="40.0" y2="40.0" stroke="#d6dedd" stroke-width="1"/>
+<text x="424" y="44.0" text-anchor="end">1.6</text>
+<text x="430" y="22" font-weight="600" font-size="12">P2: ViT-H+/16, 512 px, batch size 8, patch embeddings</text>
+<text x="460.0" y="318" text-anchor="middle">fp32</text>
+<circle cx="444.0" cy="183.3" r="4" fill="#111414"/>
+<circle cx="452.0" cy="198.8" r="4" fill="#ffffff" stroke="#111414" stroke-width="1.5"/>
+<circle cx="460.0" cy="180.3" r="4" fill="#ffffff" stroke="#111414" stroke-width="1.5"/>
+<path d="M476.0 173.8 L481.0 178.8 L476.0 183.8 L471.0 178.8 Z" fill="#ffffff" stroke="#057379" stroke-width="1.5"/>
+<text x="520.0" y="318" text-anchor="middle"><tspan x="520.0">fp16-</tspan><tspan x="520.0" dy="12">cast</tspan></text>
+<circle cx="504.0" cy="164.7" r="4" fill="#111414"/>
+<circle cx="512.0" cy="202.5" r="4" fill="#ffffff" stroke="#111414" stroke-width="1.5"/>
+<circle cx="520.0" cy="182.1" r="4" fill="#ffffff" stroke="#111414" stroke-width="1.5"/>
+<path d="M536.0 176.5 L541.0 181.5 L536.0 186.5 L531.0 181.5 Z" fill="#ffffff" stroke="#057379" stroke-width="1.5"/>
+<text x="580.0" y="318" text-anchor="middle"><tspan x="580.0">bf16-</tspan><tspan x="580.0" dy="12">cast</tspan></text>
+<circle cx="564.0" cy="160.3" r="4" fill="#111414"/>
+<circle cx="572.0" cy="203.0" r="4" fill="#ffffff" stroke="#111414" stroke-width="1.5"/>
+<circle cx="580.0" cy="181.0" r="4" fill="#ffffff" stroke="#111414" stroke-width="1.5"/>
+<path d="M596.0 177.6 L601.0 182.6 L596.0 187.6 L591.0 182.6 Z" fill="#ffffff" stroke="#057379" stroke-width="1.5"/>
+<text x="640.0" y="318" text-anchor="middle"><tspan x="640.0">fp16-</tspan><tspan x="640.0" dy="12">autocast</tspan></text>
+<circle cx="624.0" cy="187.3" r="4" fill="#111414"/>
+<circle cx="632.0" cy="198.8" r="4" fill="#ffffff" stroke="#111414" stroke-width="1.5"/>
+<circle cx="640.0" cy="135.1" r="4" fill="#ffffff" stroke="#111414" stroke-width="1.5"/>
+<path d="M656.0 171.3 L661.0 176.3 L656.0 181.3 L651.0 176.3 Z" fill="#ffffff" stroke="#057379" stroke-width="1.5"/>
+<text x="700.0" y="318" text-anchor="middle"><tspan x="700.0">bf16-</tspan><tspan x="700.0" dy="12">autocast</tspan></text>
+<circle cx="684.0" cy="184.8" r="4" fill="#111414"/>
+<circle cx="692.0" cy="200.6" r="4" fill="#ffffff" stroke="#111414" stroke-width="1.5"/>
+<circle cx="700.0" cy="134.4" r="4" fill="#ffffff" stroke="#111414" stroke-width="1.5"/>
+<path d="M716.0 173.8 L721.0 178.8 L716.0 183.8 L711.0 178.8 Z" fill="#ffffff" stroke="#057379" stroke-width="1.5"/>
+<text x="22" y="170.0" transform="rotate(-90 22 170.0)" text-anchor="middle">throughput / median of the runs</text>
+<circle cx="80" cy="350" r="4" fill="#111414"/><text x="90" y="354">build, B1 main run</text>
+<circle cx="220" cy="350" r="4" fill="#ffffff" stroke="#111414" stroke-width="1.5"/><text x="230" y="354">build, B2 repeats 1 and 2</text>
+<rect x="386" y="346" width="8" height="8" fill="#057379"/><text x="400" y="354">verifier, B1 ViT-S/16 run</text>
+<path d="M560 345 L565 350 L560 355 L555 350 Z" fill="#ffffff" stroke="#057379" stroke-width="1.5"/><text x="572" y="354">verifier, --priority run</text>
+<rect x="80" y="364" width="14" height="8" fill="#e3f0ef"/><text x="100" y="372">band of &#177;5 % around the median (the AC5 target is a spread of 5 % or less)</text>
+</g></svg>
+    <figcaption class="caption"><b>Figure 1.</b> Throughput of P1 and P2 in each run, divided by the median of the runs of the same dtype mode. Black: runs of the build. Teal: runs of the verifier. The shaded band is &plusmn;5 % around the median. AC5 needs (largest &minus; smallest) / median &le; 5 %, so all points of one column must fit in a band half as wide as the shaded band.</figcaption>
+  </figure>
+  <p>AC5 fails, as the build reported. The user accepted this on 2026-11-06. The verifier adds these facts:</p>
+  <ul>
+    <li><b>The noise is in the GPU time.</b> P1 takes 10.0 to 24.7 ms for each batch of 8 (median frame time), not 1.5 to 3 ms. The device time is 97.2 % or more of the frame time in every P1 run. So the change from run to run is in the forward pass on the GPU, not in the copy to the host and not in the Python launch cost.</li>
+    <li><b>Inside one run, the batch times are tight; between runs, the level moves.</b> P2 in the build: inside each run, p90 / median of the batch times is 1.01 to 1.10, but the median batch time of fp16-autocast is 1.356 s in repeat 1 and 1.046 s in repeat 2 (4 minutes later). One P1 run changes its level in the middle: fp16-cast, main run, median 25.2 ms in the first half and 16.1 ms in the second half.</li>
+    <li><b>The P1 result depends on the run that holds it.</b> The two B1 runs (build r0, verifier B1) and the three <code>--priority</code> runs (build r1 and r2, verifier) form two groups. In each of the five dtype modes the groups do not overlap, and the ranking of the modes flips: in the B1 runs fp32 and the autocast modes are fast and the cast modes are slow; in the <code>--priority</code> runs it is the opposite (Table 4). The verifier tested if the worker before P1 sets the level (Table 6). It does not: with the same worker before it as in B1, P1 fp16-cast gave 705.0 and 721.5 img/s, the level of the <code>--priority</code> runs, not 383 to 496 img/s. In these 14 workers over 4 minutes, P1 stayed within 8 % (fp16-cast) and 11 % (fp32). The cause of the two groups stays open.</li>
+  </ul>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>P1 worker</th><th>Worker before it</th><th>Frame throughput (img/s)</th><th>Level in the B1 runs</th><th>Level in the <code>--priority</code> runs</th></tr></thead>
+      <tbody>
+        <tr><td>fp16-cast</td><td>fp16-cast, 224 px, batch size 1 (as in B1)</td><td class="num">721.5, 705.0</td><td class="num">382.9, 496.1</td><td class="num">671.4, 704.6, 783.6</td></tr>
+        <tr><td>fp16-cast</td><td>P1 fp32 (as in <code>--priority</code>)</td><td class="num">664.3, 671.1, 690.0</td><td class="num">382.9, 496.1</td><td class="num">671.4, 704.6, 783.6</td></tr>
+        <tr><td>fp32</td><td>fp32, 224 px, batch size 1 (as in B1)</td><td class="num">324.4, 349.5</td><td class="num">608.4, 584.7</td><td class="num">319.6, 334.1, 386.2</td></tr>
+        <tr><td>fp32</td><td>P1 fp16-cast</td><td class="num">362.7, 354.1, 356.2</td><td class="num">608.4, 584.7</td><td class="num">319.6, 334.1, 386.2</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 6.</b> Order test of the verifier: 14 worker subprocesses of ViT-S/16 at 224 px, one after the other, 20:47 to 20:51 UTC, with the worker subprocess of the build driver. The P1 rows only.</p>
+  <ul>
+    <li><b>Memory and power do not explain it.</b> The verifier runs had 25 to 30 GB available, AC power, Low Power Mode off and no thermal note, and still show the full effect: P1 fp32 gave 584.7 img/s at 19:48 UTC and 386.2 img/s at 20:01 UTC.</li>
+    <li><b>The B2 repeats alone also miss 5 %.</b> P1: 3.1 to 7.1 %. P2: 8.1 to 26.4 %. So a longer time budget, the first remedy of plan Section 3.4, cannot fix a level change between runs.</li>
+  </ul>
+  <p>Consequence: each B1 value is one sample of a quantity that moves by up to 2&times; between runs on this Mac (F1). The peak memory, the validity and the FLOP counts do not have this problem.</p>
+</section>
+
+<section id="block-profile">
+  <h2>6 The forward-pass check of B5 (AC12)</h2>
+  <p>Plan Section 3.11 asks verify.html to explain a gap above 15 %. In the build, two configurations miss the forward-pass check: ViT-S/16, 224 px, batch size 1, fp32 (1.358) and fp16-cast (1.643). The verifier re-run gives 1.329 and 1.678 for the same two configurations, so this gap is systematic. The re-run also has three gaps that the build does not have (Table 5). The verifier ran two own tests on ViT-S/16 (Table 7).</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Test</th><th>What runs in the timed loop</th><th>fp32, 224 px, b1 (ms)</th><th>fp16-cast, 224 px, b1 (ms)</th></tr></thead>
+      <tbody>
+        <tr><td>1</td><td>Forward pass <code>model(pixel_values=pixels)</code></td><td class="num">5.36</td><td class="num">3.28</td></tr>
+        <tr><td>1</td><td>12 &times; block 1 alone, the same input in each call (as in <code>profile_block</code>)</td><td class="num">6.24</td><td class="num">3.93</td></tr>
+        <tr><td>1</td><td>The 12 blocks in sequence, called from outside the model (12 &times; the time per block)</td><td class="num">6.95</td><td class="num">4.00</td></tr>
+        <tr><td>1</td><td>Block 1 twelve times in sequence, each call on the output of the previous call</td><td class="num">6.72</td><td class="num">4.51</td></tr>
+        <tr><td>1</td><td>CPU time to issue one call of block 1 (500 calls, before the synchronize)</td><td class="num">0.35</td><td class="num">0.22</td></tr>
+        <tr><td>2</td><td>Forward pass</td><td class="num">3.77</td><td class="num">3.65</td></tr>
+        <tr><td>2</td><td>Encoder only: <code>model.model(x, position_embeddings=...)</code> on stored inputs (a part of the forward pass)</td><td class="num">4.97</td><td class="num">4.57</td></tr>
+        <tr><td>2</td><td>The 12 blocks in sequence with <code>layer(...)</code></td><td class="num">5.53</td><td class="num">4.21</td></tr>
+        <tr><td>2</td><td>The 12 blocks in sequence with <code>layer.forward(...)</code> (no module hooks)</td><td class="num">5.57</td><td class="num">4.60</td></tr>
+        <tr><td>2</td><td>CPU time to issue one forward pass / one encoder call (100 calls)</td><td class="num">2.90 / 2.95</td><td class="num">3.59 / 3.05</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 7.</b> Own tests of the verifier on torch-mps, ViT-S/16, 224 px, batch size 1. Each value is the median of 5 trials of <code>time_part</code> of the build, in interleaved order. Test 1 and test 2 ran in separate processes, about 10 minutes apart. Control in test 1: at fp32, 224 px, batch size 8, (12 &times; block + outer parts) / forward pass is 1.03; at fp32, 512 px, batch size 1, it is also 1.03.</p>
+  <p>Explanation:</p>
+  <ol>
+    <li><b>The isolation of one block is not the cause.</b> The 12 blocks in sequence, the same work as in the forward pass, take as long per block as block 1 alone, or longer.</li>
+    <li><b>At batch size 1, a part of the forward pass takes longer than the whole forward pass.</b> The encoder alone, on stored inputs, takes 25 to 32 % longer than the full forward pass, which does more work (patch embedding, RoPE tables, final layer norm). Module hooks are not the cause: the model has 0 hooks, and <code>layer.forward</code> gives the same time as <code>layer(...)</code>.</li>
+    <li><b>The extra time comes after the CPU issues the work.</b> The CPU issue time of the forward pass and of the encoder is about the same (2.9 to 3.6 ms). The difference is in the time until the GPU ends the queued work. The verifier did not find the mechanism inside torch-mps.</li>
+    <li><b>The effect needs small kernels.</b> At batch size 8, or at 512 px, the check is 1.03 in the own test. Each kernel then has more work, and a fixed cost for each kernel is a small part of it.</li>
+    <li><b>The other gaps of the re-run come from the level change of Section 5.</b> B5 times the 11 parts, the block, the outer parts and the forward pass one after the other, over 4 to 17 minutes for each model size and dtype mode. In test 2 the fp32 forward pass of one process went from 2.38 ms to 4.99 ms within about one minute; in test 1 at 512 px one trial gave 8.0 ms and the others 13.7 to 16.0 ms. The build values of the same configurations are within 15 %, and the block times of the re-run are 0.99&times; to 1.73&times; the build values.</li>
+  </ol>
+  <p>Consequence. At batch size 1 the absolute block time of B5 is too high for the time of a block inside the forward pass: by about 30 to 70 % for ViT-S/16 at 224 px. The time shares are robust: between the build and the re-run, the largest difference of a time share is 0.6 to 6.2 percentage points for each configuration (median 2.2), and the largest part is the same part in 15 of 16 configurations. The explainer should use the time shares, and forward pass / L for the time of one block at batch size 1 (F4).</p>
+  <p>The claim of the build ("the fixed launch cost per call in the isolated loop is counted 12 times; the forward pass overlaps launches") is partly right: the gap is a fixed cost that matters only for small kernels. It is not specific to the isolated loop, and the CPU launch time does not differ.</p>
+</section>
+
+<section id="compile">
+  <h2>7 Compile rows and baseline rows</h2>
+  <p>On 2026-11-06 the user decided that the compile rows join the baseline (D2 changed). The verifier does not reopen this decision. It records what the decision does with the numbers of the build.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Priority</th><th>Dtype mode</th><th>Compiled (img/s)</th><th>Eager, main run (img/s)</th><th>Gain against the main run</th><th>Eager, median of 3 runs (img/s)</th><th>Gain against the median</th></tr></thead>
+      <tbody>
+        <tr><td>P1</td><td>fp32</td><td class="num">471.1</td><td class="num">608.4</td><td class="num">&minus;22.6 %</td><td class="num">334.1</td><td class="num">+41.0 %</td></tr>
+        <tr><td>P1</td><td>fp16-cast</td><td class="num">1,333.1</td><td class="num">382.9</td><td class="num">+248.1 %</td><td class="num">671.4</td><td class="num">+98.6 %</td></tr>
+        <tr><td>P1</td><td>bf16-cast</td><td class="num">1,377.2</td><td class="num">487.4</td><td class="num">+182.6 %</td><td class="num">658.4</td><td class="num">+109.2 %</td></tr>
+        <tr><td>P1</td><td>fp16-autocast</td><td class="num">1,108.9</td><td class="num">702.5</td><td class="num">+57.9 %</td><td class="num">536.4</td><td class="num">+106.8 %</td></tr>
+        <tr><td>P1</td><td>bf16-autocast</td><td class="num">1,342.4</td><td class="num">608.8</td><td class="num">+120.5 %</td><td class="num">531.7</td><td class="num">+152.5 %</td></tr>
+        <tr><td>P2</td><td>fp32</td><td class="num">2.86</td><td class="num">2.57</td><td class="num">+11.3 %</td><td class="num">2.57</td><td class="num">+11.3 %</td></tr>
+        <tr><td>P2</td><td>fp16-cast</td><td class="num">10.45</td><td class="num">8.17</td><td class="num">+27.9 %</td><td class="num">7.61</td><td class="num">+37.4 %</td></tr>
+        <tr><td>P2</td><td>bf16-cast</td><td class="num">9.04</td><td class="num">8.26</td><td class="num">+9.4 %</td><td class="num">7.60</td><td class="num">+19.0 %</td></tr>
+        <tr><td>P2</td><td>fp16-autocast</td><td class="num">10.42</td><td class="num">6.21</td><td class="num">+67.9 %</td><td class="num">6.21</td><td class="num">+67.9 %</td></tr>
+        <tr><td>P2</td><td>bf16-autocast</td><td class="num">10.12</td><td class="num">6.32</td><td class="num">+60.0 %</td><td class="num">6.32</td><td class="num">+60.0 %</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 8.</b> Compile rows of the build (B3) against the eager rows. The results table compares with the main run only (<code>baseline_table.py:226</code>). P1: frame embedding; P2: patch embeddings. Each compile row ran once.</p>
+  <ul>
+    <li>Against the median of the three eager runs, all 10 compile rows are more than 10 % faster. So the decision of the user has a basis in the data. Against the main run, two rows are not: P1 fp32 (&minus;22.6 %) and P2 bf16-cast (+9.4 %). The results table still says "The gains were above 10 %" (F2).</li>
+    <li>With the decision, 5 of 135 baseline rows of each output are compile rows: P1 fp16 and bf16, P2 fp32, fp16 and bf16. The other 130 rows are eager. P1 fp32 stays eager, because its main run (608.4 img/s) is faster than its compile row. That main run is the fastest of the three eager fp32 runs by 1.8&times; (Section 5). ADR 0004 must say that a speedup at P1 and P2 compares with compiled torch, and elsewhere with eager torch (F5).</li>
+    <li>Each compile row ran once, so the same noise as in Section 5 applies to the compile rows.</li>
+  </ul>
+</section>
+
+<section id="code">
+  <h2>8 Code against the plan</h2>
+  <p>The verifier read the 6 new modules, the 3 new scripts and the 7 new test files against plan Sections 3 and 5. A scan with Python <code>ast</code> finds type hints on every parameter and return value of the new code. Every public function has a docstring. Table 9 gives the differences from the plan. None makes a criterion fail.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Place</th><th>Plan</th><th>Code</th><th>Verdict</th></tr></thead>
+      <tbody>
+        <tr><td><code>bench.py:386</code> <code>baseline_rows</code></td><td>Section 3.7: drop compile rows</td><td>Compile rows count; repeats do not count; only the latest line of a configuration counts.</td><td>User decision of 2026-11-06. The plan text and the snippet of Section 5 still say "drop" (F5).</td></tr>
+        <tr><td><code>machine.py:54</code> <code>_low_power_mode</code></td><td>Section 3.8: on this Mac the <code>lowpowermode</code> line is missing, so "not reported"</td><td>Reads <code>lowpowermode</code>, else <code>powermode</code> (1 = Low Power Mode). This Mac (Mac17,7, on AC power with an internal battery) shows <code>powermode 0</code>, so the lines record "off".</td><td>Better than the plan: the driver can now refuse Low Power Mode on this Mac. Plan text to update (F5).</td></tr>
+        <tr><td><code>bench.py:249</code> <code>check_validity</code></td><td>Takes the tokens of image 0</td><td>Takes the frame embedding and the patch embeddings and fills the 4 register rows from the reference.</td><td>Same result: <code>measure_parity</code> does not use the register rows. The timed copy has no register tokens, so the code avoids an extra copy.</td></tr>
+        <tr><td><code>torch_bench.py:54</code> <code>time_batch</code></td><td><code>.cpu().numpy()</code> in the timed region</td><td><code>.cpu()</code> only; the tensors stay torch tensors.</td><td>Same cost: <code>.numpy()</code> of a host tensor does not copy. NumPy has no bf16.</td></tr>
+        <tr><td><code>bench.py:303</code> <code>LINE_FIELDS</code></td><td>Table 7</td><td>All fields of Table 7, plus <code>warm_up_s</code>, <code>run_peak_note</code> and <code>start_time</code>.</td><td>More than the plan; needed for AC2 and AC4.</td></tr>
+        <tr><td><code>benchmark.py:203</code></td><td>Options of Table 1</td><td>Also <code>--skip-done</code>, <code>--activation-factor</code> (refuses values below 1.0) and the hidden <code>--results</code>.</td><td>Fine. <code>profile_block.py</code> has no <code>--results</code> (F7).</td></tr>
+        <tr><td><code>hub.py</code>, <code>memory.py</code>, <code>parity.py</code></td><td>Reuse of Step 2 names</td><td><code>parameter_count</code>, <code>LOAD_RATIO</code>, <code>LOAD_RESERVE_BYTES</code>, <code>load_bytes</code> and <code>TEST_IMAGES</code> moved out of <code>reference.py</code>, which imports them again.</td><td>Needed so that <code>bench.py</code> and <code>flops.py</code> do not import torch. <code>test_bench_module_does_not_import_torch</code> passes. Old imports still work.</td></tr>
+        <tr><td><code>flops.py:1</code></td><td>"NumPy only"</td><td>Pure Python.</td><td>Fine.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 9.</b> Differences between the code and the plan.</p>
+  <p>The order effect of plan Section 3.4 is small. In 93 of 254 "done" lines, the median frame time is longer than the median patch time, but by 0.8 % or less. The frame copy (frame time &minus; device time) has a median of 0.34 ms.</p>
+</section>
+
+<section id="findings">
+  <h2>9 Findings</h2>
+  <p>The verifier did not change code. Each finding gives the place and a proposed fix. The user decides.</p>
+  <ol>
+    <li id="f1"><b>F1 (high): the throughput level of one configuration changes by up to 2&times; between runs on this Mac.</b> AC5 fails for this reason, and every B1 value is one sample of it. Evidence: Sections 4.1, 5 and 6. ViT-S/16 re-run: 15 of 45 configurations within 5 % of the build, ratios 0.846 to 1.518. P1: five runs, spread 32.3 to 74.8 %. Inside one process, a forward pass changed from 2.38 to 4.99 ms within about one minute. The change is in the GPU time. Free memory, power and thermal notes do not explain it. The worker before P1 does not explain it (Table 6). The Claude desktop app ran on this Mac during all runs of the build and of the verifier. Places: <code>scripts/benchmark.py:146</code> (<code>run_configs</code>: one run for each configuration), <code>src/dinov3_apple/bench.py:386</code> (<code>baseline_rows</code>: one line for each configuration). Proposed fix, for a decision before Step 6:
+      <ul>
+        <li>Step 6 measures each speedup with torch-mps and mlx workers in alternation in one session (for example three rounds of torch-mps, mlx), and reports the median of the paired ratios with their range. A stored B1 value alone is not a safe denominator.</li>
+        <li>Add a <code>--rounds N</code> option to <code>benchmark.py</code> that runs the configuration list N times in rotation, and let <code>baseline_rows</code> use the median of the rounds.</li>
+        <li>Add the measured spread to the header of <code>baseline-torch-mps.md</code> (<code>scripts/baseline_table.py:377</code>).</li>
+        <li>Look for the cause: run a P1 loop next to <code>sudo powermetrics --samplers gpu_power</code> (the user runs it, because it needs sudo) with the other apps closed.</li>
+      </ul>
+    </li>
+    <li id="f2"><b>F2 (medium): the compile gain uses the main run only, and the table text is wrong for two rows.</b> <code>scripts/baseline_table.py:226</code> compares each compile row with the eager row of repeat 0. <code>scripts/baseline_table.py:418</code> writes "The gains were above 10 %", but the same table gives &minus;22.6 % (P1 fp32) and +9.4 % (P2 bf16-cast). Against the median of the three eager runs, all 10 gains are above 10 % (Table 8). Against the verifier run, P2 fp32 is +9.3 %. So for P2 fp32 the 10 % rule is inside the noise. Proposed fix: compare with the median of the eager runs (repeat 0, 1 and 2) and write the sentence from the numbers, for example "N of 10 compile rows are more than 10 % faster".</li>
+    <li id="f3"><b>F3 (medium): the one skipped configuration fits.</b> ViT-H+/16, fp16-autocast, 512 px, batch size 32 has the need 16.83 GB and was skipped with 15.10 GB available. The verifier ran it once into a scratch copy of the results file, with 25.3 GB available: "done", valid, peak memory 8.70 GB, 5.2 img/s for the frame embedding and the patch embeddings. The same configuration in fp32 and in bf16-autocast has the peaks 9.30 GB and 8.70 GB in the build. The need assumes a full attention score matrix and is 1.6 to 7 times the measured peak (AC7). Plan Section 9 asks the build to report such skips; the hand-over note does not give the measured peaks. Place: <code>src/dinov3_apple/bench.py:192</code> (<code>required_bench_bytes</code>). Proposed fix: the user decides on a second <code>--only-skipped</code> try with at least 16.9 GB available, or on a lower activation factor for the large configurations. The build may not lower the factor alone.</li>
+    <li id="f4"><b>F4 (low): at batch size 1, the absolute block time of B5 is not the time of a block inside the forward pass.</b> Section 6. Places: <code>src/dinov3_apple/block_profile.py:185</code> to <code>:193</code> (the items are timed one after the other, over minutes), <code>scripts/baseline_table.py:443</code> (<code>write_profile_table</code>). Proposed fix: time the forward pass before and after the parts and record both, so that a level change is visible; give forward pass / L next to the block time in <code>block-profile-torch-mps.md</code>; the explainer uses the time shares.</li>
+    <li id="f5"><b>F5 (low): plan text out of date.</b> Plan Section 3.7 and the snippet of Section 5 still drop the compile rows. Plan Section 3.8 still expects "not reported" for Low Power Mode on this Mac. Proposed fix at the Close stage: ADR 0004 holds the changed D2 rule; it says that only P1 and P2 have compile rows, so 5 of the 135 baseline rows of each output compare with compiled torch and 130 with eager torch. Update plan Sections 3.7, 3.8 and 5, or point to ADR 0004.</li>
+    <li id="f6"><b>F6 (low): lines without a worker have no time stamp.</b> The 3 "skipped" and 18 "deferred" lines have <code>start_time</code> and <code>time</code> null, because only the worker sets them. Their time is only in <code>driver.log</code>, which git ignores. Places: <code>src/dinov3_apple/bench.py:344</code> (<code>result_line</code>), <code>scripts/benchmark.py:166</code> and <code>:192</code>. Proposed fix: <code>result_line</code> sets <code>time</code> to the UTC time when the worker gives none.</li>
+    <li id="f7"><b>F7 (low): <code>profile_block.py</code> always appends to the committed file, and a failed subprocess writes no line.</b> Places: <code>scripts/profile_block.py:33</code>, <code>:114</code> and <code>:124</code> to <code>:127</code>. The verifier had to copy the file and put it back. Proposed fix: a hidden <code>--results</code> option as in <code>scripts/benchmark.py:220</code>, and a line with status "error" and the end of stderr for a failed subprocess.</li>
+    <li id="f8"><b>F8 (low): three claims of the hand-over note are not confirmed.</b> "The two B2 repeats agree within about 5 %" (P2: 8.1 to 26.4 %). "P1 takes about 1.5 to 3 ms per batch and is CPU-launch bound" (10.0 to 24.7 ms; the device time is at least 97.2 % of it). The B5 cause "the forward pass overlaps launches" (Section 6). The Learn and Close stages should use Sections 5 and 6 of this file instead.</li>
+    <li id="f9"><b>F9 (information): RoPE is a large part of the block time.</b> RoPE has 0 FLOPs in Table 6 of the plan, but takes 10.9 to 33.2 % of the block time of ViT-S/16 and 4.3 to 13.5 % of ViT-H+/16. For ViT-S/16 at 224 px, batch size 8, it takes 208 &micro;s in fp32 and 250 &micro;s in fp16-cast, while the other parts get faster in fp16-cast. The Hugging Face function splits q and k into prefix tokens and patch tokens, rotates the patch tokens with several small element-wise kernels and joins them again. The RoPE tables are fp16 in fp16-cast mode, so a dtype change is not the cause. This is a candidate for one fused kernel in Step 6 and a topic for the explainer.</li>
+    <li id="f10"><b>F10 (information): GLOSSARY "Peak memory" still says "as the backend reports it".</b> The new entry "Process footprint" names the footprint. AC18 of the Close stage asks that "Peak memory" names it too.</li>
+  </ol>
+</section>
+
+<section id="claims">
+  <h2>10 Claims of the build against the verifier values</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Claim of the hand-over note</th><th>Verifier value</th><th>Verdict</th></tr></thead>
+      <tbody>
+        <tr><td>AC1: 243 of 243 lines; done 224, deferred 18, skipped 1; 0 error</td><td>The same</td><td class="pass">confirmed</td></tr>
+        <tr><td>AC2: memory check before each worker; one worker at a time; watermarks set; 7B fp32 refused</td><td>257 checks for 257 workers; 0 overlaps; watermarks in the worker environment; test passes</td><td class="pass">confirmed</td></tr>
+        <tr><td>AC3: invalid = the 12 expected lines</td><td>The same 12 lines</td><td class="pass">confirmed</td></tr>
+        <tr><td>AC4: 0 lines miss Table 5</td><td>0 of 254</td><td class="pass">confirmed</td></tr>
+        <tr><td>AC5: P1 spreads 18 to 86 %, P2 8 to 28 %</td><td>P1 17.6 to 86.4 %, P2 7.9 to 28.3 %</td><td class="pass">confirmed</td></tr>
+        <tr><td>"The two B2 repeats agree within about 5 %"</td><td>P1 3.1 to 7.1 %; P2 8.1 to 26.4 %</td><td class="fail">not confirmed for P2 and for P1 bf16-cast</td></tr>
+        <tr><td>"B1 main rows ran about 1.5 h earlier on a noisier Mac (frame p90/median up to 1.46 against 1.1 in B2)"</td><td>P1 main run p90/median 1.03 to 1.46, repeats 1.07 to 1.20. P2: 1.01 to 1.10 in all runs. The B2 repeats also differ from each other (above).</td><td class="partial">partly confirmed</td></tr>
+        <tr><td>"P1 ... about 1.5 to 3 ms per batch ... CPU-launch bound"</td><td>Median frame time of P1 in the build: 10.8 to 24.7 ms for each batch of 8. The device time is 97.5 % or more of it. The noise is in the GPU time.</td><td class="fail">not confirmed</td></tr>
+        <tr><td>Compile gains: P1 +58 to +248 % (fp32 &minus;23 %), P2 +9 to +68 %</td><td>The same against the main run (Table 8)</td><td class="pass">confirmed</td></tr>
+        <tr><td>AC7: 0 lines above the need; largest peak / need 0.62</td><td>The same</td><td class="pass">confirmed</td></tr>
+        <tr><td>AC8: 270 rows filled; 36 empty ViT-7B/16 rows</td><td>The same; own pick agrees</td><td class="pass">confirmed</td></tr>
+        <tr><td>AC9: 10 compile lines, all done</td><td>The same, all valid</td><td class="pass">confirmed</td></tr>
+        <tr><td>AC12: sum of parts / block 0.872 to 1.081; 2 forward checks outside 15 % (1.358, 1.643)</td><td>The same in the committed file; re-run in Table 5</td><td class="pass">confirmed</td></tr>
+        <tr><td>AC12 cause: "the fixed launch cost per call in the isolated loop is counted 12 times; the forward pass overlaps launches"</td><td>A fixed cost that matters only for small kernels: yes. Specific to the isolated loop, and a launch overlap: no. The 12 blocks in sequence and the whole encoder on stored inputs show the same extra time, with the same CPU issue time (Section 6).</td><td class="partial">partly confirmed</td></tr>
+        <tr><td>AC15: total 620 KB</td><td>610,742 bytes</td><td class="pass">confirmed</td></tr>
+        <tr><td>AC16: 237 passed, 4 skipped; slow 420 passed, 70 skipped, 20 xfailed</td><td>The same counts</td><td class="pass">confirmed</td></tr>
+        <tr><td>Low Power Mode: no <code>lowpowermode</code> line, <code>powermode 0</code></td><td><code>pmset -g</code> shows <code>powermode 0</code> and no <code>lowpowermode</code> line</td><td class="pass">confirmed</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 10.</b> Claims of the hand-over note of the build and the values of the verifier.</p>
+</section>
+
+<section id="open">
+  <h2>11 Open items for the Learn and Close stages</h2>
+  <ul>
+    <li>Learn (AC17): the explainer must cover the 6 new modules. Use the B5 table and Section 6 for the launch-bound regime at batch size 1. Use Section 5 for the warning that one benchmark run on this Mac can be off by up to 2&times;.</li>
+    <li>Close (AC18): GLOSSARY "Peak memory" must name the process footprint. ADR 0004 must hold the changed D2 rule (compile rows join the baseline; only P1 and P2 have them). <code>roadmap.md</code> status.</li>
+    <li>Plan text: Sections 3.7, 3.8 and the snippet of Section 5 (F5).</li>
+    <li>B4 (ViT-7B/16): deferred by the user. A run needs about 20 to 28 GB available.</li>
+    <li>The user decides on F1 (how Step 6 measures a speedup on a noisy Mac) and F3 (a second try of the skipped configuration).</li>
+  </ul>
+</section>
+
+<section id="commands">
+  <h2>12 Commands</h2>
+  <p>The verifier ran these commands in the repo root, one heavy job at a time. <code>&lt;scratch&gt;</code> is a folder outside the repo.</p>
+<pre>uv run ruff format --check
+uv run ruff check
+uv run pytest
+DINOV3_SLOW=1 uv run pytest -q -rs
+
+# Copies first: tests/fixtures/generated/bench/ and results/*.jsonl to &lt;scratch&gt;/backup/
+uv run python scripts/benchmark.py --model-size ViT-S/16 --results &lt;scratch&gt;/b1-vits16.jsonl
+uv run python scripts/benchmark.py --priority --results &lt;scratch&gt;/priority.jsonl
+cp results/block-profile-torch-mps.jsonl &lt;scratch&gt;/block-profile-before.jsonl
+uv run python scripts/profile_block.py
+cp results/block-profile-torch-mps.jsonl &lt;scratch&gt;/block-profile-after.jsonl
+cp &lt;scratch&gt;/backup/block-profile-torch-mps.jsonl results/block-profile-torch-mps.jsonl
+
+# Own tests (scripts in &lt;scratch&gt;, not in the repo)
+uv run python &lt;scratch&gt;/b5_gap.py fp32 224 1      # and fp16-cast 224 1, fp32 224 8, fp32 512 1
+uv run python &lt;scratch&gt;/order_test.py &lt;scratch&gt;/order_test.json
+uv run python &lt;scratch&gt;/ac11.py ViT-S/16 ViT-S+/16
+cp results/baseline-torch-mps.jsonl &lt;scratch&gt;/skipped-copy.jsonl
+uv run python scripts/benchmark.py --model-size ViT-H+/16 --only-skipped --results &lt;scratch&gt;/skipped-copy.jsonl
+uv run python &lt;scratch&gt;/b5_gap2.py fp32 224 1    # and fp16-cast 224 1
+# At the end: the bench folder of the build put back from &lt;scratch&gt;/backup/
+shasum results/*.jsonl   # equal to the build: 5aad264a... and 821e4ff0...</pre>
+</section>
+
+</main>
+</body>
+</html>
