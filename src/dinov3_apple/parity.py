@@ -6,6 +6,9 @@ import numpy as np
 
 from dinov3_apple.outputs import NUM_PREFIX_TOKENS
 
+# The test images in tests/fixtures/images/, in the order of a benchmark batch.
+TEST_IMAGES = ["iss-kibo-lab", "forest", "iss-conference"]
+
 
 @dataclass(frozen=True)
 class Parity:

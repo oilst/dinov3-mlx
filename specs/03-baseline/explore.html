@@ -1,0 +1,516 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Step 3 Baseline: Explore</title>
+<style>
+/* Spec page. White page, black text, no dark mode. */
+:root { --bg: #ffffff; --fg: #111414; --muted: #4a5655; --rule: #d6dedd; --panel: #f5f8f7; --accent: #057379; --pass: #1d7a3a; --fail: #b3261e; color-scheme: light; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif; }
+main { max-width: 64rem; margin: 0 auto; padding: 40px 20px 64px; display: grid; gap: 1.75rem; }
+main > *, section > * { min-width: 0; }
+h1 { font-size: 1.9rem; line-height: 1.15; margin: 0; }
+h2 { font-size: 1.3rem; margin: 0; }
+h3 { font-size: 1.05rem; margin: 0; }
+section { display: grid; gap: 0.8rem; }
+p, ul, ol { margin: 0; max-width: 46rem; }
+li + li { margin-top: 0.25rem; }
+code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.86em; }
+p code, li code, td code { overflow-wrap: anywhere; }
+pre { margin: 0; background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 0.8rem 1rem; overflow-x: auto; }
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+th, td { text-align: left; vertical-align: top; padding: 0.45rem 0.7rem 0.45rem 0; border-bottom: 1px solid var(--rule); }
+th { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); border-bottom: 1.5px solid var(--fg); }
+td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+tr.group td { background: var(--panel); font-weight: 600; }
+.caption { font-size: 0.88rem; color: var(--muted); }
+.fail { color: var(--fail); font-weight: 600; }
+.rec { color: var(--accent); font-weight: 600; }
+.box { border: 1.5px solid var(--accent); border-radius: 6px; padding: 0.8rem 1rem; display: grid; gap: 0.5rem; }
+figure { margin: 0; display: grid; gap: 0.4rem; }
+.fig { border: 1px solid var(--rule); border-radius: 6px; padding: 0.5rem; overflow-x: auto; }
+.fig svg { display: block; width: 100%; height: auto; min-width: 640px; }
+figcaption { font-size: 0.88rem; color: var(--muted); }
+a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+<header>
+  <h1>Step 3 Baseline: Explore</h1>
+  <p>Roadmap step 3. Status: decided. On 2026-11-06 the user chose the recommended option of each decision D1 to D8 (Table 1). Date: 2026-11-06.</p>
+</header>
+
+<section id="goal">
+  <h2>1 Goal</h2>
+  <p>Step 3 measures the baseline: the throughput and the peak memory of the Hugging Face backbone on <code>torch-mps</code>. Every later speedup divides by these numbers. Step 3 also measures where the time goes inside one block, for ViT-S/16 and ViT-H+/16. Step 6 runs the same harness on <code>mlx</code>.</p>
+  <p>These points are fixed by <code>docs/plan.html</code>, <code>CLAUDE.md</code> and Step 2. They are not options:</p>
+  <ul>
+    <li>Backbone: <code>DINOv3ViTModel</code> of transformers 5.22.1, loaded with <code>load_torch_backbone</code> from the Hugging Face cache. The memory check runs before each load.</li>
+    <li>Model sizes: all six. Input resolutions: 224, 448 and 512 px square. Batch sizes: 1, 8 and 32, or smaller when the memory check fails (Table 11 of <code>docs/plan.html</code>).</li>
+    <li>Input: the stored pixels of <code>tests/fixtures/generated/reference/inputs.safetensors</code>. The three test images fill each batch in turn. Then each worker can check its first output against the reference output (D2).</li>
+    <li>Metrics: throughput, median and p90 latency at batch size 1, peak memory, load time and the time of the first call.</li>
+    <li>Run rules: one subprocess for each configuration, one heavy job at a time, a memory check first, and the MPS watermarks 0.8 and 0.6. ViT-7B/16 never runs with fp32 weights on <code>torch-mps</code>.</li>
+    <li>Output files: one JSON line for each configuration or skip, and a Markdown table in <code>results/</code>.</li>
+  </ul>
+  <p>Table 1 gives the eight decisions and the recommendations. Section 3 gives the trade-offs and the probe results.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>No.</th><th>Decision</th><th>Options</th><th>Recommendation</th></tr></thead>
+      <tbody>
+        <tr><td>D1</td><td>Dtype modes in the baseline</td><td>A fp32, fp16-cast, bf16-cast (Table 11). B all five dtype modes of Step 2. C five modes for ViT-S/16 and ViT-H+/16, three for the others.</td><td class="rec">B: all five dtype modes</td></tr>
+        <tr><td>D2</td><td>Baseline row for the speedup</td><td>A the same dtype mode as <code>mlx</code> (cast mode). B the fastest dtype mode of the same dtype that gives a valid output. C fp16-autocast only.</td><td class="rec">B: the fastest valid dtype mode of the same dtype</td></tr>
+        <tr><td>D3</td><td>Timed region and the two outputs</td><td>A device only. B host to host, one configuration for each output. C host to host, one forward pass for each batch, the copy of each output timed separately.</td><td class="rec">C: one run gives the frame row and the patch row</td></tr>
+        <tr><td>D4</td><td>Timing procedure</td><td>A 5 warm-up and 30 timed batches. B a time budget. C A with 3 repeats.</td><td class="rec">B, plus 3 repeats of the two priority configurations</td></tr>
+        <tr><td>D5</td><td>Peak memory</td><td>A the <code>torch.mps</code> counters. B the process footprint of macOS. C both, with the load peak and the run peak apart.</td><td class="rec">C: the footprint is the main number</td></tr>
+        <tr><td>D6</td><td>Time share of each part of the block</td><td>A profiler traces. B hooks with a synchronize around each part. C each part alone, in a micro-benchmark. D FLOP count only.</td><td class="rec">C and D</td></tr>
+        <tr><td>D7</td><td>Software settings of the baseline</td><td>A the Hugging Face default: SDPA attention, no compile. B A with <code>torch.compile</code>. C A, plus report-only rows with <code>torch.compile</code>.</td><td class="rec">C: A is the baseline; compile rows for the priority configurations</td></tr>
+        <tr><td>D8</td><td>ViT-7B/16</td><td>A in the normal run; the memory check decides. B a separate run, last, after the user frees memory. C leave it out.</td><td class="rec">B, cast modes only</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 1.</b> Decisions of Step 3. On 2026-11-06 the user chose the recommendation of each decision.</p>
+</section>
+
+<section id="dinov3">
+  <h2>2 DINOv3 topic</h2>
+  <p>The topic is where the compute goes for each model size and input resolution. The explainer <code>docs/learn/03-where-the-compute-goes.html</code> covers it. It starts from a FLOP count and ends with the measured time shares of D6.</p>
+  <p>A block has two kinds of matrix products. The linear layers (query, key, value and output projections, and the feed-forward network) cost about 2 × weights × N FLOPs for N tokens. The attention scores (Q·K<sup>T</sup> and the product with V) cost 4 × N<sup>2</sup> × D FLOPs in each block. For an MLP with ratio 4, the ratio of the two is about N / (6 D). So the attention share grows with the token count and falls with the embedding dimension. Figure 1 and Table 2 show the shares.</p>
+  <figure>
+    <div class="fig"><svg viewBox="0 0 960 400" role="img" aria-label="Share of attention score FLOPs in the FLOPs of one image, for each model size at 224, 448 and 512 px" font-family="-apple-system, Helvetica Neue, Arial, sans-serif">
+<rect width="960" height="400" fill="#ffffff"/>
+<rect x="90" y="14" width="14" height="14" fill="#a8d5d8"/>
+<text x="110" y="26" font-size="13" fill="#111414">224 px</text>
+<rect x="200" y="14" width="14" height="14" fill="#3f9ea4"/>
+<text x="220" y="26" font-size="13" fill="#111414">448 px</text>
+<rect x="310" y="14" width="14" height="14" fill="#05545a"/>
+<text x="330" y="26" font-size="13" fill="#111414">512 px</text>
+<line x1="90" y1="330.0" x2="930" y2="330.0" stroke="#e3e9e8" stroke-width="1"/>
+<text x="82" y="334.0" font-size="12" text-anchor="end" fill="#4a5655">0 %</text>
+<line x1="90" y1="291.4" x2="930" y2="291.4" stroke="#e3e9e8" stroke-width="1"/>
+<text x="82" y="295.4" font-size="12" text-anchor="end" fill="#4a5655">5 %</text>
+<line x1="90" y1="252.9" x2="930" y2="252.9" stroke="#e3e9e8" stroke-width="1"/>
+<text x="82" y="256.9" font-size="12" text-anchor="end" fill="#4a5655">10 %</text>
+<line x1="90" y1="214.3" x2="930" y2="214.3" stroke="#e3e9e8" stroke-width="1"/>
+<text x="82" y="218.3" font-size="12" text-anchor="end" fill="#4a5655">15 %</text>
+<line x1="90" y1="175.7" x2="930" y2="175.7" stroke="#e3e9e8" stroke-width="1"/>
+<text x="82" y="179.7" font-size="12" text-anchor="end" fill="#4a5655">20 %</text>
+<line x1="90" y1="137.1" x2="930" y2="137.1" stroke="#e3e9e8" stroke-width="1"/>
+<text x="82" y="141.1" font-size="12" text-anchor="end" fill="#4a5655">25 %</text>
+<line x1="90" y1="98.6" x2="930" y2="98.6" stroke="#e3e9e8" stroke-width="1"/>
+<text x="82" y="102.6" font-size="12" text-anchor="end" fill="#4a5655">30 %</text>
+<line x1="90" y1="60.0" x2="930" y2="60.0" stroke="#e3e9e8" stroke-width="1"/>
+<text x="82" y="64.0" font-size="12" text-anchor="end" fill="#4a5655">35 %</text>
+<rect x="103.0" y="268.8" width="34" height="61.2" fill="#a8d5d8"><title>ViT-S/16, 224 px: 7.93 %</title></rect>
+<text x="120.0" y="262.5" font-size="11" text-anchor="middle" fill="#111414">8</text>
+<rect x="143.0" y="135.1" width="34" height="194.9" fill="#3f9ea4"><title>ViT-S/16, 448 px: 25.25 %</title></rect>
+<text x="160.0" y="126.6" font-size="11" text-anchor="middle" fill="#111414">26</text>
+<rect x="183.0" y="94.0" width="34" height="236.0" fill="#05545a"><title>ViT-S/16, 512 px: 30.58 %</title></rect>
+<text x="200.0" y="85.0" font-size="11" text-anchor="middle" fill="#111414">31</text>
+<text x="160.0" y="350" font-size="13" text-anchor="middle" fill="#111414">ViT-S/16</text>
+<text x="160.0" y="367" font-size="11.5" text-anchor="middle" fill="#4a5655">D = 384</text>
+<rect x="243.0" y="283.1" width="34" height="46.9" fill="#a8d5d8"><title>ViT-S+/16, 224 px: 6.08 %</title></rect>
+<text x="260.0" y="278.7" font-size="11" text-anchor="middle" fill="#111414">6</text>
+<rect x="283.0" y="173.6" width="34" height="156.4" fill="#3f9ea4"><title>ViT-S+/16, 448 px: 20.27 %</title></rect>
+<text x="300.0" y="170.3" font-size="11" text-anchor="middle" fill="#111414">20</text>
+<rect x="323.0" y="137.9" width="34" height="192.1" fill="#05545a"><title>ViT-S+/16, 512 px: 24.90 %</title></rect>
+<text x="340.0" y="134.9" font-size="11" text-anchor="middle" fill="#111414">25</text>
+<text x="300.0" y="350" font-size="13" text-anchor="middle" fill="#111414">ViT-S+/16</text>
+<text x="300.0" y="367" font-size="11.5" text-anchor="middle" fill="#4a5655">D = 384</text>
+<rect x="383.0" y="298.0" width="34" height="32.0" fill="#a8d5d8"><title>ViT-B/16, 224 px: 4.15 %</title></rect>
+<text x="400.0" y="293.1" font-size="11" text-anchor="middle" fill="#111414">4</text>
+<rect x="423.0" y="217.8" width="34" height="112.2" fill="#3f9ea4"><title>ViT-B/16, 448 px: 14.53 %</title></rect>
+<text x="440.0" y="213.4" font-size="11" text-anchor="middle" fill="#111414">14</text>
+<rect x="463.0" y="189.9" width="34" height="140.1" fill="#05545a"><title>ViT-B/16, 512 px: 18.15 %</title></rect>
+<text x="480.0" y="185.6" font-size="11" text-anchor="middle" fill="#111414">18</text>
+<text x="440.0" y="350" font-size="13" text-anchor="middle" fill="#111414">ViT-B/16</text>
+<text x="440.0" y="367" font-size="11.5" text-anchor="middle" fill="#4a5655">D = 768</text>
+<rect x="523.0" y="305.6" width="34" height="24.4" fill="#a8d5d8"><title>ViT-L/16, 224 px: 3.16 %</title></rect>
+<text x="540.0" y="300.4" font-size="11" text-anchor="middle" fill="#111414">3</text>
+<rect x="563.0" y="242.4" width="34" height="87.6" fill="#3f9ea4"><title>ViT-L/16, 448 px: 11.35 %</title></rect>
+<text x="580.0" y="236.7" font-size="11" text-anchor="middle" fill="#111414">11</text>
+<rect x="603.0" y="219.5" width="34" height="110.5" fill="#05545a"><title>ViT-L/16, 512 px: 14.31 %</title></rect>
+<text x="620.0" y="213.7" font-size="11" text-anchor="middle" fill="#111414">14</text>
+<text x="580.0" y="350" font-size="13" text-anchor="middle" fill="#111414">ViT-L/16</text>
+<text x="580.0" y="367" font-size="11.5" text-anchor="middle" fill="#4a5655">D = 1024</text>
+<rect x="663.0" y="315.2" width="34" height="14.8" fill="#a8d5d8"><title>ViT-H+/16, 224 px: 1.92 %</title></rect>
+<text x="680.0" y="310.2" font-size="11" text-anchor="middle" fill="#111414">2</text>
+<rect x="703.0" y="274.9" width="34" height="55.1" fill="#3f9ea4"><title>ViT-H+/16, 448 px: 7.15 %</title></rect>
+<text x="720.0" y="269.9" font-size="11" text-anchor="middle" fill="#111414">7</text>
+<rect x="743.0" y="259.6" width="34" height="70.4" fill="#05545a"><title>ViT-H+/16, 512 px: 9.12 %</title></rect>
+<text x="760.0" y="254.6" font-size="11" text-anchor="middle" fill="#111414">9</text>
+<text x="720.0" y="350" font-size="13" text-anchor="middle" fill="#111414">ViT-H+/16</text>
+<text x="720.0" y="367" font-size="11.5" text-anchor="middle" fill="#4a5655">D = 1280</text>
+<rect x="803.0" y="322.5" width="34" height="7.5" fill="#a8d5d8"><title>ViT-7B/16, 224 px: 0.97 %</title></rect>
+<text x="820.0" y="317.5" font-size="11" text-anchor="middle" fill="#111414">1</text>
+<rect x="843.0" y="301.4" width="34" height="28.6" fill="#3f9ea4"><title>ViT-7B/16, 448 px: 3.71 %</title></rect>
+<text x="860.0" y="296.4" font-size="11" text-anchor="middle" fill="#111414">4</text>
+<rect x="883.0" y="293.1" width="34" height="36.9" fill="#05545a"><title>ViT-7B/16, 512 px: 4.78 %</title></rect>
+<text x="900.0" y="288.1" font-size="11" text-anchor="middle" fill="#111414">5</text>
+<text x="860.0" y="350" font-size="13" text-anchor="middle" fill="#111414">ViT-7B/16</text>
+<text x="860.0" y="367" font-size="11.5" text-anchor="middle" fill="#4a5655">D = 4096</text>
+<line x1="90" y1="330" x2="930" y2="330" stroke="#111414" stroke-width="1"/>
+<text x="22" y="195" font-size="12.5" text-anchor="middle" fill="#111414" transform="rotate(-90 22 195)">Attention scores, share of FLOPs</text>
+</svg></div>
+    <figcaption><b>Figure 1.</b> The share of the attention scores in the FLOPs of one image. Computed, not measured. The share grows with the input resolution and falls with the embedding dimension D. In ViT-S/16 at 512 px, the attention scores take 31 % of the FLOPs. In ViT-7B/16 they take 5 %. Hover over a bar to see its value.</figcaption>
+  </figure>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Model size</th><th>D</th><th>Blocks</th><th>224 px, GFLOP</th><th>448 px, GFLOP</th><th>512 px, GFLOP</th><th>Attention share at 224 / 448 / 512 px</th></tr></thead>
+      <tbody>
+        <tr><td>ViT-S/16</td><td class="num">384</td><td class="num">12</td><td class="num">9.4</td><td class="num">45.4</td><td class="num">63.8</td><td class="num">7.93 / 25.25 / 30.58 %</td></tr>
+        <tr><td>ViT-S+/16</td><td class="num">384</td><td class="num">12</td><td class="num">12.2</td><td class="num">56.6</td><td class="num">78.4</td><td class="num">6.08 / 20.27 / 24.90 %</td></tr>
+        <tr><td>ViT-B/16</td><td class="num">768</td><td class="num">12</td><td class="num">35.9</td><td class="num">157.9</td><td class="num">215.0</td><td class="num">4.15 / 14.53 / 18.15 %</td></tr>
+        <tr><td>ViT-L/16</td><td class="num">1024</td><td class="num">24</td><td class="num">125.7</td><td class="num">539.0</td><td class="num">727.2</td><td class="num">3.16 / 11.35 / 14.31 %</td></tr>
+        <tr><td>ViT-H+/16</td><td class="num">1280</td><td class="num">32</td><td class="num">344.2</td><td class="num">1,427.3</td><td class="num">1,901.9</td><td class="num">1.92 / 7.15 / 9.12 %</td></tr>
+        <tr><td>ViT-7B/16</td><td class="num">4096</td><td class="num">40</td><td class="num">2,725.5</td><td class="num">11,002.7</td><td class="num">14,511.4</td><td class="num">0.97 / 3.71 / 4.78 %</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 2.</b> FLOPs for one image, from the weight shapes of each model size (<code>dinov3_apple.flops.image_flops</code>): the patch embedding, plus in each block 2 × N × (4 D<sup>2</sup> + 2 D F) for the linear layers (3 D F for SwiGLU) and 4 × N<sup>2</sup> × D for the attention scores. Corrected in the build on 2026-11-06: the first version used 2 × parameters × N with the rounded parameter counts of the model card (21M, 29M, 86M, 300M, 840M, 6,716M), which moved the values by up to 4 % and the shares by up to 0.5 points. N is 201, 789 or 1,029 tokens (Table 4 of <code>docs/plan.html</code>). One multiply-add counts as 2 FLOPs. The count leaves out the layer norms, RoPE, LayerScale, the activation function and the softmax.</p>
+  <p>The FLOP count is not the time. Two effects move the time away from it, and Step 3 measures both:</p>
+  <ul>
+    <li>The parts without FLOPs in Table 2 (layer norms, RoPE, LayerScale, GELU or SiLU, the residual adds) read and write every token. Their cost is memory traffic. In small model sizes, their share of the time can be much larger than their share of the FLOPs.</li>
+    <li>Each operation has a fixed cost to start on the GPU. The probe of Section 3.1 measured about 170 µs for each extra synchronize after a small operation. ViT-S/16 at 224 px with batch size 1 has only 9 GFLOP. So fixed costs can set its throughput. This is risk R8 of <code>docs/plan.html</code>.</li>
+  </ul>
+</section>
+
+<section id="design">
+  <h2>3 Design</h2>
+
+  <h3>3.1 The probe</h3>
+  <p>We ran three small probes on 2026-11-06 to get numbers for the decisions. No probe loaded a model, because a Step 2 Verify agent can still run tests. Table 3 gives the results.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Probe</th><th>Measure</th><th>Result</th></tr></thead>
+      <tbody>
+        <tr class="group"><td colspan="3">Memory counters (D5)</td></tr>
+        <tr><td>Process footprint before and after a 1 GB tensor on <code>torch-mps</code></td><td><code>phys_footprint</code> of <code>proc_pid_rusage</code></td><td class="num">177 MB → 1,375 MB</td></tr>
+        <tr><td></td><td>Lifetime maximum of the footprint</td><td class="num">1,375 MB</td></tr>
+        <tr><td></td><td><code>torch.mps.driver_allocated_memory()</code></td><td class="num">1,074 MB</td></tr>
+        <tr><td>After <code>del</code> and <code>torch.mps.empty_cache()</code></td><td>footprint / driver memory</td><td class="num">1,375 MB / 0 MB</td></tr>
+        <tr><td>A 256 MB tensor alone</td><td><code>driver_allocated_memory()</code></td><td class="num">1,074 MB</td></tr>
+        <tr class="group"><td colspan="3">Fixed cost on <code>torch-mps</code> (D6)</td></tr>
+        <tr><td>One small linear layer (1 × 201 × 384) and a synchronize</td><td>median of 200</td><td class="num">237 µs</td></tr>
+        <tr><td>10 small linear layers, 1 synchronize</td><td>median of 200</td><td class="num">817 µs</td></tr>
+        <tr><td>10 small linear layers, 10 synchronizes</td><td>median of 200</td><td class="num">2,382 µs</td></tr>
+        <tr class="group"><td colspan="3"><code>torch.compile</code> on <code>torch-mps</code> (D7)</td></tr>
+        <tr><td>Layer norm and MLP of ViT-S/16 size, 8 × 1,029 tokens, fp32</td><td>compile time</td><td class="num">4.4 s</td></tr>
+        <tr><td></td><td>eager / compiled, mean of 50</td><td class="num">1.809 / 1.826 ms</td></tr>
+        <tr><td></td><td>largest difference</td><td class="num">8.9e-7</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 3.</b> Probe results. torch 2.15.0, macOS 26.5.2, M5 Max. Each probe ran in its own process with the MPS watermarks 0.8 and 0.6.</p>
+  <p>Four results drive the decisions:</p>
+  <ol>
+    <li>The macOS process footprint includes the memory of <code>torch-mps</code>. Its lifetime maximum catches short peaks. MLX memory also counts in it. So one measure works for both backends (D5).</li>
+    <li><code>torch.mps.driver_allocated_memory()</code> grows in steps of about 1 GB. A 256 MB tensor and a 1 GB tensor give the same value. It is too coarse for the small model sizes (D5).</li>
+    <li>Each extra synchronize costs about 170 µs: (2,382 − 817) / 9 = 174 µs. A hook with a synchronize around each part of a block adds more time than some parts take (D6).</li>
+    <li><code>torch.compile</code> works on <code>torch-mps</code> for an MLP. It gave no gain for this MLP (D7).</li>
+  </ol>
+
+  <h3>3.2 D1: dtype modes in the baseline</h3>
+  <p>Table 11 of <code>docs/plan.html</code> names three dtypes: fp32, fp16 and bf16. Step 2 found five dtype modes on <code>torch-mps</code> (Table 5 of <code>specs/02-reference/plan.html</code>). fp16-cast gives NaN for ViT-L/16 at every input resolution and for ViT-H+/16 at 224 px (<code>results/parity-torch-mps.md</code>). The reference fine-tuning setup uses fp16-autocast. MLX in Step 5 works like cast mode.</p>
+  <p><b>Option A: fp32, fp16-cast and bf16-cast.</b> The three dtypes of Table 11, in cast mode, as MLX runs them.</p>
+  <ul>
+    <li>For: the fewest configurations. Each MLX row has a partner in the same mode.</li>
+    <li>Against: ViT-L/16 and ViT-H+/16 have no valid fp16 row. The mode of the reference fine-tuning setup is not measured. A user who switches to autocast does not know the cost.</li>
+  </ul>
+  <p><b>Option B: all five dtype modes.</b></p>
+  <ul>
+    <li>For: the full picture. D2 can pick the best valid mode. The cost of autocast against cast becomes a measured number. Step 2 already tests the same five modes.</li>
+    <li>Against: 5/3 of the run time of Option A (Table 4).</li>
+  </ul>
+  <p><b>Option C: five dtype modes for ViT-S/16 and ViT-H+/16, three for the others.</b> These two model sizes are in the priority configurations of Section 7 of <code>docs/plan.html</code>.</p>
+  <ul>
+    <li>For: the full picture where it matters most. Less run time than B.</li>
+    <li>Against: ViT-L/16 has no valid fp16 row, because fp16-cast overflows there at every input resolution.</li>
+  </ul>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Option</th><th>Configurations without ViT-7B/16</th><th>Estimated time</th><th>ViT-7B/16 configurations (D8)</th><th>Estimated time</th></tr></thead>
+      <tbody>
+        <tr><td>D1 A</td><td class="num">135</td><td class="num">1.0 h</td><td class="num">18</td><td class="num">0.7 h</td></tr>
+        <tr><td>D1 B</td><td class="num">225</td><td class="num">1.6 h</td><td class="num">18</td><td class="num">0.7 h</td></tr>
+        <tr><td>D1 C</td><td class="num">171</td><td class="num">1.3 h</td><td class="num">18</td><td class="num">0.7 h</td></tr>
+        <tr><td>D1 B with D3 B</td><td class="num">450</td><td class="num">3.2 h</td><td class="num">36</td><td class="num">1.4 h</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 4.</b> Estimated run time. Not measured. The estimate uses the FLOPs of Table 2, the time budget of D4 Option B, 6 s for each subprocess and load, and assumed rates of 6 TFLOP/s in fp32, 12 TFLOP/s in cast mode and 10 TFLOP/s in autocast mode. The first runs of the build replace these rates with measured values. ViT-7B/16 runs in fp16-cast and bf16-cast only.</p>
+  <div class="box">
+    <p><b>Recommendation: Option B.</b> The fp16-cast rows with a NaN output keep their time, with the flag "output not valid". D2 does not use them.</p>
+  </div>
+
+  <h3>3.3 D2: baseline row for the speedup</h3>
+  <p>The glossary defines the speedup as the throughput of <code>mlx</code> divided by the throughput of the baseline, for the same configuration. With five dtype modes, "fp16" has two baseline rows. The rule must be fixed before Step 6 measures, so that nobody picks the row after the result.</p>
+  <p><b>Option A: the same dtype mode as <code>mlx</code>.</b> MLX runs in cast mode, so the baseline is fp16-cast or bf16-cast.</p>
+  <ul>
+    <li>For: the same arithmetic on both sides.</li>
+    <li>Against: ViT-L/16 and ViT-H+/16 have no valid fp16-cast row. A fast row with a wrong output can be the baseline. A user of PyTorch picks the faster valid mode, so the speedup overstates the gain.</li>
+  </ul>
+  <p><b>Option B: the fastest dtype mode of the same dtype with a valid output.</b> For fp16, the faster of fp16-cast and fp16-autocast. For bf16, the faster of bf16-cast and bf16-autocast. A row is valid when its output is finite and the first image passes the parity thresholds of its dtype mode. Each worker checks this on its first batch.</p>
+  <ul>
+    <li>For: MLX must beat the best that PyTorch does with a correct output. It is the strictest fair rule. Every configuration has a baseline row.</li>
+    <li>Against: the arithmetic can differ (autocast keeps the residual stream in fp32). The results table must name the mode of each baseline row.</li>
+  </ul>
+  <p><b>Option C: fp16-autocast only, the mode of the reference fine-tuning setup.</b></p>
+  <ul>
+    <li>For: the number that matters for our own pipeline.</li>
+    <li>Against: no bf16 baseline. ViT-7B/16 has no autocast row, because its weights cannot be fp32 on <code>torch-mps</code>.</li>
+  </ul>
+  <div class="box">
+    <p><b>Recommendation: Option B.</b> The results table also lists every other dtype mode, so a reader can compute the speedup against any row. The rule goes into an ADR in the Close stage, because Step 6 depends on it.</p>
+  </div>
+
+  <h3>3.4 D3: timed region and the two outputs</h3>
+  <p>The backbone computes all tokens for both outputs. The frame embedding and the patch embeddings differ only in the slice and in the copy to the host: B × D values or B × N × D values. For ViT-H+/16 at 512 px and batch size 32 in fp16, the patch embeddings are 84 MB. The frame embeddings are 82 KB.</p>
+  <p><b>Option A: device only.</b> The pixels are already on the GPU. The timer stops after <code>torch.mps.synchronize()</code>. The output stays on the GPU. One row serves both outputs.</p>
+  <ul>
+    <li>For: it measures only the backbone. The least noise.</li>
+    <li>Against: a user gets the output on the host. The copy of the patch embeddings is not measured. MLX on unified memory can avoid a copy, and Option A cannot show that gain.</li>
+  </ul>
+  <p><b>Option B: host to host, one configuration for each output.</b> The timer starts with the fp32 pixels in NumPy and stops with the output in NumPy. The frame run and the patch run are two configurations, as Table 11 lists them.</p>
+  <ul>
+    <li>For: exactly what a user sees, for each output.</li>
+    <li>Against: twice the run time (Table 4). The two runs do the same forward pass.</li>
+  </ul>
+  <p><b>Option C: host to host, one forward pass for each batch, the copy of each output timed separately.</b> Each timed batch records four times:</p>
+  <pre><code>t0 = perf_counter()
+pixels = torch.from_numpy(batch).to("mps", dtype)    # pixels to the GPU
+tokens = model(pixel_values=pixels).last_hidden_state
+torch.mps.synchronize(); t1 = perf_counter()          # forward pass ends
+frame = tokens[:, 0].cpu().numpy(); t2 = perf_counter()
+patch = tokens[:, 5:].cpu().numpy(); t3 = perf_counter()
+
+frame_time = t2 - t0                   # frame embedding row
+patch_time = (t1 - t0) + (t3 - t2)     # patch embeddings row
+device_time = t1 - t0                  # also recorded</code></pre>
+  <ul>
+    <li>For: one run gives the frame row, the patch row and the device time. Half the run time of Option B.</li>
+    <li>Against: the frame copy runs before the patch copy, so a cache effect can favor the patch copy a little. The copy is a few milliseconds against a forward pass of up to seconds.</li>
+  </ul>
+  <div class="box">
+    <p><b>Recommendation: Option C.</b> The outputs stay in the dtype of the backend, with no cast to fp32 in the timed region. Step 6 uses the same four times for <code>mlx</code>, with <code>mx.eval</code> in place of the synchronize and <code>np.array</code> for the copy.</p>
+  </div>
+
+  <h3>3.5 D4: timing procedure</h3>
+  <p>The plan sets 5 warm-up batches and 30 timed batches, and lets Step 3 change them with a reason. One batch takes from about 3 ms (ViT-S/16, 224 px, batch size 1) to about 40 s (ViT-7B/16, 512 px, batch size 32, estimated). This Mac is an M5 Max. A long run can heat it and lower the clock.</p>
+  <p><b>Option A: 5 warm-up and 30 timed batches.</b></p>
+  <ul>
+    <li>For: simple. The same count for every configuration.</li>
+    <li>Against: 30 batches of 3 ms are 0.1 s. The GPU clock can still ramp up in that time. 35 batches of 40 s are 23 minutes for one ViT-7B/16 configuration.</li>
+  </ul>
+  <p><b>Option B: a time budget.</b> Warm-up: at least 3 batches and at least 2 s. Timed: at least 30 batches and at least 10 s. Stop at 60 s when at least 10 batches are done.</p>
+  <ul>
+    <li>For: small configurations get thousands of batches and a stable clock. Large configurations stop after a fixed time. The median and the p90 latency at batch size 1 always have at least 30 values.</li>
+    <li>Against: the count of timed batches differs between configurations. Each JSON line records it.</li>
+  </ul>
+  <p><b>Option C: Option A with 3 repeats in new subprocesses.</b> The median of the three runs is the result.</p>
+  <ul>
+    <li>For: the spread of the repeats shows the noise.</li>
+    <li>Against: three times the run time, and the small configurations stay too short.</li>
+  </ul>
+  <div class="box">
+    <p><b>Recommendation: Option B, plus 3 repeats for the two priority configurations</b> (ViT-S/16 frame embedding at 224 px, ViT-H+/16 patch embeddings at 512 px, batch size 8, the fp16 baseline row of D2). If their spread is above 5 %, the plan makes the budget longer. Each JSON line also records the machine state: power source, Low Power Mode, the CPU speed limit of <code>pmset -g therm</code> and the free memory before the load. The harness stops when the Mac runs on battery.</p>
+  </div>
+
+  <h3>3.6 D5: peak memory</h3>
+  <p>The glossary defines the peak memory "as the backend reports it". <code>torch.mps</code> has no peak counter. It has <code>current_allocated_memory()</code> and <code>driver_allocated_memory()</code>. MLX has <code>mx.get_peak_memory()</code>. The two backends count differently, so a ratio of their numbers can mislead.</p>
+  <p><b>Option A: the <code>torch.mps</code> counters.</b> Read <code>driver_allocated_memory()</code> after each batch and keep the largest value.</p>
+  <ul>
+    <li>For: no extra code. It is what the backend reports.</li>
+    <li>Against: it misses peaks inside a batch. It grows in steps of about 1 GB (Table 3). It does not include the CPU memory of the process. It cannot be compared with <code>mx.get_peak_memory()</code>.</li>
+  </ul>
+  <p><b>Option B: the process footprint of macOS.</b> <code>proc_pid_rusage</code> gives the current footprint and its lifetime maximum. Each configuration runs in a new subprocess, so the lifetime maximum belongs to one configuration.</p>
+  <ul>
+    <li>For: the same measure for <code>torch-mps</code> and <code>mlx</code>. It catches short peaks. It is the memory that the out-of-memory crash of this Mac depends on.</li>
+    <li>Against: it includes the load peak. The footprint does not fall after <code>empty_cache()</code> (Table 3), so the run peak can hide under the load peak. It needs <code>ctypes</code> and a fixed struct layout (<code>rusage_info_v4</code>).</li>
+  </ul>
+  <p><b>Option C: both, with the load peak and the run peak apart.</b> The worker reads the lifetime maximum after the load and again after the timed batches. It also records the largest <code>driver_allocated_memory()</code>.</p>
+  <ul>
+    <li>For: the footprint gives a fair comparison. The backend counter shows the share of the GPU heap. The load peak shows the cost of the load.</li>
+    <li>Against: when the run peak stays below the load peak, the run peak is unknown. The JSON line then records "below the load peak" and the current footprint after the run.</li>
+  </ul>
+  <div class="box">
+    <p><b>Recommendation: Option C.</b> The lifetime maximum of the footprint is the main number in the results table. The glossary entry "peak memory" changes in the Close stage to name this measure.</p>
+  </div>
+
+  <h3>3.7 D6: time share of each part of the block</h3>
+  <p>Step 3 of <code>docs/plan.html</code> asks for the time share of each part of the block for ViT-S/16 and ViT-H+/16. The parts are: the first layer norm, the query, key and value projections, RoPE, SDPA, the output projection, the first LayerScale, the second layer norm, the feed-forward network and the second LayerScale.</p>
+  <p><b>Option A: profiler traces.</b> <code>torch.profiler</code> or <code>torch.mps.profiler</code>, which writes signposts for Instruments.</p>
+  <ul>
+    <li>For: the real kernels of one forward pass, with no change to the code.</li>
+    <li>Against: the MPS signposts need Instruments, a manual step. The CPU-side profiler shows the launch time, not the GPU time. A script cannot read the shares.</li>
+  </ul>
+  <p><b>Option B: forward hooks with a synchronize before and after each part.</b></p>
+  <ul>
+    <li>For: one forward pass of the real model. Easy to write.</li>
+    <li>Against: each synchronize costs about 170 µs (Table 3). A ViT-S/16 block at 224 px has about 10 parts. The hooks then add more time than the block takes. The GPU cannot overlap the parts.</li>
+  </ul>
+  <p><b>Option C: each part alone, in a micro-benchmark.</b> The harness takes the real weights of block 1, makes an input of the right shape and runs each part many times in a loop with one synchronize at the end. It also times the whole block the same way. A check compares the sum of the parts with the whole block.</p>
+  <ul>
+    <li>For: no distortion from synchronizes. A script reads the shares. Step 4 and Step 6 can run the same split on <code>mlx</code>, so the explainer can show both backends side by side.</li>
+    <li>Against: a part alone can run faster or slower than inside the block (cache, launch overlap). The sum check shows the size of this error.</li>
+  </ul>
+  <p><b>Option D: FLOP count only.</b> Table 2, extended to every part.</p>
+  <ul>
+    <li>For: no run. Exact.</li>
+    <li>Against: it misses the memory-bound parts and the fixed costs (Section 2).</li>
+  </ul>
+  <div class="box">
+    <p><b>Recommendation: Options C and D.</b> C gives the measured share and D gives the FLOP share. The gap between them is the main lesson of the explainer. The sum of the parts must be within 15 % of the whole block, or <code>verify.html</code> explains the gap. Batch sizes 1 and 8, input resolutions 224 and 512 px, fp32 and the valid fp16 mode.</p>
+  </div>
+
+  <h3>3.8 D7: software settings of the baseline</h3>
+  <p>The baseline must be the backbone that a user of PyTorch gets. transformers uses SDPA attention by default on <code>torch-mps</code>, and Step 2 recorded it (<code>attn_implementation: sdpa</code>). transformers marks DINOv3 as ready for a full-graph <code>torch.compile</code>.</p>
+  <p><b>Option A: the Hugging Face default.</b> SDPA attention, eager mode, no compile.</p>
+  <ul>
+    <li>For: the same code as Step 2 and as most users. No compile time.</li>
+    <li>Against: a tuned PyTorch can be faster. Then the speedup overstates the gain over the best PyTorch.</li>
+  </ul>
+  <p><b>Option B: Option A with <code>torch.compile</code> for every configuration.</b></p>
+  <ul>
+    <li>For: the strongest baseline.</li>
+    <li>Against: a compile for each subprocess, about 4 s for one MLP (Table 3), more for a full backbone. The probe showed no gain. The MPS backend of <code>torch.compile</code> is new, so an error can block a configuration.</li>
+  </ul>
+  <p><b>Option C: Option A as the baseline, plus report-only rows with <code>torch.compile</code>.</b> Only for the two priority configurations, in the dtype modes of D1.</p>
+  <ul>
+    <li>For: the baseline stays simple. The extra rows show if a tuned PyTorch is faster, at small cost.</li>
+    <li>Against: the other configurations have no compile row.</li>
+  </ul>
+  <div class="box">
+    <p><b>Recommendation: Option C.</b> If a compile row is more than 10 % faster than its baseline row, the plan asks the user if the compile rows join the baseline.</p>
+  </div>
+
+  <h3>3.9 D8: ViT-7B/16</h3>
+  <p>ViT-7B/16 runs on <code>torch-mps</code> in fp16-cast and bf16-cast only. Step 2 measured a need of 20.1 GB for that load and found 14.7 GB free. The weights take 13.4 GB in fp16. At 512 px and batch size 32, the activations add a few GB more. Step 2 deferred its reference file for the same reason.</p>
+  <p><b>Option A: in the normal run.</b> The memory check of each configuration decides.</p>
+  <ul>
+    <li>For: no extra step.</li>
+    <li>Against: with about 15 to 23 GB free, most or all ViT-7B/16 configurations skip. The run gives no number.</li>
+  </ul>
+  <p><b>Option B: a separate run, last.</b> The harness takes a model size argument. The user closes other apps. Then the harness runs ViT-7B/16 alone, in cast mode, with the same memory check. A configuration that does not fit still skips with a recorded reason.</p>
+  <ul>
+    <li>For: the best chance of a ViT-7B/16 baseline, inside the run rules. It can share the session with the deferred ViT-7B/16 reference file of Step 2.</li>
+    <li>Against: it needs the user. About 0.7 h of run time (Table 4).</li>
+  </ul>
+  <p><b>Option C: leave out ViT-7B/16.</b></p>
+  <ul>
+    <li>For: no risk for the memory of this Mac.</li>
+    <li>Against: goal 3 of <code>mission.md</code> asks for every model size. The MLX run of ViT-7B/16 in Step 6 then has no speedup.</li>
+  </ul>
+  <div class="box">
+    <p><b>Recommendation: Option B.</b> The normal run records ViT-7B/16 as "deferred to the separate run". Step 3 can close with recorded skips for ViT-7B/16 (the done condition of Step 3 accepts a recorded skip).</p>
+  </div>
+
+  <h3>3.10 The design with all recommendations</h3>
+  <figure>
+    <div class="fig"><svg viewBox="0 0 960 380" role="img" aria-label="Data flow of Step 3 with the recommended options" font-family="-apple-system, Helvetica Neue, Arial, sans-serif">
+      <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#4a5655"/></marker></defs>
+      <rect width="960" height="380" fill="#ffffff"/>
+      <g font-size="12.5" fill="#111414">
+        <rect x="20" y="30" width="200" height="74" rx="6" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="120" y="56" text-anchor="middle" font-weight="600">scripts/benchmark.py</text>
+        <text x="120" y="76" text-anchor="middle">configurations, memory check</text>
+        <text x="120" y="92" text-anchor="middle">skip records, one at a time</text>
+
+        <rect x="270" y="30" width="240" height="74" rx="6" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="390" y="56" text-anchor="middle" font-weight="600">Worker subprocess</text>
+        <text x="390" y="76" text-anchor="middle">1 configuration: load, validity check,</text>
+        <text x="390" y="92" text-anchor="middle">warm-up, timed batches (D4)</text>
+
+        <rect x="560" y="30" width="180" height="74" rx="6" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="650" y="56" text-anchor="middle" font-weight="600">results/</text>
+        <text x="650" y="76" text-anchor="middle">baseline-torch-mps.jsonl</text>
+        <text x="650" y="92" text-anchor="middle">1 line per configuration</text>
+
+        <rect x="790" y="30" width="150" height="74" rx="6" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="865" y="56" text-anchor="middle" font-weight="600">Results table</text>
+        <text x="865" y="76" text-anchor="middle">baseline-torch-mps.md</text>
+        <text x="865" y="92" text-anchor="middle">baseline row (D2)</text>
+
+        <rect x="20" y="150" width="200" height="70" rx="6" fill="#f5f8f7" stroke="#4a5655"/>
+        <text x="120" y="176" text-anchor="middle" font-weight="600">Stored pixels</text>
+        <text x="120" y="196" text-anchor="middle">inputs.safetensors (Step 2)</text>
+        <text x="120" y="212" text-anchor="middle">+ reference files</text>
+
+        <text x="430" y="140" font-weight="600">One timed batch (D3)</text>
+        <rect x="430" y="160" width="60" height="34" fill="#a8d5d8" stroke="#4a5655"/>
+        <text x="460" y="181" text-anchor="middle" font-size="11.5">to GPU</text>
+        <rect x="490" y="160" width="170" height="34" fill="#3f9ea4" stroke="#4a5655"/>
+        <text x="575" y="181" text-anchor="middle" font-size="11.5" fill="#ffffff">forward pass + synchronize</text>
+        <rect x="660" y="160" width="40" height="34" fill="#f5f8f7" stroke="#4a5655"/>
+        <text x="680" y="181" text-anchor="middle" font-size="11.5">frame</text>
+        <rect x="700" y="160" width="60" height="34" fill="#f5f8f7" stroke="#4a5655"/>
+        <text x="730" y="181" text-anchor="middle" font-size="11.5">patch</text>
+        <text x="430" y="212" text-anchor="middle" font-size="11.5">t0</text>
+        <text x="660" y="212" text-anchor="middle" font-size="11.5">t1</text>
+        <text x="700" y="212" text-anchor="middle" font-size="11.5">t2</text>
+        <text x="760" y="212" text-anchor="middle" font-size="11.5">t3</text>
+        <text x="430" y="234" font-size="11.5" fill="#4a5655">frame row: t2 − t0. Patch row: (t1 − t0) + (t3 − t2).</text>
+
+        <rect x="20" y="280" width="200" height="74" rx="6" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="120" y="306" text-anchor="middle" font-weight="600">scripts/profile_block.py</text>
+        <text x="120" y="326" text-anchor="middle">ViT-S/16, ViT-H+/16</text>
+        <text x="120" y="342" text-anchor="middle">block 1 weights</text>
+
+        <rect x="270" y="280" width="240" height="74" rx="6" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="390" y="306" text-anchor="middle" font-weight="600">Each part alone (D6)</text>
+        <text x="390" y="326" text-anchor="middle">time share + FLOP share</text>
+        <text x="390" y="342" text-anchor="middle">sum of parts vs whole block</text>
+
+        <rect x="560" y="280" width="180" height="74" rx="6" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="650" y="306" text-anchor="middle" font-weight="600">results/</text>
+        <text x="650" y="326" text-anchor="middle">block-profile-</text>
+        <text x="650" y="342" text-anchor="middle">torch-mps.md</text>
+
+        <rect x="790" y="280" width="150" height="74" rx="6" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="865" y="306" text-anchor="middle" font-weight="600">Explainer</text>
+        <text x="865" y="326" text-anchor="middle">03-where-the-</text>
+        <text x="865" y="342" text-anchor="middle">compute-goes</text>
+      </g>
+      <g stroke="#4a5655" stroke-width="1.5" fill="none">
+        <path d="M220,67 H266" marker-end="url(#arrow)"/>
+        <path d="M510,67 H556" marker-end="url(#arrow)"/>
+        <path d="M740,67 H786" marker-end="url(#arrow)"/>
+        <path d="M220,185 H380 V108" marker-end="url(#arrow)"/>
+        <path d="M220,317 H266" marker-end="url(#arrow)"/>
+        <path d="M510,317 H556" marker-end="url(#arrow)"/>
+        <path d="M740,317 H786" marker-end="url(#arrow)"/>
+        <path d="M865,104 V276" marker-end="url(#arrow)"/>
+      </g>
+    </svg></div>
+    <figcaption><b>Figure 2.</b> Data flow of Step 3 with all recommendations. The driver runs one worker subprocess for each configuration, after a memory check. Each worker reads the stored pixels of Step 2, checks its first output against the reference output and times the batches. One timed batch gives the frame row and the patch row (middle). A second script times each part of one block. The explainer uses both tables. Teal boxes are new code or new files of Step 3.</figcaption>
+  </figure>
+  <p>The new code reuses Step 2: <code>check_free_memory</code>, <code>load_torch_backbone</code>, <code>DTYPE_MODES</code>, <code>read_inputs</code>, <code>read_reference</code>, <code>measure_parity</code> and <code>THRESHOLDS</code>. The worker does not use <code>run_torch</code> in the timed region, because <code>run_torch</code> casts the output to fp32 and copies all tokens. The plan names the new modules, for example <code>src/dinov3_apple/bench.py</code> for the timing loop and the footprint reader.</p>
+</section>
+
+<section id="open">
+  <h2>9 Open questions</h2>
+  <ul>
+    <li>D1 to D8: decided on 2026-11-06. The user chose the recommendation of each decision.</li>
+    <li>When does Step 3 run its first heavy job? The build starts after the user confirms that Step 2 is closed, because a Step 2 Verify agent can still run tests now.</li>
+    <li>Batch sizes: Table 12 of <code>docs/plan.html</code> sends up to 120 frames of ViT-S/16 through the backbone in one batch. Should Step 3 add batch size 64 or 128 for ViT-S/16? The recommendation is no: Step 6 searches the best batch size for both backends.</li>
+    <li>Low Power Mode and the power source: the harness records them. Should it also refuse to run when Low Power Mode is on? The recommendation is yes.</li>
+    <li>The rates in Table 4 are assumptions. The first ViT-S/16 and ViT-H+/16 runs of the build measure them. If the full run takes more than 4 h, the plan splits it by model size.</li>
+  </ul>
+</section>
+
+<section id="sources">
+  <h2>10 Sources</h2>
+  <ul>
+    <li><code>docs/plan.html</code>: Step 3, Section 7 (Table 11 and the benchmark procedure), Table 4 (tokens), Table 12 and risk R8.</li>
+    <li><code>specs/02-reference/plan.html</code>, <code>results/parity-torch-mps.md</code>: dtype modes, fp16 overflow, memory checks.</li>
+    <li>Hugging Face transformers 5.22.1: <code>models/dinov3_vit/modeling_dinov3_vit.py</code>, read in <code>.venv</code>. Apache-2.0.</li>
+    <li>macOS <code>proc_pid_rusage</code> and <code>struct rusage_info_v4</code> (<code>sys/resource.h</code>): <code>ri_phys_footprint</code> and <code>ri_lifetime_max_phys_footprint</code>.</li>
+    <li>The probes of Section 3.1: three scripts outside the repo, run on 2026-11-06 on the M5 Max with torch 2.15.0. They loaded no model.</li>
+  </ul>
+</section>
+</main>
+</body>
+</html>

@@ -202,6 +202,22 @@ _Avoid_: speed (as a number), FPS
 **Peak memory**:
 The largest memory use during one benchmark run, as the backend reports it.
 
+**Process footprint**:
+The memory that macOS charges to one process, from `proc_pid_rusage`. On unified memory it includes the GPU memory of torch-mps and mlx. Its lifetime maximum is the peak memory of a benchmark worker.
+_Avoid_: RSS, resident memory
+
+**Time budget**:
+The rule that ends the warm-up and the timed batches of one benchmark configuration: a minimum number of batches, a minimum time and a time limit.
+
+**Priority configuration**:
+One of the two configurations that the benchmarks repeat and compile: P1 (ViT-S/16, 224 px, batch size 8, frame embedding) and P2 (ViT-H+/16, 512 px, batch size 8, patch embeddings).
+
+**Compile row**:
+A benchmark result of a priority configuration with the backbone wrapped by `torch.compile`.
+
+**Block profile**:
+The time of each part of block 1, with each part run alone in a loop, next to its FLOP count.
+
 **Speedup**:
 The throughput of `mlx` divided by the throughput of the baseline, for the same configuration.
 

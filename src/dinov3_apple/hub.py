@@ -4,7 +4,9 @@ import json
 import shutil
 from pathlib import Path
 
+import numpy as np
 from huggingface_hub import snapshot_download, try_to_load_from_cache
+from safetensors import safe_open
 
 MODEL_IDS: dict[str, str] = {
     "ViT-S/16": "facebook/dinov3-vits16-pretrain-lvd1689m",
@@ -103,3 +105,13 @@ def weights_dir(
     if (converted / "config.json").exists() and any(converted.glob("*.safetensors")):
         return converted
     raise WeightsNotFoundError(f"{model_size}: not in the Hugging Face cache or in {converted}")
+
+
+def parameter_count(model_size: str) -> int:
+    """Return the number of weights of one model size, from the safetensors headers."""
+    count = 0
+    for file in sorted(weights_dir(model_size).glob("*.safetensors")):
+        with safe_open(file, "np") as tensors:
+            for name in tensors.keys():  # noqa: SIM118 (safe_open is not iterable)
+                count += int(np.prod(tensors.get_slice(name).get_shape()))
+    return count

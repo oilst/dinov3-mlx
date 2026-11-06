@@ -15,9 +15,10 @@ from PIL import Image
 from safetensors import safe_open
 from transformers import DINOv3ViTModel
 
-from dinov3_apple.hub import MODEL_IDS, weights_dir
-from dinov3_apple.memory import check_free_memory
+from dinov3_apple.hub import MODEL_IDS, parameter_count, weights_dir
+from dinov3_apple.memory import LOAD_RATIO, check_free_memory, load_bytes
 from dinov3_apple.outputs import PATCH_SIZE
+from dinov3_apple.parity import TEST_IMAGES
 from dinov3_apple.preprocess import own_aspect_size
 
 REPO_ROOT = Path(__file__).parents[2]
@@ -25,13 +26,8 @@ IMAGES_DIR = REPO_ROOT / "tests" / "fixtures" / "images"
 REFERENCE_DIR = REPO_ROOT / "tests" / "fixtures" / "generated" / "reference"
 INPUTS_FILE = REFERENCE_DIR / "inputs.safetensors"
 
-TEST_IMAGES = ["iss-kibo-lab", "forest", "iss-conference"]
 SQUARE_SIZES = [224, 448, 512]
 HIDDEN_STATES_CONFIG = "iss-kibo-lab/224x224"
-
-# The memory check of a model load: LOAD_RATIO x the weight bytes + LOAD_RESERVE_BYTES.
-LOAD_RATIO = 1.2
-LOAD_RESERVE_BYTES = 4 * 10**9
 
 # The fields of the header metadata of a reference file (Section 3.4 of the plan).
 REQUIRED_METADATA = [
@@ -117,16 +113,6 @@ def reference_path(model_size: str) -> Path:
     return REFERENCE_DIR / f"reference-{model_slug(model_size)}.safetensors"
 
 
-def parameter_count(model_size: str) -> int:
-    """Return the number of weights of one model size, from the safetensors headers."""
-    count = 0
-    for file in sorted(weights_dir(model_size).glob("*.safetensors")):
-        with safe_open(file, "np") as tensors:
-            for name in tensors.keys():  # noqa: SIM118 (safe_open is not iterable)
-                count += int(np.prod(tensors.get_slice(name).get_shape()))
-    return count
-
-
 def required_load_bytes(model_size: str, dtype: torch.dtype, ratio: float = LOAD_RATIO) -> int:
     """Return the memory that the memory check asks for before a load of one model size.
 
@@ -138,8 +124,7 @@ def required_load_bytes(model_size: str, dtype: torch.dtype, ratio: float = LOAD
     Returns:
         ratio x the weight bytes in dtype + LOAD_RESERVE_BYTES.
     """
-    weight_bytes = parameter_count(model_size) * dtype.itemsize
-    return round(ratio * weight_bytes) + LOAD_RESERVE_BYTES
+    return load_bytes(parameter_count(model_size) * dtype.itemsize, ratio)
 
 
 def load_torch_backbone(

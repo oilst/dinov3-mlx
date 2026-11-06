@@ -1,0 +1,526 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Step 3 Baseline: Plan</title>
+<style>
+/* Spec page. White page, black text, no dark mode. */
+:root { --bg: #ffffff; --fg: #111414; --muted: #4a5655; --rule: #d6dedd; --panel: #f5f8f7; --accent: #057379; --pass: #1d7a3a; --fail: #b3261e; color-scheme: light; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif; }
+main { max-width: 64rem; margin: 0 auto; padding: 40px 20px 64px; display: grid; gap: 1.75rem; }
+main > *, section > * { min-width: 0; }
+h1 { font-size: 1.9rem; line-height: 1.15; margin: 0; }
+h2 { font-size: 1.3rem; margin: 0; }
+h3 { font-size: 1.05rem; margin: 0; }
+section { display: grid; gap: 0.8rem; }
+p, ul, ol { margin: 0; max-width: 46rem; }
+li + li { margin-top: 0.25rem; }
+code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.86em; }
+p code, li code, td code { overflow-wrap: anywhere; }
+pre { margin: 0; background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 0.8rem 1rem; overflow-x: auto; }
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+th, td { text-align: left; vertical-align: top; padding: 0.45rem 0.7rem 0.45rem 0; border-bottom: 1px solid var(--rule); }
+th { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); border-bottom: 1.5px solid var(--fg); }
+td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+tr.group td { background: var(--panel); font-weight: 600; }
+.caption { font-size: 0.88rem; color: var(--muted); }
+.box { border: 1.5px solid var(--accent); border-radius: 6px; padding: 0.8rem 1rem; display: grid; gap: 0.5rem; }
+figure { margin: 0; display: grid; gap: 0.4rem; }
+.fig { border: 1px solid var(--rule); border-radius: 6px; padding: 0.5rem; overflow-x: auto; }
+.fig svg { display: block; width: 100%; height: auto; min-width: 640px; }
+figcaption { font-size: 0.88rem; color: var(--muted); }
+a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+<header>
+  <h1>Step 3 Baseline: Plan</h1>
+  <p>Roadmap step 3. Status: approved by the user on 2026-11-06. Date: 2026-11-06.</p>
+</header>
+
+<section id="goal">
+  <h2>1 Goal</h2>
+  <p>Step 3 builds the benchmark harness and measures the baseline: the throughput and the peak memory of the Hugging Face backbone on <code>torch-mps</code>. It also measures the time share of each part of one block for ViT-S/16 and ViT-H+/16. Step 6 runs the same harness on <code>mlx</code>. On 2026-11-06 the user chose the recommended option of each decision in <code>explore.html</code>:</p>
+  <ul>
+    <li>D1: all five dtype modes of Step 2: fp32, fp16-cast, bf16-cast, fp16-autocast and bf16-autocast.</li>
+    <li>D2: the baseline row for a speedup is the fastest dtype mode of the same dtype that gives a valid output.</li>
+    <li>D3: host to host. One forward pass for each batch. The copy of the frame embeddings and the copy of the patch embeddings are timed separately, so one run gives both rows.</li>
+    <li>D4: a time budget. The two priority configurations run three times.</li>
+    <li>D5: the lifetime maximum of the macOS process footprint is the main peak memory number. The <code>torch.mps</code> counter and the load peak are also recorded.</li>
+    <li>D6: each part of a block alone in a micro-benchmark, plus a FLOP count for each part.</li>
+    <li>D7: the Hugging Face default (SDPA attention, no compile) is the baseline. Report-only rows with <code>torch.compile</code> for the priority configurations.</li>
+    <li>D8: ViT-7B/16 in a separate run, last, in cast modes only, after the user frees memory.</li>
+  </ul>
+  <p>Step 2 is closed (commits <code>11fc2dd</code>, <code>44d411e</code>, <code>7f5dd59</code>). Its last commit made the memory check stricter, so the large model sizes need the user to close apps first (Section 3.6).</p>
+</section>
+
+<section id="dinov3">
+  <h2>2 DINOv3 topic</h2>
+  <p>The topic is where the compute goes for each model size and input resolution. The explainer <code>docs/learn/03-where-the-compute-goes.html</code> covers it with three views:</p>
+  <ol>
+    <li>The FLOP count of each part of a block (Table 7). The attention share grows with the token count N and falls with the embedding dimension D: the ratio of attention-score FLOPs to linear-layer FLOPs is about N / (6 D) (Figure 1 of <code>explore.html</code>).</li>
+    <li>The measured time share of each part (D6). Layer norms, RoPE, LayerScale, the activation function and the residual adds have almost no FLOPs, but they read and write every token.</li>
+    <li>The measured throughput of each model size and input resolution, against its FLOPs. The ratio gives the reached TFLOP/s. A low value shows fixed costs, for example ViT-S/16 at batch size 1.</li>
+  </ol>
+  <p>The explainer covers every function that Step 3 adds to <code>src/</code>.</p>
+</section>
+
+<section id="design">
+  <h2>3 Design</h2>
+
+  <h3>3.1 Modules</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>File</th><th>New public names</th><th>Job</th></tr></thead>
+      <tbody>
+        <tr><td><code>src/dinov3_apple/footprint.py</code></td><td><code>Footprint</code>, <code>read_footprint</code></td><td>The current macOS process footprint and its lifetime maximum, from <code>proc_pid_rusage</code> (D5).</td></tr>
+        <tr><td><code>src/dinov3_apple/machine.py</code></td><td><code>MachineState</code>, <code>MachineStateError</code>, <code>read_machine_state</code>, <code>check_machine_state</code></td><td>Power source, Low Power Mode, thermal notes and versions. Stop on battery or in Low Power Mode (Section 3.8).</td></tr>
+        <tr><td><code>src/dinov3_apple/bench.py</code></td><td><code>BenchConfig</code>, <code>TimeBudget</code>, <code>WARM_UP</code>, <code>TIMED</code>, <code>keep_going</code>, <code>bench_configurations</code>, <code>required_bench_bytes</code>, <code>make_batch</code>, <code>check_validity</code>, <code>summarize</code>, <code>baseline_rows</code></td><td>The benchmark matrix, the time budget, the memory need of one configuration, the input batch, the validity check, the summary statistics and the rule of D2. No torch import at module level, so <code>mlx</code> can reuse it.</td></tr>
+        <tr><td><code>src/dinov3_apple/torch_bench.py</code></td><td><code>run_worker</code>, <code>time_batch</code></td><td>The worker of one configuration on <code>torch-mps</code>: load, validity check, warm-up, timed batches, one result dict (Sections 3.3 to 3.6).</td></tr>
+        <tr><td><code>src/dinov3_apple/flops.py</code></td><td><code>PART_NAMES</code>, <code>part_flops</code>, <code>part_bytes</code>, <code>image_flops</code></td><td>FLOPs and bytes moved for each part of a block, and FLOPs for one image (Table 7). NumPy only.</td></tr>
+        <tr><td><code>src/dinov3_apple/block_profile.py</code></td><td><code>block_parts</code>, <code>run_parts</code>, <code>time_part</code>, <code>profile_block</code></td><td>Split block 1 of a backbone into its parts, check that the parts give the block output, and time each part alone (D6).</td></tr>
+        <tr><td><code>scripts/benchmark.py</code></td><td>&ndash;</td><td>The driver: machine state, memory check, one worker subprocess for each configuration, one JSON line for each result or skip. Options <code>--model-size</code>, <code>--repeats</code>, <code>--compile</code>, <code>--priority</code>, <code>--dry-run</code>, <code>--only-skipped</code>.</td></tr>
+        <tr><td><code>scripts/profile_block.py</code></td><td>&ndash;</td><td>The block profile of Section 3.11, one subprocess for each model size and dtype mode.</td></tr>
+        <tr><td><code>scripts/baseline_table.py</code></td><td>&ndash;</td><td>Turn the JSON lines into <code>results/baseline-torch-mps.md</code> and <code>results/block-profile-torch-mps.md</code>.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 1.</b> New code. Step 2 code that the build reuses: <code>check_free_memory</code>, <code>load_torch_backbone</code>, <code>required_load_bytes</code>, <code>DTYPE_MODES</code>, <code>read_inputs</code>, <code>read_reference</code>, <code>measure_parity</code>, <code>THRESHOLDS</code>, <code>MODEL_IDS</code>, <code>NUM_PREFIX_TOKENS</code>. The worker does not call <code>run_torch</code> in the timed region, because <code>run_torch</code> casts all tokens to fp32 and copies them.</p>
+
+  <h3>3.2 Configurations</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Run</th><th>Model sizes</th><th>Dtype modes</th><th>Input resolutions</th><th>Batch sizes</th><th>Configurations</th></tr></thead>
+      <tbody>
+        <tr><td>B1 Main matrix</td><td>ViT-S/16, ViT-S+/16, ViT-B/16, ViT-L/16, ViT-H+/16</td><td>all five</td><td>224, 448, 512 px</td><td>1, 8, 32</td><td class="num">225</td></tr>
+        <tr><td>B2 Repeats</td><td>P1 and P2 (Table 3)</td><td>all five</td><td>of P1 and P2</td><td>8</td><td class="num">2 × 5 × 2 more runs = 20</td></tr>
+        <tr><td>B3 Compile rows</td><td>P1 and P2</td><td>all five</td><td>of P1 and P2</td><td>8</td><td class="num">10</td></tr>
+        <tr><td>B4 ViT-7B/16</td><td>ViT-7B/16</td><td>fp16-cast, bf16-cast</td><td>224, 448, 512 px</td><td>1, 8, 32</td><td class="num">18</td></tr>
+        <tr><td>B5 Block profile</td><td>ViT-S/16, ViT-H+/16</td><td>fp32, fp16-cast</td><td>224, 512 px</td><td>1, 8</td><td class="num">16</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 2.</b> The runs of Step 3. Each configuration of B1 to B4 gives a frame embedding row and a patch embeddings row (D3). The output is not a separate configuration. The memory check can skip a configuration; the skip is a result line.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Name</th><th>Model size</th><th>Input resolution</th><th>Batch size</th><th>Output</th><th>Reason</th></tr></thead>
+      <tbody>
+        <tr><td>P1</td><td>ViT-S/16</td><td class="num">224 px</td><td class="num">8</td><td>frame embedding</td><td>First priority configuration of Section 7 of <code>docs/plan.html</code></td></tr>
+        <tr><td>P2</td><td>ViT-H+/16</td><td class="num">512 px</td><td class="num">8</td><td>patch embeddings</td><td>Second priority configuration</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 3.</b> Priority configurations. The section names ViT-S/16 with patch embeddings at 512 px as well. B1 measures it; B2 and B3 keep to two configurations to save run time.</p>
+  <p>B5 uses fp16-cast and not the D2 fp16 row. Reason: B5 runs block 1 only. In block 1 the largest token value is below 100 for both model sizes (Figure 1 of <code>specs/02-reference/explore.html</code>), so fp16-cast does not overflow there. Cast mode is also the mode of <code>mlx</code>. Autocast adds cast kernels between the parts, and these blur the split.</p>
+
+  <h3>3.3 The worker of one configuration</h3>
+  <p><code>scripts/benchmark.py</code> starts one worker subprocess for each configuration. The worker does these actions:</p>
+  <ol>
+    <li>Set the MPS watermarks 0.8 and 0.6 before the torch import.</li>
+    <li>Read the footprint (base).</li>
+    <li>Load the backbone with <code>load_torch_backbone(model_size, "mps", dtype_mode)</code>. Record the load time.</li>
+    <li>With <code>--compile</code>: wrap the backbone with <code>torch.compile</code>.</li>
+    <li>Read the footprint (load peak = lifetime maximum now).</li>
+    <li>Make the input batch from the stored pixels (Section 3.5).</li>
+    <li>Time the first batch. Record it as the time of the first call.</li>
+    <li>Check the validity of the first output (Section 3.5).</li>
+    <li>Run warm-up batches until <code>WARM_UP</code> ends.</li>
+    <li>Run timed batches until <code>TIMED</code> ends. After each batch, read <code>torch.mps.driver_allocated_memory()</code> and keep the maximum.</li>
+    <li>Read the footprint (end).</li>
+    <li>Print one JSON object to stdout. Write the per-batch times to <code>tests/fixtures/generated/bench/</code>.</li>
+  </ol>
+  <p>The driver adds the configuration, the machine state and the versions, and appends one line to <code>results/baseline-torch-mps.jsonl</code>. A worker that exits with an error gives a line with status "error" and the last 20 lines of its stderr.</p>
+  <p>One timed batch records four times (D3):</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Time</th><th>Taken after</th><th>Used for</th></tr></thead>
+      <tbody>
+        <tr><td><code>t0</code></td><td>nothing; the batch is fp32 NumPy on the host</td><td>start</td></tr>
+        <tr><td><code>t1</code></td><td>pixels to the GPU, forward pass, <code>torch.mps.synchronize()</code></td><td>device time = t1 − t0</td></tr>
+        <tr><td><code>t2</code></td><td><code>tokens[:, 0].cpu().numpy()</code></td><td>frame time = t2 − t0</td></tr>
+        <tr><td><code>t3</code></td><td><code>tokens[:, 5:].cpu().numpy()</code></td><td>patch time = (t1 − t0) + (t3 − t2)</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 4.</b> The four times of one timed batch. The outputs stay in the dtype of the backend output: the dtype of the weights in cast mode, fp32 in autocast mode (the final layer norm runs in fp32 under autocast). The JSON line records the output dtype.</p>
+  <p>Throughput of one output = batch size × timed batches / sum of its batch times. Latency = the median and the p90 of the batch times at batch size 1. The JSON line gives the median and the p90 for every batch size.</p>
+
+  <h3>3.4 Time budget</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Phase</th><th>Continue while</th><th>Stop early</th></tr></thead>
+      <tbody>
+        <tr><td>Warm-up (<code>WARM_UP</code>)</td><td>fewer than 3 batches or less than 2 s</td><td>no</td></tr>
+        <tr><td>Timed (<code>TIMED</code>)</td><td>fewer than 30 batches or less than 10 s</td><td>at 60 s, when at least 10 batches are done</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 5.</b> Time budget (D4). The first batch counts as neither warm-up nor timed. Elapsed time is the sum of the batch times, read with <code>time.perf_counter</code>.</p>
+  <p>Repeatability: B2 runs P1 and P2 two more times, each in a new subprocess. The spread is (largest − smallest) / median of the three throughputs, for the output of Table 3. If a spread is above 5 %, the build stops and asks the user. A longer budget is the first remedy.</p>
+
+  <h3>3.5 Input batch and validity check</h3>
+  <p><code>make_batch(inputs, side, batch_size)</code> takes the square stored pixels of the three test images at the input resolution, in the order of <code>TEST_IMAGES</code>, and repeats them until the batch is full. The batch is fp32 NumPy, shape (B, 3, side, side). Every batch is the same array.</p>
+  <p><code>check_validity(tokens, reference, dtype_mode)</code> takes the tokens of image 0 of the first batch, cast to fp32. The output is valid when all values are finite and <code>measure_parity</code> passes <code>THRESHOLDS[dtype_mode]</code> on the frame, the patch mean and the patch 1st percentile. ViT-7B/16 has no reference file yet. Its check is "finite only", and the JSON line says so. A configuration with an output that is not valid still runs its timed batches. Its line has <code>"valid": false</code> and the reason.</p>
+  <p>Expected: fp16-cast is not valid for ViT-L/16 at 224, 448 and 512 px and for ViT-H+/16 at 224 px (<code>results/parity-torch-mps.md</code>). All other configurations of B1 are valid.</p>
+
+  <h3>3.6 Memory check and peak memory</h3>
+  <p>The driver checks the free memory before it starts a worker. The need of one configuration is:</p>
+  <pre><code>need = required_load_bytes(model_size, weights dtype)              # Step 2: 1.2 x weights + 4 GB
+     + B x T x (8 D + 3 F) x a                                    # tokens and feed-forward activations
+     + 2 x B x heads x T^2 x a                                    # attention scores and softmax
+T = tokens (201, 789 or 1,029), F = feed-forward size, a = 2 bytes in cast mode, 4 bytes otherwise</code></pre>
+  <p>The attention term assumes that SDPA on <code>torch-mps</code> keeps the full score matrix. This is the safe case. For ViT-H+/16 at 512 px, batch size 32, fp32 the need is about 17 GB. For ViT-7B/16 at 512 px, batch size 32, fp16 it is about 28 GB.</p>
+  <p>Rule: if a measured lifetime maximum footprint is above the need of its configuration, the build raises the activation factor until every measured configuration fits, and records the new factor. The build never lowers the factor alone.</p>
+  <p>The available memory comes from <code>available_memory_bytes</code>. Commit <code>7f5dd59</code> of Step 2 made it stricter: it counts the free, speculative and purgeable pages, plus the inactive pages up to the file-backed pages. It does not count memory that macOS must compress or swap first. On 2026-11-06 it gave about 7 GB and later 11.3 GB on this Mac, against about 20 GB with the old count. Table 6a shows the effect on the runs.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Available memory</th><th>B1 configurations that fit</th><th>ViT-7B/16 configurations that fit</th><th>P2 fits in</th></tr></thead>
+      <tbody>
+        <tr><td class="num">7 GB</td><td class="num">173 of 225</td><td class="num">0 of 18</td><td>no dtype mode</td></tr>
+        <tr><td class="num">11 GB</td><td class="num">216 of 225</td><td class="num">0 of 18</td><td>all five dtype modes</td></tr>
+        <tr><td class="num">15 GB</td><td class="num">222 of 225</td><td class="num">0 of 18</td><td>all five dtype modes</td></tr>
+        <tr><td class="num">17 GB</td><td class="num">225 of 225</td><td class="num">0 of 18</td><td>all five dtype modes</td></tr>
+        <tr><td class="num">28.2 GB</td><td class="num">225 of 225</td><td class="num">18 of 18</td><td>all five dtype modes</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 6a.</b> Configurations that fit, from the need formula above with the parameter counts of the Hugging Face cache. Computed, not measured. The largest needs: ViT-S/16 6.7 GB, ViT-B/16 9.7 GB, ViT-L/16 12.5 GB, ViT-H+/16 16.8 GB, ViT-7B/16 28.2 GB. P2 needs 7.1 GB in cast mode and 10.2 GB with fp32 weights. The 4 GB reserve of <code>required_load_bytes</code> is in every need.</p>
+  <p>So the build does not run B1 in one go. It does these actions:</p>
+  <ol>
+    <li>Run <code>scripts/benchmark.py --dry-run</code>. It prints the need of each configuration and the available memory, and it loads no model.</li>
+    <li>Run ViT-S/16, ViT-S+/16 and ViT-B/16. These need 9.7 GB or less.</li>
+    <li>Ask the user to close apps until the dry run shows at least 17 GB. Then run ViT-L/16 and ViT-H+/16.</li>
+    <li>Run <code>scripts/benchmark.py --only-skipped</code> after the user frees more memory. It runs again only the configurations whose latest line is "skipped".</li>
+  </ol>
+  <p>The results table uses the latest line of each configuration. A later "done" line replaces an earlier "skipped" line. The JSON file keeps both.</p>
+  <p>The worker records three footprint values and one counter:</p>
+  <ul>
+    <li><code>footprint_base_bytes</code>: the footprint before the load.</li>
+    <li><code>load_peak_bytes</code>: the lifetime maximum after the load.</li>
+    <li><code>peak_bytes</code>: the lifetime maximum at the end. This is the peak memory of the results table.</li>
+    <li><code>run_peak_bytes</code>: <code>peak_bytes</code> if it is above <code>load_peak_bytes</code>, else null with the note "below the load peak".</li>
+    <li><code>mps_driver_max_bytes</code>: the largest <code>driver_allocated_memory()</code> after a batch.</li>
+  </ul>
+
+  <h3>3.7 Baseline row (D2)</h3>
+  <p>For each model size, input resolution, batch size, output and dtype (fp32, fp16, bf16), <code>baseline_rows</code> picks one result line:</p>
+  <ol>
+    <li>Take the lines of the dtype modes of that dtype: fp32 → fp32; fp16 → fp16-cast and fp16-autocast; bf16 → bf16-cast and bf16-autocast.</li>
+    <li>Drop the lines with status "skipped" or "error", the lines with <code>"valid": false</code> and the compile rows.</li>
+    <li>Take the line with the highest throughput of the output.</li>
+    <li>If no line is left, the baseline row is empty, with the reason.</li>
+  </ol>
+  <p>The results table names the dtype mode of each baseline row. The Close stage writes this rule as ADR 0004.</p>
+
+  <h3>3.8 Machine state</h3>
+  <p>The driver reads the machine state before each worker and adds it to the JSON line:</p>
+  <ul>
+    <li>Power source, from <code>pmset -g batt</code> ("AC Power" or "Battery Power").</li>
+    <li>Low Power Mode, from the <code>lowpowermode</code> line of <code>pmset -g</code>. On this Mac the line is missing; then the value is "not reported".</li>
+    <li>Thermal notes, from <code>pmset -g therm</code>. On 2026-11-06 it gave "No thermal warning level has been recorded".</li>
+    <li>The free memory before the worker, from <code>available_memory_bytes</code>.</li>
+    <li>macOS, Python, torch and transformers versions, the chip name and the memory size (once per run, in each line).</li>
+  </ul>
+  <p><code>check_machine_state</code> raises <code>MachineStateError</code> on battery power or with Low Power Mode on. The driver then stops and writes no line for the configuration.</p>
+
+  <h3>3.9 Compile rows (D7)</h3>
+  <p>B3 runs P1 and P2 in all five dtype modes with <code>--compile</code>. The compile time is part of the time of the first call. A compile error gives a line with status "error" and the error text. If a compile row is more than 10 % faster than its non-compiled row, the build reports it to the user, who decides if the compile rows join the baseline.</p>
+
+  <h3>3.10 ViT-7B/16 (D8)</h3>
+  <p>B1 writes one line with status "deferred" for each ViT-7B/16 configuration: "ViT-7B/16 runs in its own session (D8)". B4 runs only on the user's command:</p>
+  <pre><code>uv run python scripts/benchmark.py --model-size ViT-7B/16</code></pre>
+  <p>The user closes other apps first. The same memory check applies. A configuration that does not fit gives a "skipped" line. The fp32, fp16-autocast and bf16-autocast modes never run for ViT-7B/16 (run rule). If B4 does not run before Verify, Step 3 closes with the deferred lines.</p>
+
+  <h3>3.11 Block profile (D6)</h3>
+  <p><code>block_parts</code> splits block 1 (<code>model.model.layer[0]</code>) into the parts of Table 6. <code>run_parts</code> runs the parts in order with the Hugging Face modules and functions. A test checks that their result equals the output of the block. <code>profile_block</code> captures the input of each part from one run, then times each part alone: a loop with one synchronize at the end, until at least 20 calls and 0.5 s, five times; the result is the median of the five loops. It times the whole block the same way, and also the parts outside the blocks: patch embedding, RoPE tables and the final layer norm.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>No.</th><th>Part</th><th>Code</th><th>FLOPs</th><th>Bytes moved (approx.)</th></tr></thead>
+      <tbody>
+        <tr><td>1</td><td>norm1</td><td><code>layer.norm1(x)</code></td><td>&ndash;</td><td>2 B T D s</td></tr>
+        <tr><td>2</td><td>q_proj, k_proj, v_proj</td><td><code>attention.q_proj</code>, ... and the reshape to heads</td><td>3 × 2 B T D<sup>2</sup></td><td>4 B T D s + 3 D<sup>2</sup> s</td></tr>
+        <tr><td>3</td><td>RoPE</td><td><code>apply_rotary_pos_emb(q, k, cos, sin)</code></td><td>&ndash;</td><td>about 6 B T D s</td></tr>
+        <tr><td>4</td><td>SDPA</td><td><code>F.scaled_dot_product_attention(q, k, v, scale=attention.scaling)</code></td><td>4 B T<sup>2</sup> D</td><td>4 B T D s and more</td></tr>
+        <tr><td>5</td><td>o_proj</td><td>reshape and <code>attention.o_proj</code></td><td>2 B T D<sup>2</sup></td><td>2 B T D s + D<sup>2</sup> s</td></tr>
+        <tr><td>6</td><td>layer_scale1 + residual</td><td><code>layer.layer_scale1(h) + x</code></td><td>&ndash;</td><td>3 B T D s</td></tr>
+        <tr><td>7</td><td>norm2</td><td><code>layer.norm2(x)</code></td><td>&ndash;</td><td>2 B T D s</td></tr>
+        <tr><td>8</td><td>feed-forward in</td><td>MLP: <code>up_proj</code>. SwiGLU: <code>gate_proj</code> and <code>up_proj</code></td><td>2 B T D F (MLP), 2 × 2 B T D F (SwiGLU)</td><td>B T (D + F) s, (D + 2F) for SwiGLU</td></tr>
+        <tr><td>9</td><td>activation</td><td>MLP: GELU. SwiGLU: <code>silu(gate) * up</code></td><td>&ndash;</td><td>2 B T F s, 3 B T F s for SwiGLU</td></tr>
+        <tr><td>10</td><td>feed-forward out</td><td><code>down_proj</code></td><td>2 B T F D</td><td>B T (F + D) s + F D s</td></tr>
+        <tr><td>11</td><td>layer_scale2 + residual</td><td><code>layer.layer_scale2(h) + x</code></td><td>&ndash;</td><td>3 B T D s</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 6.</b> The parts of one block. B batch size, T tokens, D embedding dimension, F feed-forward size, s bytes per value. FLOPs count one multiply-add as 2 and leave out the bias adds. "&ndash;" means a few FLOPs per value, which <code>part_flops</code> counts as 0. <code>flops.py</code> holds these formulas.</p>
+  <p>The sum of the times of parts 1 to 11 must be within 15 % of the whole block. A larger gap goes into <code>verify.html</code> with an explanation. B5 also checks that L × block time + the parts outside the blocks is within 15 % of one forward pass on the same input.</p>
+
+  <h3>3.12 The JSON line</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Group</th><th>Fields</th></tr></thead>
+      <tbody>
+        <tr><td>Configuration</td><td><code>run</code> (B1 to B4), <code>model_size</code>, <code>backend</code> ("torch-mps"), <code>dtype_mode</code>, <code>side</code>, <code>batch_size</code>, <code>compile</code>, <code>repeat</code></td></tr>
+        <tr><td>Status</td><td><code>status</code> ("done", "skipped", "deferred", "error"), <code>reason</code></td></tr>
+        <tr><td>Validity</td><td><code>valid</code>, <code>finite</code>, <code>parity</code> (frame, patch mean, patch 1st percentile, patch minimum), <code>validity_note</code></td></tr>
+        <tr><td>Time</td><td><code>load_time_s</code>, <code>first_call_s</code>, <code>warm_up_batches</code>, <code>timed_batches</code>, <code>timed_s</code></td></tr>
+        <tr><td>Results for each output</td><td><code>frame</code> and <code>patch</code>: <code>throughput_ips</code>, <code>median_s</code>, <code>p90_s</code>; <code>device</code>: the same for the device time; <code>output_dtype</code></td></tr>
+        <tr><td>Memory</td><td><code>need_bytes</code>, <code>available_bytes</code>, <code>footprint_base_bytes</code>, <code>load_peak_bytes</code>, <code>peak_bytes</code>, <code>run_peak_bytes</code>, <code>mps_driver_max_bytes</code></td></tr>
+        <tr><td>Machine and versions</td><td><code>machine</code> (Section 3.8), <code>versions</code>, <code>attn_implementation</code>, <code>time</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 7.</b> Fields of one line of <code>results/baseline-torch-mps.jsonl</code>. The file holds summaries only, about 1.5 KB per line, so it goes into git. The per-batch times go to <code>tests/fixtures/generated/bench/</code>, which git ignores.</p>
+
+  <h3>3.13 Run order and run rules</h3>
+  <ol>
+    <li>Wait until the user approves this plan. (Step 2 is closed: commits <code>11fc2dd</code>, <code>44d411e</code>, <code>7f5dd59</code>.)</li>
+    <li>Run B1 from the smallest to the largest model size, in the order of Section 3.6. One worker at a time.</li>
+    <li>Run B2, then B3. P2 needs at least 10.2 GB available.</li>
+    <li>Run B5, one subprocess for each model size and dtype mode.</li>
+    <li>Ask the user for B4. Run it only after the user frees memory.</li>
+  </ol>
+  <p>Each worker runs alone. The driver waits for a worker to end before it checks the memory for the next one. The driver sets the MPS watermarks in the environment of each worker. ViT-7B/16 never loads fp32 weights.</p>
+</section>
+
+<section id="flow">
+  <h2>4 Data flow</h2>
+  <figure>
+    <div class="fig"><svg viewBox="0 0 960 380" role="img" aria-label="Data flow of Step 3" font-family="-apple-system, Helvetica Neue, Arial, sans-serif">
+      <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#4a5655"/></marker></defs>
+      <rect width="960" height="380" fill="#ffffff"/>
+      <g font-size="12.5" fill="#111414">
+        <rect x="20" y="30" width="200" height="74" rx="6" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="120" y="56" text-anchor="middle" font-weight="600">scripts/benchmark.py</text>
+        <text x="120" y="76" text-anchor="middle">machine state, memory need,</text>
+        <text x="120" y="92" text-anchor="middle">skip and deferred lines</text>
+
+        <rect x="270" y="30" width="240" height="74" rx="6" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="390" y="56" text-anchor="middle" font-weight="600">torch_bench.run_worker</text>
+        <text x="390" y="76" text-anchor="middle">1 subprocess: load, validity check,</text>
+        <text x="390" y="92" text-anchor="middle">warm-up, timed batches, footprint</text>
+
+        <rect x="560" y="30" width="180" height="74" rx="6" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="650" y="56" text-anchor="middle" font-weight="600">results/</text>
+        <text x="650" y="76" text-anchor="middle">baseline-torch-mps.jsonl</text>
+        <text x="650" y="92" text-anchor="middle">1 line per configuration</text>
+
+        <rect x="790" y="30" width="150" height="74" rx="6" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="865" y="56" text-anchor="middle" font-weight="600">baseline_table.py</text>
+        <text x="865" y="76" text-anchor="middle">baseline-torch-mps.md</text>
+        <text x="865" y="92" text-anchor="middle">baseline rows (D2)</text>
+
+        <rect x="20" y="150" width="200" height="70" rx="6" fill="#f5f8f7" stroke="#4a5655"/>
+        <text x="120" y="176" text-anchor="middle" font-weight="600">Step 2 files</text>
+        <text x="120" y="196" text-anchor="middle">inputs.safetensors</text>
+        <text x="120" y="212" text-anchor="middle">reference-{slug}.safetensors</text>
+
+        <text x="430" y="140" font-weight="600">One timed batch (Table 4)</text>
+        <rect x="430" y="160" width="60" height="34" fill="#a8d5d8" stroke="#4a5655"/>
+        <text x="460" y="181" text-anchor="middle" font-size="11.5">to GPU</text>
+        <rect x="490" y="160" width="170" height="34" fill="#3f9ea4" stroke="#4a5655"/>
+        <text x="575" y="181" text-anchor="middle" font-size="11.5" fill="#ffffff">forward pass + synchronize</text>
+        <rect x="660" y="160" width="40" height="34" fill="#f5f8f7" stroke="#4a5655"/>
+        <text x="680" y="181" text-anchor="middle" font-size="11.5">frame</text>
+        <rect x="700" y="160" width="60" height="34" fill="#f5f8f7" stroke="#4a5655"/>
+        <text x="730" y="181" text-anchor="middle" font-size="11.5">patch</text>
+        <text x="430" y="212" text-anchor="middle" font-size="11.5">t0</text>
+        <text x="660" y="212" text-anchor="middle" font-size="11.5">t1</text>
+        <text x="700" y="212" text-anchor="middle" font-size="11.5">t2</text>
+        <text x="760" y="212" text-anchor="middle" font-size="11.5">t3</text>
+        <text x="430" y="234" font-size="11.5" fill="#4a5655">per-batch times → tests/fixtures/generated/bench/ (git ignores it)</text>
+
+        <rect x="20" y="280" width="200" height="74" rx="6" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="120" y="306" text-anchor="middle" font-weight="600">scripts/profile_block.py</text>
+        <text x="120" y="326" text-anchor="middle">ViT-S/16, ViT-H+/16</text>
+        <text x="120" y="342" text-anchor="middle">fp32, fp16-cast</text>
+
+        <rect x="270" y="280" width="240" height="74" rx="6" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="390" y="306" text-anchor="middle" font-weight="600">block_profile + flops</text>
+        <text x="390" y="326" text-anchor="middle">11 parts of block 1, each alone</text>
+        <text x="390" y="342" text-anchor="middle">time share and FLOP share</text>
+
+        <rect x="560" y="280" width="180" height="74" rx="6" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="650" y="306" text-anchor="middle" font-weight="600">results/</text>
+        <text x="650" y="326" text-anchor="middle">block-profile-</text>
+        <text x="650" y="342" text-anchor="middle">torch-mps.md</text>
+
+        <rect x="790" y="280" width="150" height="74" rx="6" fill="#f5f8f7" stroke="#4a5655"/>
+        <text x="865" y="306" text-anchor="middle" font-weight="600">Explainer</text>
+        <text x="865" y="326" text-anchor="middle">03-where-the-</text>
+        <text x="865" y="342" text-anchor="middle">compute-goes</text>
+      </g>
+      <g stroke="#4a5655" stroke-width="1.5" fill="none">
+        <path d="M220,67 H266" marker-end="url(#arrow)"/>
+        <path d="M510,67 H556" marker-end="url(#arrow)"/>
+        <path d="M740,67 H786" marker-end="url(#arrow)"/>
+        <path d="M220,185 H380 V108" marker-end="url(#arrow)"/>
+        <path d="M220,317 H266" marker-end="url(#arrow)"/>
+        <path d="M510,317 H556" marker-end="url(#arrow)"/>
+        <path d="M740,317 H786" marker-end="url(#arrow)"/>
+        <path d="M865,104 V276" marker-end="url(#arrow)"/>
+      </g>
+    </svg></div>
+    <figcaption><b>Figure 1.</b> Data flow of Step 3. The driver checks the machine state and the memory, then runs one worker subprocess for each configuration. Each worker reads the stored pixels and the reference file of Step 2, checks the validity of its first output and times the batches (middle). The results table picks the baseline rows. A second script times the parts of block 1. The explainer of the Learn stage uses both tables. Teal boxes are new code or new files of the build.</figcaption>
+  </figure>
+</section>
+
+<section id="code">
+  <h2>5 Key code</h2>
+  <p>These snippets show the shape of the code. The build can change the details.</p>
+  <pre><code># src/dinov3_apple/bench.py
+@dataclass(frozen=True)
+class TimeBudget:
+    """When a phase of batches ends (Table 5)."""
+
+    min_batches: int
+    min_seconds: float
+    max_seconds: float | None = None
+    floor_batches: int = 0
+
+
+WARM_UP = TimeBudget(min_batches=3, min_seconds=2.0)
+TIMED = TimeBudget(min_batches=30, min_seconds=10.0, max_seconds=60.0, floor_batches=10)
+
+
+def keep_going(budget: TimeBudget, batches: int, elapsed_s: float) -> bool:
+    """Return True while the phase needs another batch."""
+    if budget.max_seconds is not None and elapsed_s &gt;= budget.max_seconds:
+        if batches &gt;= budget.floor_batches:
+            return False
+    return batches &lt; budget.min_batches or elapsed_s &lt; budget.min_seconds</code></pre>
+  <pre><code># src/dinov3_apple/torch_bench.py
+@torch.inference_mode()
+def time_batch(model: DINOv3ViTModel, batch: np.ndarray, mode: DtypeMode) -&gt; tuple[float, float, float]:
+    """Return the device time, the frame time and the patch time of one batch (Table 4)."""
+    t0 = time.perf_counter()
+    pixels = torch.from_numpy(batch).to("mps", mode.weights)
+    with autocast_or_null("mps", mode.autocast):
+        tokens = model(pixel_values=pixels).last_hidden_state
+    torch.mps.synchronize()
+    t1 = time.perf_counter()
+    tokens[:, 0].cpu().numpy()
+    t2 = time.perf_counter()
+    tokens[:, NUM_PREFIX_TOKENS:].cpu().numpy()
+    t3 = time.perf_counter()
+    return t1 - t0, t2 - t0, (t1 - t0) + (t3 - t2)</code></pre>
+  <pre><code># src/dinov3_apple/footprint.py
+class _RusageInfoV4(ctypes.Structure):
+    _fields_ = [("ri_uuid", ctypes.c_uint8 * 16)] + [(name, ctypes.c_uint64) for name in _V4_FIELDS]
+
+
+def read_footprint(pid: int | None = None) -&gt; Footprint:
+    """Return the current physical footprint and its lifetime maximum, in bytes.
+
+    The footprint includes the GPU memory of torch-mps and mlx on unified memory.
+
+    Raises:
+        OSError: If proc_pid_rusage fails.
+    """
+    info = _RusageInfoV4()
+    if _libc.proc_pid_rusage(pid or os.getpid(), RUSAGE_INFO_V4, ctypes.byref(info)) != 0:
+        raise OSError(ctypes.get_errno(), "proc_pid_rusage failed")
+    return Footprint(info.ri_phys_footprint, info.ri_lifetime_max_phys_footprint)</code></pre>
+  <pre><code># src/dinov3_apple/bench.py
+DTYPE_OF_MODE = {"fp32": "fp32", "fp16-cast": "fp16", "fp16-autocast": "fp16",
+                 "bf16-cast": "bf16", "bf16-autocast": "bf16"}
+
+
+def baseline_rows(lines: list[dict], output: str) -&gt; dict[tuple, dict | None]:
+    """Pick the fastest valid non-compiled line for each configuration and dtype (Section 3.7)."""
+    best: dict[tuple, dict | None] = {}
+    for line in lines:
+        key = (line["model_size"], line["side"], line["batch_size"], DTYPE_OF_MODE[line["dtype_mode"]])
+        best.setdefault(key, None)
+        if line["status"] != "done" or not line["valid"] or line["compile"]:
+            continue
+        if best[key] is None or line[output]["throughput_ips"] &gt; best[key][output]["throughput_ips"]:
+            best[key] = line
+    return best</code></pre>
+</section>
+
+<section id="tests">
+  <h2>6 Tests</h2>
+  <p>Each test is written first and must fail first (red). Tests that need weights, stored files or <code>torch-mps</code> skip with a reason when these are missing. Tests that load a model use ViT-S/16 only, on the default run.</p>
+  <ol>
+    <li><code>test_keep_going_small_batches_reach_30_and_10_s</code>, <code>test_keep_going_stops_at_60_s_after_10_batches</code>, <code>test_keep_going_slow_batches_run_10</code>, <code>test_warm_up_needs_3_batches_and_2_s</code>: Table 5 with a fake clock (3 ms, 2.5 s and 40 s per batch give 3,334, 24 and 10 timed batches).</li>
+    <li><code>test_summarize_throughput_median_p90</code>: known batch times give the throughput of Section 3.3 and the median and p90 of NumPy.</li>
+    <li><code>test_bench_configurations_counts</code>: B1 has 225 configurations; ViT-7B/16 has 18, all in cast mode; <code>--priority</code> gives P1 and P2 in five modes.</li>
+    <li><code>test_required_bench_bytes_grows_with_batch_and_side</code> and <code>test_required_bench_bytes_examples</code>: at least <code>required_load_bytes</code>; ViT-H+/16, 512 px, batch size 32, fp32 between 15 and 19 GB.</li>
+    <li><code>test_make_batch_cycles_test_images</code>: batch size 8 gives images 0, 1, 2, 0, 1, 2, 0, 1 with shape (8, 3, side, side), fp32.</li>
+    <li><code>test_check_validity_flags_nan</code>, <code>test_check_validity_passes_reference</code>, <code>test_check_validity_without_reference_is_finite_only</code>.</li>
+    <li><code>test_baseline_rows_pick_fastest_valid</code>, <code>test_baseline_rows_skip_invalid_and_compile</code>, <code>test_baseline_rows_empty_with_reason</code>: synthetic lines.</li>
+    <li><code>test_machine_state_parses_pmset</code> (stored pmset texts for AC power, battery power and a <code>lowpowermode 1</code> line), <code>test_check_machine_state_refuses_battery</code>, <code>test_check_machine_state_refuses_low_power_mode</code>.</li>
+    <li><code>test_read_footprint_counts_mps_tensor</code>: a 256 MB tensor on <code>torch-mps</code> raises the footprint by at least 230 MB; the lifetime maximum is at least the current value.</li>
+    <li><code>test_part_flops_match_explore_table_2</code>: <code>image_flops</code> gives the GFLOP values and the attention shares of Table 2 of <code>explore.html</code> within 0.5 %.</li>
+    <li><code>test_run_parts_equals_block_output</code>: ViT-S/16 and ViT-S+/16 on <code>torch-cpu</code> in fp32, 224 px: the parts in order give the output of block 1 with a largest difference of 1e-5 or less. It covers the MLP and SwiGLU.</li>
+    <li><code>test_worker_writes_all_fields</code>: ViT-S/16, 224 px, batch size 1, fp32, with a short budget: the result has every field of Table 7, <code>valid</code> is true.</li>
+    <li><code>test_baseline_table_from_lines</code>: synthetic lines give a Markdown table with the dtype mode of each baseline row and a skip section.</li>
+  </ol>
+</section>
+
+<section id="benchmarks">
+  <h2>7 Benchmarks</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Run</th><th>Command</th><th>Configurations</th><th>Estimated time</th><th>Output</th></tr></thead>
+      <tbody>
+        <tr><td>B1</td><td><code>scripts/benchmark.py</code></td><td class="num">225 + 18 deferred</td><td class="num">1.6 h</td><td><code>results/baseline-torch-mps.jsonl</code></td></tr>
+        <tr><td>B2</td><td><code>scripts/benchmark.py --priority --repeats 2</code></td><td class="num">20</td><td class="num">0.2 h</td><td>same file, <code>repeat</code> 1 and 2</td></tr>
+        <tr><td>B3</td><td><code>scripts/benchmark.py --priority --compile</code></td><td class="num">10</td><td class="num">0.2 h</td><td>same file, <code>compile</code> true</td></tr>
+        <tr><td>B4</td><td><code>scripts/benchmark.py --model-size ViT-7B/16</code></td><td class="num">18</td><td class="num">0.7 h</td><td>same file</td></tr>
+        <tr><td>B5</td><td><code>scripts/profile_block.py</code></td><td class="num">16</td><td class="num">0.2 h</td><td><code>results/block-profile-torch-mps.jsonl</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 8.</b> Benchmark runs. Backend <code>torch-mps</code>, torch 2.15.0, transformers 5.22.1, SDPA attention. The times are estimates from Table 4 of <code>explore.html</code>. The first B1 runs measure the real rates. If B1 needs more than 4 h, the build splits it by model size.</p>
+  <p><code>scripts/baseline_table.py</code> writes <code>results/baseline-torch-mps.md</code> with these sections: baseline rows for each output (D2); all dtype modes; repeats and spread; compile rows; skipped, deferred and error lines; machine state and versions. It writes <code>results/block-profile-torch-mps.md</code> with the time share and the FLOP share of each part, and the sum check.</p>
+</section>
+
+<section id="criteria">
+  <h2>8 Acceptance criteria</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>No.</th><th>Criterion</th><th>Target</th><th>Checked by</th></tr></thead>
+      <tbody>
+        <tr><td>AC1</td><td>B1 is complete: each configuration has a latest line with status "done", "skipped" or "deferred". A "skipped" line is allowed only after one <code>--only-skipped</code> try with the memory that the user freed</td><td class="num">225 + 18 configurations, 0 missing, 0 "error"; the table lists each skip with its need and the available memory</td><td><code>baseline_table.py</code> count; Verify</td></tr>
+        <tr><td>AC2</td><td>Run rules: a logged memory check before each worker; no two workers overlap in time; watermarks set; no fp32 weights for ViT-7B/16</td><td class="num">0 violations</td><td>driver log, JSON line times</td></tr>
+        <tr><td>AC3</td><td>Validity: every "done" line has <code>valid</code> and <code>parity</code> or a finite-only note. The invalid set equals Section 3.5</td><td class="num">invalid = ViT-L/16 fp16-cast (9), ViT-H+/16 fp16-cast at 224 px (3)</td><td>JSON lines; <code>test_check_validity_*</code></td></tr>
+        <tr><td>AC4</td><td>Time budget: each "done" line meets Table 5</td><td class="num">timed batches ≥ 30 and timed time ≥ 10 s, or timed time ≥ 60 s and batches ≥ 10; warm-up ≥ 3 and ≥ 2 s</td><td>JSON lines; <code>test_keep_going_*</code></td></tr>
+        <tr><td>AC5</td><td>Repeatability of P1 (frame) and P2 (patch) in each dtype mode with a valid output</td><td class="num">spread ≤ 5 %</td><td>B2, results table</td></tr>
+        <tr><td>AC6</td><td>Peak memory: every "done" line has <code>peak_bytes</code>, <code>load_peak_bytes</code>, <code>run_peak_bytes</code> or the note, and <code>mps_driver_max_bytes</code></td><td class="num">all fields present</td><td><code>test_worker_writes_all_fields</code>; JSON lines</td></tr>
+        <tr><td>AC7</td><td>The memory need is safe: <code>need_bytes</code> ≥ <code>peak_bytes</code> for every "done" line</td><td class="num">0 lines above the need</td><td>results table check</td></tr>
+        <tr><td>AC8</td><td>Baseline rows: each model size, input resolution, batch size, output and dtype has a row or an empty row with the reason; the row names its dtype mode</td><td class="num">5 × 3 × 3 × 2 × 3 = 270 rows (without ViT-7B/16)</td><td><code>test_baseline_rows_*</code>; results table</td></tr>
+        <tr><td>AC9</td><td>Compile rows: P1 and P2 in five dtype modes</td><td class="num">10 lines "done" or "error" with the error text; gain reported</td><td>B3</td></tr>
+        <tr><td>AC10</td><td>ViT-7B/16: 18 lines</td><td class="num">"done", "skipped" or "deferred", each with its reason</td><td>B4 or the deferred lines of B1</td></tr>
+        <tr><td>AC11</td><td>The block split is exact</td><td class="num">largest difference ≤ 1e-5, fp32, ViT-S/16 and ViT-S+/16</td><td><code>test_run_parts_equals_block_output</code></td></tr>
+        <tr><td>AC12</td><td>Block profile: 16 configurations of B5, each with the time share and the FLOP share of the 11 parts</td><td class="num">sum of parts within 15 % of the whole block; L × block + outer parts within 15 % of the forward pass, or <code>verify.html</code> explains</td><td>B5; <code>results/block-profile-torch-mps.md</code></td></tr>
+        <tr><td>AC13</td><td>FLOP counts</td><td class="num">within 0.5 % of Table 2 of <code>explore.html</code></td><td><code>test_part_flops_match_explore_table_2</code></td></tr>
+        <tr><td>AC14</td><td>Machine state: every line has it; the driver refuses battery power and Low Power Mode</td><td class="num">all lines; 3 tests green</td><td><code>test_machine_state_*</code>; JSON lines</td></tr>
+        <tr><td>AC15</td><td>Results files in git: <code>baseline-torch-mps.jsonl</code>, <code>baseline-torch-mps.md</code>, <code>block-profile-torch-mps.jsonl</code>, <code>block-profile-torch-mps.md</code></td><td class="num">4 files, total ≤ 1 MB</td><td><code>git status</code>, file size</td></tr>
+        <tr><td>AC16</td><td>Tests and lint</td><td class="num">pytest 0 failures (default and <code>DINOV3_SLOW=1</code>); ruff format and check clean</td><td><code>uv run pytest</code>, <code>uv run ruff</code></td></tr>
+        <tr><td>AC17</td><td>Explainer <code>docs/learn/03-where-the-compute-goes.html</code></td><td class="num">covers every function that Step 3 adds to <code>src/</code></td><td>Learn stage</td></tr>
+        <tr><td>AC18</td><td>Steering files and ADR</td><td class="num">GLOSSARY "peak memory" names the footprint; ADR 0004 holds the D2 rule; <code>roadmap.md</code> status</td><td>Close stage</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 9.</b> Acceptance criteria. Rule for a missed target: the build stops and asks the user. The build never changes a target alone, except the activation factor of Section 3.6, which it may only raise.</p>
+</section>
+
+<section id="open">
+  <h2>9 Open questions</h2>
+  <ul>
+    <li>Approval of this plan: approved by the user on 2026-11-06, with the 4 GB reserve kept.</li>
+    <li>Step 2 is closed (message of the Step 2 session, 2026-11-06). The heavy jobs can start after the approval of this plan.</li>
+    <li>Memory: with the stricter count of <code>7f5dd59</code>, ViT-L/16 and ViT-H+/16 need the user to close apps (Table 6a). The 4 GB reserve of <code>required_load_bytes</code> comes from Step 2, when the count was looser. Keep it, or lower it for the benchmark? The plan keeps it; the user decides.</li>
+    <li>B4 (ViT-7B/16): the user frees memory and starts it, or Step 3 closes with the deferred lines. The user can pair it with the deferred ViT-7B/16 reference file of Step 2. With a reference file, the validity check of ViT-7B/16 becomes a full parity check.</li>
+    <li>Compile rows: if a compile row is more than 10 % faster, the user decides if the compile rows join the baseline.</li>
+    <li>The attention term of Section 3.6 assumes a full score matrix. If SDPA on <code>torch-mps</code> needs less, some large configurations skip without need. The build reports these skips; the user decides on a second try.</li>
+  </ul>
+</section>
+</main>
+</body>
+</html>

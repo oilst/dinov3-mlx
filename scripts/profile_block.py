@@ -1,0 +1,145 @@
+"""Time each part of block 1 of ViT-S/16 and ViT-H+/16 on torch-mps (B5, Section 3.11 of
+specs/03-baseline/plan.html).
+
+The driver runs one subprocess for each model size and dtype mode, one after the other, after a
+memory check. Each subprocess profiles 224 and 512 px at batch sizes 1 and 8 and appends one JSON
+line for each configuration to results/block-profile-torch-mps.jsonl.
+
+Usage:
+    uv run python scripts/profile_block.py
+"""
+
+import os
+
+# The MPS watermarks must be set before torch starts (CLAUDE.md run rules).
+WATERMARKS = {"PYTORCH_MPS_HIGH_WATERMARK_RATIO": "0.8", "PYTORCH_MPS_LOW_WATERMARK_RATIO": "0.6"}
+os.environ.update(WATERMARKS)
+
+import argparse
+import json
+import logging
+import subprocess
+import sys
+from dataclasses import asdict
+from datetime import UTC, datetime
+from pathlib import Path
+
+from dinov3_apple.bench import BenchConfig, make_batch, required_bench_bytes
+from dinov3_apple.flops import MODEL_SHAPES, part_bytes, part_flops, tokens
+from dinov3_apple.machine import check_machine_state, read_machine_state
+from dinov3_apple.memory import GB, available_memory_bytes
+
+REPO_ROOT = Path(__file__).parents[1]
+RESULTS = REPO_ROOT / "results" / "block-profile-torch-mps.jsonl"
+LOG = REPO_ROOT / "tests" / "fixtures" / "generated" / "bench" / "profile_block.log"
+MODEL_SIZES = ["ViT-S/16", "ViT-H+/16"]
+DTYPE_MODES = ["fp32", "fp16-cast"]
+SIDES = [224, 512]
+BATCH_SIZES = [1, 8]
+
+logger = logging.getLogger("profile_block")
+
+
+def child(model_size: str, dtype_mode: str) -> None:
+    """Load one backbone and profile all input resolutions and batch sizes. Print JSON lines."""
+    import torch
+
+    from dinov3_apple.block_profile import profile_block
+    from dinov3_apple.reference import DTYPE_MODES as MODES
+    from dinov3_apple.reference import load_torch_backbone, read_inputs
+
+    model = load_torch_backbone(model_size, "mps", dtype_mode)
+    inputs = read_inputs()
+    shape = MODEL_SHAPES[model_size]
+    bytes_per_value = MODES[dtype_mode].weights.itemsize
+    for side in SIDES:
+        for batch_size in BATCH_SIZES:
+            batch = make_batch(inputs, side, batch_size)
+            pixels = torch.from_numpy(batch).to("mps", MODES[dtype_mode].weights)
+            result = profile_block(model, pixels, dtype_mode)
+            num_tokens = tokens(side)
+            line = {
+                "model_size": model_size,
+                "backend": "torch-mps",
+                "dtype_mode": dtype_mode,
+                "side": side,
+                "batch_size": batch_size,
+                **result,
+                "part_flops": part_flops(shape, batch_size, num_tokens),
+                "part_bytes": part_bytes(shape, batch_size, num_tokens, bytes_per_value),
+                "attn_implementation": model.config._attn_implementation,
+                "time": datetime.now(UTC).isoformat(timespec="seconds"),
+            }
+            print(json.dumps(line), flush=True)
+
+
+def main() -> None:
+    """Run one subprocess for each model size and dtype mode."""
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawTextHelpFormatter
+    )
+    parser.add_argument("--child", nargs=2, help=argparse.SUPPRESS)
+    args = parser.parse_args()
+    if args.child:
+        child(*args.child)
+        return
+
+    LOG.parent.mkdir(parents=True, exist_ok=True)
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(name)s %(message)s",
+        handlers=[logging.StreamHandler(sys.stderr), logging.FileHandler(LOG)],
+    )
+    for model_size in MODEL_SIZES:
+        for dtype_mode in DTYPE_MODES:
+            machine = read_machine_state()
+            check_machine_state(machine)
+            # The largest configuration of the subprocess sets the need.
+            need = required_bench_bytes(
+                BenchConfig("B5", model_size, dtype_mode, max(SIDES), max(BATCH_SIZES))
+            )
+            available = available_memory_bytes()
+            fits = available >= need
+            logger.info(
+                f"memory check: {model_size} {dtype_mode} B5: needs {need / GB:.1f} GB, "
+                f"{available / GB:.1f} GB available, {'ok' if fits else 'does not fit'}"
+            )
+            if not fits:
+                skip = {
+                    "model_size": model_size,
+                    "dtype_mode": dtype_mode,
+                    "status": "skipped",
+                    "reason": f"needs {need / GB:.1f} GB, {available / GB:.1f} GB available",
+                }
+                with RESULTS.open("a") as file:
+                    file.write(json.dumps(skip) + "\n")
+                continue
+            done = subprocess.run(
+                [sys.executable, __file__, "--child", model_size, dtype_mode],
+                check=False,
+                env=os.environ | WATERMARKS,
+                capture_output=True,
+                text=True,
+            )
+            if done.returncode != 0:
+                logger.error(f"{model_size} {dtype_mode}: {done.stderr[-2000:]}")
+                continue
+            with RESULTS.open("a") as file:
+                for text in done.stdout.splitlines():
+                    if text.startswith("{"):
+                        line = json.loads(text) | {
+                            "status": "done",
+                            "need_bytes": need,
+                            "available_bytes": available,
+                            "machine": asdict(machine),
+                        }
+                        file.write(json.dumps(line) + "\n")
+                        ratio = sum(line["parts_s"].values()) / line["block_s"]
+                        logger.info(
+                            f"{model_size} {dtype_mode} {line['side']}px b{line['batch_size']}: "
+                            f"block {1e3 * line['block_s']:.3f} ms, parts / block {ratio:.3f}"
+                        )
+
+
+if __name__ == "__main__":
+    main()

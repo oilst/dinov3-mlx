@@ -12,6 +12,10 @@ logger = logging.getLogger(__name__)
 
 GB = 1e9
 
+# The memory check of a model load: LOAD_RATIO x the weight bytes + LOAD_RESERVE_BYTES.
+LOAD_RATIO = 1.2
+LOAD_RESERVE_BYTES = 4 * 10**9
+
 
 class InsufficientMemoryError(MemoryError):
     """A model load needs more memory than is available."""
@@ -72,3 +76,16 @@ def check_free_memory(required_bytes: int, label: str) -> int:
     if not fits:
         raise InsufficientMemoryError(message)
     return available
+
+
+def load_bytes(weight_bytes: int, ratio: float = LOAD_RATIO) -> int:
+    """Return the memory that the memory check asks for before a model load.
+
+    Args:
+        weight_bytes: The bytes of the loaded weights.
+        ratio: The ratio of the load peak to the weight bytes.
+
+    Returns:
+        ratio x weight_bytes + LOAD_RESERVE_BYTES.
+    """
+    return round(ratio * weight_bytes) + LOAD_RESERVE_BYTES
