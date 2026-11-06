@@ -86,13 +86,14 @@ def _baseline_section(lines: list[dict], output: str) -> str:
                     key = [model_size, side, batch_size, dtype]
                     if row is None or row.line is None:
                         reason = row.reason if row else "no line"
-                        rows.append(key + ["–", "–", "–", "–", "–", f"empty: {reason}"])
+                        rows.append(key + ["–", "–", "–", "–", "–", "–", f"empty: {reason}"])
                         continue
                     line, result = row.line, row.line[output]
                     rows.append(
                         key
                         + [
                             line["dtype_mode"] + (" + compile" if line["compile"] else ""),
+                            str(row.runs),
                             f"{result['throughput_ips']:.1f}",
                             _ms(result["median_s"]),
                             _ms(result["p90_s"]),
@@ -106,6 +107,7 @@ def _baseline_section(lines: list[dict], output: str) -> str:
         "Batch size",
         "Dtype",
         "Dtype mode",
+        "Runs",
         "Throughput (img/s)",
         "Median (ms)",
         "p90 (ms)",
@@ -188,6 +190,23 @@ def spreads(lines: list[dict]) -> list[tuple[str, str, list[float], float | None
                 spread = (max(values) - min(values)) / statistics.median(values)
             result.append((name, mode, values, spread))
     return result
+
+
+def repeatability_note(lines: list[dict]) -> str:
+    """Return the warning about the spread of one run for the header (finding F1 of verify.html)."""
+    found = [(values, spread) for *_, values, spread in spreads(lines) if spread is not None]
+    if not found:
+        return "Repeatability: no priority configuration has more than one run yet."
+    counts = sorted(len(values) for values, _ in found)
+    low, high = min(spread for _, spread in found), max(spread for _, spread in found)
+    ratio = max(max(values) / min(values) for values, _ in found)
+    return (
+        f"Repeatability: over {counts[0]} to {counts[-1]} runs, the throughput of P1 and P2 "
+        f"spreads by {100 * low:.1f} to {100 * high:.1f} % (Section 4, limit 5 %). The fastest "
+        f"and the slowest run of one configuration differ by up to {ratio:.1f}x. So one run can "
+        "be far off on this Mac (finding F1 of `specs/03-baseline/verify.html`). A baseline row "
+        "with 1 run is one sample."
+    )
 
 
 def _repeats_section(lines: list[dict]) -> str:
@@ -396,6 +415,8 @@ def write_baseline_table(lines: list[dict]) -> str:
             "the batch times."
         ),
         "",
+        repeatability_note(lines),
+        "",
         "## Checks",
         "",
         *checks(lines),
@@ -406,9 +427,10 @@ def write_baseline_table(lines: list[dict]) -> str:
             f"## {number}. Baseline rows: {OUTPUT_NAMES[output]}",
             "",
             (
-                "The fastest valid dtype mode of each dtype, without repeats (D2, Section 3.7 of "
-                "the plan). Compile rows count since the decision of the user on 2026-11-06; only "
-                "P1 and P2 have them."
+                "The fastest valid dtype mode of each dtype (D2, Section 3.7 of the plan). Each "
+                "dtype mode counts with the median of its valid runs; Runs gives their number "
+                "(finding F1 of `specs/03-baseline/verify.html`). Compile rows count since the "
+                "decision of the user on 2026-11-06; only P1 and P2 have them."
             ),
             "",
             _baseline_section(lines, output),
@@ -447,10 +469,19 @@ def write_baseline_table(lines: list[dict]) -> str:
     return "\n".join(parts)
 
 
+def forward_time(line: dict) -> float:
+    """Return the forward time of the checks: the mean of the times before and after the parts.
+
+    Lines from before finding F4 of verify.html have only the time after the parts.
+    """
+    before = line.get("forward_before_s")
+    return line["forward_s"] if before is None else (before + line["forward_s"]) / 2
+
+
 def profile_checks(line: dict) -> tuple[float, float]:
     """Return the sum of the parts / the block, and (L x block + outer parts) / the forward pass."""
     part_sum = sum(line["parts_s"].values()) / line["block_s"]
-    whole = (line["blocks"] * line["block_s"] + sum(line["outer_s"].values())) / line["forward_s"]
+    whole = (line["blocks"] * line["block_s"] + sum(line["outer_s"].values())) / forward_time(line)
     return part_sum, whole
 
 
@@ -473,12 +504,27 @@ def write_profile_table(lines: list[dict]) -> str:
             "checks: 15 %."
         ),
         "",
+        (
+            "The forward pass runs before and after the parts; the check uses the mean of the two. "
+            "A large change between the two shows a change of the speed of the Mac during the "
+            "profile. At batch size 1 a block alone takes longer than a block inside the forward "
+            "pass, so Forward / L gives the time of one block inside the forward pass (finding F4 "
+            "of `specs/03-baseline/verify.html`). Lines from before F4 have only the time after "
+            "the parts."
+        ),
+        "",
         "## Summary",
         "",
     ]
     summary_rows = []
     for line in lines:
         part_sum, whole = profile_checks(line)
+        before = line.get("forward_before_s")
+        forward = (
+            _ms(line["forward_s"])
+            if before is None
+            else (f"{_ms(before)} → {_ms(line['forward_s'])}")
+        )
         summary_rows.append(
             [
                 line["model_size"],
@@ -486,9 +532,10 @@ def write_profile_table(lines: list[dict]) -> str:
                 line["side"],
                 line["batch_size"],
                 _ms(line["block_s"]),
+                _ms(forward_time(line) / line["blocks"]),
                 f"{part_sum:.3f}",
                 "pass" if abs(part_sum - 1) <= PART_SUM_LIMIT else "outside 15 %",
-                _ms(line["forward_s"]),
+                forward,
                 f"{whole:.3f}",
                 "pass" if abs(whole - 1) <= PART_SUM_LIMIT else "outside 15 %",
             ]
@@ -501,9 +548,10 @@ def write_profile_table(lines: list[dict]) -> str:
                 "Input resolution",
                 "Batch size",
                 "Block (ms)",
+                "Forward / L (ms)",
                 "Sum of parts / block",
                 "Check",
-                "Forward pass (ms)",
+                "Forward pass, before → after (ms)",
                 "(L × block + outer) / forward",
                 "Check",
             ],

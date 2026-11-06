@@ -14,6 +14,7 @@ Usage:
     uv run python scripts/benchmark.py --priority --repeats 2     # B2
     uv run python scripts/benchmark.py --priority --compile       # B3
     uv run python scripts/benchmark.py --model-size ViT-7B/16     # B4, cast modes only
+    uv run python scripts/benchmark.py --model-size ViT-S/16 --rounds 2   # 2 more runs of each
 """
 
 import os
@@ -37,6 +38,7 @@ from dinov3_apple.bench import (
     GIANT_MODEL_SIZE,
     MAIN_MODEL_SIZES,
     BenchConfig,
+    add_rounds,
     bench_configurations,
     latest_lines,
     line_key,
@@ -126,7 +128,7 @@ def select_configs(args: argparse.Namespace, lines: list[dict]) -> list[BenchCon
         configs = [c for c in configs if latest.get(c.key, {}).get("status") == "skipped"]
     if args.skip_done:
         configs = [c for c in configs if latest.get(c.key, {}).get("status") != "done"]
-    return configs
+    return add_rounds(configs, lines, args.rounds)
 
 
 def dry_run(configs: list[BenchConfig], factor: float) -> None:
@@ -210,6 +212,12 @@ def main() -> None:
     )
     parser.add_argument(
         "--skip-done", action="store_true", help="leave out configurations with a done line"
+    )
+    parser.add_argument(
+        "--rounds",
+        type=int,
+        default=0,
+        help="run the configurations this many more times, round after round (repeat numbers)",
     )
     parser.add_argument(
         "--activation-factor",

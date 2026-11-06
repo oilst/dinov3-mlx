@@ -5,7 +5,7 @@ No torch import, so the mlx harness of Step 6 can reuse this module without the 
 its footprint.
 """
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from functools import cache
 
@@ -183,6 +183,34 @@ def bench_configurations(
             for batch_size in BATCH_SIZES
         ]
     return configs
+
+
+def add_rounds(configs: list[BenchConfig], lines: list[dict], rounds: int) -> list[BenchConfig]:
+    """Run the configurations in rounds: the whole list once per round (finding F1 of verify.html).
+
+    One run of a configuration can be off by up to 2x on this Mac, so the baseline rows take the
+    median of the runs. Each round gives each configuration the next free repeat number. A
+    configuration without a line starts with repeat 0, the main run.
+
+    Args:
+        configs: The configurations of one round.
+        lines: The JSON lines that exist already.
+        rounds: The number of rounds. 0 returns the configurations unchanged.
+
+    Returns:
+        The configurations of all rounds, round after round.
+    """
+    if not rounds:
+        return configs
+    taken: dict[tuple, int] = {}
+    for line in lines:
+        identity = line_key(line)[:-1]
+        taken[identity] = max(taken.get(identity, -1), line["repeat"])
+    return [
+        replace(config, repeat=taken.get(config.key[:-1], -1) + 1 + index)
+        for index in range(rounds)
+        for config in configs
+    ]
 
 
 @cache
@@ -378,20 +406,25 @@ class BaselineRow:
     """The baseline row of one model size, input resolution, batch size, output and dtype.
 
     Attributes:
-        line: The chosen JSON line, or None for an empty row.
+        line: The chosen JSON line, or None for an empty row. With several runs of the chosen
+            configuration, the run with the median throughput (the lower one of the two middle
+            runs for an even count).
         reason: Why the row is empty, or "" when it has a line.
+        runs: The valid runs of the chosen configuration.
     """
 
     line: dict | None
     reason: str
+    runs: int = 0
 
 
 def baseline_rows(lines: list[dict], output: str) -> dict[tuple, BaselineRow]:
-    """Pick the fastest valid line for each configuration and dtype (D2, Section 3.7).
+    """Pick the fastest valid configuration for each model size, input resolution, batch size
+    and dtype (D2, Section 3.7).
 
-    Only the latest line of each configuration counts. Repeats do not count. Compile rows count:
-    the user decided on 2026-11-06 that they join the baseline, because they were more than 10 %
-    faster.
+    Each configuration counts with the median of its valid runs: the main run, the repeats and
+    the rounds (finding F1 of verify.html). Compile rows count: the user decided on 2026-11-06
+    that they join the baseline, because they were more than 10 % faster.
 
     Args:
         lines: JSON lines of results/baseline-torch-mps.jsonl.
@@ -402,8 +435,6 @@ def baseline_rows(lines: list[dict], output: str) -> dict[tuple, BaselineRow]:
     """
     candidates: dict[tuple, list[dict]] = {}
     for line in latest_lines(lines):
-        if line["repeat"]:
-            continue
         key = (
             line["model_size"],
             line["side"],
@@ -413,16 +444,27 @@ def baseline_rows(lines: list[dict], output: str) -> dict[tuple, BaselineRow]:
         candidates.setdefault(key, []).append(line)
     rows = {}
     for key, group in candidates.items():
-        usable = [line for line in group if line["status"] == "done" and line["valid"]]
-        if usable:
-            best = max(usable, key=lambda line: line[output]["throughput_ips"])
-            rows[key] = BaselineRow(best, "")
+        runs: dict[tuple, list[dict]] = {}
+        for line in group:
+            if line["status"] == "done" and line["valid"]:
+                runs.setdefault((line["dtype_mode"], line["compile"]), []).append(line)
+        if runs:
+            medians = [_median_run(found, output) for found in runs.values()]
+            best = max(medians, key=lambda run: run[0][output]["throughput_ips"])
+            rows[key] = BaselineRow(best[0], "", best[1])
             continue
         reasons = []
         for line in group:
+            if line["repeat"]:
+                continue
             if line["status"] != "done":
                 reasons.append(f"{line['dtype_mode']}: {line['status']}, {line['reason']}")
             else:
                 reasons.append(f"{line['dtype_mode']}: not valid, {line.get('validity_note', '')}")
         rows[key] = BaselineRow(None, "; ".join(reasons))
     return rows
+
+
+def _median_run(runs: list[dict], output: str) -> tuple[dict, int]:
+    ordered = sorted(runs, key=lambda line: line[output]["throughput_ips"])
+    return ordered[(len(ordered) - 1) // 2], len(ordered)

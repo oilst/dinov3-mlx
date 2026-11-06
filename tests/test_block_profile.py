@@ -36,3 +36,17 @@ def test_run_parts_equals_block_output(
         state = run_parts(parts, {"x": x, "cos": position[0], "sin": position[1]})
     difference = (state["out"] - expected).abs().max().item()
     assert difference <= 1e-5
+
+
+def test_profile_block_times_the_forward_pass_before_and_after(
+    backbone: Callable[[str, str, str], torch.nn.Module],
+    inputs: dict[str, np.ndarray],
+) -> None:
+    from dinov3_apple.block_profile import profile_block
+
+    model = backbone("ViT-S/16", "cpu", "fp32")
+    pixels = torch.from_numpy(inputs["iss-kibo-lab/224x224"])
+    result = profile_block(model, pixels, "fp32", min_calls=2, min_seconds=0.0, loops=1)
+    assert result["forward_before_s"] > 0
+    assert result["forward_s"] > 0
+    assert set(result["parts_s"]) == set(PART_NAMES)

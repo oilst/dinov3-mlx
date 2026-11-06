@@ -65,8 +65,8 @@ def test_baseline_table_from_lines() -> None:
         _line("fp16-cast", 0.0, model_size="ViT-7B/16", status="deferred", reason="D8"),
     ]
     text = write_baseline_table(lines)
-    assert "| ViT-S/16 | 224 | 8 | fp16 | fp16-cast | 300.0 |" in text
-    assert "| ViT-S/16 | 224 | 8 | bf16 | bf16-autocast | 250.0 |" in text
+    assert "| ViT-S/16 | 224 | 8 | fp16 | fp16-cast | 1 | 300.0 |" in text
+    assert "| ViT-S/16 | 224 | 8 | bf16 | bf16-autocast | 1 | 250.0 |" in text
     assert "## Skipped, deferred and error lines" in text
     assert "needs 6.7 GB, 6.4 GB available" in text
     assert "6.7" in text and "6.4" in text
@@ -110,3 +110,41 @@ def test_compile_gain_uses_median_of_eager_runs() -> None:
         compile_summary(lines)
         == "0 of 1 compile rows are more than 10 % faster than the median of their eager runs."
     )
+
+
+def test_baseline_table_names_runs_and_spread() -> None:
+    p1 = {"model_size": "ViT-S/16", "side": 224, "batch_size": 8}
+    lines = [
+        _line("fp32", 600.0, **p1),
+        _line("fp32", 300.0, **p1, repeat=1, run="B2"),
+        _line("fp32", 330.0, **p1, repeat=2, run="B2"),
+    ]
+    text = write_baseline_table(lines)
+    # The baseline row is the median run, with the number of runs.
+    assert "| ViT-S/16 | 224 | 8 | fp32 | fp32 | 3 | 330.0 |" in text
+    # The header warns about the spread of one run (finding F1 of verify.html).
+    assert "Repeatability:" in text
+    assert "90.9 %" in text  # (600 - 300) / 330
+    assert "2.0x" in text  # 600 / 300
+
+
+def test_profile_table_uses_forward_before_and_after() -> None:
+    parts = {name: 1e-4 for name in PART_NAMES}
+    line = {
+        "model_size": "ViT-S/16",
+        "dtype_mode": "fp32",
+        "side": 224,
+        "batch_size": 1,
+        "parts_s": parts,
+        "part_flops": {name: 1e6 for name in PART_NAMES},
+        "block_s": 1.05e-3,
+        "outer_s": {"patch_embedding": 1e-4, "rope_tables": 1e-4, "final_norm": 1e-5},
+        "forward_before_s": 1.2e-2,
+        "forward_s": 1.6e-2,
+        "blocks": 12,
+    }
+    text = write_profile_table([line])
+    assert "12.00 → 16.00" in text  # the forward pass before and after the parts
+    assert "1.17" in text  # forward / L in ms: mean 14 ms / 12
+    # (12 x 1.05 + 0.21) / 14 = 0.915
+    assert "0.915" in text

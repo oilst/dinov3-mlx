@@ -454,7 +454,7 @@ a { color: var(--accent); }
     <li>Close (AC18): GLOSSARY "Peak memory" must name the process footprint. ADR 0004 must hold the changed D2 rule (compile rows join the baseline; only P1 and P2 have them). <code>roadmap.md</code> status.</li>
     <li>Plan text: Sections 3.7, 3.8 and the snippet of Section 5 (F5).</li>
     <li>B4 (ViT-7B/16): deferred by the user. A run needs about 20 to 28 GB available.</li>
-    <li>The user decides on F1 (how Step 6 measures a speedup on a noisy Mac) and F3 (a second try of the skipped configuration).</li>
+    <li>F1, F2, F3, F4, F6 and F7 are fixed after Verify (Section 13). Still open from F1: the design of the Step 6 speedup on a noisy Mac, and the search for the cause.</li>
   </ul>
 </section>
 
@@ -483,6 +483,25 @@ uv run python scripts/benchmark.py --model-size ViT-H+/16 --only-skipped --resul
 uv run python &lt;scratch&gt;/b5_gap2.py fp32 224 1    # and fp16-cast 224 1
 # At the end: the bench folder of the build put back from &lt;scratch&gt;/backup/
 shasum results/*.jsonl   # equal to the build: 5aad264a... and 821e4ff0...</pre>
+</section>
+
+<section id="fixed">
+  <h2>13 Fixed after Verify</h2>
+  <p>On 2026-11-06 the user asked to follow the recommendations of Section 9. The build session fixed F2, F3, F6 and F7 (commit <code>4a0066d</code>). The verifier session then fixed F1 and F4 after the build session had ended, so the two sessions did not edit the same files at the same time. F5 and F10 belong to the Close stage. F9 is a topic for the Learn stage and Step 6.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Finding</th><th>Change</th><th>Test</th></tr></thead>
+      <tbody>
+        <tr><td>F1</td><td><code>benchmark.py --rounds N</code> runs the selected configurations N more times, round after round (<code>bench.add_rounds</code>). Each round gives each configuration the next free repeat number. <code>baseline_rows</code> now counts each configuration with its median valid run, not with the main run only. The baseline tables have a new column Runs. The header of <code>baseline-torch-mps.md</code> gives the measured spread and the largest ratio of the fastest to the slowest run (now 1.9&times;). Effect on the committed results: two baseline rows change. P1 fp32 is now the compile row (471.1 img/s), because the median of the three eager runs is 334.1 img/s. P2 bf16 is now bf16-autocast + compile (10.1 img/s) in place of bf16-cast + compile (9.0 img/s). All other rows have one run and do not change. Still open: the design of the Step 6 speedup (pairs of torch-mps and mlx runs in one session) belongs to the plan of Step 6. The search for the cause with <code>sudo powermetrics</code> needs the user.</td><td><code>test_add_rounds_rotates_and_numbers_repeats</code>, <code>test_baseline_rows_use_median_of_runs</code>, <code>test_baseline_rows_median_skips_invalid_runs</code>, <code>test_baseline_table_names_runs_and_spread</code>; <code>test_baseline_rows_skip_invalid_and_include_compile</code> changed (one fast repeat does not win). A dry run of <code>--rounds 2</code> for ViT-S/16 gives 90 configurations with the expected repeat numbers.</td></tr>
+        <tr><td>F2</td><td><code>compile_gains</code> compares each compile row with the median of the valid eager runs. The table sentence comes from the numbers: 10 of 10 compile rows are more than 10 % faster.</td><td><code>test_compile_gain_uses_median_of_eager_runs</code></td></tr>
+        <tr><td>F3</td><td>The skipped configuration (ViT-H+/16, fp16-autocast, 512 px, batch size 32) ran with 23.1 GB available: "done", valid, 5.7 img/s, peak memory 8.69 GB. B1 now has 225 "done" lines, 18 "deferred" lines and 0 "skipped" lines.</td><td>New line in <code>results/baseline-torch-mps.jsonl</code></td></tr>
+        <tr><td>F4</td><td><code>profile_block</code> also times the forward pass before the parts (<code>forward_before_s</code>). The profile table gives the forward pass before &rarr; after, uses the mean of the two for the check, and gives Forward / L next to the block time. The 16 committed B5 lines are from before F4 and have only the time after the parts; the next B5 run fills the new field.</td><td><code>test_profile_block_times_the_forward_pass_before_and_after</code> (ViT-S/16 on torch-cpu), <code>test_profile_table_uses_forward_before_and_after</code></td></tr>
+        <tr><td>F6</td><td><code>result_line</code> gives a line without a worker the time of the driver.</td><td><code>test_result_line_without_worker_has_a_time</code></td></tr>
+        <tr><td>F7</td><td><code>profile_block.py</code> has a hidden <code>--results</code> option and writes a line with status "error" and the end of stderr for a failed subprocess.</td><td><code>tests/test_profile_block_script.py</code> (2 tests)</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 11.</b> Changes after Verify. After all changes: <code>ruff format --check</code> and <code>ruff check</code> clean; default test run 247 passed, 4 skipped, 0 failed; <code>DINOV3_SLOW=1</code> 431 passed, 69 skipped, 20 xfailed, 0 failed. The two results tables were made again from the JSON lines.</p>
 </section>
 
 </main>

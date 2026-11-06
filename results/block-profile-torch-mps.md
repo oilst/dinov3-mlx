@@ -4,26 +4,28 @@ Written by `scripts/baseline_table.py` on 2026-11-06 from `results/block-profile
 
 Each part of block 1 runs alone in a loop with one synchronize at the end. The time is the median of five loops. The FLOP share comes from `dinov3_apple.flops`. Limits of the checks: 15 %.
 
+The forward pass runs before and after the parts; the check uses the mean of the two. A large change between the two shows a change of the speed of the Mac during the profile. At batch size 1 a block alone takes longer than a block inside the forward pass, so Forward / L gives the time of one block inside the forward pass (finding F4 of `specs/03-baseline/verify.html`). Lines from before F4 have only the time after the parts.
+
 ## Summary
 
-| Model size | Dtype mode | Input resolution | Batch size | Block (ms) | Sum of parts / block | Check | Forward pass (ms) | (L × block + outer) / forward | Check |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| ViT-S/16 | fp32 | 224 | 1 | 0.43 | 0.872 | pass | 3.87 | 1.358 | outside 15 % |
-| ViT-S/16 | fp32 | 224 | 8 | 1.39 | 0.987 | pass | 19.76 | 0.868 | pass |
-| ViT-S/16 | fp32 | 512 | 1 | 1.31 | 0.997 | pass | 17.30 | 0.926 | pass |
-| ViT-S/16 | fp32 | 512 | 8 | 10.43 | 0.967 | pass | 126.52 | 1.006 | pass |
-| ViT-S/16 | fp16-cast | 224 | 1 | 0.29 | 0.933 | pass | 2.22 | 1.643 | outside 15 % |
-| ViT-S/16 | fp16-cast | 224 | 8 | 0.71 | 1.055 | pass | 8.32 | 1.076 | pass |
-| ViT-S/16 | fp16-cast | 512 | 1 | 0.55 | 1.081 | pass | 6.07 | 1.132 | pass |
-| ViT-S/16 | fp16-cast | 512 | 8 | 4.03 | 0.948 | pass | 50.14 | 0.997 | pass |
-| ViT-H+/16 | fp32 | 224 | 1 | 2.15 | 1.066 | pass | 68.29 | 1.010 | pass |
-| ViT-H+/16 | fp32 | 224 | 8 | 16.08 | 0.982 | pass | 528.10 | 0.978 | pass |
-| ViT-H+/16 | fp32 | 512 | 1 | 11.50 | 0.950 | pass | 365.52 | 1.009 | pass |
-| ViT-H+/16 | fp32 | 512 | 8 | 95.97 | 1.001 | pass | 3190.96 | 0.965 | pass |
-| ViT-H+/16 | fp16-cast | 224 | 1 | 0.94 | 0.874 | pass | 28.19 | 1.073 | pass |
-| ViT-H+/16 | fp16-cast | 224 | 8 | 6.14 | 0.884 | pass | 196.68 | 1.006 | pass |
-| ViT-H+/16 | fp16-cast | 512 | 1 | 3.90 | 1.012 | pass | 123.06 | 1.020 | pass |
-| ViT-H+/16 | fp16-cast | 512 | 8 | 33.31 | 1.021 | pass | 1171.64 | 0.915 | pass |
+| Model size | Dtype mode | Input resolution | Batch size | Block (ms) | Forward / L (ms) | Sum of parts / block | Check | Forward pass, before → after (ms) | (L × block + outer) / forward | Check |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| ViT-S/16 | fp32 | 224 | 1 | 0.43 | 0.32 | 0.872 | pass | 3.87 | 1.358 | outside 15 % |
+| ViT-S/16 | fp32 | 224 | 8 | 1.39 | 1.65 | 0.987 | pass | 19.76 | 0.868 | pass |
+| ViT-S/16 | fp32 | 512 | 1 | 1.31 | 1.44 | 0.997 | pass | 17.30 | 0.926 | pass |
+| ViT-S/16 | fp32 | 512 | 8 | 10.43 | 10.54 | 0.967 | pass | 126.52 | 1.006 | pass |
+| ViT-S/16 | fp16-cast | 224 | 1 | 0.29 | 0.18 | 0.933 | pass | 2.22 | 1.643 | outside 15 % |
+| ViT-S/16 | fp16-cast | 224 | 8 | 0.71 | 0.69 | 1.055 | pass | 8.32 | 1.076 | pass |
+| ViT-S/16 | fp16-cast | 512 | 1 | 0.55 | 0.51 | 1.081 | pass | 6.07 | 1.132 | pass |
+| ViT-S/16 | fp16-cast | 512 | 8 | 4.03 | 4.18 | 0.948 | pass | 50.14 | 0.997 | pass |
+| ViT-H+/16 | fp32 | 224 | 1 | 2.15 | 2.13 | 1.066 | pass | 68.29 | 1.010 | pass |
+| ViT-H+/16 | fp32 | 224 | 8 | 16.08 | 16.50 | 0.982 | pass | 528.10 | 0.978 | pass |
+| ViT-H+/16 | fp32 | 512 | 1 | 11.50 | 11.42 | 0.950 | pass | 365.52 | 1.009 | pass |
+| ViT-H+/16 | fp32 | 512 | 8 | 95.97 | 99.72 | 1.001 | pass | 3190.96 | 0.965 | pass |
+| ViT-H+/16 | fp16-cast | 224 | 1 | 0.94 | 0.88 | 0.874 | pass | 28.19 | 1.073 | pass |
+| ViT-H+/16 | fp16-cast | 224 | 8 | 6.14 | 6.15 | 0.884 | pass | 196.68 | 1.006 | pass |
+| ViT-H+/16 | fp16-cast | 512 | 1 | 3.90 | 3.85 | 1.012 | pass | 123.06 | 1.020 | pass |
+| ViT-H+/16 | fp16-cast | 512 | 8 | 33.31 | 36.61 | 1.021 | pass | 1171.64 | 0.915 | pass |
 
 ## ViT-S/16, fp32, 224 px, batch size 1
 

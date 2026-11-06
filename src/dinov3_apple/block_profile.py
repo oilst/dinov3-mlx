@@ -166,7 +166,9 @@ def profile_block(
 
     Returns:
         parts_s (seconds per part, by name), block_s, outer_s (patch_embedding, rope_tables,
-        final_norm), forward_s and blocks (the number of blocks L).
+        final_norm), forward_before_s and forward_s (the forward pass before and after the parts,
+        so that a change of the speed of the Mac during the profile is visible; finding F4 of
+        specs/03-baseline/verify.html) and blocks (the number of blocks L).
     """
     device = pixels.device.type
     autocast = DTYPE_MODES[dtype_mode].autocast
@@ -174,6 +176,7 @@ def profile_block(
     layer = model.model.layer[0]
     parts = block_parts(layer)
     with context:
+        forward_before_s = time_part(lambda: model(pixel_values=pixels), device, **timing)
         x = model.embeddings(pixels)
         cos, sin = model.rope_embeddings(pixels)
         state = run_parts(parts, {"x": x, "cos": cos, "sin": sin})
@@ -195,6 +198,7 @@ def profile_block(
         "parts_s": parts_s,
         "block_s": block_s,
         "outer_s": outer_s,
+        "forward_before_s": forward_before_s,
         "forward_s": forward_s,
         "blocks": model.config.num_hidden_layers,
     }

@@ -8,6 +8,7 @@ from dinov3_apple.bench import (
     WARM_UP,
     BenchConfig,
     TimeBudget,
+    add_rounds,
     baseline_rows,
     bench_configurations,
     check_validity,
@@ -202,7 +203,8 @@ def test_baseline_rows_skip_invalid_and_include_compile() -> None:
         _line("fp16-cast", 500.0, valid=False, reason="non-finite output"),
         _line("fp16-autocast", 400.0, compile=True),
         _line("fp16-autocast", 200.0),
-        _line("fp16-cast", 900.0, repeat=1),
+        # One fast repeat does not win: the median of [200, 900] is 200 (finding F1).
+        _line("fp16-autocast", 900.0, repeat=1),
     ]
     row = baseline_rows(lines, "patch")[("ViT-S/16", 224, 8, "fp16")]
     assert row.line["dtype_mode"] == "fp16-autocast"
@@ -235,3 +237,38 @@ def test_result_line_without_worker_has_a_time() -> None:
     )
     assert line["time"] is not None
     assert line["start_time"] is None
+
+
+def test_baseline_rows_use_median_of_runs() -> None:
+    # Finding F1 of verify.html: one run can be off by up to 2x on this Mac.
+    lines = [
+        _line("fp32", 600.0),
+        _line("fp32", 320.0, repeat=1),
+        _line("fp32", 330.0, repeat=2),
+    ]
+    row = baseline_rows(lines, "frame")[("ViT-S/16", 224, 8, "fp32")]
+    assert row.line["frame"]["throughput_ips"] == 330.0
+    assert row.runs == 3
+
+
+def test_baseline_rows_median_skips_invalid_runs() -> None:
+    lines = [
+        _line("fp16-cast", 300.0),
+        _line("fp16-cast", 900.0, repeat=1, valid=False),
+        _line("fp16-cast", 0.0, repeat=2, status="skipped", reason="does not fit"),
+    ]
+    row = baseline_rows(lines, "frame")[("ViT-S/16", 224, 8, "fp16")]
+    assert row.line["frame"]["throughput_ips"] == 300.0
+    assert row.runs == 1
+
+
+def test_add_rounds_rotates_and_numbers_repeats() -> None:
+    configs = [
+        BenchConfig("B1", "ViT-S/16", "fp32", 224, 1),
+        BenchConfig("B1", "ViT-S/16", "fp32", 224, 8),
+    ]
+    # 224 px batch size 8 has a main run and repeat 1 already; batch size 1 has no line.
+    lines = [_line("fp32", 100.0), _line("fp32", 100.0, repeat=1)]
+    rounds = add_rounds(configs, lines, rounds=2)
+    assert [(c.batch_size, c.repeat) for c in rounds] == [(1, 0), (8, 2), (1, 1), (8, 3)]
+    assert add_rounds(configs, lines, rounds=0) == configs
