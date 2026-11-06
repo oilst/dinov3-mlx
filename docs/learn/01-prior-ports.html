@@ -202,12 +202,12 @@ angles = angles.flatten(1, 2).tile(2)                           # (H*W, head_dim
     <table>
       <thead><tr><th>Model size</th><th>Parameters</th><th>fp32 file</th><th>fp16 or bf16 (estimate)</th><th>On this Mac (2026-11-06)</th></tr></thead>
       <tbody>
-        <tr><td>ViT-S/16</td><td class="num">21.6 M</td><td class="num">0.09 GB</td><td class="num">0.04 GB</td><td>Converted from the Meta checkpoint</td></tr>
-        <tr><td>ViT-S+/16</td><td class="num">28.7 M</td><td class="num">0.11 GB</td><td class="num">0.06 GB</td><td>Waits for access</td></tr>
-        <tr><td>ViT-B/16</td><td class="num">85.7 M</td><td class="num">0.34 GB</td><td class="num">0.17 GB</td><td>Waits for access</td></tr>
-        <tr><td>ViT-L/16</td><td class="num">303.1 M</td><td class="num">1.21 GB</td><td class="num">0.61 GB</td><td>Waits for access</td></tr>
-        <tr><td>ViT-H+/16</td><td class="num">840.6 M</td><td class="num">3.36 GB</td><td class="num">1.68 GB</td><td>Converted from the Meta checkpoint</td></tr>
-        <tr><td>ViT-7B/16</td><td class="num">6,716.0 M</td><td class="num">26.86 GB (6 shards)</td><td class="num">13.43 GB</td><td>Waits for access</td></tr>
+        <tr><td>ViT-S/16</td><td class="num">21.6 M</td><td class="num">0.09 GB</td><td class="num">0.04 GB</td><td>Downloaded, and converted from the Meta checkpoint</td></tr>
+        <tr><td>ViT-S+/16</td><td class="num">28.7 M</td><td class="num">0.11 GB</td><td class="num">0.06 GB</td><td>Downloaded</td></tr>
+        <tr><td>ViT-B/16</td><td class="num">85.7 M</td><td class="num">0.34 GB</td><td class="num">0.17 GB</td><td>Downloaded</td></tr>
+        <tr><td>ViT-L/16</td><td class="num">303.1 M</td><td class="num">1.21 GB</td><td class="num">0.61 GB</td><td>Downloaded</td></tr>
+        <tr><td>ViT-H+/16</td><td class="num">840.6 M</td><td class="num">3.36 GB</td><td class="num">1.68 GB</td><td>Downloaded, and converted from the Meta checkpoint</td></tr>
+        <tr><td>ViT-7B/16</td><td class="num">6,716.0 M</td><td class="num">26.86 GB (6 shards)</td><td class="num">13.43 GB</td><td>Downloaded</td></tr>
       </tbody>
     </table>
   </div>
@@ -248,7 +248,7 @@ angles = angles.flatten(1, 2).tile(2)                           # (H*W, head_dim
     <li class="note"><b>bf16 RoPE tables by default.</b> Both Python ports build the RoPE tables in bf16 unless the caller changes a default. Meta's hub code and Hugging Face use fp32.</li>
     <li class="note"><b>SwiGLU width.</b> <code>intermediate_size</code> is 4 × the embedding dimension for ViT-S+/16 and ViT-H+/16, but Meta's ratio is 6 (Table 2).</li>
     <li class="note"><b>Shards break a simple converter.</b> MLXDINOv3 downloads only <code>model.safetensors</code>. ViT-7B/16 has six shards and an index, so the converter cannot read it.</li>
-    <li class="note"><b>The converted file has the same size as the Hub file.</b> Our converted ViT-S/16 and ViT-H+/16 files have exactly the byte count of the files on the Hub. A test compares each tensor when the access comes.</li>
+    <li class="note"><b>The converted file has the same size as the Hub file.</b> Our converted ViT-S/16 and ViT-H+/16 files have exactly the byte count of the files on the Hub. After the downloads, a test showed that each converted tensor is equal to the Hub tensor.</li>
   </ol>
 </section>
 

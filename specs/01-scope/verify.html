@@ -41,6 +41,7 @@ a { color: var(--accent); }
 <section id="goal">
   <h2>1 Goal</h2>
   <p>This file checks the ten acceptance criteria of <code>specs/01-scope/plan.html</code> (Section 8) against the repo on 2026-11-06. The verifier read the spec folder, the diff against commit <code>4859f06</code> and the new files. The verifier ran the tests, the lint and the format check again. The verifier did not download weights, did not run a conversion and did not load a model. Step 1 has no benchmark (plan.html Section 7).</p>
+  <p><b>Update after the downloads (Section 11):</b> all 10 criteria pass. AC6 and AC7 pass with measured values, and F9 is closed.</p>
   <p>Result: 8 criteria pass (AC1 to AC5, AC7 to AC9), AC6 is partial, AC10 passes for <code>GLOSSARY.md</code> and is pending for <code>roadmap.md</code>. No criterion fails. Section 9 lists 9 findings. None of them blocks the step.</p>
 </section>
 
@@ -146,6 +147,36 @@ sysctl -n hw.memsize
 git status --short
 git diff GLOSSARY.md tech-stack.md
 git log --oneline</code></pre>
+</section>
+<section id="recheck">
+  <h2>11 Re-check after the downloads</h2>
+  <p>Meta approved the access to the gated repos on 2026-11-06. The user ran <code>uv run python scripts/download_weights.py</code>. The main session then measured the values in Table 4 at 16:09 CET. It did not change the rows of the verifier in Section 8.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>No.</th><th>Criterion</th><th>Target</th><th>Measured</th><th>Result</th></tr></thead>
+      <tbody>
+        <tr><td>AC4</td><td><code>uv run pytest</code> passes</td><td>0 failures, 0 errors</td><td>17 passed, 4 skipped, 0 failed, 22.9 s. The 4 skips are <code>test_converted_weights_match_hub</code> for ViT-S+/16, ViT-B/16, ViT-L/16 and ViT-7B/16, which have no converted file.</td><td class="pass">pass</td></tr>
+        <tr><td>AC6</td><td>Weights are available for all model sizes</td><td>6 of 6 in the Hugging Face cache, 0 skips in test 6</td><td>6 of 6. <code>test_weights_are_in_cache</code> passes for all six sizes, also for the 6 shards of ViT-7B/16. <code>test_converted_weights_match_hub</code> passes for ViT-S/16 and ViT-H+/16: each converted tensor is equal to the Hub tensor.</td><td class="pass">pass</td></tr>
+        <tr><td>AC7</td><td>Free disk after the downloads</td><td class="num">&ge; 50 GB</td><td>90 GiB (96.6 GB) free (<code>df -h ~</code>).</td><td class="pass">pass</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 4.</b> Re-check of the criteria that the downloads changed.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Model size</th><th>Download</th><th>Time</th><th>Size in the cache</th></tr></thead>
+      <tbody>
+        <tr><td>ViT-S/16</td><td class="num">0.09 GB</td><td class="num">4 s</td><td class="num">96 MiB</td></tr>
+        <tr><td>ViT-S+/16</td><td class="num">0.11 GB</td><td class="num">4 s</td><td class="num">113 MiB</td></tr>
+        <tr><td>ViT-B/16</td><td class="num">0.34 GB</td><td class="num">9 s</td><td class="num">327 MiB</td></tr>
+        <tr><td>ViT-L/16</td><td class="num">1.21 GB</td><td class="num">36 s</td><td class="num">1.1 GiB</td></tr>
+        <tr><td>ViT-H+/16</td><td class="num">3.36 GB</td><td class="num">60 s</td><td class="num">3.1 GiB</td></tr>
+        <tr><td>ViT-7B/16</td><td class="num">26.86 GB</td><td class="num">471 s</td><td class="num">25 GiB</td></tr>
+        <tr><td><b>Total</b></td><td class="num"><b>31.98 GB</b></td><td class="num"><b>584 s</b></td><td class="num"><b>30 GiB</b></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 5.</b> Downloads (F9). The times come from the output of the download script. huggingface_hub 2.4.0 stores the files once in <code>~/.cache/huggingface/hub/blobs/</code>, and each model folder holds only links. So <code>du</code> without <code>-L</code> shows only 12 KB for each model folder.</p>
 </section>
 </main>
 </body>
