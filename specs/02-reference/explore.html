@@ -1,0 +1,519 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Step 2 Reference: Explore</title>
+<style>
+/* Spec page. White page, black text, no dark mode. */
+:root { --bg: #ffffff; --fg: #111414; --muted: #4a5655; --rule: #d6dedd; --panel: #f5f8f7; --accent: #057379; --pass: #1d7a3a; --fail: #b3261e; color-scheme: light; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif; }
+main { max-width: 64rem; margin: 0 auto; padding: 40px 20px 64px; display: grid; gap: 1.75rem; }
+main > *, section > * { min-width: 0; }
+h1 { font-size: 1.9rem; line-height: 1.15; margin: 0; }
+h2 { font-size: 1.3rem; margin: 0; }
+h3 { font-size: 1.05rem; margin: 0; }
+section { display: grid; gap: 0.8rem; }
+p, ul, ol { margin: 0; max-width: 46rem; }
+li + li { margin-top: 0.25rem; }
+code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.86em; }
+p code, li code { overflow-wrap: anywhere; }
+pre { margin: 0; background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 0.8rem 1rem; overflow-x: auto; }
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+th, td { text-align: left; vertical-align: top; padding: 0.45rem 0.7rem 0.45rem 0; border-bottom: 1px solid var(--rule); }
+th { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); border-bottom: 1.5px solid var(--fg); }
+td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+tr.group td { background: var(--panel); font-weight: 600; }
+.caption { font-size: 0.88rem; color: var(--muted); }
+.fail { color: var(--fail); font-weight: 600; }
+.rec { color: var(--accent); font-weight: 600; }
+.box { border: 1.5px solid var(--accent); border-radius: 6px; padding: 0.8rem 1rem; display: grid; gap: 0.5rem; }
+figure { margin: 0; display: grid; gap: 0.4rem; }
+.fig { border: 1px solid var(--rule); border-radius: 6px; padding: 0.5rem; overflow-x: auto; }
+.fig svg { display: block; width: 100%; height: auto; min-width: 640px; }
+figcaption { font-size: 0.88rem; color: var(--muted); }
+a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+<header>
+  <h1>Step 2 Reference: Explore</h1>
+  <p>Roadmap step 2. Status: decided. On 2026-11-06 the user chose the recommended option of each decision D1 to D7 (Table 1). Date: 2026-11-06.</p>
+</header>
+
+<section id="goal">
+  <h2>1 Goal</h2>
+  <p>Step 2 gives every later step a fixed reference output and the parity tests. The reference output comes from the Hugging Face backbone on <code>torch-cpu</code> in fp32. The parity tests compare <code>torch-mps</code> in fp32, fp16 and bf16 with it. Steps 4 and 5 run the same tests on <code>mlx</code>.</p>
+  <p>The task fixes these points. They are not options:</p>
+  <ul>
+    <li>Model sizes: all six. Meta approved the access on 2026-11-06, and the Hugging Face cache holds all six model sizes. The converted weights of ViT-S/16 and ViT-H+/16 stay as a fallback. Their tensors are equal to the Hub tensors (<code>specs/01-scope/verify.html</code>, Section 11).</li>
+    <li>The weight loader reads the Hugging Face cache first and the converted folder second. A missing model size skips with a reason.</li>
+    <li>The reference outputs go into <code>tests/fixtures/generated/</code>. Git ignores this folder.</li>
+    <li>One heavy job at a time, the MPS watermarks, and a memory check before each model load.</li>
+  </ul>
+  <p>This page has seven decisions. Table 1 gives the options and the recommendations. Section 3 gives the trade-offs and the measurements.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>No.</th><th>Decision</th><th>Options</th><th>Recommendation</th></tr></thead>
+      <tbody>
+        <tr><td>D1</td><td>Test images</td><td>A scikit-image samples. B public-domain photos. C synthetic images. D COCO images.</td><td class="rec">B: three public-domain photos at 16:9, 4:3 and 3:4, in the repo</td></tr>
+        <tr><td>D2</td><td>Preprocessing</td><td>A torch float resize. B Pillow float resize. C Hugging Face image processor.</td><td class="rec">A, and store the pixel tensor. All backends read the same pixels.</td></tr>
+        <tr><td>D3</td><td>Input resolutions</td><td>A the Table 9 minimum. B square plus own aspect ratio. C B plus 768 px.</td><td class="rec">B: 224, 448, 512 px square, plus the own aspect ratio at 224 px</td></tr>
+        <tr><td>D4</td><td>Storage format</td><td>A safetensors. B NumPy <code>.npz</code>. C torch <code>.pt</code>.</td><td class="rec">A: one input file, one file per model size, all tokens, hidden states for one configuration</td></tr>
+        <tr><td>D5</td><td>fp16 and bf16 on <code>torch-mps</code></td><td>A cast the weights. B autocast. C both.</td><td class="rec">C: both, because cast fp16 overflows in ViT-H+/16</td></tr>
+        <tr><td>D6</td><td>Patch threshold</td><td>A mean and minimum. B mean and 1st percentile. C one value per model size.</td><td class="rec">B: thresholds on the mean and the 1st percentile; the minimum is reported</td></tr>
+        <tr><td>D7</td><td>ViT-7B/16</td><td>A fp32 reference, half precision on <code>torch-mps</code>. B bf16 reference. C A plus fp32 on <code>torch-mps</code>.</td><td class="rec">A: fp32 reference on <code>torch-cpu</code>, alone and last, after a memory check</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 1.</b> Decisions of Step 2. The user picks one option for each decision.</p>
+</section>
+
+<section id="dinov3">
+  <h2>2 DINOv3 topic</h2>
+  <p>The topic is the tokens and the two outputs. The token sequence has 1 CLS token, 4 register tokens and N patch tokens. The final layer norm acts on all tokens. The frame embedding is the CLS token after the final layer norm. The patch embeddings are the patch tokens after the final layer norm. No output includes the register tokens. The explainer <code>docs/learn/02-tokens-and-outputs.html</code> covers these parts.</p>
+  <p>The probe of Section 3.1 found a surprise for the explainer. Inside the backbone, one register token holds very large values. In ViT-H+/16 at 224 px, the register token at sequence position 2 holds values up to 130,689 from block 23 on. The largest fp16 value is 65,504. So ViT-H+/16 with fp16 weights gives NaN on <code>torch-mps</code>. The final layer norm removes the large values: the outputs stay below 13. Figure 1 and Table 2 show the values.</p>
+  <figure>
+    <div class="fig"><svg viewBox="0 0 960 420" role="img" aria-label="Largest absolute token value after each block, log scale, for ViT-H+/16 at 224 and 512 px and ViT-S/16 at 224 px, with the fp16 maximum at 65,504" font-family="-apple-system, Helvetica Neue, Arial, sans-serif">
+<rect width="960" height="420" fill="#ffffff"/>
+<line x1="84" y1="22" x2="106" y2="22" stroke="#2a78d6" stroke-width="2"/>
+<circle cx="95" cy="22" r="4" fill="#2a78d6" stroke="#ffffff" stroke-width="2"/>
+<text x="114" y="26" font-size="13" fill="#111414">ViT-H+/16, 224 px</text>
+<line x1="274" y1="22" x2="296" y2="22" stroke="#eb6834" stroke-width="2"/>
+<circle cx="285" cy="22" r="4" fill="#eb6834" stroke="#ffffff" stroke-width="2"/>
+<text x="304" y="26" font-size="13" fill="#111414">ViT-H+/16, 512 px</text>
+<line x1="464" y1="22" x2="486" y2="22" stroke="#1baf7a" stroke-width="2"/>
+<circle cx="475" cy="22" r="4" fill="#1baf7a" stroke="#ffffff" stroke-width="2"/>
+<text x="494" y="26" font-size="13" fill="#111414">ViT-S/16, 224 px</text>
+<line x1="84" y1="364.0" x2="810" y2="364.0" stroke="#e3e9e8" stroke-width="1"/>
+<text x="76" y="368.0" font-size="12" text-anchor="end" fill="#4a5655">10</text>
+<line x1="84" y1="302.4" x2="810" y2="302.4" stroke="#e3e9e8" stroke-width="1"/>
+<text x="76" y="306.4" font-size="12" text-anchor="end" fill="#4a5655">100</text>
+<line x1="84" y1="240.8" x2="810" y2="240.8" stroke="#e3e9e8" stroke-width="1"/>
+<text x="76" y="244.8" font-size="12" text-anchor="end" fill="#4a5655">1,000</text>
+<line x1="84" y1="179.2" x2="810" y2="179.2" stroke="#e3e9e8" stroke-width="1"/>
+<text x="76" y="183.2" font-size="12" text-anchor="end" fill="#4a5655">10,000</text>
+<line x1="84" y1="117.6" x2="810" y2="117.6" stroke="#e3e9e8" stroke-width="1"/>
+<text x="76" y="121.6" font-size="12" text-anchor="end" fill="#4a5655">100,000</text>
+<line x1="84" y1="56.0" x2="810" y2="56.0" stroke="#e3e9e8" stroke-width="1"/>
+<text x="76" y="60.0" font-size="12" text-anchor="end" fill="#4a5655">1,000,000</text>
+<text x="84.0" y="382" font-size="12" text-anchor="middle" fill="#4a5655">0</text>
+<text x="174.8" y="382" font-size="12" text-anchor="middle" fill="#4a5655">4</text>
+<text x="265.5" y="382" font-size="12" text-anchor="middle" fill="#4a5655">8</text>
+<text x="356.2" y="382" font-size="12" text-anchor="middle" fill="#4a5655">12</text>
+<text x="447.0" y="382" font-size="12" text-anchor="middle" fill="#4a5655">16</text>
+<text x="537.8" y="382" font-size="12" text-anchor="middle" fill="#4a5655">20</text>
+<text x="628.5" y="382" font-size="12" text-anchor="middle" fill="#4a5655">24</text>
+<text x="719.2" y="382" font-size="12" text-anchor="middle" fill="#4a5655">28</text>
+<text x="810.0" y="382" font-size="12" text-anchor="middle" fill="#4a5655">32</text>
+<line x1="84" y1="364" x2="810" y2="364" stroke="#111414" stroke-width="1"/>
+<text x="447" y="410" font-size="12.5" text-anchor="middle" fill="#111414">Block output (0 = token sequence before block 1)</text>
+<text x="18" y="210" font-size="12.5" text-anchor="middle" fill="#111414" transform="rotate(-90 18 210)">Largest |value| (log scale)</text>
+<line x1="84" y1="128.9" x2="810" y2="128.9" stroke="#b3261e" stroke-width="1.5" stroke-dasharray="6 4"/>
+<text x="92" y="121.9" font-size="12.5" fill="#b3261e">fp16 maximum: 65,504</text>
+<polyline points="84.0,338.5 106.7,308.7 129.4,292.0 152.1,275.9 174.8,274.8 197.4,277.8 220.1,254.1 242.8,253.8 265.5,254.0 288.2,254.1 310.9,256.7 333.6,258.2 356.2,201.6 378.9,201.7 401.6,201.7 424.3,201.7 447.0,201.8 469.7,201.6 492.4,201.7 515.1,202.0 537.8,202.4 560.4,203.2 583.1,204.1 605.8,110.5 628.5,110.5 651.2,110.5 673.9,110.5 696.6,110.5 719.2,110.5 741.9,110.5 764.6,110.4 787.3,110.5 810.0,110.5" fill="none" stroke="#2a78d6" stroke-width="2" stroke-linejoin="round"/>
+<polyline points="84.0,337.8 106.7,311.1 129.4,291.2 152.1,275.8 174.8,275.0 197.4,276.5 220.1,254.6 242.8,254.1 265.5,254.4 288.2,254.2 310.9,256.7 333.6,258.2 356.2,203.5 378.9,203.6 401.6,203.5 424.3,203.5 447.0,203.5 469.7,203.2 492.4,203.2 515.1,203.4 537.8,203.7 560.4,204.2 583.1,205.2 605.8,145.4 628.5,145.0 651.2,145.0 673.9,144.7 696.6,142.9 719.2,140.4 741.9,139.3 764.6,138.0 787.3,136.1 810.0,138.4" fill="none" stroke="#eb6834" stroke-width="2" stroke-linejoin="round"/>
+<polyline points="84.0,356.0 106.7,322.2 129.4,326.6 152.1,277.2 174.8,277.8 197.4,272.7 220.1,272.0 242.8,241.3 265.5,241.4 288.2,240.2 310.9,235.9 333.6,226.5 356.2,230.7" fill="none" stroke="#1baf7a" stroke-width="2" stroke-linejoin="round"/>
+<circle cx="84.0" cy="338.5" r="4" fill="#2a78d6" stroke="none"><title>ViT-H+/16, 224 px, block output 0: 26</title></circle>
+<circle cx="106.7" cy="308.7" r="4" fill="#2a78d6" stroke="none"><title>ViT-H+/16, 224 px, block output 1: 79</title></circle>
+<circle cx="129.4" cy="292.0" r="4" fill="#2a78d6" stroke="none"><title>ViT-H+/16, 224 px, block output 2: 147</title></circle>
+<circle cx="152.1" cy="275.9" r="4" fill="#2a78d6" stroke="none"><title>ViT-H+/16, 224 px, block output 3: 269</title></circle>
+<circle cx="174.8" cy="274.8" r="4" fill="#2a78d6" stroke="none"><title>ViT-H+/16, 224 px, block output 4: 280</title></circle>
+<circle cx="197.4" cy="277.8" r="4" fill="#2a78d6" stroke="none"><title>ViT-H+/16, 224 px, block output 5: 251</title></circle>
+<circle cx="220.1" cy="254.1" r="4" fill="#2a78d6" stroke="none"><title>ViT-H+/16, 224 px, block output 6: 608</title></circle>
+<circle cx="242.8" cy="253.8" r="4" fill="#2a78d6" stroke="none"><title>ViT-H+/16, 224 px, block output 7: 616</title></circle>
+<circle cx="265.5" cy="254.0" r="4" fill="#2a78d6" stroke="none"><title>ViT-H+/16, 224 px, block output 8: 611</title></circle>
+<circle cx="288.2" cy="254.1" r="4" fill="#2a78d6" stroke="none"><title>ViT-H+/16, 224 px, block output 9: 609</title></circle>
+<circle cx="310.9" cy="256.7" r="4" fill="#2a78d6" stroke="none"><title>ViT-H+/16, 224 px, block output 10: 553</title></circle>
+<circle cx="333.6" cy="258.2" r="4" fill="#2a78d6" stroke="none"><title>ViT-H+/16, 224 px, block output 11: 522</title></circle>
+<circle cx="356.2" cy="201.6" r="4" fill="#2a78d6" stroke="none"><title>ViT-H+/16, 224 px, block output 12: 4,333</title></circle>
+<circle cx="378.9" cy="201.7" r="4" fill="#2a78d6" stroke="none"><title>ViT-H+/16, 224 px, block output 13: 4,306</title></circle>
+<circle cx="401.6" cy="201.7" r="4" fill="#2a78d6" stroke="none"><title>ViT-H+/16, 224 px, block output 14: 4,306</title></circle>
+<circle cx="424.3" cy="201.7" r="4" fill="#2a78d6" stroke="none"><title>ViT-H+/16, 224 px, block output 15: 4,314</title></circle>
+<circle cx="447.0" cy="201.8" r="4" fill="#2a78d6" stroke="none"><title>ViT-H+/16, 224 px, block output 16: 4,302</title></circle>
+<circle cx="469.7" cy="201.6" r="4" fill="#2a78d6" stroke="none"><title>ViT-H+/16, 224 px, block output 17: 4,329</title></circle>
+<circle cx="492.4" cy="201.7" r="4" fill="#2a78d6" stroke="none"><title>ViT-H+/16, 224 px, block output 18: 4,311</title></circle>
+<circle cx="515.1" cy="202.0" r="4" fill="#2a78d6" stroke="none"><title>ViT-H+/16, 224 px, block output 19: 4,262</title></circle>
+<circle cx="537.8" cy="202.4" r="4" fill="#2a78d6" stroke="none"><title>ViT-H+/16, 224 px, block output 20: 4,197</title></circle>
+<circle cx="560.4" cy="203.2" r="4" fill="#2a78d6" stroke="none"><title>ViT-H+/16, 224 px, block output 21: 4,084</title></circle>
+<circle cx="583.1" cy="204.1" r="4" fill="#2a78d6" stroke="none"><title>ViT-H+/16, 224 px, block output 22: 3,947</title></circle>
+<circle cx="605.8" cy="110.5" r="4" fill="#2a78d6" stroke="none"><title>ViT-H+/16, 224 px, block output 23: 130,360</title></circle>
+<circle cx="628.5" cy="110.5" r="4" fill="#2a78d6" stroke="none"><title>ViT-H+/16, 224 px, block output 24: 130,566</title></circle>
+<circle cx="651.2" cy="110.5" r="4" fill="#2a78d6" stroke="none"><title>ViT-H+/16, 224 px, block output 25: 130,552</title></circle>
+<circle cx="673.9" cy="110.5" r="4" fill="#2a78d6" stroke="none"><title>ViT-H+/16, 224 px, block output 26: 130,530</title></circle>
+<circle cx="696.6" cy="110.5" r="4" fill="#2a78d6" stroke="none"><title>ViT-H+/16, 224 px, block output 27: 130,566</title></circle>
+<circle cx="719.2" cy="110.5" r="4" fill="#2a78d6" stroke="none"><title>ViT-H+/16, 224 px, block output 28: 130,531</title></circle>
+<circle cx="741.9" cy="110.5" r="4" fill="#2a78d6" stroke="none"><title>ViT-H+/16, 224 px, block output 29: 130,590</title></circle>
+<circle cx="764.6" cy="110.4" r="4" fill="#2a78d6" stroke="none"><title>ViT-H+/16, 224 px, block output 30: 130,689</title></circle>
+<circle cx="787.3" cy="110.5" r="4" fill="#2a78d6" stroke="none"><title>ViT-H+/16, 224 px, block output 31: 130,505</title></circle>
+<circle cx="810.0" cy="110.5" r="4" fill="#2a78d6" stroke="none"><title>ViT-H+/16, 224 px, block output 32: 130,436</title></circle>
+<text x="820.0" y="114.5" font-size="12.5" fill="#111414">ViT-H+/16, 224 px</text>
+<circle cx="84.0" cy="337.8" r="4" fill="#eb6834" stroke="none"><title>ViT-H+/16, 512 px, block output 0: 27</title></circle>
+<circle cx="106.7" cy="311.1" r="4" fill="#eb6834" stroke="none"><title>ViT-H+/16, 512 px, block output 1: 72</title></circle>
+<circle cx="129.4" cy="291.2" r="4" fill="#eb6834" stroke="none"><title>ViT-H+/16, 512 px, block output 2: 152</title></circle>
+<circle cx="152.1" cy="275.8" r="4" fill="#eb6834" stroke="none"><title>ViT-H+/16, 512 px, block output 3: 270</title></circle>
+<circle cx="174.8" cy="275.0" r="4" fill="#eb6834" stroke="none"><title>ViT-H+/16, 512 px, block output 4: 279</title></circle>
+<circle cx="197.4" cy="276.5" r="4" fill="#eb6834" stroke="none"><title>ViT-H+/16, 512 px, block output 5: 264</title></circle>
+<circle cx="220.1" cy="254.6" r="4" fill="#eb6834" stroke="none"><title>ViT-H+/16, 512 px, block output 6: 596</title></circle>
+<circle cx="242.8" cy="254.1" r="4" fill="#eb6834" stroke="none"><title>ViT-H+/16, 512 px, block output 7: 608</title></circle>
+<circle cx="265.5" cy="254.4" r="4" fill="#eb6834" stroke="none"><title>ViT-H+/16, 512 px, block output 8: 602</title></circle>
+<circle cx="288.2" cy="254.2" r="4" fill="#eb6834" stroke="none"><title>ViT-H+/16, 512 px, block output 9: 605</title></circle>
+<circle cx="310.9" cy="256.7" r="4" fill="#eb6834" stroke="none"><title>ViT-H+/16, 512 px, block output 10: 552</title></circle>
+<circle cx="333.6" cy="258.2" r="4" fill="#eb6834" stroke="none"><title>ViT-H+/16, 512 px, block output 11: 522</title></circle>
+<circle cx="356.2" cy="203.5" r="4" fill="#eb6834" stroke="none"><title>ViT-H+/16, 512 px, block output 12: 4,038</title></circle>
+<circle cx="378.9" cy="203.6" r="4" fill="#eb6834" stroke="none"><title>ViT-H+/16, 512 px, block output 13: 4,015</title></circle>
+<circle cx="401.6" cy="203.5" r="4" fill="#eb6834" stroke="none"><title>ViT-H+/16, 512 px, block output 14: 4,033</title></circle>
+<circle cx="424.3" cy="203.5" r="4" fill="#eb6834" stroke="none"><title>ViT-H+/16, 512 px, block output 15: 4,036</title></circle>
+<circle cx="447.0" cy="203.5" r="4" fill="#eb6834" stroke="none"><title>ViT-H+/16, 512 px, block output 16: 4,036</title></circle>
+<circle cx="469.7" cy="203.2" r="4" fill="#eb6834" stroke="none"><title>ViT-H+/16, 512 px, block output 17: 4,085</title></circle>
+<circle cx="492.4" cy="203.2" r="4" fill="#eb6834" stroke="none"><title>ViT-H+/16, 512 px, block output 18: 4,081</title></circle>
+<circle cx="515.1" cy="203.4" r="4" fill="#eb6834" stroke="none"><title>ViT-H+/16, 512 px, block output 19: 4,053</title></circle>
+<circle cx="537.8" cy="203.7" r="4" fill="#eb6834" stroke="none"><title>ViT-H+/16, 512 px, block output 20: 4,004</title></circle>
+<circle cx="560.4" cy="204.2" r="4" fill="#eb6834" stroke="none"><title>ViT-H+/16, 512 px, block output 21: 3,924</title></circle>
+<circle cx="583.1" cy="205.2" r="4" fill="#eb6834" stroke="none"><title>ViT-H+/16, 512 px, block output 22: 3,786</title></circle>
+<circle cx="605.8" cy="145.4" r="4" fill="#eb6834" stroke="none"><title>ViT-H+/16, 512 px, block output 23: 35,361</title></circle>
+<circle cx="628.5" cy="145.0" r="4" fill="#eb6834" stroke="none"><title>ViT-H+/16, 512 px, block output 24: 35,879</title></circle>
+<circle cx="651.2" cy="145.0" r="4" fill="#eb6834" stroke="none"><title>ViT-H+/16, 512 px, block output 25: 35,853</title></circle>
+<circle cx="673.9" cy="144.7" r="4" fill="#eb6834" stroke="none"><title>ViT-H+/16, 512 px, block output 26: 36,350</title></circle>
+<circle cx="696.6" cy="142.9" r="4" fill="#eb6834" stroke="none"><title>ViT-H+/16, 512 px, block output 27: 38,908</title></circle>
+<circle cx="719.2" cy="140.4" r="4" fill="#eb6834" stroke="none"><title>ViT-H+/16, 512 px, block output 28: 42,686</title></circle>
+<circle cx="741.9" cy="139.3" r="4" fill="#eb6834" stroke="none"><title>ViT-H+/16, 512 px, block output 29: 44,503</title></circle>
+<circle cx="764.6" cy="138.0" r="4" fill="#eb6834" stroke="none"><title>ViT-H+/16, 512 px, block output 30: 46,580</title></circle>
+<circle cx="787.3" cy="136.1" r="4" fill="#eb6834" stroke="none"><title>ViT-H+/16, 512 px, block output 31: 50,048</title></circle>
+<circle cx="810.0" cy="138.4" r="4" fill="#eb6834" stroke="none"><title>ViT-H+/16, 512 px, block output 32: 46,014</title></circle>
+<text x="820.0" y="142.4" font-size="12.5" fill="#111414">ViT-H+/16, 512 px</text>
+<circle cx="84.0" cy="356.0" r="4" fill="#1baf7a" stroke="none"><title>ViT-S/16, 224 px, block output 0: 14</title></circle>
+<circle cx="106.7" cy="322.2" r="4" fill="#1baf7a" stroke="none"><title>ViT-S/16, 224 px, block output 1: 48</title></circle>
+<circle cx="129.4" cy="326.6" r="4" fill="#1baf7a" stroke="none"><title>ViT-S/16, 224 px, block output 2: 40</title></circle>
+<circle cx="152.1" cy="277.2" r="4" fill="#1baf7a" stroke="none"><title>ViT-S/16, 224 px, block output 3: 256</title></circle>
+<circle cx="174.8" cy="277.8" r="4" fill="#1baf7a" stroke="none"><title>ViT-S/16, 224 px, block output 4: 251</title></circle>
+<circle cx="197.4" cy="272.7" r="4" fill="#1baf7a" stroke="none"><title>ViT-S/16, 224 px, block output 5: 304</title></circle>
+<circle cx="220.1" cy="272.0" r="4" fill="#1baf7a" stroke="none"><title>ViT-S/16, 224 px, block output 6: 312</title></circle>
+<circle cx="242.8" cy="241.3" r="4" fill="#1baf7a" stroke="none"><title>ViT-S/16, 224 px, block output 7: 981</title></circle>
+<circle cx="265.5" cy="241.4" r="4" fill="#1baf7a" stroke="none"><title>ViT-S/16, 224 px, block output 8: 978</title></circle>
+<circle cx="288.2" cy="240.2" r="4" fill="#1baf7a" stroke="none"><title>ViT-S/16, 224 px, block output 9: 1,023</title></circle>
+<circle cx="310.9" cy="235.9" r="4" fill="#1baf7a" stroke="none"><title>ViT-S/16, 224 px, block output 10: 1,199</title></circle>
+<circle cx="333.6" cy="226.5" r="4" fill="#1baf7a" stroke="none"><title>ViT-S/16, 224 px, block output 11: 1,709</title></circle>
+<circle cx="356.2" cy="230.7" r="4" fill="#1baf7a" stroke="none"><title>ViT-S/16, 224 px, block output 12: 1,460</title></circle>
+<text x="366.2" y="234.7" font-size="12.5" fill="#111414">ViT-S/16, 224 px</text>
+</svg></div>
+    <figcaption><b>Figure 1.</b> The largest absolute value in the token sequence after each block, before the final layer norm. Log scale. From block 12 on, a register token holds the largest value in ViT-H+/16. At 224 px this value is above the fp16 maximum from block 23 on. At 512 px it reaches 76 % of the fp16 maximum. ViT-S/16 stays below 2,000. Hover over a point to see its value. Table 2 gives the same data in numbers.</figcaption>
+  </figure>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Model size</th><th>Input resolution</th><th>Blocks</th><th>Before block 1</th><th>Largest value</th><th>After block</th><th>Sequence position</th><th>Share of fp16 maximum</th><th>Largest output value</th></tr></thead>
+      <tbody>
+        <tr><td>ViT-S/16</td><td class="num">224 px</td><td class="num">12</td><td class="num">13.5</td><td class="num">1,709</td><td class="num">11</td><td class="num">1</td><td class="num">2.6 %</td><td class="num">9.1</td></tr>
+        <tr><td>ViT-S/16</td><td class="num">512 px</td><td class="num">12</td><td class="num">14.0</td><td class="num">1,753</td><td class="num">11</td><td class="num">1</td><td class="num">2.7 %</td><td class="num">&ndash;</td></tr>
+        <tr><td>ViT-H+/16</td><td class="num">224 px</td><td class="num">32</td><td class="num">25.9</td><td class="num fail">130,689</td><td class="num">30</td><td class="num">2</td><td class="num fail">199.5 %</td><td class="num">12.2</td></tr>
+        <tr><td>ViT-H+/16</td><td class="num">512 px</td><td class="num">32</td><td class="num">26.6</td><td class="num">50,048</td><td class="num">31</td><td class="num">2</td><td class="num">76.4 %</td><td class="num">9.7</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 2.</b> Largest absolute token value inside the backbone, on <code>torch-cpu</code> in fp32. Sequence positions 1 to 4 are the register tokens. "Largest output value" is the largest absolute value after the final layer norm. One image: COCO 000000039769.</p>
+</section>
+
+<section id="design">
+  <h2>3 Design</h2>
+
+  <h3>3.1 The probe</h3>
+  <p>We ran a probe on 2026-11-06 to get numbers for the decisions. The probe used the converted weights of ViT-S/16 and ViT-H+/16 and one image: COCO 000000039769 (640 × 480 px). This image is also the image of the conversion check of Step 1. The converted tensors are equal to the Hub tensors, so the results also apply to the Hub weights. The probe compared three preprocessing methods on <code>torch-cpu</code> in fp32. Then it compared <code>torch-mps</code> in five dtype modes with <code>torch-cpu</code> in fp32. Each model size ran in its own process, one after the other. The free memory was 15 GB (free and inactive pages) before each load. Table 3 gives the results.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Comparison</th><th>Measure</th><th>ViT-S/16, 224 px</th><th>ViT-H+/16, 224 px</th><th>ViT-H+/16, 512 px</th></tr></thead>
+      <tbody>
+        <tr class="group"><td colspan="5">Preprocessing on torch-cpu, fp32, against the torch float resize</td></tr>
+        <tr><td>Pillow float resize</td><td>largest pixel difference</td><td class="num">8.2e-6</td><td class="num">8.2e-6</td><td class="num">1.8e-7</td></tr>
+        <tr><td></td><td>frame</td><td class="num">1.000000</td><td class="num">1.000000</td><td class="num">1.000000</td></tr>
+        <tr><td></td><td>patch mean</td><td class="num">1.000000</td><td class="num">1.000000</td><td class="num">1.000000</td></tr>
+        <tr><td></td><td>patch minimum</td><td class="num">1.000000</td><td class="num">1.000000</td><td class="num">1.000000</td></tr>
+        <tr><td>Pillow 8-bit resize</td><td>largest pixel difference</td><td class="num">0.0037</td><td class="num">0.0037</td><td class="num">0.0039</td></tr>
+        <tr><td></td><td>frame</td><td class="num">0.999977</td><td class="num">0.999969</td><td class="num">0.999998</td></tr>
+        <tr><td></td><td>patch mean</td><td class="num">0.999973</td><td class="num fail">0.999038</td><td class="num">0.999997</td></tr>
+        <tr><td></td><td>patch minimum</td><td class="num">0.999904</td><td class="num fail">0.929001</td><td class="num fail">0.999716</td></tr>
+        <tr class="group"><td colspan="5">Batch of 8 against batch of 1, torch-cpu, fp32</td></tr>
+        <tr><td>Image 4 of 8</td><td>largest difference, frame</td><td class="num">0.0</td><td class="num">0.0</td><td class="num">0.0</td></tr>
+        <tr class="group"><td colspan="5">torch-mps against torch-cpu in fp32</td></tr>
+        <tr><td>fp32</td><td>frame</td><td class="num">1.000000</td><td class="num">1.000000</td><td class="num">1.000000</td></tr>
+        <tr><td></td><td>patch mean</td><td class="num">1.000000</td><td class="num">1.000000</td><td class="num">1.000000</td></tr>
+        <tr><td></td><td>patch minimum</td><td class="num">1.000000</td><td class="num">1.000000</td><td class="num">1.000000</td></tr>
+        <tr><td>fp16 cast</td><td>frame</td><td class="num">0.999997</td><td class="num fail">NaN</td><td class="num">0.999999</td></tr>
+        <tr><td></td><td>patch mean</td><td class="num">0.999999</td><td class="num fail">NaN</td><td class="num">1.000000</td></tr>
+        <tr><td></td><td>patch minimum</td><td class="num">0.999996</td><td class="num fail">NaN</td><td class="num">0.999996</td></tr>
+        <tr><td>fp16 autocast</td><td>frame</td><td class="num">0.999999</td><td class="num">1.000000</td><td class="num">1.000000</td></tr>
+        <tr><td></td><td>patch mean</td><td class="num">0.999999</td><td class="num">0.999993</td><td class="num">1.000000</td></tr>
+        <tr><td></td><td>patch minimum</td><td class="num">0.999998</td><td class="num">0.999098</td><td class="num">0.999999</td></tr>
+        <tr><td>bf16 cast</td><td>frame</td><td class="num">0.999833</td><td class="num">0.999936</td><td class="num">0.999924</td></tr>
+        <tr><td></td><td>patch mean</td><td class="num">0.999898</td><td class="num">0.999763</td><td class="num">0.999975</td></tr>
+        <tr><td></td><td>patch minimum</td><td class="num">0.999770</td><td class="num fail">0.983156</td><td class="num">0.999734</td></tr>
+        <tr><td>bf16 autocast</td><td>frame</td><td class="num">0.999932</td><td class="num">0.999976</td><td class="num">0.999984</td></tr>
+        <tr><td></td><td>patch mean</td><td class="num">0.999959</td><td class="num">0.999838</td><td class="num">0.999993</td></tr>
+        <tr><td></td><td>patch minimum</td><td class="num">0.999897</td><td class="num fail">0.988567</td><td class="num">0.999913</td></tr>
+        <tr><td></td><td>patch 1st percentile</td><td class="num">0.999910</td><td class="num fail">0.997850</td><td class="num">0.999980</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 3.</b> Probe results. Each value is a cosine similarity (parity), except the pixel rows. Red marks a value below the frame threshold of Table 9 of <code>docs/plan.html</code> for the dtype of the row (0.9999 for fp32, 0.999 for fp16 and bf16). "Cast" puts all weights and inputs in the dtype. "Autocast" keeps the weights in fp32 and runs <code>torch.autocast</code>. The cosine of two equal fp32 vectors can show 0.9999996 because of rounding, so 1.000000 means "equal within rounding".</p>
+  <p>Four results drive the decisions:</p>
+  <ol>
+    <li>A resize of 8-bit pixels moves each pixel by up to 0.0039. For ViT-H+/16 at 224 px, this drops the patch minimum to 0.929. The preprocessing must be the same for all backends (D2).</li>
+    <li>A Pillow resize of float pixels equals the torch float resize within 8.2e-6 per pixel. The outputs agree to 1.000000 (D2).</li>
+    <li>fp16 with cast weights overflows in ViT-H+/16 at 224 px, but not at 512 px. The input resolution changes the token values (D3, D5).</li>
+    <li>The patch minimum depends on one patch. For ViT-H+/16 in bf16 autocast it is 0.988567 at 224 px and 0.999913 at 512 px. The 1st percentile is 0.99785 and 0.99998 (D6).</li>
+  </ol>
+
+  <h3>3.2 D1: test images</h3>
+  <p>The images must be public domain, so that the public repo can hold them. They must have at least two aspect ratios.</p>
+  <p><b>Option A: scikit-image sample images.</b> For example <code>astronaut</code> (512 × 512 px, public domain, NASA), <code>coffee</code> (400 × 600 px, CC0) and <code>rocket</code> (427 × 640 px, public domain, SpaceX). The scikit-image documentation gives these licenses.</p>
+  <ul>
+    <li>For: the licenses are documented. The files are small.</li>
+    <li>Against: the images are small (640 px or less), so the 512 px input resolution needs an upscale. All three are square or landscape. No image is 16:9 or portrait. CC0 is a public-domain dedication, not public domain by law.</li>
+  </ul>
+  <p><b>Option B: public-domain photos from Wikimedia Commons.</b> We pick three photos that are works of a US federal agency, for example NASA. One photo is 16:9 landscape, the shape of a video frame, with people and equipment indoors. One is 4:3 landscape with fine texture outdoors. One is 3:4 portrait. We store each one at 1024 px on the long side as JPEG with quality 95, about 200 KB. A file <code>tests/fixtures/images/SOURCES.md</code> names the page, the author and the license of each photo.</p>
+  <ul>
+    <li>For: real image statistics. Enough pixels for every input resolution up to 768 px. The 16:9 photo has the shape of our video frames. The portrait photo and the 4:3 photo give the same patch grid with rows and columns swapped, so a swap of height and width fails a test.</li>
+    <li>Against: we must check the license page of each photo. About 600 KB in git.</li>
+  </ul>
+  <p><b>Option C: synthetic images from code.</b> Gradients, checkerboards and noise.</p>
+  <ul>
+    <li>For: no license, no file.</li>
+    <li>Against: far from the training data. Table 2 shows that the token values depend on the input. A parity pass on noise says little about real images.</li>
+  </ul>
+  <p><b>Option D: COCO images, downloaded at test time.</b></p>
+  <ul>
+    <li>For: the Hugging Face converter uses COCO 000000039769, so we can compare with its published values.</li>
+    <li>Against: COCO images have Flickr licenses. They are not public domain, so the repo cannot hold them. The tests need the network once.</li>
+  </ul>
+  <div class="box">
+    <p><b>Recommendation: Option B.</b> Three public-domain photos at 16:9, 4:3 and 3:4. The plan names the three files after a check of each license page. COCO 000000039769 stays only in the conversion check of Step 1, as now.</p>
+  </div>
+
+  <h3>3.3 D2: preprocessing</h3>
+  <p>The Hugging Face image processor <code>DINOv3ViTImageProcessor</code> (transformers 5.22.1) does three actions: it divides the 8-bit pixels by 255, it resizes the float pixels (bilinear, with antialiasing), and it normalizes with the ImageNet mean and standard deviation. It resizes to a fixed 224 × 224 px and ignores the aspect ratio. It needs torchvision. Our project does not install torchvision.</p>
+  <p><b>Option A: torch float resize.</b> Pillow decodes the image to 8-bit RGB. We divide by 255 to get float32 values. <code>torch.nn.functional.interpolate</code> resizes with <code>mode="bilinear"</code> and <code>antialias=True</code>. Then we normalize.</p>
+  <ul>
+    <li>For: the same math as the Hugging Face image processor. <code>scripts/convert_meta_checkpoint.py</code> already uses it.</li>
+    <li>Against: it needs torch. The MLX path of Step 6 needs its own resize.</li>
+  </ul>
+  <p><b>Option B: Pillow float resize.</b> We put each color channel into a float32 Pillow image (mode <code>F</code>) and resize it with <code>BILINEAR</code>. Pillow antialiases when it makes an image smaller.</p>
+  <ul>
+    <li>For: NumPy and Pillow only, no torch. Table 3: at most 8.2e-6 per pixel from Option A, parity 1.000000.</li>
+    <li>Against: three resizes per image, one for each channel. A later Pillow version can move away from torch.</li>
+  </ul>
+  <p><b>Option C: the Hugging Face image processor.</b></p>
+  <ul>
+    <li>For: exactly what Hugging Face users get.</li>
+    <li>Against: one more pinned package (torchvision). It always resizes to a fixed size, so the own aspect ratio of D3 needs a second call.</li>
+  </ul>
+  <p><b>Separate choice: store the pixel tensor.</b> The reference script stores the normalized fp32 pixel tensor of each image and input resolution. Every backend reads these stored pixels. Then the parity tests measure only the backbone, and no preprocessing difference can hide in them. A separate test compares our preprocessing function with the stored pixels.</p>
+  <div class="box">
+    <p><b>Recommendation: Option A, and store the pixel tensor.</b> Option B stays a candidate for the MLX path of Step 6. A test then compares B with A, with a limit of 1e-5 per pixel.</p>
+  </div>
+
+  <h3>3.4 D3: input resolutions</h3>
+  <p>Table 9 of <code>docs/plan.html</code> asks for 224, 448 and 512 px, and one non-square input, for example 224 × 320 px. Section 7 of <code>docs/plan.html</code> names two priority configurations: ViT-S/16 with frame embeddings, and ViT-H+/16 and ViT-S/16 with patch embeddings at 512 px. Table 3 shows that the input resolution changes the token values. The counts below are for three images and one model size.</p>
+  <p><b>Option A: the Table 9 minimum.</b> Every image at 224, 448 and 512 px square. The Hugging Face image processor also resizes to a square and ignores the aspect ratio. One image at 224 × 320 px. 10 configurations.</p>
+  <ul>
+    <li>For: the least compute.</li>
+    <li>Against: one non-square grid in one orientation only.</li>
+  </ul>
+  <p><b>Option B: square plus own aspect ratio.</b> Every image at 224, 448 and 512 px square. Every image also at its own aspect ratio: the short side is 224 px, and the long side is rounded to the nearest multiple of 16. For example 224 × 400 px for 16:9, 224 × 304 px for 4:3 and 304 × 224 px for 3:4. 12 configurations.</p>
+  <ul>
+    <li>For: non-square grids in both orientations. A swap of height and width in the RoPE tables or in the reshape of the patch embeddings fails a test.</li>
+    <li>Against: 2 more configurations than Option A.</li>
+  </ul>
+  <p><b>Option C: Option B plus 768 px square.</b> 15 configurations.</p>
+  <ul>
+    <li>For: covers the largest crop of the high-resolution adaptation.</li>
+    <li>Against: Table 11 of <code>docs/plan.html</code> has no 768 px configuration. ViT-7B/16 at 768 px in fp32 on <code>torch-cpu</code> is slow and needs about 27 GB for the weights alone.</li>
+  </ul>
+  <div class="box">
+    <p><b>Recommendation: Option B.</b> Step 6 can add 768 px when it studies the attention cost.</p>
+  </div>
+
+  <h3>3.5 D4: storage format</h3>
+  <p>For each configuration we store the input and the output:</p>
+  <ul>
+    <li>The normalized fp32 pixel tensor (D2).</li>
+    <li>All tokens after the final layer norm, in fp32: the CLS token, the 4 register tokens and the patch tokens. The frame embedding and the patch embeddings are slices of these tokens.</li>
+    <li>Metadata: the versions of transformers, torch and Pillow, the SHA-256 of each image and of each weight file, the weight source (Hugging Face cache or converted folder), the preprocessing settings and the date.</li>
+    <li>For one configuration per model size (first image, 224 px square): the token sequence after each block. Step 4 then finds the first block that differs.</li>
+  </ul>
+  <p>Size for D3 Option B: about 21 MB of pixels for all model sizes. Tokens: 11 MB for ViT-S/16, 36 MB for ViT-H+/16 and 114 MB for ViT-7B/16. Hidden states for one configuration: 34 MB for ViT-H+/16 and 135 MB for ViT-7B/16.</p>
+  <p><b>Option A: safetensors.</b> One file <code>inputs.safetensors</code> for the pixels. One file per model size, for example <code>reference-vith16plus.safetensors</code>, with keys such as <code>photo1/224x224/tokens</code>. The metadata goes into the safetensors header as JSON text.</p>
+  <ul>
+    <li>For: already a dependency. No pickle. torch, NumPy and <code>mlx.core.load</code> read it. A test loads one tensor without the full file. One file per model size lets a test skip a missing model size, and we can make one model size again alone.</li>
+    <li>Against: the header holds text only, so the metadata is a JSON string.</li>
+  </ul>
+  <p><b>Option B: NumPy <code>.npz</code> plus a JSON file.</b></p>
+  <ul>
+    <li>For: NumPy only. <code>mlx.core.load</code> reads it.</li>
+    <li>Against: two files per model size. No place for metadata inside the file.</li>
+  </ul>
+  <p><b>Option C: torch <code>.pt</code>.</b></p>
+  <ul>
+    <li>For: one line to write.</li>
+    <li>Against: pickle. The MLX tests of Step 4 then need torch to read the reference.</li>
+  </ul>
+  <div class="box">
+    <p><b>Recommendation: Option A,</b> with all tokens and with the hidden states for one configuration per model size.</p>
+  </div>
+
+  <h3>3.6 D5: fp16 and bf16 on <code>torch-mps</code></h3>
+  <p>PyTorch can run a backbone in half precision in two modes. Cast mode puts all weights and inputs in the dtype. Autocast mode keeps the weights in fp32: <code>torch.autocast</code> runs the matrix products in the dtype and keeps the layer norms and the residual stream in fp32. MLX in Step 5 works like cast mode. The reference fine-tuning setup uses fp16 autocast (Table 12 of <code>docs/plan.html</code>). bf16 has the range of fp32, so it does not overflow.</p>
+  <p><b>Option A: cast mode only.</b></p>
+  <ul>
+    <li>For: the same mode as MLX. Half the weight memory.</li>
+    <li>Against: ViT-H+/16 in fp16 fails at 224 px (Table 3). The baseline then has no fp16 value for ViT-H+/16.</li>
+  </ul>
+  <p><b>Option B: autocast mode only.</b></p>
+  <ul>
+    <li>For: it works for both model sizes. It is the mode of the reference fine-tuning setup.</li>
+    <li>Against: an MLX result in fp16 has no partner in the same mode. The weights stay in fp32.</li>
+  </ul>
+  <p><b>Option C: both modes.</b> Four half-precision modes: fp16 cast, bf16 cast, fp16 autocast and bf16 autocast.</p>
+  <ul>
+    <li>For: the full picture. The overflow becomes a recorded result, and Step 5 knows it before the MLX work.</li>
+    <li>Against: twice the half-precision runs on <code>torch-mps</code>. Each run takes about one second.</li>
+  </ul>
+  <div class="box">
+    <p><b>Recommendation: Option C.</b> The parity test of ViT-H+/16 in fp16 cast mode records the overflow as an expected failure with its reason. Step 5 must solve the overflow for MLX, for example with an fp32 residual stream.</p>
+  </div>
+
+  <h3>3.7 D6: patch threshold</h3>
+  <p>Table 9 of <code>docs/plan.html</code> gives frame thresholds: 0.9999 for fp32, 0.999 for fp16 and bf16. The probe passes them with a margin (Table 3). Table 9 leaves the patch threshold to Step 2.</p>
+  <p><b>Option A: thresholds on the mean and the minimum.</b></p>
+  <ul>
+    <li>For: the simplest rule. One wrong patch fails the test.</li>
+    <li>Against: one sensitive patch sets the minimum. For bf16, the minimum threshold must go down to about 0.98. Such a low limit lets real errors in other patches pass.</li>
+  </ul>
+  <p><b>Option B: thresholds on the mean and the 1st percentile. The report also gives the minimum.</b></p>
+  <ul>
+    <li>For: one sensitive patch does not set the limit. An error in one row or one column of patches still fails: at 224 px one row is 14 of 196 patches, which is 7 %.</li>
+    <li>Against: an error in less than 1 % of the patches passes the threshold. The minimum in the report still shows it.</li>
+  </ul>
+  <p><b>Option C: one threshold for each model size and dtype, from the <code>torch-mps</code> values minus a margin.</b></p>
+  <ul>
+    <li>For: the tightest limits.</li>
+    <li>Against: many numbers. A new torch version can move them. The mission asks for one threshold for each dtype.</li>
+  </ul>
+  <div class="box">
+    <p><b>Recommendation: Option B.</b> The plan sets the numbers from the measurements on all test images. The frame thresholds of Table 9 stay, unless the full measurement shows a reason to change them.</p>
+  </div>
+
+  <h3>3.8 D7: ViT-7B/16</h3>
+  <p>The reference output comes from <code>torch-cpu</code> in fp32 (<code>GLOSSARY.md</code>). The weights of ViT-7B/16 need 26.9 GB in fp32 and 13.4 GB in fp16 or bf16. The run rules of <code>CLAUDE.md</code> say: run ViT-7B/16 in fp16, bf16 or with quantized weights. Step 2 of <code>docs/plan.html</code> allows one fp32 run for the reference output, after a memory check. On 2026-11-06 at 16:20, <code>memory_pressure</code> gave 57 % free memory, about 36 GiB.</p>
+  <p><b>Option A: fp32 reference on <code>torch-cpu</code>, half precision on <code>torch-mps</code>.</b> The reference script runs ViT-7B/16 last, in its own process, after a memory check. The <code>torch-mps</code> tests of ViT-7B/16 run in fp16 and bf16 only. fp32 on <code>torch-mps</code> skips with a reason.</p>
+  <ul>
+    <li>For: a true fp32 reference for all six model sizes. It follows <code>docs/plan.html</code> and the run rules.</li>
+    <li>Against: about 27 GB in one process. The peak of the load can be higher than the weights. The plan measures the load peak of ViT-H+/16 first and scales it to ViT-7B/16.</li>
+  </ul>
+  <p><b>Option B: a bf16 reference for ViT-7B/16.</b> <code>torch-cpu</code> in bf16 makes the reference output of ViT-7B/16.</p>
+  <ul>
+    <li>For: half the memory.</li>
+    <li>Against: a bf16 output has its own error of about 1e-4 (Table 3, bf16 rows). The parity of the half-precision backends then measures two errors together.</li>
+  </ul>
+  <p><b>Option C: Option A, plus fp32 on <code>torch-mps</code>.</b></p>
+  <ul>
+    <li>For: a full fp32 row for ViT-7B/16.</li>
+    <li>Against: it breaks the run rule of <code>CLAUDE.md</code>. The MPS high watermark (0.8) leaves little room next to 27 GB of weights.</li>
+  </ul>
+  <div class="box">
+    <p><b>Recommendation: Option A.</b> When the memory check fails, the script skips ViT-7B/16 and records the reason. The run of ViT-7B/16 in fp16 cast mode can show the same overflow as ViT-H+/16. The test then records it.</p>
+  </div>
+
+  <h3>3.9 The design with all recommendations</h3>
+  <figure>
+    <div class="fig"><svg viewBox="0 0 960 340" role="img" aria-label="Data flow of Step 2 with the recommended options" font-family="-apple-system, Helvetica Neue, Arial, sans-serif">
+      <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#4a5655"/></marker></defs>
+      <rect width="960" height="340" fill="#ffffff"/>
+      <g font-size="12.5" fill="#111414">
+        <rect x="20" y="30" width="180" height="70" rx="6" fill="#f5f8f7" stroke="#4a5655"/>
+        <text x="110" y="56" text-anchor="middle" font-weight="600">Test images</text>
+        <text x="110" y="76" text-anchor="middle">3 public-domain photos</text>
+        <text x="110" y="92" text-anchor="middle">16:9, 4:3, 3:4</text>
+
+        <rect x="250" y="30" width="200" height="70" rx="6" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="350" y="56" text-anchor="middle" font-weight="600">Preprocessing</text>
+        <text x="350" y="76" text-anchor="middle">float resize, antialias</text>
+        <text x="350" y="92" text-anchor="middle">ImageNet mean and std</text>
+
+        <rect x="500" y="30" width="200" height="70" rx="6" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="600" y="56" text-anchor="middle" font-weight="600">inputs.safetensors</text>
+        <text x="600" y="76" text-anchor="middle">fp32 pixels for each</text>
+        <text x="600" y="92" text-anchor="middle">image and input resolution</text>
+
+        <rect x="20" y="140" width="180" height="70" rx="6" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="110" y="166" text-anchor="middle" font-weight="600">Weight loader</text>
+        <text x="110" y="186" text-anchor="middle">1 Hugging Face cache</text>
+        <text x="110" y="202" text-anchor="middle">2 converted folder, 3 skip</text>
+
+        <rect x="250" y="140" width="200" height="70" rx="6" fill="#f5f8f7" stroke="#4a5655"/>
+        <text x="350" y="166" text-anchor="middle" font-weight="600">torch-cpu, fp32</text>
+        <text x="350" y="186" text-anchor="middle">Hugging Face backbone</text>
+        <text x="350" y="202" text-anchor="middle">reference output</text>
+
+        <rect x="500" y="140" width="200" height="70" rx="6" fill="#f5f8f7" stroke="#4a5655"/>
+        <text x="600" y="166" text-anchor="middle" font-weight="600">torch-mps</text>
+        <text x="600" y="186" text-anchor="middle">fp32, fp16, bf16</text>
+        <text x="600" y="202" text-anchor="middle">cast mode and autocast mode</text>
+
+        <rect x="750" y="140" width="190" height="70" rx="6" fill="#ffffff" stroke="#4a5655" stroke-dasharray="5 4"/>
+        <text x="845" y="166" text-anchor="middle" font-weight="600">mlx</text>
+        <text x="845" y="186" text-anchor="middle">Steps 4 and 5</text>
+        <text x="845" y="202" text-anchor="middle">same pixels, same tests</text>
+
+        <rect x="250" y="250" width="200" height="70" rx="6" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="350" y="276" text-anchor="middle" font-weight="600">reference-SIZE.safetensors</text>
+        <text x="350" y="296" text-anchor="middle">all tokens after the final</text>
+        <text x="350" y="312" text-anchor="middle">layer norm, hidden states</text>
+
+        <rect x="500" y="250" width="200" height="70" rx="6" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="600" y="276" text-anchor="middle" font-weight="600">Parity tests</text>
+        <text x="600" y="296" text-anchor="middle">frame; patch mean,</text>
+        <text x="600" y="312" text-anchor="middle">1st percentile, minimum</text>
+      </g>
+      <g stroke="#4a5655" stroke-width="1.5" fill="none">
+        <line x1="200" y1="65" x2="248" y2="65" marker-end="url(#arrow)"/>
+        <line x1="450" y1="65" x2="498" y2="65" marker-end="url(#arrow)"/>
+        <line x1="600" y1="100" x2="600" y2="138" marker-end="url(#arrow)"/>
+        <line x1="540" y1="100" x2="400" y2="138" marker-end="url(#arrow)"/>
+        <line x1="200" y1="175" x2="248" y2="175" marker-end="url(#arrow)"/>
+        <line x1="350" y1="210" x2="350" y2="248" marker-end="url(#arrow)"/>
+        <line x1="450" y1="285" x2="498" y2="285" marker-end="url(#arrow)"/>
+        <line x1="600" y1="210" x2="600" y2="248" marker-end="url(#arrow)"/>
+        <path d="M700,65 L845,65 L845,138" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+        <path d="M845,210 L845,285 L702,285" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      </g>
+      <text x="224" y="232" font-size="11.5" fill="#4a5655" text-anchor="middle">weights for</text>
+      <text x="224" y="246" font-size="11.5" fill="#4a5655" text-anchor="middle">every backend</text>
+    </svg></div>
+    <figcaption><b>Figure 2.</b> Data flow of Step 2 with all recommendations. The preprocessing runs once and stores the pixels. <code>torch-cpu</code> in fp32 makes the reference output from these pixels. <code>torch-mps</code> and later <code>mlx</code> (dashed) read the same pixels. The parity tests compare their outputs with the reference output. The weight loader gives the weights to every backend. Teal boxes are new code or new files of Step 2.</figcaption>
+  </figure>
+</section>
+
+<section id="open">
+  <h2>9 Open questions</h2>
+  <ul>
+    <li>D1 to D7: decided on 2026-11-06. The user chose the recommendation of each decision.</li>
+    <li>The probe ran with ViT-S/16 and ViT-H+/16 only. The other four model sizes can show other token values. ViT-S+/16 and ViT-7B/16 use SwiGLU, as ViT-H+/16 does.</li>
+    <li>transformers uses SDPA attention on <code>torch-cpu</code> and on <code>torch-mps</code> by default. We keep the default and record it in the metadata.</li>
+    <li>The probe used one image. The plan measures all test images before it sets the thresholds.</li>
+  </ul>
+</section>
+
+<section id="sources">
+  <h2>10 Sources</h2>
+  <ul>
+    <li>Hugging Face transformers 5.22.1: <code>models/dinov3_vit/image_processing_dinov3_vit.py</code> and <code>modeling_dinov3_vit.py</code>, read in <code>.venv</code>. Apache-2.0.</li>
+    <li>scikit-image documentation, <code>skimage.data</code>, read on 2026-11-06: image sizes and licenses of Option A of D1.</li>
+    <li><code>docs/learn/01-prior-ports.html</code>, Section 9: the 8-bit resize surprise of Step 1.</li>
+    <li>The probe of Section 3.1: two scripts outside the repo, run on 2026-11-06 on the M5 Max with the converted weights, torch 2.15.0, transformers 5.22.1, Pillow 13.0.0.</li>
+  </ul>
+</section>
+</main>
+</body>
+</html>

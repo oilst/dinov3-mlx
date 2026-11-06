@@ -1,9 +1,10 @@
-"""Hugging Face ids of the DINOv3 model sizes and the download of their weights."""
+"""Hugging Face ids of the DINOv3 model sizes, the download of their weights and their folder."""
 
+import json
 import shutil
 from pathlib import Path
 
-from huggingface_hub import snapshot_download
+from huggingface_hub import snapshot_download, try_to_load_from_cache
 
 MODEL_IDS: dict[str, str] = {
     "ViT-S/16": "facebook/dinov3-vits16-pretrain-lvd1689m",
@@ -14,8 +15,15 @@ MODEL_IDS: dict[str, str] = {
     "ViT-7B/16": "facebook/dinov3-vit7b16-pretrain-lvd1689m",
 }
 
+# The converted weights of scripts/convert_meta_checkpoint.py. Only a fallback.
+CONVERTED_DIR = Path.home() / ".cache" / "dinov3-apple" / "converted"
+
 # The files that a backbone needs. ViT-7B/16 has six shards and an index.
 WEIGHT_PATTERNS: list[str] = ["config.json", "*.safetensors", "model.safetensors.index.json"]
+
+
+class WeightsNotFoundError(FileNotFoundError):
+    """Neither the Hugging Face cache nor the converted folder has all weight files."""
 
 
 class InsufficientDiskError(RuntimeError):
@@ -53,3 +61,45 @@ def download(model_id: str) -> Path:
         The path of the snapshot in the Hugging Face cache.
     """
     return Path(snapshot_download(model_id, allow_patterns=WEIGHT_PATTERNS))
+
+
+def _cached(model_id: str, filename: str, cache_dir: Path | None) -> Path | None:
+    path = try_to_load_from_cache(model_id, filename, cache_dir=cache_dir)
+    return Path(path) if isinstance(path, str) else None
+
+
+def _has_all_weight_files(model_id: str, cache_dir: Path | None) -> bool:
+    index = _cached(model_id, "model.safetensors.index.json", cache_dir)
+    if index is None:
+        names = {"model.safetensors"}
+    else:
+        names = set(json.loads(index.read_text())["weight_map"].values())
+    return all(_cached(model_id, name, cache_dir) is not None for name in names)
+
+
+def weights_dir(
+    model_size: str, cache_dir: Path | None = None, converted_dir: Path = CONVERTED_DIR
+) -> Path:
+    """Return the folder with config.json and the safetensors files of one model size.
+
+    The Hugging Face cache comes first, the converted folder second.
+
+    Args:
+        model_size: A key of MODEL_IDS, for example "ViT-S/16".
+        cache_dir: The Hugging Face cache. None means the default cache.
+        converted_dir: The folder of the converted weights.
+
+    Returns:
+        The snapshot folder in the Hugging Face cache, or the converted folder.
+
+    Raises:
+        WeightsNotFoundError: If neither place has all weight files.
+    """
+    model_id = MODEL_IDS[model_size]
+    config = _cached(model_id, "config.json", cache_dir)
+    if config is not None and _has_all_weight_files(model_id, cache_dir):
+        return config.parent
+    converted = converted_dir / model_id
+    if (converted / "config.json").exists() and any(converted.glob("*.safetensors")):
+        return converted
+    raise WeightsNotFoundError(f"{model_size}: not in the Hugging Face cache or in {converted}")

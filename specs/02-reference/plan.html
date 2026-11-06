@@ -1,0 +1,390 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Step 2 Reference: Plan</title>
+<style>
+/* Spec page. White page, black text, no dark mode. */
+:root { --bg: #ffffff; --fg: #111414; --muted: #4a5655; --rule: #d6dedd; --panel: #f5f8f7; --accent: #057379; --pass: #1d7a3a; --fail: #b3261e; color-scheme: light; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif; }
+main { max-width: 64rem; margin: 0 auto; padding: 40px 20px 64px; display: grid; gap: 1.75rem; }
+main > *, section > * { min-width: 0; }
+h1 { font-size: 1.9rem; line-height: 1.15; margin: 0; }
+h2 { font-size: 1.3rem; margin: 0; }
+h3 { font-size: 1.05rem; margin: 0; }
+section { display: grid; gap: 0.8rem; }
+p, ul, ol { margin: 0; max-width: 46rem; }
+li + li { margin-top: 0.25rem; }
+code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.86em; }
+p code, li code, td code { overflow-wrap: anywhere; }
+pre { margin: 0; background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 0.8rem 1rem; overflow-x: auto; }
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+th, td { text-align: left; vertical-align: top; padding: 0.45rem 0.7rem 0.45rem 0; border-bottom: 1px solid var(--rule); }
+th { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); border-bottom: 1.5px solid var(--fg); }
+td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.caption { font-size: 0.88rem; color: var(--muted); }
+.box { border: 1.5px solid var(--accent); border-radius: 6px; padding: 0.8rem 1rem; display: grid; gap: 0.5rem; }
+figure { margin: 0; display: grid; gap: 0.4rem; }
+.fig { border: 1px solid var(--rule); border-radius: 6px; padding: 0.5rem; overflow-x: auto; }
+.fig svg { display: block; width: 100%; height: auto; min-width: 640px; }
+figcaption { font-size: 0.88rem; color: var(--muted); }
+a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+<header>
+  <h1>Step 2 Reference: Plan</h1>
+  <p>Roadmap step 2. Status: approved by the user on 2026-11-06. Date: 2026-11-06.</p>
+</header>
+
+<section id="goal">
+  <h2>1 Goal</h2>
+  <p>Step 2 makes the reference output of all six model sizes and the parity tests for <code>torch-mps</code>. Steps 4 and 5 run the same parity tests on <code>mlx</code>. On 2026-11-06 the user chose the recommended option of each decision in <code>explore.html</code>:</p>
+  <ol>
+    <li>D1: three public-domain photos at 16:9, 4:3 and 3:4, in the repo.</li>
+    <li>D2: float resize with antialiasing in torch. The normalized pixel tensor is stored, and every backend reads it.</li>
+    <li>D3: 224, 448 and 512 px square, plus the own aspect ratio of each image with a short side of 224 px. 12 configurations for each model size.</li>
+    <li>D4: safetensors. One input file, one reference file for each model size, all tokens, hidden states for one configuration.</li>
+    <li>D5: fp16 and bf16 on <code>torch-mps</code> in cast mode and in autocast mode.</li>
+    <li>D6: patch thresholds on the mean and the 1st percentile. The report also gives the minimum.</li>
+    <li>D7: the ViT-7B/16 reference in fp32 on <code>torch-cpu</code>, alone and last, after a memory check. ViT-7B/16 on <code>torch-mps</code> in cast mode only.</li>
+  </ol>
+  <p>All six model sizes are in the Hugging Face cache since 2026-11-06. The converted weights of ViT-S/16 and ViT-H+/16 stay as a fallback.</p>
+</section>
+
+<section id="dinov3">
+  <h2>2 DINOv3 topic</h2>
+  <p>The topic is the tokens and the two outputs: the CLS token, the 4 register tokens, the patch tokens, the final layer norm, the frame embedding and the patch embeddings. The explainer <code>docs/learn/02-tokens-and-outputs.html</code> shows the token sequence for each input resolution of D3, the slices that give the two outputs, and the large values of the register tokens inside the backbone (Figure 1 of <code>explore.html</code>). It uses the stored hidden states of Section 3.4 for all six model sizes, so it shows if the other model sizes also have large register values.</p>
+</section>
+
+<section id="design">
+  <h2>3 Design</h2>
+
+  <h3>3.1 Test images</h3>
+  <p>The three photos come from Wikimedia Commons. Each is a work of a US federal agency, so it is in the public domain in the US. We checked each license page on 2026-11-06.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>File in the repo</th><th>Aspect</th><th>Stored size</th><th>Content</th><th>Source file on Wikimedia Commons</th><th>Author, license</th></tr></thead>
+      <tbody>
+        <tr><td><code>iss-kibo-lab.jpg</code></td><td>16:9</td><td class="num">1024 × 576</td><td>Three people and equipment indoors</td><td><code>ISS-22_crew_members_in_the_Kibo_lab.jpg</code>, 4288 × 2848</td><td>NASA, public domain (PD NASA)</td></tr>
+        <tr><td><code>forest.jpg</code></td><td>4:3</td><td class="num">1024 × 768</td><td>Pine forest, grass, sky: fine texture outdoors</td><td><code>South_Fork_Amercian_River_Cohesive_Strategy_Field_Trip_(36013609855).jpg</code>, 4608 × 3456</td><td>USDA Forest Service, Pacific Southwest Region 5, public domain (PD USDA)</td></tr>
+        <tr><td><code>iss-conference.jpg</code></td><td>3:4</td><td class="num">768 × 1024</td><td>A group of people at a table, close range, portrait</td><td><code>Expedition_75_crew_members_gather_for_a_daily_planning_conference_(iss075e0162800).jpg</code>, 3024 × 4032</td><td>NASA Johnson Space Center, public domain (PD NASA)</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 1.</b> Test images. "Stored size" is width × height. The source file names omit the prefix <code>https://commons.wikimedia.org/wiki/File:</code>.</p>
+  <p>The script <code>scripts/make_test_images.py</code> downloads each source file, checks its SHA-1 against the value of the Commons API, crops the center to the aspect ratio of Table 1, resizes with Pillow <code>LANCZOS</code> to 1024 px on the long side and saves a JPEG with quality 92. (Changed on 2026-11-06 by the user: quality 95 gave 1.19 MB, above the limit of AC1.) Only the ISS-22 photo needs a crop (3:2 to 16:9). The three files go to <code>tests/fixtures/images/</code> with <code>SOURCES.md</code>: page URL, author, license, SHA-1 of the source, crop and resize. Git keeps these files. Their total size must be 1 MB or less.</p>
+
+  <h3>3.2 Configurations</h3>
+  <p>Each model size gets 12 configurations: 3 images × 4 input resolutions.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Image</th><th>Square inputs (H × W)</th><th>Own aspect ratio (H × W)</th><th>Patch grid of the own aspect ratio</th><th>Tokens</th></tr></thead>
+      <tbody>
+        <tr><td><code>iss-kibo-lab</code></td><td>224, 448, 512</td><td class="num">224 × 400</td><td class="num">14 × 25</td><td class="num">355</td></tr>
+        <tr><td><code>forest</code></td><td>224, 448, 512</td><td class="num">224 × 304</td><td class="num">14 × 19</td><td class="num">271</td></tr>
+        <tr><td><code>iss-conference</code></td><td>224, 448, 512</td><td class="num">304 × 224</td><td class="num">19 × 14</td><td class="num">271</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 2.</b> Input resolutions. The square inputs have 201, 789 and 1029 tokens. For the own aspect ratio, the short side is 224 px and the long side is rounded to the nearest multiple of 16. The <code>forest</code> and <code>iss-conference</code> grids are the same grid with rows and columns swapped.</p>
+
+  <h3>3.3 Modules</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>File</th><th>New public names</th><th>Job</th></tr></thead>
+      <tbody>
+        <tr><td><code>src/dinov3_apple/hub.py</code></td><td><code>CONVERTED_DIR</code>, <code>WeightsNotFoundError</code>, <code>weights_dir</code></td><td>Find the weights of one model size: Hugging Face cache first, converted folder second.</td></tr>
+        <tr><td><code>src/dinov3_apple/memory.py</code></td><td><code>InsufficientMemoryError</code>, <code>available_memory_bytes</code>, <code>check_free_memory</code></td><td>Read the free memory from <code>vm_stat</code> and stop a model load that does not fit. Step 3 reuses it.</td></tr>
+        <tr><td><code>src/dinov3_apple/preprocess.py</code></td><td><code>IMAGENET_MEAN</code>, <code>IMAGENET_STD</code>, <code>own_aspect_size</code>, <code>load_image</code>, <code>preprocess</code></td><td>Image file to normalized fp32 pixel tensor (D2).</td></tr>
+        <tr><td><code>src/dinov3_apple/outputs.py</code></td><td><code>NUM_PREFIX_TOKENS</code>, <code>split_tokens</code></td><td>Token sequence to frame embedding and patch embeddings. The register tokens are dropped.</td></tr>
+        <tr><td><code>src/dinov3_apple/parity.py</code></td><td><code>Parity</code>, <code>THRESHOLDS</code>, <code>measure_parity</code></td><td>Cosine parity of frame and patch embeddings. NumPy only, so <code>mlx</code> uses it too.</td></tr>
+        <tr><td><code>src/dinov3_apple/reference.py</code></td><td><code>DTYPE_MODES</code>, <code>configurations</code>, <code>load_torch_backbone</code>, <code>run_torch</code>, <code>read_inputs</code>, <code>read_reference</code></td><td>The configurations of Table 2, the <code>torch-cpu</code> and <code>torch-mps</code> runs in each dtype mode, and the reading of the stored files.</td></tr>
+        <tr><td><code>scripts/make_test_images.py</code></td><td>&ndash;</td><td>Section 3.1.</td></tr>
+        <tr><td><code>scripts/make_reference.py</code></td><td>&ndash;</td><td>Write <code>inputs.safetensors</code>, then one reference file for each model size, each model size in its own subprocess (Section 3.5).</td></tr>
+        <tr><td><code>scripts/parity_table.py</code></td><td>&ndash;</td><td>Turn the parity results of the tests into <code>results/parity-torch-mps.md</code>.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 3.</b> New code. <code>scripts/convert_meta_checkpoint.py</code> imports <code>CONVERTED_DIR</code> from <code>hub.py</code> instead of its own copy. We write all code from the Hugging Face code and the paper (ADR 0002).</p>
+
+  <h3>3.4 Stored files</h3>
+  <p>All stored files go to <code>tests/fixtures/generated/reference/</code>. Git ignores this folder.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>File</th><th>Key</th><th>Shape, dtype</th></tr></thead>
+      <tbody>
+        <tr><td><code>inputs.safetensors</code></td><td><code>{image}/{H}x{W}/pixels</code></td><td>(1, 3, H, W), fp32, normalized</td></tr>
+        <tr><td rowspan="2"><code>reference-{slug}.safetensors</code></td><td><code>{image}/{H}x{W}/tokens</code></td><td>(1 + 4 + N, D), fp32, after the final layer norm</td></tr>
+        <tr><td><code>iss-kibo-lab/224x224/hidden_states</code></td><td>(L + 1, 201, D), fp32, before the final layer norm</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 4.</b> Stored files. <code>{slug}</code> is the part of the Hugging Face id between <code>dinov3-</code> and <code>-pretrain</code>, for example <code>vith16plus</code>. N is the number of patches, D the embedding dimension, L the number of blocks. Row 0 of <code>hidden_states</code> is the token sequence before block 1.</p>
+  <p>The header metadata of each file holds one JSON string with: the versions of Python, torch, transformers, safetensors and Pillow; the SHA-256 of each test image; the preprocessing settings; for a reference file also the model size, the weight source (Hugging Face cache or converted folder), the SHA-256 of each weight file, the attention implementation, the run time and the peak memory; and the date.</p>
+
+  <h3>3.5 Run rules for the reference runs</h3>
+  <ol>
+    <li><code>make_reference.py</code> writes <code>inputs.safetensors</code> first. This needs no model.</li>
+    <li>For each model size, from the smallest to the largest, it checks the free memory and then starts one subprocess. The next subprocess starts after the previous one ends.</li>
+    <li>The memory check needs 1.2 × the fp32 weight bytes + 4 GB. The first run measures the peak memory of ViT-S/16 and ViT-H+/16 (<code>resource.getrusage</code>). If the ratio of peak memory to weight bytes is above 1.2, the script uses the measured ratio.</li>
+    <li>ViT-7B/16 needs about 36 GB by this rule. If the check fails, the script skips ViT-7B/16 and records the reason. The user can then close apps and run <code>make_reference.py ViT-7B/16</code> again.</li>
+  </ol>
+
+  <h3>3.6 Dtype modes on <code>torch-mps</code></h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Dtype mode</th><th>Weights</th><th>Inputs</th><th>Autocast</th><th>Model sizes</th></tr></thead>
+      <tbody>
+        <tr><td><code>fp32</code></td><td>fp32</td><td>fp32</td><td>off</td><td>All except ViT-7B/16</td></tr>
+        <tr><td><code>fp16-cast</code></td><td>fp16</td><td>fp16</td><td>off</td><td>All six</td></tr>
+        <tr><td><code>bf16-cast</code></td><td>bf16</td><td>bf16</td><td>off</td><td>All six</td></tr>
+        <tr><td><code>fp16-autocast</code></td><td>fp32</td><td>fp32</td><td>fp16</td><td>All except ViT-7B/16</td></tr>
+        <tr><td><code>bf16-autocast</code></td><td>fp32</td><td>fp32</td><td>bf16</td><td>All except ViT-7B/16</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 5.</b> Dtype modes. ViT-7B/16 skips the modes with fp32 weights on <code>torch-mps</code> (run rule of <code>CLAUDE.md</code>). The test records the skip with this reason.</p>
+  <p>A non-finite output in <code>fp16-cast</code> is an expected failure: the test calls <code>pytest.xfail</code> with the reason "fp16 overflow" and records the configuration. A non-finite output in any other dtype mode fails the test.</p>
+
+  <h3>3.7 Thresholds</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Measure</th><th>fp32</th><th>fp16, both modes</th><th>bf16, both modes</th><th>Source</th></tr></thead>
+      <tbody>
+        <tr><td>Frame parity</td><td class="num">≥ 0.9999</td><td class="num">≥ 0.999</td><td class="num">≥ 0.998</td><td>Table 9 of <code>docs/plan.html</code>; probe: 1.000000 and ≥ 0.999833. Build: bf16 down to 0.998365</td></tr>
+        <tr><td>Patch parity, mean</td><td class="num">≥ 0.9999</td><td class="num">≥ 0.999</td><td class="num">≥ 0.995</td><td>Probe: 1.000000 and ≥ 0.999763. Build: bf16 down to 0.995177</td></tr>
+        <tr><td>Patch parity, 1st percentile</td><td class="num">≥ 0.9999</td><td class="num">≥ 0.99</td><td class="num">≥ 0.96</td><td>Probe: 1.000000 and ≥ 0.99785 (bf16 autocast). Build: bf16 down to 0.968878</td></tr>
+        <tr><td>Patch parity, minimum</td><td>report only</td><td>report only</td><td>report only</td><td>Probe: down to 0.983 (bf16 cast, ViT-H+/16, 224 px). Build: down to 0.845 (bf16 cast, ViT-H+/16, 224 px)</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 6.</b> Thresholds. They hold for every backend and model size.</p>
+  <p>Change on 2026-11-06 by the user: bf16 has its own column. The build measured 5 bf16 configurations below the first proposal (0.999, 0.999 and 0.99, the values of the fp16 column). A probe showed that <code>torch-cpu</code> in bf16 gives the same values, so the cause is bf16 arithmetic, not <code>torch-mps</code>. ViT-H+/16 at 224 px is sensitive to its input: fp32 with only the pixels rounded to bf16 gives a patch 1st percentile of 0.9925. The bf16 column takes the worst measured values, rounded down. fp32 and fp16 keep the first proposal.</p>
+  <div class="box">
+    <p><b>Rule for a changed threshold.</b> If a measured <code>torch-mps</code> value fails a threshold of Table 6, the build stops and asks the user. The build never lowers a threshold alone. <code>verify.html</code> confirms each threshold or gives the reason for its change. In the Close stage, Table 9 of <code>docs/plan.html</code> and the parity row of <code>mission.md</code> get the final values.</p>
+  </div>
+</section>
+
+<section id="flow">
+  <h2>4 Data flow</h2>
+  <figure>
+    <div class="fig"><svg viewBox="0 0 960 340" role="img" aria-label="Data flow of Step 2" font-family="-apple-system, Helvetica Neue, Arial, sans-serif">
+      <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#4a5655"/></marker></defs>
+      <rect width="960" height="340" fill="#ffffff"/>
+      <g font-size="12.5" fill="#111414">
+        <rect x="20" y="30" width="180" height="70" rx="6" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="110" y="56" text-anchor="middle" font-weight="600">tests/fixtures/images</text>
+        <text x="110" y="76" text-anchor="middle">3 JPEG + SOURCES.md</text>
+        <text x="110" y="92" text-anchor="middle">make_test_images.py</text>
+
+        <rect x="250" y="30" width="200" height="70" rx="6" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="350" y="56" text-anchor="middle" font-weight="600">preprocess.py</text>
+        <text x="350" y="76" text-anchor="middle">float resize, antialias</text>
+        <text x="350" y="92" text-anchor="middle">ImageNet mean and std</text>
+
+        <rect x="500" y="30" width="200" height="70" rx="6" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="600" y="56" text-anchor="middle" font-weight="600">inputs.safetensors</text>
+        <text x="600" y="76" text-anchor="middle">12 pixel tensors</text>
+        <text x="600" y="92" text-anchor="middle">3 images × 4 resolutions</text>
+
+        <rect x="20" y="140" width="180" height="70" rx="6" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="110" y="166" text-anchor="middle" font-weight="600">hub.weights_dir</text>
+        <text x="110" y="186" text-anchor="middle">1 Hugging Face cache</text>
+        <text x="110" y="202" text-anchor="middle">2 converted folder, 3 skip</text>
+
+        <rect x="250" y="140" width="200" height="70" rx="6" fill="#f5f8f7" stroke="#4a5655"/>
+        <text x="350" y="166" text-anchor="middle" font-weight="600">torch-cpu, fp32</text>
+        <text x="350" y="186" text-anchor="middle">make_reference.py</text>
+        <text x="350" y="202" text-anchor="middle">1 subprocess per model size</text>
+
+        <rect x="500" y="140" width="200" height="70" rx="6" fill="#f5f8f7" stroke="#4a5655"/>
+        <text x="600" y="166" text-anchor="middle" font-weight="600">torch-mps</text>
+        <text x="600" y="186" text-anchor="middle">5 dtype modes</text>
+        <text x="600" y="202" text-anchor="middle">tests/test_parity.py</text>
+
+        <rect x="750" y="140" width="190" height="70" rx="6" fill="#ffffff" stroke="#4a5655" stroke-dasharray="5 4"/>
+        <text x="845" y="166" text-anchor="middle" font-weight="600">mlx</text>
+        <text x="845" y="186" text-anchor="middle">Steps 4 and 5</text>
+        <text x="845" y="202" text-anchor="middle">same pixels, same tests</text>
+
+        <rect x="250" y="250" width="200" height="70" rx="6" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="350" y="276" text-anchor="middle" font-weight="600">reference-{slug}.safetensors</text>
+        <text x="350" y="296" text-anchor="middle">12 × tokens, 1 × hidden</text>
+        <text x="350" y="312" text-anchor="middle">states, metadata</text>
+
+        <rect x="500" y="250" width="200" height="70" rx="6" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="600" y="276" text-anchor="middle" font-weight="600">parity.measure_parity</text>
+        <text x="600" y="296" text-anchor="middle">frame; patch mean,</text>
+        <text x="600" y="312" text-anchor="middle">1st percentile, minimum</text>
+
+        <rect x="750" y="250" width="190" height="70" rx="6" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="845" y="276" text-anchor="middle" font-weight="600">results/</text>
+        <text x="845" y="296" text-anchor="middle">parity-torch-mps.md</text>
+        <text x="845" y="312" text-anchor="middle">in git</text>
+      </g>
+      <g stroke="#4a5655" stroke-width="1.5" fill="none">
+        <line x1="200" y1="65" x2="248" y2="65" marker-end="url(#arrow)"/>
+        <line x1="450" y1="65" x2="498" y2="65" marker-end="url(#arrow)"/>
+        <line x1="600" y1="100" x2="600" y2="138" marker-end="url(#arrow)"/>
+        <line x1="540" y1="100" x2="400" y2="138" marker-end="url(#arrow)"/>
+        <line x1="200" y1="175" x2="248" y2="175" marker-end="url(#arrow)"/>
+        <line x1="350" y1="210" x2="350" y2="248" marker-end="url(#arrow)"/>
+        <line x1="450" y1="285" x2="498" y2="285" marker-end="url(#arrow)"/>
+        <line x1="600" y1="210" x2="600" y2="248" marker-end="url(#arrow)"/>
+        <line x1="700" y1="285" x2="748" y2="285" marker-end="url(#arrow)"/>
+        <path d="M700,65 L845,65 L845,138" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+        <path d="M800,210 L800,232 L640,232 L640,248" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+      </g>
+      <text x="224" y="232" font-size="11.5" fill="#4a5655" text-anchor="middle">weights for</text>
+      <text x="224" y="246" font-size="11.5" fill="#4a5655" text-anchor="middle">every backend</text>
+    </svg></div>
+    <figcaption><b>Figure 1.</b> Data flow of Step 2. The images go through the preprocessing once. <code>torch-cpu</code> in fp32 makes the reference files from the stored pixels. The parity tests run <code>torch-mps</code> on the same stored pixels, measure the parity against the reference files and write the results table. <code>mlx</code> (dashed) joins in Steps 4 and 5. Teal boxes are new files or new code of Step 2.</figcaption>
+  </figure>
+</section>
+
+<section id="code">
+  <h2>5 Key code</h2>
+  <p>These snippets show the shape of the code. The build can change the details.</p>
+  <pre><code># src/dinov3_apple/hub.py
+def weights_dir(model_size: str) -&gt; Path:
+    """Return the folder with config.json and the safetensors files of one model size.
+
+    The Hugging Face cache comes first, the converted folder second.
+
+    Raises:
+        WeightsNotFoundError: If neither place has all weight files.
+    """
+    model_id = MODEL_IDS[model_size]
+    config = try_to_load_from_cache(model_id, "config.json")
+    if isinstance(config, str) and _has_all_weight_files(model_id):
+        return Path(config).parent
+    converted = CONVERTED_DIR / model_id
+    if (converted / "config.json").exists() and any(converted.glob("*.safetensors")):
+        return converted
+    raise WeightsNotFoundError(f"{model_size}: not in the Hugging Face cache or in {converted}")</code></pre>
+  <pre><code># src/dinov3_apple/preprocess.py
+def preprocess(image: np.ndarray, size: tuple[int, int]) -&gt; torch.Tensor:
+    """Return a normalized (1, 3, H, W) fp32 tensor from an (h, w, 3) uint8 RGB image.
+
+    The resize works on float pixels with antialiasing, as the Hugging Face image processor does.
+    """
+    pixels = torch.from_numpy(image).permute(2, 0, 1).unsqueeze(0).to(torch.float32) / 255.0
+    resized = F.interpolate(pixels, size=size, mode="bilinear", antialias=True)
+    return (resized - IMAGENET_MEAN.view(1, 3, 1, 1)) / IMAGENET_STD.view(1, 3, 1, 1)
+
+
+def own_aspect_size(height: int, width: int, short_side: int = 224) -&gt; tuple[int, int]:
+    """Keep the aspect ratio: the short side becomes short_side, the long side a multiple of 16."""</code></pre>
+  <pre><code># src/dinov3_apple/parity.py (NumPy only)
+@dataclass(frozen=True)
+class Parity:
+    frame: float
+    patch_mean: float
+    patch_p01: float
+    patch_min: float
+
+
+def measure_parity(reference: np.ndarray, output: np.ndarray) -&gt; Parity:
+    """Compare two token sequences of shape (1 + 4 + N, D) in fp32."""
+    ref, out = reference.astype(np.float64), output.astype(np.float64)
+    cos = (ref * out).sum(-1) / (np.linalg.norm(ref, axis=-1) * np.linalg.norm(out, axis=-1))
+    patches = cos[NUM_PREFIX_TOKENS:]
+    return Parity(cos[0], patches.mean(), np.quantile(patches, 0.01), patches.min())</code></pre>
+  <p>Change on 2026-11-06 by the user: <code>preprocess</code> resizes and normalizes in fp64 and casts the result to fp32. The fp32 resize of torch was up to 2.2e-5 per pixel away from an fp64 resize on the test images, and failed the 1e-5 limit of AC2. Pillow float resize is within 8e-8 of the fp64 resize. The stored pixels differ from the Hugging Face image processor (fp32) by about 2e-5. An 8-bit resize differs by 0.004.</p>
+  <p>The cosine runs in fp64. Then two equal fp32 vectors give 1.000000, not 0.9999996 (Table 3 of <code>explore.html</code>).</p>
+  <pre><code># tests/test_parity.py (shape)
+@pytest.mark.parametrize("model_size", MODEL_SIZES_UNDER_TEST)
+@pytest.mark.parametrize("dtype_mode", DTYPE_MODES)
+@pytest.mark.parametrize("config", CONFIG_IDS)           # for example "forest/224x304"
+def test_parity(model_size, dtype_mode, config, mps_backbone, reference, inputs, record):
+    tokens = run_torch(mps_backbone(model_size, dtype_mode), inputs[config], dtype_mode)
+    if not np.isfinite(tokens).all():
+        record(model_size, dtype_mode, config, None)
+        if dtype_mode == "fp16-cast":
+            pytest.xfail("fp16 overflow: a register token is above 65,504 (explore.html, Table 2)")
+        pytest.fail("non-finite output")
+    parity = measure_parity(reference(model_size)[config], tokens)
+    record(model_size, dtype_mode, config, parity)
+    assert parity.frame &gt;= THRESHOLDS[dtype_mode].frame
+    assert parity.patch_mean &gt;= THRESHOLDS[dtype_mode].patch_mean
+    assert parity.patch_p01 &gt;= THRESHOLDS[dtype_mode].patch_p01</code></pre>
+  <p>The fixture <code>mps_backbone</code> keeps one model in memory at a time. It frees the previous model (<code>del</code>, <code>gc.collect</code>, <code>torch.mps.empty_cache</code>) and calls <code>check_free_memory</code> before each load. <code>conftest.py</code> sets the MPS watermarks before torch is imported. <code>record</code> appends one JSON line to <code>tests/fixtures/generated/parity/torch-mps.jsonl</code>.</p>
+</section>
+
+<section id="tests">
+  <h2>6 Tests</h2>
+  <p>Each test is written first and must fail first (red). Tests that need weights or stored files skip with a reason when these are missing. ViT-S/16 and ViT-B/16 run by default. The other four model sizes run when <code>DINOV3_SLOW=1</code> (Table 9 of <code>docs/plan.html</code>).</p>
+  <ol>
+    <li><code>test_weights_dir_prefers_hugging_face_cache</code>, <code>test_weights_dir_falls_back_to_converted_folder</code>, <code>test_weights_dir_raises_when_no_weights</code>: the order of Section 3.3, with a temporary cache folder.</li>
+    <li><code>test_check_free_memory_raises_when_memory_is_too_small</code>, <code>test_check_free_memory_passes_when_memory_is_enough</code>, <code>test_available_memory_is_positive_and_below_total</code>.</li>
+    <li><code>test_own_aspect_size</code>: (576, 1024) gives (224, 400), (768, 1024) gives (224, 304), (1024, 768) gives (304, 224), a square gives (224, 224).</li>
+    <li><code>test_preprocess_shape_and_dtype</code>: (1, 3, H, W), fp32.</li>
+    <li><code>test_preprocess_matches_pillow_float_resize</code>: the largest difference to the Pillow float resize (mode <code>F</code>) is 1e-5 or less in [0, 1] pixel units.</li>
+    <li><code>test_preprocess_matches_stored_pixels</code>: <code>preprocess</code> gives exactly the stored pixels of all 12 image and input resolution pairs (largest difference 0.0).</li>
+    <li><code>test_test_images_match_sources</code>: the three files exist, have the sizes of Table 1, and their SHA-256 values equal the values in <code>SOURCES.md</code>.</li>
+    <li><code>test_split_tokens_drops_register_tokens</code>: with a synthetic sequence, the frame embedding is row 0 and the patch embeddings are rows 5 to 5 + N, reshaped to (H/16, W/16, D). This replaces <code>test_shapes</code> and <code>test_no_register_tokens</code> of Table 9.</li>
+    <li><code>test_measure_parity_worked_example</code>: the example of Table 10 of <code>docs/plan.html</code> gives 0.9997. Two equal vectors give 1.0. The 1st percentile of a known list is correct.</li>
+    <li><code>test_reference_files_are_complete[model size]</code>: 12 token tensors with shape (1 + 4 + N, D), one hidden-state tensor with shape (L + 1, 201, D), all finite, fp32, and metadata with all fields of Section 3.4.</li>
+    <li><code>test_reference_is_reproducible[model size]</code>: a new <code>torch-cpu</code> fp32 run of <code>iss-kibo-lab/224x224</code> gives the stored tokens with a largest difference of 1e-5 or less.</li>
+    <li><code>test_parity[model size, dtype mode, configuration]</code>: Section 5, thresholds of Table 6. 6 model sizes × 12 configurations × 5 dtype modes, minus the 36 ViT-7B/16 skips of Table 5: 324 tests.</li>
+    <li><code>test_batch_consistency[model size, dtype mode]</code>: a batch of 8 at 224 × 224 px (the three images, repeated) gives the same outputs as 8 runs with batch size 1. Thresholds: the frame and patch thresholds of the dtype mode.</li>
+  </ol>
+</section>
+
+<section id="benchmarks">
+  <h2>7 Benchmarks</h2>
+  <p>Step 2 has no throughput benchmark. <code>verify.html</code> records for each model size: the run time of <code>make_reference.py</code>, the peak memory of its subprocess, the free memory before the load, and the run time of the parity tests (default run and <code>DINOV3_SLOW=1</code>).</p>
+</section>
+
+<section id="criteria">
+  <h2>8 Acceptance criteria</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>No.</th><th>Criterion</th><th>Target</th><th>Checked by</th></tr></thead>
+      <tbody>
+        <tr><td>AC1</td><td>Test images in the repo</td><td>3 public-domain JPEG files of Table 1, total ≤ 1 MB, <code>SOURCES.md</code> with URL, author, license and SHA-1 of each source</td><td>test 7, file check</td></tr>
+        <tr><td>AC2</td><td>Preprocessing</td><td>Pillow float resize ≤ 1e-5 per pixel; stored pixels equal (0.0)</td><td>tests 3 to 6</td></tr>
+        <tr><td>AC3</td><td>Weight loader order</td><td>Hugging Face cache, then converted folder, then <code>WeightsNotFoundError</code></td><td>test 1</td></tr>
+        <tr><td>AC4</td><td>Memory check before each model load</td><td>Check logged before every load in <code>make_reference.py</code> and in the test fixture; 1 heavy job at a time</td><td>test 2, run log</td></tr>
+        <tr><td>AC5</td><td>Reference files for all model sizes</td><td>6 of 6 complete, or ViT-7B/16 skipped with a recorded memory reason</td><td>tests 10 and 11</td></tr>
+        <tr><td>AC6</td><td>Outputs and parity metric</td><td>Register tokens dropped; Table 10 example gives 0.9997</td><td>tests 8 and 9</td></tr>
+        <tr><td>AC7</td><td><code>torch-mps</code> fp32 parity</td><td>Frame, patch mean and patch 1st percentile ≥ 0.9999 for 5 model sizes × 12 configurations</td><td>test 12</td></tr>
+        <tr><td>AC8</td><td><code>torch-mps</code> half-precision parity</td><td>Frame and patch mean ≥ 0.999, patch 1st percentile ≥ 0.99, in all four modes; every fp16-cast overflow recorded as expected failure</td><td>test 12</td></tr>
+        <tr><td>AC9</td><td>Batch consistency</td><td>The thresholds of the dtype mode, all model sizes and dtype modes of Table 5</td><td>test 13</td></tr>
+        <tr><td>AC10</td><td>Thresholds confirmed</td><td>Each threshold of Table 6 confirmed, or changed by the user with a reason</td><td><code>verify.html</code></td></tr>
+        <tr><td>AC11</td><td>Results table in git</td><td><code>results/parity-torch-mps.md</code>: one row for each model size and dtype mode, with the minimum over the configurations of frame, patch mean, patch 1st percentile and patch minimum</td><td><code>scripts/parity_table.py</code></td></tr>
+        <tr><td>AC12</td><td>Test suite and lint</td><td><code>uv run pytest</code>: 0 failures; default run ≤ 180 s; <code>DINOV3_SLOW=1</code> run: 0 failures; ruff check and format clean</td><td>pytest, ruff</td></tr>
+        <tr><td>AC13</td><td>Explainer</td><td><code>docs/learn/02-tokens-and-outputs.html</code> covers every new public function of Table 3, and the register values of all six model sizes</td><td>file check</td></tr>
+        <tr><td>AC14</td><td>Steering files</td><td><code>roadmap.md</code>: Step 2 done, Step 3 next. <code>GLOSSARY.md</code>: the new terms (Dtype mode, Cast mode, Autocast mode, Test image, Reference file). <code>tech-stack.md</code> unchanged unless a package changes.</td><td>file check</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 7.</b> Acceptance criteria. No new package is necessary: torch, Pillow, NumPy and safetensors are already in <code>uv.lock</code>.</p>
+</section>
+
+<section id="open">
+  <h2>9 Open questions</h2>
+  <ul>
+    <li>The parity results table in git: <code>results/parity-torch-mps.md</code> at the repo root. Approved with this plan on 2026-11-06.</li>
+    <li>ViT-7B/16 in fp16 cast mode: if all 12 configurations overflow, Step 2 has no fp16 value for ViT-7B/16 on <code>torch-mps</code>. Step 3 then needs a decision for its fp16 baseline. This is not a blocker for Step 2.</li>
+    <li>The source photos are in the public domain in the US. The NASA media guidelines ask users not to suggest an endorsement by NASA. <code>SOURCES.md</code> states this.</li>
+  </ul>
+</section>
+
+<section id="sources">
+  <h2>10 Sources</h2>
+  <ul>
+    <li><code>specs/02-reference/explore.html</code>: the decisions and the probe.</li>
+    <li>Wikimedia Commons API and file pages of the three photos of Table 1, read on 2026-11-06: size, SHA-1, license (PD NASA, PD USDA), author.</li>
+    <li>Hugging Face transformers 5.22.1: <code>image_processing_dinov3_vit.py</code> and <code>modeling_dinov3_vit.py</code>. Apache-2.0.</li>
+    <li><code>docs/plan.html</code>: Step 2, Table 9 and Table 10.</li>
+  </ul>
+</section>
+</main>
+</body>
+</html>

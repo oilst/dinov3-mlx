@@ -18,9 +18,8 @@ import torch.nn.functional as F
 from PIL import Image
 from transformers import DINOv3ViTConfig, DINOv3ViTModel
 
-from dinov3_apple.hub import MODEL_IDS
+from dinov3_apple.hub import CONVERTED_DIR, MODEL_IDS
 
-CONVERTED_DIR = Path.home() / ".cache" / "dinov3-apple" / "converted"
 TEST_IMAGE_URL = "http://images.cocodataset.org/val2017/000000039769.jpg"
 TEST_IMAGE = (
     Path(__file__).parents[1] / "tests" / "fixtures" / "generated" / "coco-000000039769.jpg"
