@@ -17,20 +17,36 @@ class InsufficientMemoryError(MemoryError):
     """A model load needs more memory than is available."""
 
 
-def available_memory_bytes() -> int:
-    """Return the free and the inactive memory in bytes, from vm_stat.
+def available_memory_bytes(vm_stat_text: str | None = None) -> int:
+    """Return the memory that a new allocation can get without compression or swap, from vm_stat.
 
-    macOS can give inactive pages to a new allocation without swapping, so they count as available.
+    The sum counts the free, speculative and purgeable pages, plus the inactive pages up to the
+    number of file-backed pages. macOS can drop file-backed pages at once. The other inactive pages
+    hold app memory that macOS must compress or swap before it can reuse them, so they do not count.
+
+    Args:
+        vm_stat_text: The output of vm_stat. None runs vm_stat.
+
+    Returns:
+        The available memory in bytes.
     """
-    text = subprocess.run(["vm_stat"], capture_output=True, text=True, check=True).stdout
-    page_size = int(re.search(r"page size of (\d+) bytes", text).group(1))
+    if vm_stat_text is None:
+        vm_stat_text = subprocess.run(
+            ["vm_stat"], capture_output=True, text=True, check=True
+        ).stdout
+    page_size = int(re.search(r"page size of (\d+) bytes", vm_stat_text).group(1))
     pages = {
         name: int(count)
         for name, count in re.findall(
-            r"^Pages (free|inactive):\s+(\d+)\.", text, flags=re.MULTILINE
+            r"^(Pages free|Pages inactive|Pages speculative|Pages purgeable|File-backed pages):"
+            r"\s+(\d+)\.",
+            vm_stat_text,
+            flags=re.MULTILINE,
         )
     }
-    return (pages["free"] + pages["inactive"]) * page_size
+    droppable_inactive = min(pages["Pages inactive"], pages["File-backed pages"])
+    free = pages["Pages free"] + pages["Pages speculative"] + pages["Pages purgeable"]
+    return (free + droppable_inactive) * page_size
 
 
 def check_free_memory(required_bytes: int, label: str) -> int:

@@ -502,7 +502,7 @@ def split_tokens(tokens: np.ndarray, height: int, width: int) -> tuple[np.ndarra
   </ul>
   <h3>8.2 <code>src/dinov3_apple/memory.py</code></h3>
   <ul>
-    <li><code>available_memory_bytes()</code> reads <code>vm_stat</code> and returns the free pages plus the inactive pages, times the page size.</li>
+    <li><code>available_memory_bytes()</code> reads <code>vm_stat</code>. It counts the free, speculative and purgeable pages, plus the inactive pages up to the number of file-backed pages, times the page size. macOS can drop file-backed pages at once; the other inactive pages hold app memory that macOS must compress or swap first. (Changed after Verify, finding F6. The Step 2 runs used free plus all inactive pages.)</li>
     <li><code>check_free_memory(required_bytes, label)</code> logs one line ("memory check: ViT-S/16 torch-mps fp16-cast: needs 4.1 GB, 21.0 GB available, ok") and raises <code>InsufficientMemoryError</code> when the memory does not fit. It returns the available bytes. <code>GB</code> is 1e9, the unit of the log line.</li>
   </ul>
   <h3>8.3 <code>src/dinov3_apple/preprocess.py</code> and <code>outputs.py</code></h3>
@@ -553,7 +553,7 @@ def run_torch(model: DINOv3ViTModel, pixels: np.ndarray, dtype_mode: str) -> np.
     <li class="note"><b>The bf16 failures are not a <code>torch-mps</code> defect.</b> <code>torch-cpu</code> in bf16 gives the same parity. For ViT-H+/16 at 224 px, a rounding of the input pixels alone moves some patch embeddings to a cosine of 0.968.</li>
     <li class="note"><b>One ViT-S+/16 input is special.</b> Only <code>iss-kibo-lab</code> at 224 × 400 px fails the first bf16 proposal for ViT-S+/16. On this input, bf16 autocast is worse than bf16 cast (frame 0.9984 and 0.9994), on both backends. Its register values are normal.</li>
     <li class="note"><b>Batches change nothing.</b> A batch of 8 gives the same output as 8 runs with batch size 1 on <code>torch-mps</code> in every dtype mode (parity 1.000000).</li>
-    <li class="note"><b>Free memory is less than it looks.</b> <code>memory_pressure</code> showed 60 % free memory, but the memory compressor held 20 GB. <code>vm_stat</code> gave 21 to 23 GB of free and inactive pages, too little for ViT-7B/16 in fp32.</li>
+    <li class="note"><b>Free memory is less than it looks.</b> <code>memory_pressure</code> showed 60 % free memory, but the memory compressor held 20 GB. <code>vm_stat</code> gave 21 to 23 GB of free and inactive pages, too little for ViT-7B/16 in fp32. Only about 7 GB of that needs no compression or swap.</li>
   </ol>
 </section>
 

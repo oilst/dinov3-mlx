@@ -412,6 +412,21 @@ DINOV3_SLOW=1 uv run pytest -q -k "not 7B" --junitxml=slow.xml
 #   4 bf16 probe values on torch-cpu, one process each; dtype of rope_embeddings.inv_freq
 #   ast scan of the type hints of the functions in the build commit</code></pre>
 </section>
+<section>
+  <h2>11 Fixed after Verify</h2>
+  <p>On 2026-11-06 the user asked to fix findings F4, F6 and F7. The Step 2 session made these changes after this verification. F2 (bf16 margin) stays open for Steps 4 and 5.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Finding</th><th>Change</th><th>Test</th></tr></thead>
+      <tbody>
+        <tr><td>F4</td><td><code>make_reference.py</code> reads the load ratio of earlier runs from <code>runs.jsonl</code> (<code>load_ratio</code>): the largest measured ratio of model sizes with at least 1 GB of fp32 weights, never below 1.2. Each run line now records <code>fp32_weight_bytes</code>.</td><td><code>tests/test_make_reference.py</code> (3 tests)</td></tr>
+        <tr><td>F6</td><td><code>available_memory_bytes</code> counts free, speculative and purgeable pages, plus inactive pages up to the number of file-backed pages. At 17:40 this gave 7.1 GB, against 19.7 GB for free plus all inactive pages. A run that needs more now skips with a recorded reason, for example ViT-H+/16 in fp32 (8.1 GB).</td><td><code>tests/test_memory.py</code> (2 new tests with a fixed <code>vm_stat</code> text)</td></tr>
+        <tr><td>F7</td><td><code>test_preprocess_matches_pillow_float_resize</code> runs for all 12 configurations.</td><td>12 tests, all pass</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 13.</b> Changes after Verify. Default test run after the changes: 191 passed, 4 skipped, 0 failed, 26.4 s.</p>
+</section>
 </main>
 </body>
 </html>

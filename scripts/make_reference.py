@@ -170,12 +170,45 @@ def _append_run(line: dict) -> None:
         file.write(json.dumps(line) + "\n")
 
 
+def load_ratio(runs_log: Path = RUNS_LOG) -> float:
+    """Return the load ratio for the memory check: the largest measured ratio of earlier runs.
+
+    Only runs of model sizes with at least RATIO_MIN_WEIGHT_BYTES of fp32 weights count. The result
+    is never below LOAD_RATIO.
+
+    Args:
+        runs_log: The JSON lines of earlier runs of this script.
+
+    Returns:
+        The load ratio.
+    """
+    ratio = LOAD_RATIO
+    if not runs_log.exists():
+        return ratio
+    for text in runs_log.read_text().splitlines():
+        line = json.loads(text)
+        if line.get("status") != "done" or "measured_ratio" not in line:
+            continue
+        weight_bytes = line.get("fp32_weight_bytes")
+        if weight_bytes is None and line.get("model_size") in MODEL_IDS:
+            weight_bytes = parameter_count(line["model_size"]) * 4
+        if weight_bytes is not None and weight_bytes >= RATIO_MIN_WEIGHT_BYTES:
+            ratio = max(ratio, line["measured_ratio"])
+    return ratio
+
+
 def run_all(model_sizes: list[str]) -> None:
     """Run each model size in its own subprocess, one after the other, after a memory check."""
-    ratio = LOAD_RATIO
+    ratio = load_ratio()
+    logger.info(f"the memory check uses the load ratio {ratio:.2f}")
     for model_size in model_sizes:
         fp32_bytes = parameter_count(model_size) * 4
-        line = {"model_size": model_size, "time": _now(), "ratio": round(ratio, 3)}
+        line = {
+            "model_size": model_size,
+            "time": _now(),
+            "ratio": round(ratio, 3),
+            "fp32_weight_bytes": fp32_bytes,
+        }
         try:
             available = check_free_memory(
                 required_load_bytes(model_size, torch.float32, ratio),

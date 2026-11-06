@@ -11,7 +11,7 @@ from dinov3_apple.preprocess import (
     own_aspect_size,
     preprocess,
 )
-from dinov3_apple.reference import INPUTS_FILE, configurations, read_inputs
+from dinov3_apple.reference import INPUTS_FILE, Configuration, configurations, read_inputs
 
 IMAGES_DIR = Path(__file__).parent / "fixtures" / "images"
 
@@ -50,10 +50,10 @@ def _pillow_float_resize(image: np.ndarray, size: tuple[int, int]) -> np.ndarray
     return np.stack(channels)[None]
 
 
-@pytest.mark.parametrize("name", ["iss-kibo-lab.jpg", "forest.jpg", "iss-conference.jpg"])
-@pytest.mark.parametrize("size", [(224, 224), (512, 512)])
-def test_preprocess_matches_pillow_float_resize(name: str, size: tuple[int, int]) -> None:
-    image = load_image(IMAGES_DIR / name)
+@pytest.mark.parametrize("config", configurations(), ids=lambda config: config.id)
+def test_preprocess_matches_pillow_float_resize(config: Configuration) -> None:
+    image = load_image(config.image_path)
+    size = (config.height, config.width)
     pixels = preprocess(image, size).numpy()
     unnormalized = pixels * IMAGENET_STD.numpy().reshape(
         1, 3, 1, 1
