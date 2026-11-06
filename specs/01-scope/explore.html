@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Step 1 Scope: Explore</title>
+<style>
+/* Spec page. White page, black text, no dark mode. */
+:root { --bg: #ffffff; --fg: #111414; --muted: #4a5655; --rule: #d6dedd; --panel: #f5f8f7; --accent: #057379; --pass: #1d7a3a; --fail: #b3261e; color-scheme: light; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif; }
+main { max-width: 64rem; margin: 0 auto; padding: 40px 20px 64px; display: grid; gap: 1.75rem; }
+h1 { font-size: 1.9rem; line-height: 1.15; margin: 0; }
+h2 { font-size: 1.3rem; margin: 0; }
+h3 { font-size: 1.05rem; margin: 0; }
+section { display: grid; gap: 0.8rem; }
+p, ul, ol { margin: 0; max-width: 46rem; }
+li + li { margin-top: 0.25rem; }
+code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.86em; }
+pre { margin: 0; background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 0.8rem 1rem; overflow-x: auto; }
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+th, td { text-align: left; vertical-align: top; padding: 0.45rem 0.7rem 0.45rem 0; border-bottom: 1px solid var(--rule); }
+th { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); border-bottom: 1.5px solid var(--fg); }
+td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+tr.ref td { background: var(--panel); }
+.caption { font-size: 0.88rem; color: var(--muted); }
+.yes { color: var(--pass); font-weight: 600; }
+.no { color: var(--fail); font-weight: 600; }
+.box { border: 1.5px solid var(--accent); border-radius: 6px; padding: 0.8rem 1rem; display: grid; gap: 0.5rem; }
+a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+<header>
+  <h1>Step 1 Scope: Explore</h1>
+  <p>Roadmap step 1. Status: decided. On 2026-11-06 the user chose Option A (scope) and Option B of R1 (MIT for our code, see ADR 0002). Date: 2026-11-06.</p>
+</header>
+
+<section id="goal">
+  <h2>1 Goal</h2>
+  <p>Step 1 makes sure that this repo adds value. This file compares the public MLX ports of DINOv3 with the plan of this repo. It lists the gaps that this repo fills. It gives three scope options and one recommendation. The user picks one option.</p>
+  <p>We read the code of each port on 2026-11-06. We did not run the ports. A port "has" a feature in Table 1 only when its code or its tests show the feature.</p>
+</section>
+
+<section id="dinov3">
+  <h2>2 DINOv3 topic</h2>
+  <p>The topic of Step 1 is what the other ports cover. The explainer <code>docs/learn/01-prior-ports.html</code> compares each port with the Hugging Face code: the token layout, the 2D RoPE, the feed-forward network and the two outputs.</p>
+</section>
+
+<section id="design">
+  <h2>3 Design</h2>
+
+  <h3>3.1 Prior work</h3>
+  <p>Our search found four MLX ports, not two. <code>docs/plan.html</code> (Table 2) knows only the first two. Table 1 compares the four ports with the Hugging Face <code>DINOv3ViTModel</code>, which gives our reference output and our baseline.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Item</th><th>MLXDINOv3</th><th>mlx_dinov3</th><th>mlx-image (DINOv3 part)</th><th>mlx-dinov3</th><th>HF DINOv3ViTModel</th></tr></thead>
+      <tbody>
+        <tr><td>Repo</td><td>vincentamato/MLXDINOv3</td><td>etornam45/mlx_dinov3 (behind etornam.vercel.app)</td><td>riccardomusmeci/mlx-image</td><td>sarveshmayil/mlx-dinov3</td><td>huggingface/transformers</td></tr>
+        <tr><td>Language</td><td>Swift, MLX Swift</td><td>Python, MLX</td><td>Python, MLX</td><td>Python, MLX</td><td>Python, PyTorch</td></tr>
+        <tr><td>Code base</td><td>Hugging Face layout and key names</td><td>Official Meta code, ported (keeps the Meta copyright headers)</td><td>Official Meta layout (<code>x_norm_clstoken</code>, <code>storage_tokens</code>)</td><td>Official Meta layout</td><td>Meta AI and Hugging Face</td></tr>
+        <tr><td>Model sizes</td><td>Reads <code>config.json</code>, so all ViT sizes in principle. The converter reads only one <code>model.safetensors</code>. ViT-7B/16 has six shards, so it fails. Tests: ViT-S/16 only.</td><td>Factories for S, B, L, SO400M, H, giant2 and 7B. The converter guesses S+ and H+ from the FFN shape. No size has a test.</td><td>S/16, S+/16 and B/16 at 224 px.</td><td>None. ConvNeXt and some ViT layers. No ViT model.</td><td class="yes">All six, and ConvNeXt</td></tr>
+        <tr><td>Outputs</td><td>CLS token, patch tokens, last hidden state, all hidden states</td><td>CLS token, register tokens, patch tokens, pre-norm tokens, intermediate layers</td><td>CLS token, register tokens, patch tokens, intermediate layers</td><td>None</td><td>Last hidden state, pooler output (CLS token after the final norm)</td></tr>
+        <tr><td>Input resolution</td><td>Model: any multiple of 16. Image processor: one square size, 224 px by default.</td><td>Any multiple of 16 (not tested)</td><td>Any multiple of 16. Tests: 224 px.</td><td>n/a</td><td>Any multiple of 16</td></tr>
+        <tr><td>Parity tests</td><td class="yes">Yes: ViT-S/16, fp32, 224 px, one image. Last hidden state, CLS token, hidden state 6. Cosine ≥ 0.999, relative L2 ≤ 0.02.</td><td class="no">No tests. The converter prints the CLS cosine against Hugging Face (target 0.999).</td><td class="no">No parity test. 30 sanity tests: shapes, parameter count, same output twice, same class more similar.</td><td class="no">No</td><td>Reference</td></tr>
+        <tr><td>Benchmarks</td><td class="no">None</td><td class="no">None ("high-performance", no numbers)</td><td class="no">None for DINOv3 speed</td><td class="no">None</td><td>Our baseline on <code>torch-mps</code></td></tr>
+        <tr><td>Fine-tuning</td><td class="no">None</td><td>A DETR head on a frozen ViT-S/16. No adapter.</td><td>General trainer (full fine-tuning, classifier head). No LoRA, no DoRA.</td><td class="no">None</td><td>Through PEFT (our reference fine-tuning setup)</td></tr>
+        <tr><td>Quantized weights</td><td class="no">No</td><td class="yes">Yes: <code>nn.quantize</code>, 2 to 8 bits, with a drift check</td><td class="no">Not for DINOv3</td><td class="no">No</td><td>Not in the model code</td></tr>
+        <tr><td>Weights</td><td>Downloads the gated Hugging Face repo, then converts</td><td>Converts a local <code>.pth</code> file</td><td>Re-hosts converted weights, not gated, on the <code>mlx-vision</code> Hugging Face org</td><td>Converts a local <code>.pth</code> file</td><td>Gated Hugging Face repos</td></tr>
+        <tr><td>Code license</td><td>MIT</td><td>DINOv3 License (file <code>LICENSE.md</code>)</td><td>MIT</td><td>MIT</td><td>Apache-2.0</td></tr>
+        <tr><td>Activity</td><td>Release 2.0.0. Last push 2026-04-11. 9 stars.</td><td>Last push 2026-05-16. 1 star.</td><td>Last push 2026-04-08. 102 stars.</td><td>Last push 2025-10-13. 5 stars.</td><td>Active</td></tr>
+        <tr><td>Explainers</td><td class="no">No</td><td class="no">No</td><td class="no">No</td><td class="no">No</td><td>Model docs page</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 1.</b> Prior work, read from the code on 2026-11-06. Green: the code shows the feature. Red: the code does not show it. The last column is our reference, not a competitor.</p>
+  <p>Two more projects are near this scope, but they are not general ports. <code>rinpatch/dinov3-coreml</code> converts ViT-B/16 to Core ML. <code>mlx-community/tripo_splat_mlx</code> has a ViT-H+/16 encoder inside a 3D pipeline.</p>
+
+  <h3>3.2 Gaps that this repo fills</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>No.</th><th>Gap</th><th>Evidence in Table 1</th><th>Roadmap step</th></tr></thead>
+      <tbody>
+        <tr><td>G1</td><td>No port shows parity for more than one model size. No port tests fp16 or bf16.</td><td>Only MLXDINOv3 has parity tests, for ViT-S/16 in fp32.</td><td>2, 4, 5</td></tr>
+        <tr><td>G2</td><td>No port shows a working ViT-7B/16 or ViT-H+/16.</td><td>MLXDINOv3 cannot read the six shards of ViT-7B/16. mlx_dinov3 has untested factories. mlx-image stops at ViT-B/16.</td><td>5</td></tr>
+        <tr><td>G3</td><td>No port measures throughput or peak memory, and no port compares with <code>torch-mps</code>.</td><td>The "Benchmarks" row is red for all ports.</td><td>3, 6</td></tr>
+        <tr><td>G4</td><td>No port has adapter fine-tuning (LoRA, DoRA) for DINOv3 in MLX.</td><td>The "Fine-tuning" row has a frozen backbone or full fine-tuning only.</td><td>8</td></tr>
+        <tr><td>G5</td><td>No port tests patch embeddings at high or non-square input resolutions.</td><td>All tests use 224 × 224 px.</td><td>2, 6</td></tr>
+        <tr><td>G6</td><td>No port explains DINOv3.</td><td>The "Explainers" row is red for all ports.</td><td>Each step</td></tr>
+        <tr><td>G7</td><td>No Python port loads the gated Hugging Face weights directly from the Hugging Face cache, with the Hugging Face key names.</td><td>mlx_dinov3 and mlx-dinov3 need <code>.pth</code> files. mlx-image needs its re-hosted weights.</td><td>4</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 2.</b> Gaps. The plan claim of Section 3 of <code>docs/plan.html</code> stays true: no project has all five parts of this repo.</p>
+  <p>The overlap is real for the small model sizes. mlx-image already gives ViT-S/16, ViT-S+/16 and ViT-B/16 in Python MLX. So a port of the small model sizes alone adds little. The value of this repo is in G1 to G6 together.</p>
+
+  <h3>3.3 Option A: own Python package, full scope</h3>
+  <p>We build a new Python MLX package, as <code>docs/plan.html</code> describes. We write the model from the Hugging Face code (Apache-2.0) and the paper. The package loads the weights from the Hugging Face cache. It covers all six model sizes, the parity tests, the benchmarks, the adapters and the explainers.</p>
+  <ul>
+    <li>For: we control the API, the tests and the benchmark harness. Each part gets an explainer, so the learning goal is met. The fine-tuning step needs the model code in our hands.</li>
+    <li>Against: one more DINOv3 port. We must make the gaps visible in the README, or users see a duplicate.</li>
+  </ul>
+
+  <h3>3.4 Option B: contribute to mlx-image</h3>
+  <p>We add ViT-L/16, ViT-H+/16, ViT-7B/16, parity tests and adapters to mlx-image. This repo keeps only the benchmarks, the explainers and the fine-tuning experiments.</p>
+  <ul>
+    <li>For: one place for users, and 102 stars of reach.</li>
+    <li>Against: each change waits for the review of another maintainer. The mlx-image API fixes a 224 px config for each model and uses re-hosted weights that are not gated. The fine-tuning step needs changes deep inside the model code. Our steps lose their schedule.</li>
+  </ul>
+
+  <h3>3.5 Option C: benchmarks and explainers only</h3>
+  <p>We use one existing port as the MLX backend. We add the parity tests, the benchmarks and the explainers. We do not write a port.</p>
+  <ul>
+    <li>For: the least code.</li>
+    <li>Against: no port covers all six model sizes (G2). A fix of the port means that we own the port anyway. Goal 5 (fast adapter fine-tuning) has no base. The learning goal suffers, because we explain code that we did not write.</li>
+  </ul>
+
+  <h3>3.6 Recommendation</h3>
+  <div class="box">
+    <p><b>Option A, with a sharper focus.</b> The README and the first release lead with the gaps G1 to G7, not with "a port of DINOv3". Concretely:</p>
+    <ol>
+      <li>Write the MLX model from the Hugging Face code and the paper. Do not copy the official Meta code. Section 4 explains how this choice touches the license.</li>
+      <li>Load the gated weights from the Hugging Face cache with the Hugging Face key names. Do not re-host weights.</li>
+      <li>Support all six model sizes, with sharded weights for ViT-7B/16.</li>
+      <li>Publish parity for every model size and dtype, and the benchmark matrix against <code>torch-mps</code> on the M5 Max.</li>
+      <li>Add LoRA and DoRA adapters in Step 8.</li>
+      <li>Later, offer upstream fixes to mlx-image (for example the larger model sizes) where they help users. This is not a goal of this repo.</li>
+    </ol>
+  </div>
+</section>
+
+<section id="license">
+  <h2>4 Effect on the license decision</h2>
+  <p>Decision D6 (risk R1 in <code>docs/plan.html</code>) stays with the user. Table 1 gives three facts for it.</p>
+  <ul>
+    <li>mlx_dinov3 ports the official Meta code and ships the DINOv3 License. This is Option A of R1.</li>
+    <li>MLXDINOv3 and mlx-image ship their code under MIT and state that the weights stay under the DINOv3 License. This is Option B of R1.</li>
+    <li>The Hugging Face model code is Apache-2.0. If we write the model from this code and from the paper, and not from the official Meta code, our code is less directly a derivative work of the official code. This is not a legal opinion.</li>
+  </ul>
+  <p>The weights are DINO Materials in all cases. This repo never distributes them.</p>
+</section>
+
+<section id="open">
+  <h2>9 Open questions</h2>
+  <ul>
+    <li>Scope: decided on 2026-11-06, Option A.</li>
+    <li>Repo license: decided on 2026-11-06, Option B of R1 (ADR 0002).</li>
+    <li>The Hugging Face token: renewed on 2026-11-06. The access to the gated repos waits for the review of Meta.</li>
+    <li>Clause 1.b.iv of the DINOv3 License forbids use that will "reverse engineer, decompile or discover the underlying components" of the DINO Materials. The explainers describe the public code and the paper. Is this out of scope of clause 1.b.iv? The user decides if a legal check is necessary.</li>
+    <li>Repo name (R2): keep <code>dinov3-apple</code>? The user decides before the first push.</li>
+  </ul>
+</section>
+
+<section id="sources">
+  <h2>10 Sources</h2>
+  <ul>
+    <li>github.com/vincentamato/MLXDINOv3, commit 3122d79 (2026-04-10).</li>
+    <li>github.com/etornam45/mlx_dinov3, commit 43d139b (2026-05-16). Project page: etornam.vercel.app/projects/mlx-dinov3.</li>
+    <li>github.com/riccardomusmeci/mlx-image, commit da92532 (2026-04-08), files <code>src/mlxim/model/dinov3/</code> and <code>tests/test_dinov3.py</code>.</li>
+    <li>github.com/sarveshmayil/mlx-dinov3, commit 0bdeaa0 (2025-10-13).</li>
+    <li>Hugging Face transformers 4.56.1, <code>models/dinov3_vit/modeling_dinov3_vit.py</code>.</li>
+    <li>DINOv3 License, last updated 2025-08-19, clauses 1.b.i and 1.b.iv.</li>
+    <li>Hugging Face model pages of the six model sizes (gated, license <code>dinov3-license</code>).</li>
+  </ul>
+</section>
+</main>
+</body>
+</html>

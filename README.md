@@ -2,7 +2,7 @@
 
 Fast DINOv3 frame embeddings, patch embeddings and fine-tuning on Apple silicon with MLX.
 
-Status: planning. There is no code to install yet.
+Status: Step 1 (scope). The Python project and the weight scripts exist. The MLX backbone comes in Step 4.
 
 - Why and what: [mission.md](mission.md)
 - Steps and status: [roadmap.md](roadmap.md)

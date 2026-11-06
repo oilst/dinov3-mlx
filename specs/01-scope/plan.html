@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Step 1 Scope: Plan</title>
+<style>
+/* Spec page. White page, black text, no dark mode. */
+:root { --bg: #ffffff; --fg: #111414; --muted: #4a5655; --rule: #d6dedd; --panel: #f5f8f7; --accent: #057379; --pass: #1d7a3a; --fail: #b3261e; color-scheme: light; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif; }
+main { max-width: 60rem; margin: 0 auto; padding: 40px 20px 64px; display: grid; gap: 1.75rem; }
+h1 { font-size: 1.9rem; line-height: 1.15; margin: 0; }
+h2 { font-size: 1.3rem; margin: 0; }
+h3 { font-size: 1.05rem; margin: 0; }
+section { display: grid; gap: 0.8rem; }
+p, ul, ol { margin: 0; max-width: 46rem; }
+li + li { margin-top: 0.25rem; }
+code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.86em; }
+pre { margin: 0; background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 0.8rem 1rem; overflow-x: auto; }
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 0.95rem; }
+th, td { text-align: left; vertical-align: top; padding: 0.45rem 0.7rem 0.45rem 0; border-bottom: 1px solid var(--rule); }
+th { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); border-bottom: 1.5px solid var(--fg); }
+td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.caption { font-size: 0.88rem; color: var(--muted); }
+figure { margin: 0; display: grid; gap: 0.4rem; }
+.fig { border: 1px solid var(--rule); border-radius: 6px; padding: 0.5rem; overflow-x: auto; }
+.fig svg { display: block; width: 100%; height: auto; min-width: 640px; }
+figcaption { font-size: 0.88rem; color: var(--muted); }
+a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+<header>
+  <h1>Step 1 Scope: Plan</h1>
+  <p>Roadmap step 1. Status: approved by the user on 2026-11-06. Changed on 2026-11-06: Section 3.3 (converted weights), tests 7 to 9, AC6. Date: 2026-11-06.</p>
+</header>
+
+<section id="goal">
+  <h2>1 Goal</h2>
+  <p>Step 1 gives every later step a fixed scope, a license, a Python project and local access to the weights of all six model sizes. The user decided two items on 2026-11-06:</p>
+  <ul>
+    <li>Scope: Option A of <code>explore.html</code>. We build our own Python MLX package from the Hugging Face code and the paper. The README leads with the gaps G1 to G7.</li>
+    <li>License: our code under MIT, the weights under the DINOv3 License, a legal check before the first push. <code>docs/adr/0002-mit-for-code-dinov3-license-for-weights.md</code> records the decision.</li>
+  </ul>
+  <p>The rest of this plan creates the Python project and downloads the weights.</p>
+</section>
+
+<section id="dinov3">
+  <h2>2 DINOv3 topic</h2>
+  <p>The topic is what the other ports cover. The explainer <code>docs/learn/01-prior-ports.html</code> puts the four MLX ports next to the Hugging Face code, part by part: the token layout, the 2D RoPE, the feed-forward network, the weight names and the two outputs. It also shows the file sizes of the six model sizes, which set the memory budget of the later steps.</p>
+</section>
+
+<section id="design">
+  <h2>3 Design</h2>
+  <h3>3.1 Python project</h3>
+  <p>We create the project with <code>uv init --lib</code>: a <code>src/</code> layout, the package <code>dinov3_apple</code> (a working name until the user decides R2), Python 3.12. uv installs Python 3.12, because this Mac has no Python 3.12 yet. We pin each dependency to one version with <code>==</code> and commit <code>uv.lock</code>.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Package</th><th>Version</th><th>Group</th><th>Used for</th></tr></thead>
+      <tbody>
+        <tr><td>mlx</td><td class="num">0.32.4</td><td>main</td><td>The fast backend</td></tr>
+        <tr><td>torch</td><td class="num">2.15.0</td><td>main</td><td>Reference output (<code>torch-cpu</code>) and baseline (<code>torch-mps</code>)</td></tr>
+        <tr><td>transformers</td><td class="num">5.22.1</td><td>main</td><td><code>DINOv3ViTModel</code></td></tr>
+        <tr><td>pillow</td><td class="num">13.0.0</td><td>main</td><td>Read the test image (added for Section 3.3)</td></tr>
+        <tr><td>safetensors</td><td class="num">0.8.0</td><td>main</td><td>Read the weights</td></tr>
+        <tr><td>huggingface_hub</td><td class="num">2.4.0</td><td>main</td><td>Download the weights into the Hugging Face cache</td></tr>
+        <tr><td>pytest</td><td class="num">9.2.0</td><td>dev</td><td>Tests</td></tr>
+        <tr><td>ruff</td><td class="num">0.17.4</td><td>dev</td><td>Lint and format</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 1.</b> Pinned versions. These are the latest versions on PyPI on 2026-11-06.</p>
+  <p>Later steps add packages (for example PEFT in Step 8). Pillow came in Step 1 for Section 3.3 when they need them.</p>
+
+  <h3>3.2 Weights</h3>
+  <p>The module <code>dinov3_apple/hub.py</code> holds the six Hugging Face ids of <code>tech-stack.md</code> and two functions: one checks the free disk, one downloads one model size. The script <code>scripts/download_weights.py</code> calls them for each model size, one at a time, from the smallest to the largest. It downloads only <code>config.json</code>, the safetensors files and the safetensors index. The weights go into the Hugging Face cache, outside the repo.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Model size</th><th>Parameters</th><th>Files</th><th>Size (fp32)</th></tr></thead>
+      <tbody>
+        <tr><td>ViT-S/16</td><td class="num">21.6 M</td><td>1</td><td class="num">0.09 GB</td></tr>
+        <tr><td>ViT-S+/16</td><td class="num">28.7 M</td><td>1</td><td class="num">0.11 GB</td></tr>
+        <tr><td>ViT-B/16</td><td class="num">85.7 M</td><td>1</td><td class="num">0.34 GB</td></tr>
+        <tr><td>ViT-L/16</td><td class="num">303.1 M</td><td>1</td><td class="num">1.21 GB</td></tr>
+        <tr><td>ViT-H+/16</td><td class="num">840.6 M</td><td>1</td><td class="num">3.36 GB</td></tr>
+        <tr><td>ViT-7B/16</td><td class="num">6,716.0 M</td><td>6 shards and an index</td><td class="num">26.86 GB</td></tr>
+        <tr><td><b>Total</b></td><td class="num"></td><td></td><td class="num"><b>31.98 GB</b></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 2.</b> Weight files on the Hugging Face Hub (API, 2026-11-06). The disk has 129 GiB free (2026-11-06).</p>
+  <p>Before each download, the script reads the file sizes from the Hub. It stops if the free disk after the download is less than 50 GB. A download does not load the weights into memory, so the out-of-memory rule of <code>CLAUDE.md</code> does not apply. We still run one download at a time.</p>
+  <h3>3.3 Converted weights while the access waits</h3>
+  <p>On 2026-11-06 the token works, but Meta has not yet approved the access to the gated repos. This Mac holds the Meta checkpoints of ViT-S/16 and ViT-H+/16 (<code>.pth</code> files in the torch hub cache). The script <code>scripts/convert_meta_checkpoint.py</code> converts one checkpoint into a Hugging Face model folder. It adapts the Hugging Face converter <code>convert_dinov3_vit_to_hf.py</code> (Apache-2.0), as ADR 0002 requires.</p>
+  <ol>
+    <li>It checks the SHA-256 of the checkpoint against the 8 hex digits in the file name.</li>
+    <li>It renames the keys, splits each <code>qkv</code> weight into q, k and v, and loads the result into <code>DINOv3ViTModel</code> with <code>strict=True</code>.</li>
+    <li>It compares the first 5 values of the frame embedding and of the first patch embedding of one COCO image with the values of the Hugging Face converter (tolerance 1e-3).</li>
+    <li>It saves the folder to <code>~/.cache/dinov3-apple/converted/&lt;Hugging Face id&gt;</code>. It does not write into the Hugging Face cache, so that the real downloads stay clean.</li>
+  </ol>
+  <p>When the access comes, test 9 compares each converted tensor with the downloaded tensor.</p>
+</section>
+
+<section id="flow">
+  <h2>4 Data flow</h2>
+  <figure>
+    <div class="fig"><svg viewBox="0 0 960 250" role="img" aria-label="Data flow of Step 1">
+      <rect width="960" height="250" fill="#ffffff"/>
+      <defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#111414"/></marker></defs>
+      <g font-family="-apple-system, Helvetica, Arial, sans-serif" font-size="13" fill="#111414">
+        <rect x="20" y="30" width="190" height="70" rx="6" fill="#f5f8f7" stroke="#4a5655"/>
+        <text x="115" y="58" text-anchor="middle" font-weight="600">Hugging Face Hub</text>
+        <text x="115" y="78" text-anchor="middle">6 gated repos</text>
+        <rect x="20" y="150" width="190" height="70" rx="6" fill="#ffffff" stroke="#4a5655"/>
+        <text x="115" y="178" text-anchor="middle" font-weight="600">User</text>
+        <text x="115" y="198" text-anchor="middle">accepts license, renews token</text>
+        <line x1="115" y1="150" x2="115" y2="104" stroke="#111414" marker-end="url(#a)"/>
+        <rect x="270" y="30" width="230" height="70" rx="6" fill="#ffffff" stroke="#057379" stroke-width="1.5"/>
+        <text x="385" y="58" text-anchor="middle" font-weight="600">scripts/download_weights.py</text>
+        <text x="385" y="78" text-anchor="middle">disk check, then one download</text>
+        <line x1="210" y1="65" x2="266" y2="65" stroke="#111414" marker-end="url(#a)"/>
+        <rect x="560" y="30" width="200" height="70" rx="6" fill="#f5f8f7" stroke="#4a5655"/>
+        <text x="660" y="58" text-anchor="middle" font-weight="600">Hugging Face cache</text>
+        <text x="660" y="78" text-anchor="middle">6 model sizes, 32 GB</text>
+        <line x1="500" y1="65" x2="556" y2="65" stroke="#111414" marker-end="url(#a)"/>
+        <path d="M560,58 C530,10 420,10 395,26" fill="none" stroke="#4a5655" stroke-dasharray="4 3" marker-end="url(#a)"/>
+        <text x="478" y="16" text-anchor="middle" fill="#4a5655" font-size="12">next model size</text>
+        <rect x="270" y="150" width="230" height="70" rx="6" fill="#ffffff" stroke="#057379" stroke-width="1.5"/>
+        <text x="385" y="178" text-anchor="middle" font-weight="600">pyproject.toml + uv.lock</text>
+        <text x="385" y="198" text-anchor="middle">Python 3.12, pinned versions</text>
+        <rect x="560" y="150" width="200" height="70" rx="6" fill="#ffffff" stroke="#057379" stroke-width="1.5"/>
+        <text x="660" y="178" text-anchor="middle" font-weight="600">uv run pytest</text>
+        <text x="660" y="198" text-anchor="middle">environment + cache tests</text>
+        <line x1="500" y1="185" x2="556" y2="185" stroke="#111414" marker-end="url(#a)"/>
+        <line x1="660" y1="100" x2="660" y2="146" stroke="#111414" marker-end="url(#a)"/>
+        <rect x="810" y="90" width="130" height="70" rx="6" fill="#f5f8f7" stroke="#4a5655"/>
+        <text x="875" y="118" text-anchor="middle" font-weight="600">Step 2</text>
+        <text x="875" y="138" text-anchor="middle">reference outputs</text>
+        <line x1="760" y1="70" x2="806" y2="110" stroke="#111414" marker-end="url(#a)"/>
+      </g>
+    </svg></div>
+    <figcaption><b>Figure 1.</b> The user gives access to the gated repos. The script downloads one model size at a time into the Hugging Face cache. The tests check the environment and the cache. Step 2 reads the weights from the cache. Teal boxes are new files of this step.</figcaption>
+  </figure>
+</section>
+
+<section id="code">
+  <h2>5 Key code</h2>
+  <pre><code># Create the project (run once).
+uv init --lib --name dinov3-apple --python 3.12
+uv add mlx==0.32.4 torch==2.15.0 transformers==5.22.1 safetensors==0.8.0 huggingface_hub==2.4.0 pillow==13.0.0
+uv add --dev pytest==9.2.0 ruff==0.17.4</code></pre>
+  <pre><code># src/dinov3_apple/hub.py (shape of the code, not final)
+MODEL_IDS: dict[str, str] = {
+    "vits16": "facebook/dinov3-vits16-pretrain-lvd1689m",
+    # ... the other five model sizes of tech-stack.md
+}
+WEIGHT_PATTERNS: list[str] = ["config.json", "*.safetensors", "model.safetensors.index.json"]
+
+
+def check_free_disk(required_bytes: int, keep_free_bytes: int, path: Path) -> None:
+    """Raise InsufficientDiskError if the download leaves less than keep_free_bytes."""
+    free = shutil.disk_usage(path).free
+    if free - required_bytes &lt; keep_free_bytes:
+        raise InsufficientDiskError(f"{free=} {required_bytes=} {keep_free_bytes=}")
+
+
+def download(model_id: str) -&gt; Path:
+    """Download one model size into the Hugging Face cache and return the snapshot path."""
+    return Path(snapshot_download(model_id, allow_patterns=WEIGHT_PATTERNS))</code></pre>
+</section>
+
+<section id="tests">
+  <h2>6 Tests</h2>
+  <ol>
+    <li><code>test_mlx_default_device_is_gpu</code>: MLX runs on the GPU.</li>
+    <li><code>test_torch_mps_is_available</code>: PyTorch can use the MPS backend.</li>
+    <li><code>test_transformers_has_dinov3_vit_model</code>: <code>from transformers import DINOv3ViTModel</code> works.</li>
+    <li><code>test_model_ids_cover_six_model_sizes</code>: <code>MODEL_IDS</code> holds the six ids of <code>tech-stack.md</code>.</li>
+    <li><code>test_check_free_disk_raises_when_space_is_too_small</code> and <code>test_check_free_disk_passes_when_space_is_enough</code>: the disk check stops a download that leaves too little space, and only such a download.</li>
+    <li><code>test_weights_are_in_cache[model size]</code>: for each model size, the cache holds <code>config.json</code> and every safetensors file of the index. The test skips with a reason when a model size is missing, so that <code>uv run pytest</code> passes on a machine without weights. <code>verify.html</code> counts the skips.</li>
+    <li><code>test_convert_state_dict_splits_qkv_and_renames_keys</code>: the key map and the qkv split of Section 3.3.</li>
+    <li><code>test_check_checksum_accepts_matching_name</code> and <code>test_check_checksum_rejects_other_content</code>: the checksum check.</li>
+    <li><code>test_converted_weights_match_hub[model size]</code>: each converted tensor is equal to the tensor of the Hub file. The test skips when one of the two files is missing.</li>
+  </ol>
+</section>
+
+<section id="benchmarks">
+  <h2>7 Benchmarks</h2>
+  <p>Step 1 has no benchmark. <code>verify.html</code> records the download time and the free disk after the downloads.</p>
+</section>
+
+<section id="criteria">
+  <h2>8 Acceptance criteria</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>No.</th><th>Criterion</th><th>Target</th><th>Checked by</th></tr></thead>
+      <tbody>
+        <tr><td>AC1</td><td>The user chose the scope</td><td>Option recorded</td><td><code>explore.html</code>, this plan</td></tr>
+        <tr><td>AC2</td><td>License files and ADR exist</td><td><code>LICENSE</code> (MIT), <code>LICENSE-DINOv3.md</code>, ADR 0002</td><td>File check</td></tr>
+        <tr><td>AC3</td><td><code>uv sync</code> installs the project</td><td>Python 3.12.x, the versions of Table 1, <code>uv.lock</code> present</td><td><code>uv sync --locked</code></td></tr>
+        <tr><td>AC4</td><td><code>uv run pytest</code> passes</td><td>0 failures, 0 errors</td><td>pytest</td></tr>
+        <tr><td>AC5</td><td>Lint and format are clean</td><td>0 findings</td><td><code>uv run ruff check</code>, <code>uv run ruff format --check</code></td></tr>
+        <tr><td>AC6</td><td>Weights are available for all model sizes</td><td>6 of 6 in the Hugging Face cache (0 skips in test 6). Until the access comes: ViT-S/16 and ViT-H+/16 converted and checked (Section 3.3), the other 4 named as missing.</td><td><code>test_weights_are_in_cache</code>, <code>convert_meta_checkpoint.py</code>, test 9</td></tr>
+        <tr><td>AC7</td><td>Free disk after the downloads</td><td class="num">≥ 50 GB</td><td><code>df -h</code></td></tr>
+        <tr><td>AC8</td><td><code>tech-stack.md</code> records the versions</td><td>macOS, MLX, Python, torch, transformers</td><td>File check</td></tr>
+        <tr><td>AC9</td><td>The explainer covers the prior ports and every function of <code>hub.py</code></td><td>4 ports, 2 functions</td><td><code>docs/learn/01-prior-ports.html</code></td></tr>
+        <tr><td>AC10</td><td><code>roadmap.md</code> and <code>GLOSSARY.md</code> are up to date</td><td>Step 1 done, Step 2 next</td><td>File check</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 3.</b> Acceptance criteria. If the access does not come in Step 1, AC6 is partial and <code>verify.html</code> names the missing model sizes.</p>
+</section>
+
+<section id="open">
+  <h2>9 Open questions</h2>
+  <ul>
+    <li>The copyright holder in <code>LICENSE</code>: "Ueli Peter" or the company. The user decides.</li>
+    <li>The token works since 2026-11-06. The access request to the six gated repos waits for the review of Meta.</li>
+    <li>The legal check of ADR 0002 before Step 7. The user names who does it.</li>
+    <li>The repo name and the package name (R2). The working names are <code>dinov3-apple</code> and <code>dinov3_apple</code>. The user decides before Step 7.</li>
+  </ul>
+</section>
+</main>
+</body>
+</html>

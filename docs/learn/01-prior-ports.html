@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Prior DINOv3 Ports</title>
+<style>
+/* Explainer page. White page, black text, no dark mode. */
+:root { --bg: #ffffff; --fg: #111414; --muted: #4a5655; --rule: #d6dedd; --panel: #f5f8f7; --accent: #057379; --cls: #057379; --patch: #9fd3d1; --reg: #e0a336; color-scheme: light; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif; }
+main { max-width: 62rem; margin: 0 auto; padding: 40px 20px 64px; display: grid; gap: 1.75rem; }
+h1 { font-size: 1.9rem; line-height: 1.15; margin: 0; }
+h2 { font-size: 1.3rem; margin: 0; }
+h3 { font-size: 1.05rem; margin: 0; }
+section { display: grid; gap: 0.8rem; }
+p, ul, ol { margin: 0; max-width: 46rem; }
+li + li { margin-top: 0.25rem; }
+code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.86em; }
+pre { margin: 0; background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 0.8rem 1rem; overflow-x: auto; }
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 0.92rem; }
+th, td { text-align: left; vertical-align: top; padding: 0.45rem 0.7rem 0.45rem 0; border-bottom: 1px solid var(--rule); }
+th { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); border-bottom: 1.5px solid var(--fg); }
+td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.caption, figcaption { font-size: 0.88rem; color: var(--muted); }
+figure { margin: 0; display: grid; gap: 0.4rem; }
+.fig { border: 1px solid var(--rule); border-radius: 6px; padding: 0.5rem; overflow-x: auto; }
+.fig svg { display: block; width: 100%; height: auto; min-width: 640px; }
+.note { border-left: 3px solid var(--accent); padding: 0.3rem 0 0.3rem 0.9rem; }
+nav ol { columns: 2; }
+a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+<header>
+  <h1>Prior DINOv3 Ports</h1>
+  <p>Explainer for roadmap step 1. Date: 2026-11-06.</p>
+</header>
+
+<nav>
+  <h2>Contents</h2>
+  <ol>
+    <li><a href="#why">Why compare the ports</a></li>
+    <li><a href="#tokens">The token layout</a></li>
+    <li><a href="#rope">The 2D RoPE</a></li>
+    <li><a href="#ffn">The feed-forward network</a></li>
+    <li><a href="#weights">Two sets of weight names</a></li>
+    <li><a href="#outputs">The two outputs</a></li>
+    <li><a href="#sizes">The weight files of the model sizes</a></li>
+    <li><a href="#code">The code of Step 1</a></li>
+    <li><a href="#surprises">Surprises</a></li>
+    <li><a href="#sources">Sources</a></li>
+  </ol>
+</nav>
+
+<section id="why">
+  <h2>1 Why compare the ports</h2>
+  <p>Four public projects run DINOv3 in MLX: MLXDINOv3 (Swift), mlx_dinov3 (Python), the DINOv3 part of mlx-image (Python) and mlx-dinov3 (Python, not complete). <code>specs/01-scope/explore.html</code> compares what each project gives. This explainer compares how each project computes the backbone, part by part, against the Hugging Face <code>DINOv3ViTModel</code>. Our parity tests compare with that model (see "reference output" in <code>GLOSSARY.md</code>).</p>
+  <p>The ports come from two code bases. MLXDINOv3 follows the Hugging Face code. mlx_dinov3 and mlx-image follow the official Meta code. Both code bases compute the same function, but they use different weight names and different defaults.</p>
+</section>
+
+<section id="tokens">
+  <h2>2 The token layout</h2>
+  <figure>
+    <div class="fig"><svg viewBox="0 0 960 230" role="img" aria-label="Token sequence of a DINOv3 ViT">
+      <rect width="960" height="230" fill="#ffffff"/>
+      <g font-family="-apple-system, Helvetica, Arial, sans-serif" font-size="13" fill="#111414">
+        <text x="20" y="28" font-weight="600">Token sequence for a 224 × 224 px image (14 × 14 = 196 patches)</text>
+        <rect x="20" y="50" width="60" height="44" fill="#057379"/>
+        <text x="50" y="77" text-anchor="middle" fill="#ffffff">CLS</text>
+        <rect x="84" y="50" width="44" height="44" fill="#e0a336"/>
+        <text x="106" y="77" text-anchor="middle">R1</text>
+        <rect x="132" y="50" width="44" height="44" fill="#e0a336"/>
+        <text x="154" y="77" text-anchor="middle">R2</text>
+        <rect x="180" y="50" width="44" height="44" fill="#e0a336"/>
+        <text x="202" y="77" text-anchor="middle">R3</text>
+        <rect x="228" y="50" width="44" height="44" fill="#e0a336"/>
+        <text x="250" y="77" text-anchor="middle">R4</text>
+        <rect x="284" y="50" width="44" height="44" fill="#9fd3d1"/>
+        <text x="306" y="77" text-anchor="middle">P0</text>
+        <rect x="332" y="50" width="44" height="44" fill="#9fd3d1"/>
+        <text x="354" y="77" text-anchor="middle">P1</text>
+        <text x="420" y="77" text-anchor="middle">…</text>
+        <rect x="466" y="50" width="54" height="44" fill="#9fd3d1"/>
+        <text x="493" y="77" text-anchor="middle">P195</text>
+        <text x="20" y="118">index 0</text>
+        <text x="120" y="118">indices 1 to 4</text>
+        <text x="330" y="118">indices 5 to 200</text>
+        <line x1="20" y1="134" x2="272" y2="134" stroke="#4a5655"/>
+        <text x="146" y="152" text-anchor="middle" fill="#4a5655">5 prefix tokens: no RoPE</text>
+        <line x1="284" y1="134" x2="520" y2="134" stroke="#4a5655"/>
+        <text x="402" y="152" text-anchor="middle" fill="#4a5655">patch tokens: RoPE on q and k</text>
+        <rect x="580" y="50" width="360" height="150" rx="6" fill="#f5f8f7" stroke="#d6dedd"/>
+        <text x="596" y="76" font-weight="600">After the final layer norm</text>
+        <rect x="596" y="92" width="18" height="18" fill="#057379"/>
+        <text x="622" y="106">index 0 → frame embedding</text>
+        <rect x="596" y="122" width="18" height="18" fill="#e0a336"/>
+        <text x="622" y="136">indices 1 to 4 → not an output</text>
+        <rect x="596" y="152" width="18" height="18" fill="#9fd3d1"/>
+        <text x="622" y="166">indices 5 to end → patch embeddings,</text>
+        <text x="622" y="184">a 14 × 14 grid</text>
+      </g>
+    </svg></div>
+    <figcaption><b>Figure 1.</b> The sequence that the blocks process. Teal: the CLS token. Amber: the 4 register tokens. Light teal: the patch tokens, in row-major order.</figcaption>
+  </figure>
+  <p>All four ports and the Hugging Face model use this layout. The patch embedding is a 16 × 16 convolution with stride 16. MLX convolutions use the channels-last layout NHWC, so every port moves the axes of the convolution weight from (out, in, 16, 16) to (out, 16, 16, in). In the Hugging Face code, the variable <code>num_prefix_tokens</code> holds the 5 tokens before the patches.</p>
+</section>
+
+<section id="rope">
+  <h2>3 The 2D RoPE</h2>
+  <p>DINOv3 has no learned position embedding. Each block rotates the queries and keys of the patch tokens by angles that come from the patch position. The Hugging Face code computes the angles in four steps:</p>
+  <pre><code># transformers, modeling_dinov3_vit.py (Apache-2.0), shortened
+coords_h = torch.arange(0.5, num_patches_h) / num_patches_h    # patch centers in (0, 1)
+coords_w = torch.arange(0.5, num_patches_w) / num_patches_w
+coords = 2.0 * stack(meshgrid(coords_h, coords_w)) - 1.0        # (H*W, 2) in (-1, 1)
+inv_freq = 1 / base ** torch.arange(0, 1, 4 / head_dim)        # head_dim / 4 values, base = 100
+angles = 2 * pi * coords[:, :, None] * inv_freq[None, None, :] # (H*W, 2, head_dim / 4)
+angles = angles.flatten(1, 2).tile(2)                           # (H*W, head_dim)</code></pre>
+  <ul>
+    <li>Each axis gets one quarter of the head dimension, and the tile doubles the result for the rotate-half form.</li>
+    <li>Each axis has its own scale (Meta calls this "separate" normalization). A non-square image therefore still spans (-1, 1) on both axes.</li>
+    <li>The prefix tokens get no rotation. <code>apply_rotary_pos_emb</code> splits q and k after the prefix tokens.</li>
+    <li>Hugging Face computes the tables in fp32 and then casts them to the dtype of the input.</li>
+  </ul>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Project</th><th>Table computation</th><th>Default dtype of the tables</th></tr></thead>
+      <tbody>
+        <tr><td>Hugging Face</td><td>As above</td><td>fp32</td></tr>
+        <tr><td>Meta (hub)</td><td>Stores <code>periods</code> instead of <code>inv_freq</code>, same angles</td><td>fp32 (<code>pos_embed_rope_dtype="fp32"</code>)</td></tr>
+        <tr><td>MLXDINOv3</td><td>Line-by-line copy of the Hugging Face steps</td><td>fp32, then the input dtype</td></tr>
+        <tr><td>mlx_dinov3</td><td>Port of the Meta class</td><td>bf16 (the model default <code>pos_embed_rope_dtype="bf16"</code>)</td></tr>
+        <tr><td>mlx-image</td><td>Port of the Meta class</td><td>bf16 (the same default, the factories do not change it)</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 1.</b> RoPE in each project. We read the defaults from the code. We did not measure the effect of bf16 tables on parity.</p>
+</section>
+
+<section id="ffn">
+  <h2>4 The feed-forward network</h2>
+  <p>ViT-S/16, ViT-B/16 and ViT-L/16 use an MLP: up projection, GELU, down projection. ViT-S+/16, ViT-H+/16 and ViT-7B/16 use SwiGLU: <code>down(silu(gate(x)) * up(x))</code>. The width of the SwiGLU hidden layer looks strange in the Hugging Face config:</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Model size</th><th>Meta <code>ffn_ratio</code></th><th>Embedding dimension</th><th>Meta hidden width</th><th>Hugging Face <code>intermediate_size</code></th></tr></thead>
+      <tbody>
+        <tr><td>ViT-S+/16</td><td class="num">6</td><td class="num">384</td><td class="num">384 × 6 × 2/3 = 1536</td><td class="num">1536</td></tr>
+        <tr><td>ViT-H+/16</td><td class="num">6</td><td class="num">1280</td><td class="num">1280 × 6 × 2/3 = 5120</td><td class="num">5120</td></tr>
+        <tr><td>ViT-7B/16</td><td class="num">3</td><td class="num">4096</td><td class="num">4096 × 3 × 2/3 = 8192, aligned to 64</td><td class="num">8192</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 2.</b> SwiGLU width. Meta multiplies the ratio by 2/3, so the three matrices of SwiGLU have about the same parameter count as the two matrices of an MLP with the full ratio.</p>
+  <p>mlx_dinov3 has no factory for ViT-S+/16 or ViT-H+/16. Its converter computes the ratio back from the weight shape. mlx-image sets <code>ffn_ratio=6</code> and <code>ffn_layer="swiglu"</code> for ViT-S+/16, as Meta does.</p>
+</section>
+
+<section id="weights">
+  <h2>5 Two sets of weight names</h2>
+  <p>Meta publishes <code>.pth</code> files. Hugging Face publishes safetensors files with other names. Step 1 converts the local Meta checkpoints with this map, which comes from the Hugging Face converter:</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Meta name</th><th>Hugging Face name</th><th>Change</th></tr></thead>
+      <tbody>
+        <tr><td><code>cls_token</code></td><td><code>embeddings.cls_token</code></td><td>Rename</td></tr>
+        <tr><td><code>storage_tokens</code></td><td><code>embeddings.register_tokens</code></td><td>Rename. Meta says "storage token" for a register token.</td></tr>
+        <tr><td><code>mask_token</code></td><td><code>embeddings.mask_token</code></td><td>Shape (1, D) becomes (1, 1, D). Only training uses it.</td></tr>
+        <tr><td><code>patch_embed.proj.*</code></td><td><code>embeddings.patch_embeddings.*</code></td><td>Rename</td></tr>
+        <tr><td><code>blocks.N.attn.qkv.weight</code></td><td><code>…attention.{q,k,v}_proj.weight</code></td><td>Split into 3 equal parts along the output axis</td></tr>
+        <tr><td><code>blocks.N.attn.qkv.bias</code></td><td><code>…attention.{q,v}_proj.bias</code></td><td>Split. The k part is dropped (see Section 9).</td></tr>
+        <tr><td><code>blocks.N.attn.proj.*</code></td><td><code>…attention.o_proj.*</code></td><td>Rename</td></tr>
+        <tr><td><code>blocks.N.ls1.gamma</code>, <code>ls2.gamma</code></td><td><code>…layer_scale1.lambda1</code>, <code>layer_scale2.lambda1</code></td><td>Rename</td></tr>
+        <tr><td><code>blocks.N.mlp.fc1</code>, <code>fc2</code></td><td><code>…mlp.up_proj</code>, <code>down_proj</code></td><td>Rename (MLP)</td></tr>
+        <tr><td><code>blocks.N.mlp.w1</code>, <code>w2</code>, <code>w3</code></td><td><code>…mlp.gate_proj</code>, <code>up_proj</code>, <code>down_proj</code></td><td>Rename (SwiGLU)</td></tr>
+        <tr><td><code>blocks.N.attn.qkv.bias_mask</code>, <code>rope_embed.periods</code>, <code>local_cls_norm.*</code></td><td>none</td><td>Dropped</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 3.</b> Meta names and Hugging Face names. In transformers 5.22.1, the blocks have the prefix <code>model.layer.N</code>. Older files on the Hub use <code>layer.N</code>.</p>
+  <p>MLXDINOv3 reads the Hugging Face names and changes only the axes of the convolution weight. mlx_dinov3 and mlx-image keep the Meta names and read <code>.pth</code> files. ADR 0002 makes us follow the Hugging Face side.</p>
+</section>
+
+<section id="outputs">
+  <h2>6 The two outputs</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Output</th><th>Hugging Face</th><th>Meta and the Meta-based ports</th><th>MLXDINOv3</th></tr></thead>
+      <tbody>
+        <tr><td>Frame embedding</td><td><code>pooler_output</code> = <code>last_hidden_state[:, 0]</code></td><td><code>x_norm_clstoken</code></td><td><code>clsToken</code></td></tr>
+        <tr><td>Patch embeddings</td><td><code>last_hidden_state[:, 5:]</code></td><td><code>x_norm_patchtokens</code></td><td><code>patchTokens</code></td></tr>
+        <tr><td>Register tokens</td><td><code>last_hidden_state[:, 1:5]</code></td><td><code>x_storage_tokens</code></td><td>not separate</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 4.</b> Output names. All of them come after the same final layer norm.</p>
+</section>
+
+<section id="sizes">
+  <h2>7 The weight files of the model sizes</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Model size</th><th>Parameters</th><th>fp32 file</th><th>fp16 or bf16 (estimate)</th><th>On this Mac (2026-11-06)</th></tr></thead>
+      <tbody>
+        <tr><td>ViT-S/16</td><td class="num">21.6 M</td><td class="num">0.09 GB</td><td class="num">0.04 GB</td><td>Converted from the Meta checkpoint</td></tr>
+        <tr><td>ViT-S+/16</td><td class="num">28.7 M</td><td class="num">0.11 GB</td><td class="num">0.06 GB</td><td>Waits for access</td></tr>
+        <tr><td>ViT-B/16</td><td class="num">85.7 M</td><td class="num">0.34 GB</td><td class="num">0.17 GB</td><td>Waits for access</td></tr>
+        <tr><td>ViT-L/16</td><td class="num">303.1 M</td><td class="num">1.21 GB</td><td class="num">0.61 GB</td><td>Waits for access</td></tr>
+        <tr><td>ViT-H+/16</td><td class="num">840.6 M</td><td class="num">3.36 GB</td><td class="num">1.68 GB</td><td>Converted from the Meta checkpoint</td></tr>
+        <tr><td>ViT-7B/16</td><td class="num">6,716.0 M</td><td class="num">26.86 GB (6 shards)</td><td class="num">13.43 GB</td><td>Waits for access</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 5.</b> Weight files on the Hugging Face Hub. The weights alone set the lower limit of the memory of each later step. ViT-7B/16 in fp32 uses 39 % of the 64 GiB (68.7 GB) of unified memory before the first activation.</p>
+</section>
+
+<section id="code">
+  <h2>8 The code of Step 1</h2>
+  <h3>8.1 <code>src/dinov3_apple/hub.py</code></h3>
+  <ul>
+    <li><code>MODEL_IDS</code> maps each model size to its Hugging Face id. A test compares it with <code>tech-stack.md</code>, so the code and the docs cannot drift apart.</li>
+    <li><code>check_free_disk(required_bytes, keep_free_bytes, path)</code> raises <code>InsufficientDiskError</code> when a download would leave less free disk than the limit. The download script keeps 50 GB free.</li>
+    <li><code>download(model_id)</code> calls <code>snapshot_download</code> with <code>WEIGHT_PATTERNS</code>. The patterns get the config, every safetensors shard and the shard index, and nothing else.</li>
+  </ul>
+  <h3>8.2 <code>scripts/convert_meta_checkpoint.py</code></h3>
+  <ul>
+    <li><code>check_checksum(checkpoint)</code>: Meta puts the first 8 hex digits of the SHA-256 in each file name, for example <code>…-08c60483.pth</code>. The function computes the hash in chunks of 16 MB and compares.</li>
+    <li><code>convert_state_dict(meta_state_dict)</code> applies Table 3.</li>
+    <li><code>load_test_image()</code> resizes the COCO test image to 224 × 224 px on float pixels with antialiasing, then normalizes it with the ImageNet mean and standard deviation.</li>
+    <li><code>check_outputs(model, model_size)</code> compares 5 values of the frame embedding and 5 values of the first patch embedding with the Hugging Face converter (tolerance 1e-3).</li>
+  </ul>
+  <pre><code>def convert_state_dict(meta_state_dict):
+    converted = {}
+    for key, tensor in meta_state_dict.items():
+        if ".qkv." in key:  # one fused matrix -> three matrices
+            for name, part in zip(("q_proj", "k_proj", "v_proj"), tensor.chunk(3, dim=0)):
+                converted[key.replace("qkv", name)] = part
+        else:
+            converted[key] = tensor
+    ...  # then drop the keys of SKIPPED_KEYS and apply KEY_RENAMES</code></pre>
+</section>
+
+<section id="surprises">
+  <h2>9 Surprises</h2>
+  <ol>
+    <li class="note"><b>The k bias is always zero.</b> Meta trains with one fused qkv bias, but a mask (<code>mask_k_bias=True</code>, <code>bias_mask</code>) sets the k part to zero. So the Hugging Face model has no <code>k_proj.bias</code> (<code>key_bias=False</code>). ViT-7B/16 has no q bias and no v bias either.</li>
+    <li class="note"><b>8-bit pixels change the output.</b> Our first conversion check resized the 8-bit image with Pillow and missed the expected values by 0.004. A resize on float pixels, as torchvision does, missed by 0.0004 or less. The preprocessing must be fixed before the parity tests of Step 2 can mean anything.</li>
+    <li class="note"><b>bf16 RoPE tables by default.</b> Both Python ports build the RoPE tables in bf16 unless the caller changes a default. Meta's hub code and Hugging Face use fp32.</li>
+    <li class="note"><b>SwiGLU width.</b> <code>intermediate_size</code> is 4 × the embedding dimension for ViT-S+/16 and ViT-H+/16, but Meta's ratio is 6 (Table 2).</li>
+    <li class="note"><b>Shards break a simple converter.</b> MLXDINOv3 downloads only <code>model.safetensors</code>. ViT-7B/16 has six shards and an index, so the converter cannot read it.</li>
+    <li class="note"><b>The converted file has the same size as the Hub file.</b> Our converted ViT-S/16 and ViT-H+/16 files have exactly the byte count of the files on the Hub. A test compares each tensor when the access comes.</li>
+  </ol>
+</section>
+
+<section id="sources">
+  <h2>10 Sources</h2>
+  <ul>
+    <li>Hugging Face transformers 5.22.1, <code>models/dinov3_vit/modeling_dinov3_vit.py</code>, and <code>convert_dinov3_vit_to_hf.py</code> (main branch, 2026-11-06). Apache-2.0.</li>
+    <li>Official DINOv3 code, <code>dinov3/hub/backbones.py</code> and <code>dinov3/layers/rope_position_encoding.py</code>. Read to check facts only (ADR 0002).</li>
+    <li>MLXDINOv3 commit 3122d79, mlx_dinov3 commit 43d139b, mlx-image commit da92532, mlx-dinov3 commit 0bdeaa0.</li>
+    <li>Hugging Face Hub API, file sizes of the six model sizes, 2026-11-06.</li>
+  </ul>
+</section>
+</main>
+</body>
+</html>

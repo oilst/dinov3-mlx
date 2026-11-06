@@ -1,0 +1,39 @@
+[project]
+name = "dinov3-apple"
+version = "0.1.0"
+description = "Fast DINOv3 frame embeddings, patch embeddings and fine-tuning on Apple silicon with MLX."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE", "LICENSE-DINOv3.md"]
+authors = [
+    { name = "Ueli Peter" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "huggingface-hub==2.4.0",
+    "mlx==0.32.4",
+    "pillow==13.0.0",
+    "safetensors==0.8.0",
+    "torch==2.15.0",
+    "transformers==5.22.1",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.15,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest==9.2.0",
+    "ruff==0.17.4",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["scripts"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+extend-select = ["I"]

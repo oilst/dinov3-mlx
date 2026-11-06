@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Step 1 Scope: Verify</title>
+<style>
+/* Spec page. White page, black text, no dark mode. */
+:root { --bg: #ffffff; --fg: #111414; --muted: #4a5655; --rule: #d6dedd; --panel: #f5f8f7; --accent: #057379; --pass: #1d7a3a; --fail: #b3261e; --partial: #8a5a00; --pending: #4a5655; color-scheme: light; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif; }
+main { max-width: 60rem; margin: 0 auto; padding: 40px 20px 64px; display: grid; gap: 1.75rem; }
+h1 { font-size: 1.9rem; line-height: 1.15; margin: 0; }
+h2 { font-size: 1.3rem; margin: 0; }
+h3 { font-size: 1.05rem; margin: 0; }
+section { display: grid; gap: 0.8rem; }
+p, ul, ol { margin: 0; max-width: 46rem; }
+li + li { margin-top: 0.25rem; }
+code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.86em; }
+pre { margin: 0; background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 0.8rem 1rem; overflow-x: auto; }
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 0.95rem; }
+th, td { text-align: left; vertical-align: top; padding: 0.45rem 0.7rem 0.45rem 0; border-bottom: 1px solid var(--rule); }
+th { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); border-bottom: 1.5px solid var(--fg); }
+td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.caption { font-size: 0.88rem; color: var(--muted); }
+.pass { color: var(--pass); font-weight: 600; }
+.fail { color: var(--fail); font-weight: 600; }
+.partial { color: var(--partial); font-weight: 600; }
+.pending { color: var(--pending); font-weight: 600; font-style: italic; }
+a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+<header>
+  <h1>Step 1 Scope: Verify</h1>
+  <p>Roadmap step 1. Status: verified. Date: 2026-11-06. Verifier: a separate agent, not the agent that built the step.</p>
+</header>
+
+<section id="goal">
+  <h2>1 Goal</h2>
+  <p>This file checks the ten acceptance criteria of <code>specs/01-scope/plan.html</code> (Section 8) against the repo on 2026-11-06. The verifier read the spec folder, the diff against commit <code>4859f06</code> and the new files. The verifier ran the tests, the lint and the format check again. The verifier did not download weights, did not run a conversion and did not load a model. Step 1 has no benchmark (plan.html Section 7).</p>
+  <p>Result: 8 criteria pass (AC1 to AC5, AC7 to AC9), AC6 is partial, AC10 passes for <code>GLOSSARY.md</code> and is pending for <code>roadmap.md</code>. No criterion fails. Section 9 lists 9 findings. None of them blocks the step.</p>
+</section>
+
+<section id="criteria">
+  <h2>8 Acceptance criteria</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>No.</th><th>Criterion</th><th>Target</th><th>Measured</th><th>Result</th></tr></thead>
+      <tbody>
+        <tr><td>AC1</td><td>The user chose the scope</td><td>Option recorded</td><td><code>explore.html</code> header: "Status: decided. On 2026-11-06 the user chose Option A (scope) and Option B of R1". <code>plan.html</code> Section 1 records the same two decisions.</td><td class="pass">pass</td></tr>
+        <tr><td>AC2</td><td>License files and ADR exist</td><td>LICENSE (MIT), LICENSE-DINOv3.md, ADR 0002</td><td><code>LICENSE</code>: MIT License, "Copyright (c) 2026 Ueli Peter". <code>LICENSE-DINOv3.md</code>: DINOv3 License, last updated 2025-08-19, definitions and sections 1 to 8. <code>docs/adr/0002-mit-for-code-dinov3-license-for-weights.md</code>: MIT for the code, DINOv3 License for the weights, status accepted subject to a legal check. <code>pyproject.toml</code> names both license files. <code>scripts/convert_meta_checkpoint.py</code> has the Apache-2.0 attribution line that the ADR requires.</td><td class="pass">pass</td></tr>
+        <tr><td>AC3</td><td><code>uv sync</code> installs the project</td><td>Python 3.12.x, the versions of Table 1, <code>uv.lock</code> present</td><td><code>uv sync --locked</code>: "Resolved 63 packages", "Checked 42 packages", exit 0. Python 3.12.13, mlx 0.32.4, torch 2.15.0, transformers 5.22.1, safetensors 0.8.0, huggingface_hub 2.4.0, pillow 13.0.0, pytest 9.2.0, ruff 0.17.4. All equal Table 1 and the <code>==</code> pins of <code>pyproject.toml</code>. <code>uv.lock</code>: 217,400 bytes.</td><td class="pass">pass</td></tr>
+        <tr><td>AC4</td><td><code>uv run pytest</code> passes</td><td>0 failures, 0 errors</td><td>9 passed, 12 skipped, 0 failed, 0 errors, 4.42 s. The skips: 6 &times; <code>test_weights_are_in_cache</code> (no model size in the Hugging Face cache), 6 &times; <code>test_converted_weights_match_hub</code> (no Hub file). Table 2 gives the details.</td><td class="pass">pass</td></tr>
+        <tr><td>AC5</td><td>Lint and format are clean</td><td>0 findings</td><td><code>ruff check</code>: "All checks passed!" (8 files). <code>ruff format --check</code>: "16 files already formatted". Both exit 0.</td><td class="pass">pass</td></tr>
+        <tr><td>AC6</td><td>Weights are available for all model sizes</td><td>6 of 6 in the Hugging Face cache (0 skips in test 6). Interim: ViT-S/16 and ViT-H+/16 converted and checked, the other 4 named as missing.</td><td>0 of 6 in the Hugging Face cache (6 skips in test 6). Converted and checked: ViT-S/16 and ViT-H+/16 (Table 2). Missing: ViT-S+/16, ViT-B/16, ViT-L/16, ViT-7B/16. Meta has not approved the gated repos yet.</td><td class="partial">partial</td></tr>
+        <tr><td>AC7</td><td>Free disk after the downloads</td><td class="num">&ge; 50 GB</td><td>135.7 GB free (126 GiB, <code>df</code>) before the downloads. The six downloads need 31.98 GB, so about 103.7 GB stay free. The downloads did not happen yet, so this value is a projection.</td><td class="pass">pass</td></tr>
+        <tr><td>AC8</td><td><code>tech-stack.md</code> records the versions</td><td>macOS, MLX, Python, torch, transformers</td><td><code>tech-stack.md</code> Section "Versions": macOS 26.5.2 (build 25F84), Python 3.12.13, mlx 0.32.4, torch 2.15.0, transformers 5.22.1, and uv, safetensors, huggingface_hub, pillow, pytest, ruff. <code>sw_vers</code> gives 26.5.2, build 25F84. All values equal the measured values of AC3.</td><td class="pass">pass</td></tr>
+        <tr><td>AC9</td><td>The explainer covers the prior ports and every function of <code>hub.py</code></td><td>4 ports, 2 functions</td><td><code>docs/learn/01-prior-ports.html</code> covers MLXDINOv3, mlx_dinov3, mlx-image and mlx-dinov3. Section 8.1 covers <code>check_free_disk</code> and <code>download</code> (and <code>MODEL_IDS</code>, <code>InsufficientDiskError</code>, <code>WEIGHT_PATTERNS</code>). <code>src/</code> has no other function. Section 8.2 also covers the four functions of <code>convert_meta_checkpoint.py</code>. Two small factual errors: findings F4 and F5.</td><td class="pass">pass</td></tr>
+        <tr><td rowspan="2">AC10</td><td><code>GLOSSARY.md</code> is up to date</td><td>The Step 1 terms</td><td>All 7 terms are present: Port, Prefix tokens, SwiGLU, Gated repo, Hugging Face cache, Meta checkpoint, Converted weights. The definitions agree with the code in <code>.venv</code> (RoPE skips the prefix tokens; SwiGLU is <code>down(silu(gate(x)) * up(x))</code>).</td><td class="pass">pass</td></tr>
+        <tr><td><code>roadmap.md</code> is up to date</td><td>Step 1 done, Step 2 next</td><td><code>roadmap.md:8</code> shows Step 1 as "next". The main session updates <code>roadmap.md</code> after this report (stage 6, Close).</td><td class="pending">pending (main session)</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 1.</b> Acceptance criteria of plan.html Section 8, with the measured values of 2026-11-06.</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Model size</th><th>Hugging Face cache (config.json)</th><th>Converted folder</th><th>model.safetensors (bytes)</th><th>Hub size (plan Table 2)</th><th>test 6</th><th>test 9</th></tr></thead>
+      <tbody>
+        <tr><td>ViT-S/16</td><td>missing</td><td>present</td><td class="num">86,406,384</td><td class="num">86,406,384</td><td>skip</td><td>skip</td></tr>
+        <tr><td>ViT-S+/16</td><td>missing</td><td>missing</td><td class="num">&ndash;</td><td class="num">0.11 GB</td><td>skip</td><td>skip</td></tr>
+        <tr><td>ViT-B/16</td><td>missing</td><td>missing</td><td class="num">&ndash;</td><td class="num">0.34 GB</td><td>skip</td><td>skip</td></tr>
+        <tr><td>ViT-L/16</td><td>missing</td><td>missing</td><td class="num">&ndash;</td><td class="num">1.21 GB</td><td>skip</td><td>skip</td></tr>
+        <tr><td>ViT-H+/16</td><td>missing</td><td>present</td><td class="num">3,362,432,800</td><td class="num">3,362,432,800</td><td>skip</td><td>skip</td></tr>
+        <tr><td>ViT-7B/16</td><td>missing</td><td>missing</td><td class="num">&ndash;</td><td class="num">26.86 GB</td><td>skip</td><td>skip</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 2.</b> Weights for each model size (AC6). The converted folders are in <code>~/.cache/dinov3-apple/converted/facebook/</code>. Each converted file has exactly the byte count of the Hub file.</p>
+  <p>Evidence that the two conversions are "checked", without a model load:</p>
+  <ul>
+    <li><code>convert_meta_checkpoint.py</code> saves the folder only after <code>check_outputs</code> passes (lines 207 to 210). So a folder exists only after a passed output check.</li>
+    <li>The safetensors headers hold only F32 tensors: 211 tensors for ViT-S/16 and 615 tensors for ViT-H+/16. These counts equal the parameter list of <code>DINOv3ViTModel</code> for 12 MLP blocks and 32 SwiGLU blocks. No header has a <code>k_proj.bias</code>.</li>
+    <li>Each <code>config.json</code> has the values of <code>CONFIGS</code> and <code>transformers_version</code> 5.22.1.</li>
+    <li>The SHA-256 of the ViT-S/16 Meta checkpoint starts with <code>08c60483</code>, as its file name says. The verifier did not hash the 3.4 GB ViT-H+/16 checkpoint.</li>
+  </ul>
+</section>
+
+<section id="findings">
+  <h2>9 Findings</h2>
+  <p>The plan does not name these problems. None of them makes a criterion fail.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>No.</th><th>Location</th><th>Problem</th><th>Proposed fix</th></tr></thead>
+      <tbody>
+        <tr><td>F1</td><td><code>tests/test_convert_meta_checkpoint.py:65-68</code></td><td>Test 9 looks only for <code>model.safetensors</code>. The Hub repo of ViT-7B/16 has 6 shards and an index. So test 9 always skips for ViT-7B/16, also after the access comes. Today this has no effect, because no ViT-7B/16 Meta checkpoint is converted.</td><td>Read the shards through <code>model.safetensors.index.json</code>, as test 6 does, or state the limit in plan.html Section 6.</td></tr>
+        <tr><td>F2</td><td><code>specs/01-scope/plan.html:76</code>, <code>:153</code></td><td>Line 76 says "Pillow in Step 2". Table 1 (line 67) adds pillow 13.0.0 in Step 1. The <code>uv add</code> command at line 153 does not add pillow.</td><td>Change line 76 to name only PEFT, and add <code>pillow==13.0.0</code> to line 153.</td></tr>
+        <tr><td>F3</td><td><code>specs/01-scope/explore.html:148</code>, <code>:150</code></td><td>Section 9 still says "The user decides" for the scope, and "HTTP 401" for the token. The header says "decided", and plan.html Section 9 says that the token works.</td><td>Mark both questions as answered on 2026-11-06.</td></tr>
+        <tr><td>F4</td><td><code>docs/learn/01-prior-ports.html:125</code></td><td>The explainer says that Hugging Face computes the RoPE tables "with autocast off". <code>modeling_dinov3_vit.py</code> of transformers 5.22.1 (the cited source) has no autocast. It computes <code>inv_freq</code> and the coordinates in fp32 and then casts <code>cos</code> and <code>sin</code> to the input dtype (lines 171 to 207).</td><td>Remove "with autocast off", or name the older version that had it.</td></tr>
+        <tr><td>F5</td><td><code>docs/learn/01-prior-ports.html:214</code></td><td>"ViT-7B/16 in fp32 uses 42 % of the 64 GB". 26.86 GB is a decimal value. The unified memory is 64 GiB (<code>hw.memsize</code> = 68,719,476,736 bytes). The correct share is 26.86 / 68.72 = 39 %.</td><td>Write 39 %, or give both values in GiB (25.0 GiB of 64 GiB).</td></tr>
+        <tr><td>F6</td><td><code>README.md:5</code></td><td>"Status: planning. There is no code to install yet." The repo now has a package that <code>uv sync</code> installs.</td><td>Update the status line at the Close stage.</td></tr>
+        <tr><td>F7</td><td><code>tests/test_hub.py:21-23</code></td><td>The test reads the free disk, then calls <code>check_free_disk</code> with <code>required_bytes</code> equal to that value and <code>keep_free_bytes=1</code>. If another process frees 1 byte or more between the two reads, the check passes and the test fails. The risk is small but real.</td><td>Use a fixed large value, for example <code>required_bytes=free_bytes + 10**12</code>.</td></tr>
+        <tr><td>F8</td><td><code>tests/test_hub.py:26</code></td><td>The test <code>test_check_free_disk_passes_when_space_is_enough</code> is not in plan.html Section 6. It is a useful extra test. Information only.</td><td>Add it to Section 6 of plan.html.</td></tr>
+        <tr><td>F9</td><td><code>specs/01-scope/plan.html</code> Section 7, AC7</td><td>Plan Section 7 says that verify.html records the download time and the free disk after the downloads. No download ran, so this file records no download time and only a projected free disk.</td><td>Record both values in this file when the access comes and the downloads run.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>On 2026-11-06 the main session fixed F1 to F8. Test 9 now reads the shards through the index. After the fixes, <code>uv run pytest</code> gives 9 passed and 12 skipped, and ruff is clean. F9 waits for the downloads.</p>
+  <p class="caption"><b>Table 3.</b> Findings. The verifier checked the key map of <code>convert_state_dict</code>, the <code>CONFIGS</code> values, the patch index in <code>check_outputs</code>, the RoPE code in the explainer and Table 3 of the explainer against <code>modeling_dinov3_vit.py</code> in <code>.venv</code>. These agree. <code>convert_dinov3_vit_to_hf.py</code> is not part of the installed wheel, so the verifier could not check the <code>EXPECTED</code> values against it.</p>
+</section>
+
+<section id="commands">
+  <h2>10 Commands</h2>
+  <p>The verifier ran these commands in <code>~/Documents/Development/dinov3-apple</code>. The shell had an unrelated <code>VIRTUAL_ENV</code>. uv ignored it with a warning.</p>
+  <pre><code>uv --version
+uv sync --locked
+uv run python -c "import sys, mlx.core as mx, torch, transformers; print(sys.version, mx.__version__, torch.__version__, transformers.__version__)"
+uv run python -c "import safetensors, huggingface_hub, PIL; print(safetensors.__version__, huggingface_hub.__version__, PIL.__version__)"
+uv run pytest --version
+uv run ruff --version
+uv run pytest -q -rs
+uv run ruff check
+uv run ruff format --check
+uv run python -c "
+from huggingface_hub import try_to_load_from_cache
+from huggingface_hub.constants import HF_HUB_CACHE
+from dinov3_apple.hub import MODEL_IDS
+print('cache', HF_HUB_CACHE)
+for s, i in MODEL_IDS.items():
+    print(s, i, try_to_load_from_cache(i, 'config.json'))
+"
+ls -la ~/.cache/huggingface/hub | grep -i dinov3
+find ~/.cache/dinov3-apple/converted -type f -exec stat -f '%z %N' {} \;
+ls -la ~/.cache/torch/hub/checkpoints | grep -i dinov3
+cat ~/.cache/dinov3-apple/converted/facebook/*/config.json
+# Read only the JSON header of each converted model.safetensors (8-byte length, then the header).
+python3 -c "import json,struct,sys; f=open(sys.argv[1],'rb'); n=struct.unpack('&lt;Q',f.read(8))[0]; h=json.loads(f.read(n)); ..." MODEL.safetensors
+shasum -a 256 ~/.cache/torch/hub/checkpoints/dinov3_vits16_pretrain_lvd1689m-08c60483.pth
+df -h ~
+df -k ~
+sw_vers
+sysctl -n hw.memsize
+git status --short
+git diff GLOSSARY.md tech-stack.md
+git log --oneline</code></pre>
+</section>
+</main>
+</body>
+</html>

@@ -45,6 +45,10 @@ _Avoid_: storage token, register (alone)
 **Patch token**:
 The token of one patch.
 
+**Prefix tokens**:
+The CLS token and the 4 register tokens, at positions 0 to 4 of the sequence. RoPE does not rotate them.
+_Avoid_: special tokens
+
 **Block**:
 One transformer layer: an attention branch and a feed-forward branch, each with a pre-norm, a LayerScale and a residual connection.
 _Avoid_: layer (alone)
@@ -60,9 +64,31 @@ A learned factor for each channel on the output of each branch of a block.
 The per-token network in each block. ViT-S/16, ViT-B/16 and ViT-L/16 use an MLP with GELU. ViT-S+/16, ViT-H+/16 and ViT-7B/16 use SwiGLU.
 _Avoid_: FFN (in prose), MLP (for the general case)
 
+**SwiGLU**:
+The gated feed-forward network of ViT-S+/16, ViT-H+/16 and ViT-7B/16: `down(silu(gate(x)) * up(x))`. Its hidden width is 2/3 of the width that the Meta ratio gives.
+
 **Embedding dimension**:
 The length of each token vector of a model size: 384, 768, 1024, 1280 or 4096.
 _Avoid_: hidden size, width, d_model
+
+## Weights
+
+**Port**:
+A public implementation of DINOv3 in another framework, for example MLX. `specs/01-scope/explore.html` compares the known ports.
+_Avoid_: re-implementation, clone
+
+**Gated repo**:
+A Hugging Face repo that gives its files only to accounts that the owner approved. All six DINOv3 model repos are gated.
+
+**Hugging Face cache**:
+The folder where `huggingface_hub` stores downloaded files, `~/.cache/huggingface/hub` by default. The weights live there, outside the repo.
+
+**Meta checkpoint**:
+A `.pth` weight file of the official DINOv3 code, with the Meta weight names, for example `blocks.0.attn.qkv.weight`.
+_Avoid_: original weights, raw weights
+
+**Converted weights**:
+A Hugging Face model folder that `scripts/convert_meta_checkpoint.py` made from a Meta checkpoint, in `~/.cache/dinov3-apple/converted/`. We use them only while a gated repo is not available.
 
 ## Outputs
 
