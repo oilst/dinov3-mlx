@@ -1,3 +1,4 @@
+import pytest
 from baseline_table import write_baseline_table, write_profile_table
 
 from dinov3_apple.flops import PART_NAMES
@@ -91,3 +92,21 @@ def test_profile_table_from_lines() -> None:
     assert "sdpa" in text
     assert "Sum of parts / block" in text
     assert "1.048" in text  # 11 parts x 0.1 ms / 1.05 ms
+
+
+def test_compile_gain_uses_median_of_eager_runs() -> None:
+    from baseline_table import compile_gains, compile_summary
+
+    p1 = {"model_size": "ViT-S/16", "side": 224, "batch_size": 8}
+    lines = [
+        _line("fp32", 100.0, **p1),
+        _line("fp32", 300.0, **p1, repeat=1, run="B2"),
+        _line("fp32", 320.0, **p1, repeat=2, run="B2"),
+        _line("fp32", 320.0, **p1, compile=True, run="B3", first_call_s=4.0),
+    ]
+    gains = {(name, mode): gain for name, mode, _, _, gain in compile_gains(lines)}
+    assert gains[("P1", "fp32")] == pytest.approx(320.0 / 300.0 - 1)
+    assert (
+        compile_summary(lines)
+        == "0 of 1 compile rows are more than 10 % faster than the median of their eager runs."
+    )

@@ -6,6 +6,7 @@ its footprint.
 """
 
 from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
 from functools import cache
 
 import numpy as np
@@ -367,6 +368,8 @@ def result_line(
     line |= {"need_bytes": need_bytes, "available_bytes": available_bytes}
     line["machine"] = asdict(machine)
     line["versions"] = line["versions"] or machine.versions
+    # A line without a worker (skipped, deferred) gets the time of the driver.
+    line["time"] = line["time"] or datetime.now(UTC).isoformat(timespec="seconds")
     return line
 
 

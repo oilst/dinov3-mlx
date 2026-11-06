@@ -1,12 +1,12 @@
 # Baseline: Hugging Face backbone on torch-mps
 
-Written by `scripts/baseline_table.py` on 2026-11-06 from `results/baseline-torch-mps.jsonl` (275 lines, 2026-11-06T17:10:21+00:00 to 2026-11-06T19:05:21+00:00). Spec: `specs/03-baseline/plan.html`. The latest line of each configuration counts.
+Written by `scripts/baseline_table.py` on 2026-11-06 from `results/baseline-torch-mps.jsonl` (276 lines, 2026-11-06T17:10:21+00:00 to 2026-11-06T21:12:53+00:00). Spec: `specs/03-baseline/plan.html`. The latest line of each configuration counts.
 
 Throughput is images per second, host to host (D3). Peak memory is the lifetime maximum of the macOS process footprint of the worker (D5). Latency is the median and the p90 of the batch times.
 
 ## Checks
 
-- AC1: 243 of 243 configurations of B1 and B4 have a line: {'done': 224, 'deferred': 18, 'skipped': 1}.
+- AC1: 243 of 243 configurations of B1 and B4 have a line: {'done': 225, 'deferred': 18}.
 - AC3: 12 done lines of B1 and B4 are not valid. Not expected: none. Expected but valid or not run: none.
 - AC4: 0 done lines miss the time budget of Table 5.
 - AC7: 0 done lines have a peak memory above the need. Largest peak / need: 0.62.
@@ -550,6 +550,7 @@ The fastest valid dtype mode of each dtype, without repeats (D2, Section 3.7 of 
 | ViT-H+/16 | 448 | 32 | fp16-autocast | yes | 7.6 | 7.6 | 7.6 | 4207.30 | 4266.19 | 7.46 | 4.76 | 6.49 | 13.81 | 15 |
 | ViT-H+/16 | 512 | 1 | fp16-autocast | yes | 6.0 | 6.0 | 6.1 | 163.17 | 179.73 | 4.86 | 4.76 | 4.34 | 8.31 | 61 |
 | ViT-H+/16 | 512 | 8 | fp16-autocast | yes | 6.2 | 6.2 | 6.2 | 1276.95 | 1341.18 | 5.02 | 4.77 | 4.34 | 10.23 | 30 |
+| ViT-H+/16 | 512 | 32 | fp16-autocast | yes | 5.7 | 5.7 | 5.7 | 5562.42 | 8018.56 | 8.69 | 4.77 | 7.56 | 16.83 | 12 |
 | ViT-H+/16 | 224 | 1 | bf16-autocast | yes | 18.6 | 18.6 | 18.7 | 50.92 | 66.92 | 4.82 | 4.76 | 4.35 | 8.06 | 186 |
 | ViT-H+/16 | 224 | 8 | bf16-autocast | yes | 33.6 | 33.6 | 33.7 | 236.99 | 252.91 | 4.84 | 4.76 | 4.34 | 8.25 | 42 |
 | ViT-H+/16 | 224 | 32 | bf16-autocast | yes | 33.7 | 33.7 | 33.7 | 940.73 | 990.19 | 4.93 | 4.76 | 4.34 | 8.90 | 30 |
@@ -579,20 +580,20 @@ Spread = (largest − smallest) / median of the throughputs of the main run and 
 
 ## 5. Compile rows
 
-The gains were above 10 %. On 2026-11-06 the user decided that the compile rows join the baseline (D7).
+10 of 10 compile rows are more than 10 % faster than the median of their eager runs. On 2026-11-06 the user decided that the compile rows join the baseline (D7).
 
-| Priority | Dtype mode | Status | Compiled (img/s) | Eager (img/s) | Gain | Note |
+| Priority | Dtype mode | Status | Compiled (img/s) | Eager median (img/s) | Gain | Note |
 | --- | --- | --- | --- | --- | --- | --- |
-| P1 | fp32 | done | 471.1 | 608.4 | -22.6 % | first call 4.9 s |
-| P1 | fp16-cast | done | 1333.1 | 382.9 | +248.1 % | first call 4.4 s |
-| P1 | bf16-cast | done | 1377.2 | 487.4 | +182.6 % | first call 4.3 s |
-| P1 | fp16-autocast | done | 1108.9 | 702.5 | +57.9 % | first call 5.1 s |
-| P1 | bf16-autocast | done | 1342.4 | 608.8 | +120.5 % | first call 4.9 s |
-| P2 | fp32 | done | 2.9 | 2.6 | +11.3 % | first call 11.7 s |
-| P2 | fp16-cast | done | 10.5 | 8.2 | +27.9 % | first call 9.6 s |
-| P2 | bf16-cast | done | 9.0 | 8.3 | +9.4 % | first call 10.0 s |
-| P2 | fp16-autocast | done | 10.4 | 6.2 | +67.9 % | first call 12.6 s |
-| P2 | bf16-autocast | done | 10.1 | 6.3 | +60.0 % | first call 12.7 s |
+| P1 | fp32 | done | 471.1 | 334.1 (3 runs) | +41.0 % | first call 4.9 s |
+| P1 | fp16-cast | done | 1333.1 | 671.4 (3 runs) | +98.6 % | first call 4.4 s |
+| P1 | bf16-cast | done | 1377.2 | 658.4 (3 runs) | +109.2 % | first call 4.3 s |
+| P1 | fp16-autocast | done | 1108.9 | 536.4 (3 runs) | +106.8 % | first call 5.1 s |
+| P1 | bf16-autocast | done | 1342.4 | 531.7 (3 runs) | +152.5 % | first call 4.9 s |
+| P2 | fp32 | done | 2.9 | 2.6 (3 runs) | +11.3 % | first call 11.7 s |
+| P2 | fp16-cast | done | 10.5 | 7.6 (3 runs) | +37.4 % | first call 9.6 s |
+| P2 | bf16-cast | done | 9.0 | 7.6 (3 runs) | +19.0 % | first call 10.0 s |
+| P2 | fp16-autocast | done | 10.4 | 6.2 (3 runs) | +67.9 % | first call 12.6 s |
+| P2 | bf16-autocast | done | 10.1 | 6.3 (3 runs) | +60.0 % | first call 12.7 s |
 
 ## Skipped, deferred and error lines
 
@@ -616,7 +617,6 @@ The gains were above 10 %. On 2026-11-06 the user decided that the compile rows 
 | ViT-7B/16 | bf16-cast | 512 | 1 | no | 0 | deferred | 20.37 | 20.60 | ViT-7B/16 runs in its own session (D8) |
 | ViT-7B/16 | bf16-cast | 512 | 8 | no | 0 | deferred | 22.15 | 20.60 | ViT-7B/16 runs in its own session (D8) |
 | ViT-7B/16 | bf16-cast | 512 | 32 | no | 0 | deferred | 28.23 | 20.60 | ViT-7B/16 runs in its own session (D8) |
-| ViT-H+/16 | fp16-autocast | 512 | 32 | no | 0 | skipped | 16.83 | 15.10 | needs 16.8 GB, 15.1 GB available |
 
 ## Machine state and versions
 

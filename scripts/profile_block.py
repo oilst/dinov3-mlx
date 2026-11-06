@@ -36,6 +36,7 @@ MODEL_SIZES = ["ViT-S/16", "ViT-H+/16"]
 DTYPE_MODES = ["fp32", "fp16-cast"]
 SIDES = [224, 512]
 BATCH_SIZES = [1, 8]
+STDERR_LINES = 20
 
 logger = logging.getLogger("profile_block")
 
@@ -73,12 +74,45 @@ def child(model_size: str, dtype_mode: str) -> None:
             print(json.dumps(line), flush=True)
 
 
+def subprocess_lines(
+    model_size: str, dtype_mode: str, returncode: int, stdout: str, stderr: str, extra: dict
+) -> list[dict]:
+    """Return the result lines of one subprocess, or one "error" line if it failed.
+
+    Args:
+        model_size: The model size of the subprocess.
+        dtype_mode: The dtype mode of the subprocess.
+        returncode: The exit code of the subprocess.
+        stdout: Its standard output, with one JSON line for each configuration.
+        stderr: Its standard error.
+        extra: Fields for every line, for example the need and the machine state.
+
+    Returns:
+        The lines to append to the results file.
+    """
+    if returncode != 0:
+        tail = "\n".join(stderr.splitlines()[-STDERR_LINES:])
+        return [
+            {
+                "model_size": model_size,
+                "dtype_mode": dtype_mode,
+                "status": "error",
+                "reason": f"exit code {returncode}: {tail}",
+                "time": datetime.now(UTC).isoformat(timespec="seconds"),
+            }
+            | extra
+        ]
+    found = [json.loads(text) for text in stdout.splitlines() if text.startswith("{")]
+    return [line | {"status": "done"} | extra for line in found]
+
+
 def main() -> None:
     """Run one subprocess for each model size and dtype mode."""
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawTextHelpFormatter
     )
     parser.add_argument("--child", nargs=2, help=argparse.SUPPRESS)
+    parser.add_argument("--results", type=Path, default=RESULTS, help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.child:
         child(*args.child)
@@ -110,8 +144,9 @@ def main() -> None:
                     "dtype_mode": dtype_mode,
                     "status": "skipped",
                     "reason": f"needs {need / GB:.1f} GB, {available / GB:.1f} GB available",
+                    "time": datetime.now(UTC).isoformat(timespec="seconds"),
                 }
-                with RESULTS.open("a") as file:
+                with args.results.open("a") as file:
                     file.write(json.dumps(skip) + "\n")
                 continue
             done = subprocess.run(
@@ -121,24 +156,22 @@ def main() -> None:
                 capture_output=True,
                 text=True,
             )
-            if done.returncode != 0:
-                logger.error(f"{model_size} {dtype_mode}: {done.stderr[-2000:]}")
-                continue
-            with RESULTS.open("a") as file:
-                for text in done.stdout.splitlines():
-                    if text.startswith("{"):
-                        line = json.loads(text) | {
-                            "status": "done",
-                            "need_bytes": need,
-                            "available_bytes": available,
-                            "machine": asdict(machine),
-                        }
-                        file.write(json.dumps(line) + "\n")
-                        ratio = sum(line["parts_s"].values()) / line["block_s"]
-                        logger.info(
-                            f"{model_size} {dtype_mode} {line['side']}px b{line['batch_size']}: "
-                            f"block {1e3 * line['block_s']:.3f} ms, parts / block {ratio:.3f}"
-                        )
+            extra = {"need_bytes": need, "available_bytes": available, "machine": asdict(machine)}
+            lines = subprocess_lines(
+                model_size, dtype_mode, done.returncode, done.stdout, done.stderr, extra
+            )
+            with args.results.open("a") as file:
+                for line in lines:
+                    file.write(json.dumps(line) + "\n")
+            for line in lines:
+                if line["status"] != "done":
+                    logger.error(f"{model_size} {dtype_mode}: {line['reason']}")
+                    continue
+                ratio = sum(line["parts_s"].values()) / line["block_s"]
+                logger.info(
+                    f"{model_size} {dtype_mode} {line['side']}px b{line['batch_size']}: "
+                    f"block {1e3 * line['block_s']:.3f} ms, parts / block {ratio:.3f}"
+                )
 
 
 if __name__ == "__main__":

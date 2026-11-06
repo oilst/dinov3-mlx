@@ -215,25 +215,43 @@ def _repeats_section(lines: list[dict]) -> str:
 
 def compile_gains(
     lines: list[dict],
-) -> list[tuple[str, str, dict | None, dict | None, float | None]]:
-    """Return (priority name, dtype mode, compile line, eager line, gain) for P1 and P2 (D7)."""
+) -> list[tuple[str, str, dict | None, list[float], float | None]]:
+    """Return (priority name, dtype mode, compile line, eager throughputs, gain) for P1 and P2.
+
+    The gain compares the compile row with the median of the valid eager runs: the main run and
+    the repeats (D7, finding F2 of verify.html).
+    """
     result = []
     for name, (_, _, _, output) in PRIORITY.items():
         compiled = _priority_lines(lines, name, compile=True)
         eager = _priority_lines(lines, name, compile=False)
         for mode in DTYPE_MODE_NAMES:
             c_line = next(iter(compiled[mode]), None)
-            e_line = next((line for line in eager[mode] if line["repeat"] == 0), None)
+            values = [
+                line[output]["throughput_ips"]
+                for line in eager[mode]
+                if line["status"] == "done" and line["valid"]
+            ]
             gain = None
-            if c_line and e_line and c_line["status"] == e_line["status"] == "done":
-                gain = c_line[output]["throughput_ips"] / e_line[output]["throughput_ips"] - 1
-            result.append((name, mode, c_line, e_line, gain))
+            if c_line and c_line["status"] == "done" and values:
+                gain = c_line[output]["throughput_ips"] / statistics.median(values) - 1
+            result.append((name, mode, c_line, values, gain))
     return result
+
+
+def compile_summary(lines: list[dict]) -> str:
+    """Return one sentence with the number of compile rows above the 10 % limit."""
+    gains = [gain for *_, gain in compile_gains(lines) if gain is not None]
+    above = sum(gain > COMPILE_GAIN_LIMIT for gain in gains)
+    return (
+        f"{above} of {len(gains)} compile rows are more than 10 % faster than the median of "
+        "their eager runs."
+    )
 
 
 def _compile_section(lines: list[dict]) -> str:
     rows = []
-    for name, mode, c_line, e_line, gain in compile_gains(lines):
+    for name, mode, c_line, values, gain in compile_gains(lines):
         output = PRIORITY[name][3]
         if c_line is None:
             rows.append([name, mode, "no line", "–", "–", "–", "–"])
@@ -242,16 +260,14 @@ def _compile_section(lines: list[dict]) -> str:
             reason = c_line["reason"].splitlines()[-1] if c_line["reason"] else ""
             rows.append([name, mode, c_line["status"], "–", "–", "–", reason])
             continue
-        eager_value = (
-            f"{e_line[output]['throughput_ips']:.1f}" if e_line and gain is not None else "–"
-        )
+        eager = f"{statistics.median(values):.1f} ({len(values)} runs)" if values else "–"
         rows.append(
             [
                 name,
                 mode,
                 "done" + ("" if c_line["valid"] else ", not valid"),
                 f"{c_line[output]['throughput_ips']:.1f}",
-                eager_value,
+                eager,
                 "–" if gain is None else f"{100 * gain:+.1f} %",
                 f"first call {c_line['first_call_s']:.1f} s",
             ]
@@ -261,7 +277,7 @@ def _compile_section(lines: list[dict]) -> str:
         "Dtype mode",
         "Status",
         "Compiled (img/s)",
-        "Eager (img/s)",
+        "Eager median (img/s)",
         "Gain",
         "Note",
     ]
@@ -414,10 +430,8 @@ def write_baseline_table(lines: list[dict]) -> str:
         "",
         "## 5. Compile rows",
         "",
-        (
-            "The gains were above 10 %. On 2026-11-06 the user decided that the compile rows "
-            "join the baseline (D7)."
-        ),
+        compile_summary(lines)
+        + " On 2026-11-06 the user decided that the compile rows join the baseline (D7).",
         "",
         _compile_section(lines),
         "",

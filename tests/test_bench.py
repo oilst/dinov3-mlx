@@ -14,6 +14,7 @@ from dinov3_apple.bench import (
     keep_going,
     make_batch,
     required_bench_bytes,
+    result_line,
     summarize,
 )
 from dinov3_apple.hub import WeightsNotFoundError
@@ -223,3 +224,14 @@ def test_baseline_rows_use_latest_line() -> None:
     skipped = _line("fp32", 0.0, status="skipped", reason="does not fit")
     rows = baseline_rows([skipped, _line("fp32", 120.0)], "frame")
     assert rows[("ViT-S/16", 224, 8, "fp32")].line["frame"]["throughput_ips"] == 120.0
+
+
+def test_result_line_without_worker_has_a_time() -> None:
+    from dinov3_apple.machine import read_machine_state
+
+    config = BenchConfig("B1", "ViT-S/16", "fp32", 224, 1)
+    line = result_line(
+        config, {"status": "skipped", "reason": "does not fit"}, 1, 0, read_machine_state()
+    )
+    assert line["time"] is not None
+    assert line["start_time"] is None
