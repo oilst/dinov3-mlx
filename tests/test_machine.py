@@ -29,8 +29,19 @@ Note: No CPU power status has been recorded
 """
 
 
-def _state(batt: str = BATT_AC, pmset: str = PMSET) -> MachineState:
-    return read_machine_state(batt_text=batt, pmset_text=pmset, therm_text=THERM)
+AC_96W = """ Wattage = 94W
+ Current = 4690mA
+ Voltage = 20000mV
+ Adapter Name = 96W USB-C Power Adapter
+"""
+AC_30W = """ Wattage = 30W
+ Adapter Name = 30W USB-C Power Adapter
+"""
+AC_NONE = "No adapter attached.\n"
+
+
+def _state(batt: str = BATT_AC, pmset: str = PMSET, ac: str = AC_96W) -> MachineState:
+    return read_machine_state(batt_text=batt, pmset_text=pmset, therm_text=THERM, ac_text=ac)
 
 
 def test_machine_state_parses_pmset() -> None:
@@ -67,3 +78,22 @@ def test_check_machine_state_refuses_battery() -> None:
 def test_check_machine_state_refuses_low_power_mode() -> None:
     with pytest.raises(MachineStateError, match="Low Power Mode"):
         check_machine_state(_state(pmset=PMSET_LOW_POWER))
+
+
+def test_machine_state_parses_adapter_and_battery() -> None:
+    # Finding F11 of specs/03-baseline/verify.html: a 30 W adapter cannot feed an M5 Max under load.
+    state = _state()
+    assert state.adapter_watts == 94
+    assert state.battery_percent == 68
+    assert _state(ac=AC_30W).adapter_watts == 30
+    assert _state(ac=AC_NONE).adapter_watts is None
+
+
+def test_check_machine_state_refuses_weak_adapter() -> None:
+    with pytest.raises(MachineStateError, match="30 W"):
+        check_machine_state(_state(ac=AC_30W))
+
+
+def test_check_machine_state_accepts_no_adapter_report() -> None:
+    # A desktop Mac has no adapter. Battery power is refused by its own check.
+    check_machine_state(_state(ac=AC_NONE))

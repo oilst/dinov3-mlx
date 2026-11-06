@@ -385,7 +385,14 @@ def _machine_section(lines: list[dict]) -> str:
     seen: dict[str, set[str]] = {}
     for line in lines:
         machine = line.get("machine") or {}
-        for key in ("power_source", "low_power_mode", "thermal", "chip"):
+        for key in (
+            "power_source",
+            "adapter_watts",
+            "battery_percent",
+            "low_power_mode",
+            "thermal",
+            "chip",
+        ):
             seen.setdefault(key, set()).add(str(machine.get(key)))
         if machine.get("memory_bytes"):
             seen.setdefault("memory", set()).add(f"{machine['memory_bytes'] / 2**30:.0f} GiB")
