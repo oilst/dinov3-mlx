@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+build/
+dist/
+*.egg-info/
+
+# Private context
+CLAUDE.local.md
+
+# Weights and caches
+*.safetensors
+*.pth
+*.pt
+hf_cache/
+tests/fixtures/generated/
+benchmarks/results/raw/
+
+# macOS and IDE
+.DS_Store
+.idea/

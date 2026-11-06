@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Step NN Title: Plan</title>
+<style>
+/* Spec page. White page, black text, no dark mode.
+   Copy this file to specs/NN-slug/explore.html, plan.html or verify.html.
+   explore.html: sections 1, 2, 3 (one subsection for each option, then the recommendation) and 9.
+   plan.html: all sections.
+   verify.html: sections 1 and 8 (add the columns "Measured" and "Result"), then one section with the benchmark tables. */
+:root { --bg: #ffffff; --fg: #111414; --muted: #4a5655; --rule: #d6dedd; --panel: #f5f8f7; --accent: #057379; --pass: #1d7a3a; --fail: #b3261e; color-scheme: light; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif; }
+main { max-width: 60rem; margin: 0 auto; padding: 40px 20px 64px; display: grid; gap: 1.75rem; }
+h1 { font-size: 1.9rem; line-height: 1.15; margin: 0; }
+h2 { font-size: 1.3rem; margin: 0; }
+h3 { font-size: 1.05rem; margin: 0; }
+section { display: grid; gap: 0.8rem; }
+p, ul, ol { margin: 0; max-width: 46rem; }
+code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.86em; }
+pre { margin: 0; background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 0.8rem 1rem; overflow-x: auto; }
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 0.95rem; }
+th, td { text-align: left; vertical-align: top; padding: 0.45rem 0.7rem 0.45rem 0; border-bottom: 1px solid var(--rule); }
+th { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); border-bottom: 1.5px solid var(--fg); }
+td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pass { color: var(--pass); font-weight: 600; }
+.fail { color: var(--fail); font-weight: 600; }
+figure { margin: 0; display: grid; gap: 0.4rem; }
+.fig { border: 1px solid var(--rule); border-radius: 6px; padding: 0.5rem; overflow-x: auto; }
+.fig svg { display: block; width: 100%; height: auto; min-width: 640px; }
+figcaption { font-size: 0.88rem; color: var(--muted); }
+a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+<header>
+  <h1>Step NN Title: Plan</h1>
+  <p>Roadmap step NN. Status: draft. Date: YYYY-MM-DD.</p>
+</header>
+
+<section id="goal">
+  <h2>1 Goal</h2>
+  <p>One paragraph: what the step delivers and why.</p>
+</section>
+
+<section id="dinov3">
+  <h2>2 DINOv3 topic</h2>
+  <p>The part of DINOv3 that this step touches, and the explainer in <code>docs/learn/</code> that the step writes or extends.</p>
+</section>
+
+<section id="design">
+  <h2>3 Design</h2>
+  <p>The chosen approach. In <code>explore.html</code>: one subsection for each option, with its trade-off, then the recommendation.</p>
+</section>
+
+<section id="flow">
+  <h2>4 Data flow</h2>
+  <figure>
+    <div class="fig"><svg viewBox="0 0 960 120" role="img" aria-label="Data flow"><rect width="960" height="120" fill="#ffffff"/></svg></div>
+    <figcaption><b>Figure 1.</b> What the reader must see in the diagram.</figcaption>
+  </figure>
+</section>
+
+<section id="code">
+  <h2>5 Key code</h2>
+  <pre><code># The one to three snippets that a reviewer must read.</code></pre>
+</section>
+
+<section id="tests">
+  <h2>6 Tests</h2>
+  <ol>
+    <li><code>test_name</code>: what it checks, and the threshold.</li>
+  </ol>
+</section>
+
+<section id="benchmarks">
+  <h2>7 Benchmarks</h2>
+  <p>The model sizes, backends, dtypes, input resolutions, batch sizes and outputs (frame embedding or patch embeddings).</p>
+</section>
+
+<section id="criteria">
+  <h2>8 Acceptance criteria</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>No.</th><th>Criterion</th><th>Target</th><th>Checked by</th></tr></thead>
+      <tbody>
+        <tr><td>AC1</td><td>Frame embedding parity, ViT-S/16, fp32</td><td class="num">cosine ≥ 0.9999</td><td><code>tests/test_parity.py</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="open">
+  <h2>9 Open questions</h2>
+  <ul>
+    <li>One question for each item, with the person who decides it.</li>
+  </ul>
+</section>
+</main>
+</body>
+</html>
