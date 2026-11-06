@@ -1,0 +1,417 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Step 2 Reference: Verify</title>
+<style>
+/* Spec page. White page, black text, no dark mode. */
+:root { --bg: #ffffff; --fg: #111414; --muted: #4a5655; --rule: #d6dedd; --panel: #f5f8f7; --accent: #057379; --pass: #1d7a3a; --fail: #b3261e; --partial: #8a5a00; --pending: #4a5655; color-scheme: light; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif; }
+main { max-width: 64rem; margin: 0 auto; padding: 40px 16px 64px; display: grid; gap: 1.75rem; }
+h1 { font-size: 1.9rem; line-height: 1.15; margin: 0; }
+h2 { font-size: 1.3rem; margin: 0; }
+h3 { font-size: 1.05rem; margin: 0; }
+section { display: grid; gap: 0.8rem; min-width: 0; }
+p, ul, ol { margin: 0; max-width: 48rem; }
+li + li { margin-top: 0.25rem; }
+code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.86em; }
+pre { margin: 0; background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 0.8rem 1rem; overflow-x: auto; }
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 0.92rem; }
+th, td { text-align: left; vertical-align: top; padding: 0.45rem 0.7rem 0.45rem 0; border-bottom: 1px solid var(--rule); }
+th { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); border-bottom: 1.5px solid var(--fg); }
+td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.caption { font-size: 0.88rem; color: var(--muted); }
+.pass { color: var(--pass); font-weight: 600; }
+.fail { color: var(--fail); font-weight: 600; }
+.partial { color: var(--partial); font-weight: 600; }
+.pending { color: var(--pending); font-weight: 600; font-style: italic; }
+figure { margin: 0; display: grid; gap: 0.5rem; }
+figure svg { width: 100%; height: auto; max-width: 760px; border: 1px solid var(--rule); border-radius: 6px; background: #ffffff; }
+a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+<header>
+  <h1>Step 2 Reference: Verify</h1>
+  <p>Roadmap step 2. Status: verified. Date: 2026-11-06. Verifier: a separate agent, not the agent that built the step. Build commit: <code>11fc2dd</code> ("Step 2 build: reference outputs and torch-mps parity tests").</p>
+</header>
+
+<section id="summary">
+  <h2>1 Summary</h2>
+  <p>This file checks the 14 acceptance criteria of <code>specs/02-reference/plan.html</code> (Section 8) against build commit <code>11fc2dd</code>. The verifier read the spec folder, the commit and the hand-over note of the build. The verifier made the reference files again, ran the test suite, the results table script and ruff again, and did 7 own checks (Section 2). The verifier did not change <code>src/</code>, <code>scripts/</code> or <code>tests/</code>.</p>
+  <p><b>Result:</b> <span id="result-line">14 rows pass, 0 rows fail, 4 rows are deferred by the user.</span> The 4 deferred rows are the ViT-7B/16 parts of AC5, AC8, AC9 and AC13. On 2026-11-06 the user put ViT-7B/16 out of scope for now, so the verifier ran no ViT-7B/16 job.</p>
+  <p>The build is reproducible. The new reference files are bit-identical to the reference files of the build. In two DINOV3_SLOW=1 test runs, the torch-mps parity values of all 325 test lines are identical to the values of the build (largest difference 0.0).</p>
+  <p>Section 7 gives 11 findings. No finding makes a criterion fail. Two findings need an action before Step 4: the AC8 target in <code>plan.html</code> still has the first bf16 values (F1), and the bf16 thresholds have almost no headroom (F2, Figure 1).</p>
+</section>
+
+<section id="method">
+  <h2>2 Method</h2>
+  <p>The verifier read <code>explore.html</code>, <code>plan.html</code> (with the three changes of 2026-11-06: JPEG quality 92, fp64 resize, bf16 column of Table 6), <code>git show 11fc2dd</code> and the hand-over note of the build. The source files in the working tree are equal to the commit. The verifier treated each number of the hand-over note as a claim and measured it again.</p>
+  <p>The verifier ran one heavy job at a time. Before each job, it read the free memory (<code>available_memory_bytes</code>: free and inactive pages of vm_stat). Table 1 gives the order.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>No.</th><th>Heavy job</th><th>Free memory before</th><th>Wall time</th></tr></thead>
+      <tbody>
+        <tr><td>1</td><td><code>make_reference.py ViT-S/16 ViT-S+/16 ViT-B/16 ViT-L/16 ViT-H+/16</code> (5 subprocesses, 17:07:05 to 17:07:55)</td><td class="num">19.5 GB</td><td class="num">53.8 s</td></tr>
+        <tr><td>2</td><td><code>uv run pytest</code> (default test run)</td><td class="num">20.9 GB</td><td class="num">30.1 s</td></tr>
+        <tr><td>3</td><td><code>DINOV3_SLOW=1 uv run pytest -k "not 7B"</code> (test run 1)</td><td class="num">19.9 GB</td><td class="num">50.6 s</td></tr>
+        <tr><td>4</td><td>4 torch-cpu re-checks of the bf16 probe, one process each (Table 8)</td><td class="num">19.3 to 20.2 GB</td><td class="num">&ndash;</td></tr>
+        <tr><td>5</td><td><code>DINOV3_SLOW=1 uv run pytest -k "not 7B" --junitxml=&hellip;</code> (test run 2, for the time of each model size)</td><td class="num">20.0 GB</td><td class="num">47.2 s</td></tr>
+        <tr><td>6</td><td>One ViT-S/16 load in bf16 cast mode on torch-cpu, for the dtype of the RoPE buffer (F10)</td><td class="num">17.8 GB</td><td class="num">&ndash;</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 1.</b> Heavy jobs of the verifier, in order. Each job started after the previous job ended. <code>parity_table.py</code>, ruff and the own checks load no model.</p>
+  <p>Own checks of the verifier, in addition to the tests:</p>
+  <ol>
+    <li>The JPEG quantization tables and the EXIF data of the test images. The Wikimedia Commons API for the SHA-1, the size and the license of each source file.</li>
+    <li>The Pillow float resize and the stored pixels for all 12 configurations. The fp32 resize against the fp64 resize.</li>
+    <li>The new reference files against copies of the reference files of the build: the keys and the values.</li>
+    <li>The final layer norm of the last hidden-state row against the stored tokens. The largest values in the stored hidden states.</li>
+    <li><code>results/parity-torch-mps.md</code> against the test log of the verifier, row by row.</li>
+    <li>4 values of the bf16 probe on torch-cpu. The dtype of the RoPE buffer in bf16 cast mode.</li>
+    <li>A scan of the type hints of all functions in the build commit (Python <code>ast</code>).</li>
+  </ol>
+  <p>Limits. The build is one commit, so the verifier cannot check that each test failed first (plan Section 6). torchvision is not installed, so the verifier could not compare the stored pixels with the Hugging Face image processor (plan Section 5 gives about 2e-5).</p>
+</section>
+
+<section id="criteria">
+  <h2>3 Acceptance criteria</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>No.</th><th>Criterion</th><th>Target</th><th>Measured by the verifier</th><th>Result</th></tr></thead>
+      <tbody>
+        <tr><td>AC1</td><td>Test images in the repo</td><td>3 public-domain JPEG files of Table 1, total &le; 1 MB, <code>SOURCES.md</code> with URL, author, license and SHA-1 of each source</td><td>3 JPEG files: <code>iss-kibo-lab.jpg</code> 1024 &times; 576, 178,776 bytes; <code>forest.jpg</code> 1024 &times; 768, 432,541 bytes; <code>iss-conference.jpg</code> 768 &times; 1024, 319,805 bytes. Total 931,122 bytes (0.93 MB). The quantization tables of each file are the tables of Pillow quality 92. No file has EXIF data. <code>SOURCES.md</code> gives the page URL, author, license, source size, SHA-1 of the source, crop and SHA-256 of each stored file. On 2026-11-06 the Commons API gave the same SHA-1 values, the same source sizes and the license "Public domain" for all three. <code>test_test_images_match_sources</code> (3 cases) and <code>test_test_images_total_size_is_at_most_1_mb</code> pass.</td><td class="pass">pass</td></tr>
+        <tr><td>AC2</td><td>Preprocessing</td><td>Pillow float resize &le; 1e-5 per pixel; stored pixels equal (0.0)</td><td>Largest difference to the Pillow float resize (mode F, BILINEAR): 1.19e-7 in each of the 12 configurations (verifier check; the test covers 6 of them, F7). Stored pixels: largest difference 0.0 in all 12 configurations. Tests 3 to 6 (12 test cases) pass. For comparison, an fp32 resize in torch is up to 2.26e-5 away from the fp64 resize (<code>iss-conference/448x448</code>). This confirms the reason for the change of 2026-11-06.</td><td class="pass">pass</td></tr>
+        <tr><td>AC3</td><td>Weight loader order</td><td>Hugging Face cache, then converted folder, then <code>WeightsNotFoundError</code></td><td>The 4 tests of <code>tests/test_weights_dir.py</code> pass: the 3 tests of plan Section 6 and one more test for a cache with a missing shard. All 5 reference files record the weight source "Hugging Face cache".</td><td class="pass">pass</td></tr>
+        <tr><td>AC4</td><td>Memory check before each model load</td><td>Check logged before every load in <code>make_reference.py</code> and in the test fixture; 1 heavy job at a time</td><td><code>make_reference.log</code>: 10 memory checks for 5 model loads, one in the parent process before each subprocess and one in the subprocess before the load. <code>memory-checks.log</code>: 12 memory checks for 12 model loads in the default test run, and 30 for 30 in each DINOV3_SLOW=1 test run. The subprocesses ran one after the other (<code>runs.jsonl</code>: 17:07:05, 17:07:11, 17:07:16, 17:07:23, 17:07:36). The 3 tests of <code>tests/test_memory.py</code> pass.</td><td class="pass">pass</td></tr>
+        <tr><td rowspan="2">AC5</td><td>Reference files for all model sizes</td><td>6 of 6 complete, or ViT-7B/16 skipped with a recorded memory reason</td><td>5 of 5 complete for ViT-S/16 to ViT-H+/16: 12 token tensors and 1 hidden-state tensor each. <code>test_reference_files_are_complete</code> and <code>test_reference_is_reproducible</code> pass for the 5 model sizes. The new files are bit-identical to the files of the build (largest difference 0.0 in all 65 tensors).</td><td class="pass">pass</td></tr>
+        <tr><td>ViT-7B/16 reference file</td><td>Reference file or recorded skip</td><td>Not run by the verifier. The build run recorded the skip in <code>runs.jsonl</code>: "needs 36.5 GB, 23.2 GB available, does not fit".</td><td class="pending">deferred by the user</td></tr>
+        <tr><td>AC6</td><td>Outputs and parity metric</td><td>Register tokens dropped; Table 10 example gives 0.9997</td><td><code>test_split_tokens_drops_register_tokens</code> and <code>test_split_tokens_keeps_batch_dimension</code> pass: the frame embedding is row 0, the patch embeddings start at row 5. <code>test_measure_parity_worked_example</code> gives 0.9997: below the fp32 threshold, above the fp16 and bf16 thresholds. 2 more tests of the metric pass (equal vectors, 1st percentile and minimum).</td><td class="pass">pass</td></tr>
+        <tr><td>AC7</td><td>torch-mps fp32 parity</td><td>Frame, patch mean and patch 1st percentile &ge; 0.9999 for 5 model sizes &times; 12 configurations</td><td>60 of 60 configurations pass. Worst values: frame 0.99999999998, patch mean 0.9999999999, patch 1st percentile 0.999999999, patch minimum 0.99999998.</td><td class="pass">pass</td></tr>
+        <tr><td rowspan="2">AC8</td><td>torch-mps half-precision parity</td><td>Plan Table 6 as changed on 2026-11-06: fp16 modes 0.999, 0.999, 0.99; bf16 modes 0.998, 0.995, 0.96. Every fp16-cast overflow recorded as expected failure.</td><td>222 configurations measured, all pass: fp16-cast 42, fp16-autocast 60, bf16-cast 60, bf16-autocast 60. Worst fp16 values: frame 0.999986, patch mean 0.999956, patch 1st percentile 0.999781. Worst bf16 values: 0.998365, 0.995177, 0.968878. 18 fp16-cast configurations give non-finite outputs and are expected failures with the reason "fp16 overflow": ViT-L/16 12 of 12, ViT-H+/16 6 of 12 (the inputs with a 224 px short side). <code>torch-mps.jsonl</code> has a line with status "non-finite" for each. Against the unchanged AC8 text (0.999, 0.999, 0.99 in all four modes), 5 bf16 configurations fail (F1, Table 7).</td><td class="pass">pass</td></tr>
+        <tr><td>ViT-7B/16, fp16-cast and bf16-cast</td><td>12 configurations each</td><td>Not run by the verifier. The build test run recorded "reference-vit7b16.safetensors is missing".</td><td class="pending">deferred by the user</td></tr>
+        <tr><td rowspan="2">AC9</td><td>Batch consistency</td><td>The thresholds of the dtype mode, all model sizes and dtype modes of Table 5</td><td>23 of 25 pairs of model size and dtype mode give a value, and all 23 pass. The worst value of all measures is 0.9999999999999998 (the rounding of the fp64 cosine). ViT-L/16 and ViT-H+/16 in fp16-cast give non-finite outputs: expected failures (fp16 overflow).</td><td class="pass">pass</td></tr>
+        <tr><td>ViT-7B/16, fp16-cast and bf16-cast</td><td>2 tests</td><td>Not run by the verifier. The build test run recorded a failed memory check: "needs 20.1 GB, 14.7 GB available".</td><td class="pending">deferred by the user</td></tr>
+        <tr><td>AC10</td><td>Thresholds confirmed</td><td>Each threshold of Table 6 confirmed, or changed by the user with a reason</td><td>fp32 (3 thresholds) and fp16 (3 thresholds): confirmed, with a headroom factor of 22 or more. bf16 (3 thresholds): changed by the user on 2026-11-06 with a reason: bf16 arithmetic gives the same low values on torch-cpu (Table 8). Patch minimum: report only. Section 5 gives the details.</td><td class="pass">pass</td></tr>
+        <tr><td>AC11</td><td>Results table in git</td><td><code>results/parity-torch-mps.md</code>: one row for each model size and dtype mode, with the minimum over the configurations of frame, patch mean, patch 1st percentile and patch minimum</td><td>30 rows in Table 1 of the file and 30 rows in its batch table. The 50 rows of ViT-S/16 to ViT-H+/16 equal the minimums of the verifier test log (0 differences). The 10 ViT-7B/16 rows give the skip reasons of the build test run (F8). After <code>parity_table.py</code> of the verifier, the file is byte-identical to the file in <code>11fc2dd</code>.</td><td class="pass">pass</td></tr>
+        <tr><td>AC12</td><td>Test suite and lint</td><td><code>uv run pytest</code>: 0 failures; default run &le; 180 s; DINOV3_SLOW=1 run: 0 failures; ruff check and format clean</td><td>Default: 180 passed, 4 skipped, 0 failed, 25.05 s (30.1 s wall). DINOV3_SLOW=1 with <code>-k "not 7B"</code>: 360 passed, 3 skipped, 20 xfailed, 69 deselected, 0 failed, 45.02 s (50.6 s wall). Test run 2: the same counts, 42.37 s. <code>ruff format --check src scripts tests</code>: "26 files already formatted". <code>ruff check src scripts tests</code>: "All checks passed!".</td><td class="pass">pass</td></tr>
+        <tr id="ac13"><td rowspan="2">AC13</td><td>Explainer</td><td><code>docs/learn/02-tokens-and-outputs.html</code> covers every new public function of Table 3, and the register values of all six model sizes</td><td>Checked at 17:26 in the working tree (not committed yet). The file exists (61,548 bytes). Its Sections 2, 4, 7 and 8 explain all 13 public functions and the 9 other public names of plan Table 3, with annotated code for <code>preprocess</code>, <code>split_tokens</code>, <code>measure_parity</code> and <code>run_torch</code>. It also covers the extra functions of F9 (<code>parameter_count</code>, <code>required_load_bytes</code>, <code>run_torch_hidden_states</code>, <code>model_slug</code>, <code>reference_path</code>, <code>Configuration</code>, <code>DtypeMode</code>), so the Learn done condition of CLAUDE.md also holds. Its Table 2 and Figure 2 give the register values of 5 model sizes. They equal the verifier values of Table 9 (1,708; 5,262; 14,926; 157,130; 131,448). Its statement that a register token holds the largest value after every block is true in the stored hidden states (verifier check). Two numbers in its text are not exact (F11).</td><td class="pass">pass</td></tr>
+        <tr><td>ViT-7B/16 register values</td><td>Register values of ViT-7B/16</td><td>The explainer says "Not measured yet": there is no ViT-7B/16 reference file, so there are no stored hidden states.</td><td class="pending">deferred by the user</td></tr>
+        <tr id="ac14"><td>AC14</td><td>Steering files</td><td><code>roadmap.md</code>: Step 2 done, Step 3 next. <code>GLOSSARY.md</code>: Dtype mode, Cast mode, Autocast mode, Test image, Reference file. <code>tech-stack.md</code> unchanged unless a package changes.</td><td>Checked at 17:26 in the working tree (not committed yet). <code>roadmap.md</code>: Step 2 "done (2026-11-06)", Step 3 "next". <code>GLOSSARY.md</code> defines the 5 terms, and also Stored pixels and Memory check. <code>tech-stack.md</code>: no change, and no package changed in <code>11fc2dd</code>.</td><td class="pass">pass</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 2.</b> Acceptance criteria of plan.html Section 8, with the values that the verifier measured on 2026-11-06. ViT-7B/16 is out of scope by the decision of the user, so its rows are "deferred by the user" and not "fail". In the Target column, the table numbers refer to plan.html (Table 10 to docs/plan.html). The verifier checked AC13 and AC14 at 17:26 against the working tree, while the Learn and Close stages were still open.</p>
+</section>
+
+<section id="benchmarks">
+  <h2>4 Benchmarks</h2>
+  <p>Step 2 has no throughput benchmark. Plan Section 7 asks for the values of the reference runs and the time of the parity tests. Table 3 gives the reference runs of the build and of the verifier. All runs used torch-cpu in fp32.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Model size</th><th>Run time, build</th><th>Run time, verifier</th><th>Peak memory, build</th><th>Peak memory, verifier</th><th>Free memory before, build</th><th>Free memory before, verifier</th><th>Memory check needs</th><th>Load ratio, build</th><th>Load ratio, verifier</th><th>Reference file</th></tr></thead>
+      <tbody>
+        <tr><td>ViT-S/16</td><td class="num">0.63 s</td><td class="num">0.79 s</td><td class="num">0.53 GB</td><td class="num">0.55 GB</td><td class="num">20.9 GB</td><td class="num">19.4 GB</td><td class="num">4.1 GB</td><td class="num">2.04</td><td class="num">2.29</td><td class="num">14,697,496 B</td></tr>
+        <tr><td>ViT-S+/16</td><td class="num">0.84 s</td><td class="num">0.87 s</td><td class="num">0.57 GB</td><td class="num">0.57 GB</td><td class="num">21.4 GB</td><td class="num">19.7 GB</td><td class="num">4.1 GB</td><td class="num">1.87</td><td class="num">1.89</td><td class="num">14,697,504 B</td></tr>
+        <tr><td>ViT-B/16</td><td class="num">1.49 s</td><td class="num">2.14 s</td><td class="num">0.87 GB</td><td class="num">0.87 GB</td><td class="num">21.4 GB</td><td class="num">19.6 GB</td><td class="num">4.4 GB</td><td class="num">1.49</td><td class="num">1.50</td><td class="num">29,392,416 B</td></tr>
+        <tr><td>ViT-L/16</td><td class="num">7.42 s</td><td class="num">7.68 s</td><td class="num">1.82 GB</td><td class="num">1.83 GB</td><td class="num">21.6 GB</td><td class="num">20.2 GB</td><td class="num">5.5 GB</td><td class="num">1.21</td><td class="num">1.22</td><td class="num">49,068,592 B</td></tr>
+        <tr><td>ViT-H+/16</td><td class="num">20.72 s</td><td class="num">13.39 s</td><td class="num">4.08 GB</td><td class="num">4.10 GB</td><td class="num">22.9 GB</td><td class="num">20.2 GB</td><td class="num">8.1 GB</td><td class="num">1.11</td><td class="num">1.11</td><td class="num">69,568,064 B</td></tr>
+        <tr><td>ViT-7B/16</td><td>skipped: needs 36.5 GB</td><td class="pending">deferred by the user</td><td class="num">&ndash;</td><td class="num">&ndash;</td><td class="num">23.2 GB</td><td class="num">&ndash;</td><td class="num">36.2 to 36.6 GB</td><td class="num">&ndash;</td><td class="num">&ndash;</td><td class="num">&ndash;</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 3.</b> Reference runs of <code>make_reference.py</code>, one subprocess for each model size. Run time: from the start of the model load to the end of the hidden-state run (<code>run_time_s</code> in the metadata), 12 configurations and 1 hidden-state run. Peak memory: <code>ru_maxrss</code> of the subprocess. Free memory: free and inactive pages before the subprocess. Load ratio: (peak memory &minus; memory before the load) / fp32 weight bytes. The ViT-H+/16 file of the verifier is 8 bytes larger, because its metadata has other run times; the tensors are identical. The build file is 69,568,056 bytes. The total wall time of the verifier run is 53.8 s.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Test run</th><th>Build (hand-over note)</th><th>Verifier</th></tr></thead>
+      <tbody>
+        <tr><td><code>uv run pytest</code></td><td>180 passed, 4 skipped, 0 failed, 28.9 s (34.6 s wall)</td><td>180 passed, 4 skipped, 0 failed, 25.05 s (30.1 s wall)</td></tr>
+        <tr><td><code>DINOV3_SLOW=1 uv run pytest</code></td><td>All six model sizes collected: 361 passed, 71 skipped, 20 xfailed, 0 failed, 43.8 s (48.9 s wall)</td><td>With <code>-k "not 7B"</code>: 360 passed, 3 skipped, 20 xfailed, 69 deselected, 0 failed. Test run 1: 45.02 s (50.6 s wall). Test run 2: 42.37 s (47.2 s wall).</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 4.</b> Test runs. The counts differ only by the ViT-7B/16 tests: the build collected 69 ViT-7B/16 tests (68 skipped, 1 passed: <code>test_weights_are_in_cache[ViT-7B/16]</code>), the verifier deselected them. The 4 skips of the default test run are the Step 1 test <code>test_converted_weights_match_hub</code> for the model sizes without converted weights.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Model size</th><th>Tests</th><th>Time, test run 2</th></tr></thead>
+      <tbody>
+        <tr><td>ViT-S/16</td><td class="num">67</td><td class="num">2.15 s</td></tr>
+        <tr><td>ViT-S+/16</td><td class="num">67</td><td class="num">2.10 s</td></tr>
+        <tr><td>ViT-B/16</td><td class="num">67</td><td class="num">3.08 s</td></tr>
+        <tr><td>ViT-L/16</td><td class="num">67</td><td class="num">6.90 s</td></tr>
+        <tr><td>ViT-H+/16</td><td class="num">67</td><td class="num">11.09 s</td></tr>
+        <tr><td>ViT-7B/16</td><td class="num">&ndash;</td><td class="pending">deferred by the user</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 5.</b> Time of the parity tests for each model size (JUnit XML of test run 2). Each model size has 60 <code>test_parity</code>, 5 <code>test_batch_consistency</code> and 2 <code>test_reference_*</code> tests. The times include the 6 model loads of each model size. The slowest single test of the suite is the Step 1 test <code>test_converted_weights_match_hub[ViT-H+/16]</code> (18.9 s in the default test run, 16.6 s in test run 2).</p>
+</section>
+
+<section id="thresholds">
+  <h2>5 Parity and thresholds</h2>
+  <p>Table 6 of plan.html has 9 thresholds and 1 report-only measure. The verifier confirms the fp32 and fp16 thresholds with its own values. The user changed the bf16 thresholds on 2026-11-06. The verifier confirms the reason for the change, but the new bf16 thresholds have almost no headroom (Figure 1, F2).</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Measure</th><th>Dtype modes</th><th>Threshold</th><th>Worst value of the verifier</th><th>Configuration of the worst value</th><th>Margin</th><th>Verdict</th></tr></thead>
+      <tbody>
+        <tr><td>Frame parity</td><td>fp32</td><td class="num">0.9999</td><td class="num">0.99999999998</td><td>ViT-L/16, <code>iss-conference/448x448</code></td><td class="num">0.0001</td><td class="pass">confirmed</td></tr>
+        <tr><td>Patch parity, mean</td><td>fp32</td><td class="num">0.9999</td><td class="num">0.9999999999</td><td>ViT-H+/16, <code>iss-conference/304x224</code></td><td class="num">0.0001</td><td class="pass">confirmed</td></tr>
+        <tr><td>Patch parity, 1st percentile</td><td>fp32</td><td class="num">0.9999</td><td class="num">0.999999999</td><td>ViT-H+/16, <code>iss-conference/224x224</code></td><td class="num">0.0001</td><td class="pass">confirmed</td></tr>
+        <tr><td>Frame parity</td><td>fp16-cast, fp16-autocast</td><td class="num">0.999</td><td class="num">0.999986</td><td>ViT-S+/16 fp16-autocast, <code>iss-kibo-lab/224x400</code></td><td class="num">0.000986</td><td class="pass">confirmed</td></tr>
+        <tr><td>Patch parity, mean</td><td>fp16-cast, fp16-autocast</td><td class="num">0.999</td><td class="num">0.999956</td><td>ViT-S+/16 fp16-autocast, <code>iss-kibo-lab/224x400</code></td><td class="num">0.000956</td><td class="pass">confirmed</td></tr>
+        <tr><td>Patch parity, 1st percentile</td><td>fp16-cast, fp16-autocast</td><td class="num">0.99</td><td class="num">0.999781</td><td>ViT-H+/16 fp16-autocast, <code>iss-kibo-lab/224x224</code></td><td class="num">0.009781</td><td class="pass">confirmed</td></tr>
+        <tr><td>Frame parity</td><td>bf16-cast, bf16-autocast</td><td class="num">0.998 (first proposal 0.999)</td><td class="num">0.998365</td><td>ViT-S+/16 bf16-autocast, <code>iss-kibo-lab/224x400</code></td><td class="num">0.000365</td><td class="partial">changed by the user, reason confirmed</td></tr>
+        <tr><td>Patch parity, mean</td><td>bf16-cast, bf16-autocast</td><td class="num">0.995 (first proposal 0.999)</td><td class="num">0.995177</td><td>ViT-S+/16 bf16-autocast, <code>iss-kibo-lab/224x400</code></td><td class="num">0.000177</td><td class="partial">changed by the user, reason confirmed</td></tr>
+        <tr><td>Patch parity, 1st percentile</td><td>bf16-cast, bf16-autocast</td><td class="num">0.96 (first proposal 0.99)</td><td class="num">0.968878</td><td>ViT-H+/16 bf16-cast, <code>iss-conference/224x224</code></td><td class="num">0.008878</td><td class="partial">changed by the user, reason confirmed</td></tr>
+        <tr><td>Patch parity, minimum</td><td>all five</td><td>report only</td><td class="num">fp32 0.99999998; fp16 0.998451; bf16 0.845469</td><td>bf16: ViT-H+/16 bf16-cast, <code>iss-conference/224x224</code></td><td class="num">&ndash;</td><td>report only</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 6.</b> Thresholds of plan.html Table 6 and the worst values of the verifier over 5 model sizes and 12 configurations. The values are equal to the build values in the plan (0.998365, 0.995177, 0.968878, 0.845). ViT-7B/16 has no value yet (deferred by the user).</p>
+
+  <figure>
+    <svg viewBox="0 0 760 360" role="img" aria-labelledby="fig1-title fig1-desc" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif" font-size="12">
+      <title id="fig1-title">Headroom of each threshold of Table 6</title>
+      <desc id="fig1-desc">Bars on a log scale. fp32 headroom is 1e5 to 5e6, fp16 headroom is 23 to 71, bf16 headroom is 1.04 to 1.29.</desc>
+      <rect x="0" y="0" width="760" height="360" fill="#ffffff"/>
+      <!-- decade grid: x = 200 + 70 * log10(headroom) -->
+      <g stroke="#d6dedd" stroke-width="1">
+        <line x1="270" y1="14" x2="270" y2="306"/>
+        <line x1="340" y1="14" x2="340" y2="306"/>
+        <line x1="410" y1="14" x2="410" y2="306"/>
+        <line x1="480" y1="14" x2="480" y2="306"/>
+        <line x1="550" y1="14" x2="550" y2="306"/>
+        <line x1="620" y1="14" x2="620" y2="306"/>
+        <line x1="690" y1="14" x2="690" y2="306"/>
+      </g>
+      <line x1="200" y1="14" x2="200" y2="306" stroke="#111414" stroke-width="1.5"/>
+      <line x1="200" y1="306" x2="690" y2="306" stroke="#111414" stroke-width="1"/>
+      <g fill="#111414" text-anchor="middle">
+        <text x="200" y="322">1</text>
+        <text x="270" y="322">10</text>
+        <text x="340" y="322">100</text>
+        <text x="410" y="322">1e3</text>
+        <text x="480" y="322">1e4</text>
+        <text x="550" y="322">1e5</text>
+        <text x="620" y="322">1e6</text>
+        <text x="690" y="322">1e7</text>
+        <text x="445" y="346">Headroom = (1 &minus; threshold) / (1 &minus; worst value), log scale. 1 means no headroom.</text>
+      </g>
+      <!-- fp32 -->
+      <text x="10" y="26" font-weight="700" fill="#111414">fp32</text>
+      <g fill="#111414" text-anchor="end">
+        <text x="192" y="48">frame</text>
+        <text x="192" y="72">patch mean</text>
+        <text x="192" y="96">patch 1st percentile</text>
+      </g>
+      <g fill="#057379">
+        <rect x="200" y="36" width="468.6" height="16"/>
+        <rect x="200" y="60" width="421.4" height="16"/>
+        <rect x="200" y="84" width="349.8" height="16"/>
+      </g>
+      <g fill="#111414">
+        <text x="674.6" y="48">4.9e6</text>
+        <text x="627.4" y="72">1.0e6</text>
+        <text x="555.8" y="96">9.9e4</text>
+      </g>
+      <!-- fp16 -->
+      <text x="10" y="126" font-weight="700" fill="#111414">fp16, cast and autocast</text>
+      <g fill="#111414" text-anchor="end">
+        <text x="192" y="148">frame</text>
+        <text x="192" y="172">patch mean</text>
+        <text x="192" y="196">patch 1st percentile</text>
+      </g>
+      <g fill="#057379">
+        <rect x="200" y="136" width="129.7" height="16"/>
+        <rect x="200" y="160" width="94.9" height="16"/>
+        <rect x="200" y="184" width="116.2" height="16"/>
+      </g>
+      <g fill="#111414">
+        <text x="335.7" y="148">71 (0.999986 against 0.999)</text>
+        <text x="300.9" y="172">23 (0.999956 against 0.999)</text>
+        <text x="322.2" y="196">46 (0.999781 against 0.99)</text>
+      </g>
+      <!-- bf16 -->
+      <text x="10" y="226" font-weight="700" fill="#111414">bf16, cast and autocast</text>
+      <g fill="#111414" text-anchor="end">
+        <text x="192" y="248">frame</text>
+        <text x="192" y="272">patch mean</text>
+        <text x="192" y="296">patch 1st percentile</text>
+      </g>
+      <g fill="#8a5a00">
+        <rect x="200" y="236" width="6.1" height="16"/>
+        <rect x="200" y="260" width="1.1" height="16"/>
+        <rect x="200" y="284" width="7.6" height="16"/>
+      </g>
+      <g fill="#111414">
+        <text x="212.1" y="248">1.22 (0.998365 against 0.998)</text>
+        <text x="207.1" y="272">1.04 (0.995177 against 0.995)</text>
+        <text x="213.6" y="296">1.29 (0.968878 against 0.96)</text>
+      </g>
+    </svg>
+    <p class="caption"><b>Figure 1.</b> Headroom of each threshold of plan Table 6. The bar length is (1 &minus; threshold) / (1 &minus; worst value) on a log scale. A bar of length 1 means that the worst value is equal to the threshold. The fp32 and fp16 thresholds have a headroom of 22 or more. The bf16 thresholds are the worst values of this build, rounded down, so their headroom is 1.04 to 1.29.</p>
+  </figure>
+
+  <h3>5.1 The bf16 change</h3>
+  <p>With the first proposal (0.999, 0.999, 0.99 for fp16 and bf16), 5 bf16 configurations fail. Table 7 gives them. The verifier measured the same 5 configurations with the same values as the build.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Model size</th><th>Dtype mode</th><th>Configuration</th><th>Frame</th><th>Patch mean</th><th>Patch 1st percentile</th><th>Patch minimum</th></tr></thead>
+      <tbody>
+        <tr><td>ViT-S+/16</td><td>bf16-autocast</td><td><code>iss-kibo-lab/224x400</code></td><td class="num">0.998365</td><td class="num">0.995177</td><td class="num">0.988774</td><td class="num">0.980765</td></tr>
+        <tr><td>ViT-S+/16</td><td>bf16-cast</td><td><code>iss-kibo-lab/224x400</code></td><td class="num">0.999411</td><td class="num">0.998481</td><td class="num">0.994487</td><td class="num">0.994102</td></tr>
+        <tr><td>ViT-H+/16</td><td>bf16-cast</td><td><code>iss-kibo-lab/224x224</code></td><td class="num">0.999921</td><td class="num">0.999252</td><td class="num">0.986974</td><td class="num">0.971997</td></tr>
+        <tr><td>ViT-H+/16</td><td>bf16-cast</td><td><code>iss-conference/224x224</code></td><td class="num">0.999875</td><td class="num">0.998206</td><td class="num">0.968878</td><td class="num">0.845469</td></tr>
+        <tr><td>ViT-H+/16</td><td>bf16-cast</td><td><code>iss-conference/304x224</code></td><td class="num">0.999903</td><td class="num">0.998982</td><td class="num">0.984974</td><td class="num">0.952786</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 7.</b> The torch-mps bf16 configurations below the first proposal. All of them pass the bf16 column of plan Table 6 as changed.</p>
+  <p>The reason for the change is the bf16 probe of the build: torch-cpu in bf16 gives the same low values, so the cause is bf16 arithmetic and not torch-mps. The verifier measured 4 values of the probe again on torch-cpu, each in its own process after a memory check (Table 8).</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Variant on torch-cpu</th><th>Configuration</th><th>Probe of the build (frame / mean / 1st percentile / minimum)</th><th>Verifier</th><th>torch-mps (test)</th></tr></thead>
+      <tbody>
+        <tr><td>ViT-S+/16, bf16-autocast</td><td><code>iss-kibo-lab/224x400</code></td><td>0.998498 / 0.995222 / 0.988812 / 0.981247</td><td>0.998498 / 0.995222 / 0.988812 / 0.981247 (equal)</td><td>0.998365 / 0.995177 / 0.988774 / 0.980765</td></tr>
+        <tr><td>ViT-S+/16, bf16-cast</td><td><code>iss-kibo-lab/224x400</code></td><td>0.999447 / 0.998600 / 0.994791 / 0.994091</td><td>0.999474 / 0.998581 / 0.994948 / 0.994200</td><td>0.999411 / 0.998481 / 0.994487 / 0.994102</td></tr>
+        <tr><td>ViT-H+/16, bf16-cast</td><td><code>iss-conference/224x224</code></td><td>0.999892 / 0.998579 / 0.978893 / 0.883349</td><td>0.999893 / 0.998770 / 0.978276 / 0.910125</td><td>0.999875 / 0.998206 / 0.968878 / 0.845469</td></tr>
+        <tr><td>ViT-H+/16, fp32 with the pixels rounded to bf16</td><td><code>iss-conference/224x224</code></td><td>0.999987 / 0.999601 / 0.992499 / 0.968287</td><td>0.999987 / 0.999601 / 0.992499 / 0.968287 (equal)</td><td>&ndash;</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 8.</b> Re-check of the bf16 probe. The two bf16-cast values differ from the probe in the 4th decimal. The probe made bf16 weights with <code>model.to(torch.bfloat16)</code>, which also casts the RoPE buffer <code>inv_freq</code> to bf16. <code>load_torch_backbone</code> loads with <code>dtype=torch.bfloat16</code> and keeps <code>inv_freq</code> in fp32 (verifier check). The conclusion of the probe stays the same: torch-cpu in bf16 is also below the first proposal, and ViT-H+/16 at 224 px moves even in fp32 when only the pixels are rounded to bf16.</p>
+
+  <h3>5.2 fp16 overflow</h3>
+  <p>The xfail reason of the tests says that a register token is above 65,504, the largest fp16 value. The stored hidden states of <code>iss-kibo-lab/224x224</code> support this reason (Table 9). The verifier also checked that the final layer norm of the last hidden-state row gives the stored tokens (largest difference 2.1e-6). So the hidden states are before the final layer norm, as Section 3.4 of the plan says.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Model size</th><th>Blocks</th><th>Largest absolute value</th><th>Row, token position</th><th>Rows above 65,504</th><th>fp16-cast, finite configurations</th></tr></thead>
+      <tbody>
+        <tr><td>ViT-S/16</td><td class="num">12</td><td class="num">1,708</td><td>row 11, token 1 (register token)</td><td class="num">0 of 13</td><td class="num">12 of 12</td></tr>
+        <tr><td>ViT-S+/16</td><td class="num">12</td><td class="num">5,262</td><td>row 11, token 3 (register token)</td><td class="num">0 of 13</td><td class="num">12 of 12</td></tr>
+        <tr><td>ViT-B/16</td><td class="num">12</td><td class="num">14,926</td><td>row 11, token 1 (register token)</td><td class="num">0 of 13</td><td class="num">12 of 12</td></tr>
+        <tr><td>ViT-L/16</td><td class="num">24</td><td class="num">157,130</td><td>row 23, token 2 (register token)</td><td class="num">24 of 25</td><td class="num">0 of 12</td></tr>
+        <tr><td>ViT-H+/16</td><td class="num">32</td><td class="num">131,448</td><td>row 30, token 2 (register token)</td><td class="num">10 of 33</td><td class="num">6 of 12</td></tr>
+        <tr><td>ViT-7B/16</td><td class="num">40</td><td colspan="4" class="pending">deferred by the user</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 9.</b> Largest absolute values in the stored hidden states (fp32, <code>iss-kibo-lab/224x224</code>), and the fp16-cast results of the test run. Row 0 is the token sequence before block 1. Token positions 1 to 4 are the register tokens. ViT-L/16 is above 65,504 from block 1 on (rows 1 to 24), so it overflows at every input resolution. ViT-H+/16 is above 65,504 from block 23 on (rows 23 to 32) at this input, and overflows only at the inputs with a 224 px short side.</p>
+</section>
+
+<section id="code">
+  <h2>6 Code against the plan</h2>
+  <p>The verifier read the build commit against Sections 3 to 6 of plan.html. Table 10 gives each check.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Plan item</th><th>What the verifier checked</th><th>Result</th></tr></thead>
+      <tbody>
+        <tr><td>Table 3, <code>hub.py</code></td><td><code>CONVERTED_DIR</code>, <code>WeightsNotFoundError</code> (a <code>FileNotFoundError</code>) and <code>weights_dir</code>: the cache first (with all shards of the index), the converted folder second, else the error. <code>convert_meta_checkpoint.py</code> imports <code>CONVERTED_DIR</code>.</td><td class="pass">as planned</td></tr>
+        <tr><td>Table 3, <code>memory.py</code></td><td><code>InsufficientMemoryError</code> (a <code>MemoryError</code>), <code>available_memory_bytes</code> and <code>check_free_memory</code>, with one log line for each memory check.</td><td class="partial">deviation F6</td></tr>
+        <tr><td>Table 3, <code>preprocess.py</code></td><td><code>IMAGENET_MEAN</code>, <code>IMAGENET_STD</code>, <code>own_aspect_size</code>, <code>load_image</code> and <code>preprocess</code>. The resize and the normalization run in fp64, the result is fp32 (change of 2026-11-06).</td><td class="pass">as planned</td></tr>
+        <tr><td>Table 3, <code>outputs.py</code></td><td><code>NUM_PREFIX_TOKENS</code> = 5. <code>split_tokens</code> returns row 0 and rows 5 to 5 + N as a grid.</td><td class="pass">as planned</td></tr>
+        <tr><td>Table 3, <code>parity.py</code></td><td><code>Parity</code>, <code>THRESHOLDS</code> and <code>measure_parity</code>. NumPy only. The cosine runs in fp64 and is clamped at 1.0.</td><td class="pass">as planned</td></tr>
+        <tr><td>Table 3, <code>reference.py</code></td><td><code>DTYPE_MODES</code>, <code>configurations</code>, <code>load_torch_backbone</code> (memory check before each load), <code>run_torch</code>, <code>read_inputs</code> and <code>read_reference</code>. 10 more public names.</td><td class="partial">deviation F9</td></tr>
+        <tr><td>Table 3, scripts</td><td><code>make_test_images.py</code>, <code>make_reference.py</code> and <code>parity_table.py</code> do the jobs of Table 3.</td><td class="partial">findings F3, F4, F8</td></tr>
+        <tr><td>Table 2, configurations</td><td>12 configurations for each model size. Token counts in the log of <code>make_reference.py</code>: 201, 789, 1029, 355, 271 and 271.</td><td class="pass">as planned</td></tr>
+        <tr><td>Table 4, stored files</td><td>Keys <code>{image}/{H}x{W}/pixels</code>, <code>{image}/{H}x{W}/tokens</code> and <code>iss-kibo-lab/224x224/hidden_states</code>. All fp32. 13 tensors in each reference file. Hidden states (L + 1, 201, D) with L = 12, 12, 12, 24 and 32. Git ignores <code>tests/fixtures/generated/</code>.</td><td class="pass">as planned</td></tr>
+        <tr><td>Section 3.4, metadata</td><td>Versions (Python 3.12.13, torch 2.15.0, transformers 5.22.1, safetensors 0.8.0, Pillow 13.0.0, and NumPy 2.5.4), SHA-256 of each test image, the preprocessing settings, the model size, the weight source, the SHA-256 of each weight file, the attention implementation (sdpa), the run time, the peak memory and the date. Also <code>model_id</code>, <code>num_blocks</code>, <code>load_time_s</code> and <code>rss_before_load_bytes</code>.</td><td class="pass">as planned</td></tr>
+        <tr><td>Section 3.5, run rules</td><td><code>inputs.safetensors</code> first; model sizes from the smallest to the largest; a memory check, then one subprocess; the next subprocess after the previous one ends; 1.2 &times; fp32 weight bytes + 4 GB; a skip with a recorded reason.</td><td class="partial">deviation F5, finding F4</td></tr>
+        <tr><td>Table 5, dtype modes</td><td><code>DTYPE_MODES</code> equals Table 5. ViT-7B/16 skips fp32, fp16-autocast and bf16-autocast on torch-mps, and the test records the reason.</td><td class="pass">as planned</td></tr>
+        <tr><td>Section 3.6, xfail rule</td><td>A non-finite output in fp16-cast calls <code>pytest.xfail</code> with "fp16 overflow: &hellip;". A non-finite output in another dtype mode calls <code>pytest.fail</code>. <code>test_batch_consistency</code> uses the same rule.</td><td class="pass">as planned</td></tr>
+        <tr><td>Section 3.7, thresholds</td><td><code>THRESHOLDS</code> equals Table 6 as changed. <code>test_thresholds_of_table_6</code> checks the 15 values.</td><td class="pass">as planned</td></tr>
+        <tr><td>Section 5, fixtures</td><td>One model in memory; <code>del</code>, <code>gc.collect</code> and <code>torch.mps.empty_cache</code> before the next load; a memory check before each load. <code>conftest.py</code> sets the MPS watermarks (0.8 and 0.6) before torch is imported. <code>record</code> appends one JSON line.</td><td class="pass">as planned (fixture name: F9)</td></tr>
+        <tr><td>Section 6, tests</td><td>Tests 1 to 13 exist. 6 more tests exist. ViT-S/16 and ViT-B/16 run by default, all six model sizes with DINOV3_SLOW=1. A missing weight file or stored file gives a skip with a reason.</td><td class="partial">finding F7</td></tr>
+        <tr><td>CLAUDE.md, code rules</td><td>Type hints on every parameter and return value (scan: 0 missing). Google-style docstrings on the public functions. pathlib, f-strings and specific exceptions.</td><td class="pass">as planned</td></tr>
+        <tr><td>Table 7 note, packages</td><td><code>pyproject.toml</code>, <code>uv.lock</code> and <code>tech-stack.md</code> are not in the build commit.</td><td class="pass">as planned</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 10.</b> The code of commit <code>11fc2dd</code> against Sections 3 to 6 of plan.html.</p>
+</section>
+
+<section id="findings">
+  <h2>7 Findings</h2>
+  <p>No finding makes a criterion fail. F1 and F2 need an action before Step 4. The verifier did not fix a finding.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>No.</th><th>Location</th><th>Problem and concrete case</th><th>Proposed fix</th><th>Effect</th></tr></thead>
+      <tbody>
+        <tr><td>F1</td><td><code>specs/02-reference/plan.html</code> Section 8, Table 7, AC8</td><td>The AC8 target still says "Frame and patch mean &ge; 0.999, patch 1st percentile &ge; 0.99, in all four modes". The change of 2026-11-06 updated plan Table 6 but not AC8. Against this text, the 5 bf16 configurations of Table 7 fail.</td><td>Change the AC8 target to "fp16 modes: 0.999, 0.999, 0.99. bf16 modes: 0.998, 0.995, 0.96 (Table 6)".</td><td>Plan text only. AC8 passes against plan Table 6.</td></tr>
+        <tr><td>F2</td><td><code>src/dinov3_apple/parity.py:31</code>, plan Table 6</td><td>The bf16 thresholds are the worst values of this build, rounded down. The headroom of the bf16 patch mean is 0.000177 (0.995177 against 0.995), Figure 1. Plan Table 6 says that the thresholds hold for every backend and model size. A small change of the bf16 arithmetic can fail them: another torch version, mlx in Steps 4 and 5, or ViT-7B/16.</td><td>Keep the thresholds (user decision). In Steps 4 and 5, also compare mlx bf16 with the torch-cpu bf16 output, so that a fail shows if mlx or bf16 is the cause. The rule for a changed threshold (plan Section 3.7) applies.</td><td>Risk for Steps 4 and 5.</td></tr>
+        <tr><td>F3</td><td><code>scripts/make_test_images.py:6</code></td><td>The module docstring says "saves a JPEG with quality 95". <code>JPEG_QUALITY</code> on line 27 is 92, and the stored files have the quantization tables of quality 92.</td><td>Change "95" to "92" in the docstring.</td><td>Text only.</td></tr>
+        <tr><td>F4</td><td><code>scripts/make_reference.py:175</code></td><td>The measured load ratio lives only in one invocation (<code>ratio</code> in <code>run_all</code>). The re-run of plan Section 3.5 (<code>make_reference.py ViT-7B/16</code>) starts again at 1.2. Concrete case: this run measured 1.215 for ViT-L/16. A separate ViT-7B/16 invocation asks for 36.24 GB. The rule asks for 36.64 GB.</td><td>At start, read the largest <code>measured_ratio</code> in <code>runs.jsonl</code> of the model sizes with &ge; 1 GB fp32 weights.</td><td>Low. The 4 GB reserve covers the 0.40 GB.</td></tr>
+        <tr><td>F5</td><td><code>scripts/make_reference.py:54</code>, <code>:195</code>, <code>:201</code></td><td>Deviation from plan Section 3.5. The plan learns the ratio from ViT-S/16 and ViT-H+/16 as peak memory / weight bytes. The build learns it only from model sizes with &ge; 1 GB fp32 weights (ViT-L/16, ViT-H+/16), and subtracts the memory before the load. With the ViT-S/16 ratio, the plan rule asks for 6.4 &times; 26.86 + 4 = 176 GB for ViT-7B/16 (peak memory / weight bytes), or 65.4 GB with the subtraction (2.285). Neither fits on this Mac. The hand-over note gives this reason.</td><td>Accept. Write the rule into plan.html Section 3.5.</td><td>None. The build rule is better.</td></tr>
+        <tr><td>F6</td><td><code>src/dinov3_apple/memory.py:20</code></td><td>Deviation from plan Section 3.3 ("the free memory from vm_stat"). <code>available_memory_bytes</code> adds the free and the inactive pages. At 17:06 vm_stat gave 0.65 GB of free pages and 18.9 GB of inactive pages, so with free pages only, every memory check fails. But inactive pages also hold app memory that macOS must compress or swap before the reuse.</td><td>Accept. Write the definition into plan.html and into the GLOSSARY.md term "Memory check". Keep the 4 GB reserve.</td><td>Low.</td></tr>
+        <tr><td>F7</td><td><code>tests/test_preprocess.py:53-54</code></td><td><code>test_preprocess_matches_pillow_float_resize</code> covers 224 &times; 224 and 512 &times; 512 only: 6 of the 12 configurations, not 448 &times; 448 and not the own aspect ratio. The fp32 resize error was largest at 448 &times; 448 (2.26e-5). The verifier check of all 12 configurations gives 1.19e-7.</td><td>Parametrize the test over <code>configurations()</code>.</td><td>Low. AC2 passes with the verifier check.</td></tr>
+        <tr><td>F8</td><td><code>scripts/parity_table.py:22</code></td><td><code>latest_lines</code> keeps the last line of each configuration over all test runs in <code>torch-mps.jsonl</code>. After a filtered test run, the rows of different test runs mix, and the table does not show this. Concrete case: after the verifier test run with <code>-k "not 7B"</code>, the ViT-7B/16 rows come from the build test run (17:01) and the other rows from the verifier test run (17:16).</td><td>Write the time range of the lines into each row, or write a run id into each line.</td><td>Low.</td></tr>
+        <tr><td>F9</td><td><code>src/dinov3_apple/reference.py</code>, <code>tests/</code></td><td>Names that differ from plan Table 3 and Section 5: more public names (<code>Configuration</code>, <code>DtypeMode</code>, <code>parameter_count</code>, <code>required_load_bytes</code>, <code>run_torch_hidden_states</code>, <code>model_slug</code>, <code>reference_path</code>, <code>LOAD_RATIO</code>, <code>LOAD_RESERVE_BYTES</code>, <code>REQUIRED_METADATA</code>, <code>memory.GB</code>). <code>PATCH_SIZE</code> is in both <code>preprocess.py</code> and <code>outputs.py</code>. <code>run_torch</code> returns (B, 1 + 4 + N, D). The test file is <code>test_torch_mps_parity.py</code>, not <code>test_parity.py</code>. The fixture is <code>backbone</code> with a device argument, not <code>mps_backbone</code>.</td><td>Update Table 3 and Section 5 of plan.html, or accept. Keep one <code>PATCH_SIZE</code>.</td><td>None on the behavior. The explainer covers the extra functions (AC13).</td></tr>
+        <tr><td>F10</td><td>bf16 probe of the build</td><td>The torch-cpu bf16-cast values of the verifier differ from the probe in the 4th decimal (Table 8). Cause: the probe cast the RoPE buffer to bf16, the tests keep it in fp32.</td><td>None. Information only.</td><td>None. The conclusion of the probe holds.</td></tr>
+        <tr><td>F11</td><td><code>src/dinov3_apple/preprocess.py:4-5</code>, <code>docs/learn/02-tokens-and-outputs.html</code> Section 2, <code>specs/02-reference/plan.html</code> Section 5</td><td>Two numbers in the texts are not exact. (1) "A resize of 8-bit pixels &hellip; drops the patch parity of ViT-H+/16 to 0.93": in Table 3 of explore.html, 0.929 is the patch minimum; the patch mean is 0.999038. (2) "Pillow float resize is within 8e-8 of the fp64 resize": the verifier measured up to 8.9e-8 (<code>iss-kibo-lab/512x512</code>).</td><td>Write "patch minimum" in (1), and "within 9e-8" or "below 1e-7" in (2).</td><td>Text only.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 11.</b> Findings. Line numbers refer to commit <code>11fc2dd</code>.</p>
+</section>
+
+<section id="claims">
+  <h2>8 Claims of the build against the verifier values</h2>
+  <p>All AC values of the hand-over note are equal to the verifier values, except the values in Table 12. The parity values and the reference files are identical. Only run times, free memory and test counts differ.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Claim</th><th>Build</th><th>Verifier</th><th>Reason for the difference</th></tr></thead>
+      <tbody>
+        <tr><td>Run time of ViT-H+/16 in <code>make_reference.py</code></td><td class="num">20.72 s</td><td class="num">13.39 s</td><td>Other load on the Mac. The other model sizes differ by 0.03 to 0.65 s.</td></tr>
+        <tr><td>Free memory before the reference runs</td><td class="num">20.9 to 22.9 GB</td><td class="num">19.4 to 20.2 GB</td><td>Other apps.</td></tr>
+        <tr><td>Load ratio of ViT-S/16</td><td class="num">2.04</td><td class="num">2.29</td><td>Fixed torch memory, not weights. The ratios of ViT-L/16 and ViT-H+/16 differ by 0.006 and 0.003.</td></tr>
+        <tr><td>Default test run</td><td class="num">28.9 s</td><td class="num">25.05 s</td><td>Same counts. Other load on the Mac.</td></tr>
+        <tr><td>DINOV3_SLOW=1 test run</td><td>361 passed, 71 skipped</td><td>360 passed, 3 skipped, 69 deselected</td><td>The verifier deselected the ViT-7B/16 tests (decision of the user).</td></tr>
+        <tr><td>Probe, torch-cpu bf16-cast</td><td>Table 8</td><td>Table 8</td><td>The RoPE buffer dtype (F10).</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 12.</b> Values of the hand-over note that differ from the verifier values.</p>
+</section>
+
+<section id="open">
+  <h2>9 Open items</h2>
+  <ol>
+    <li><b>ViT-7B/16 (deferred by the user).</b> The reference file, the torch-mps rows of fp16-cast and bf16-cast, the 2 batch tests and the tests 10 and 11 for ViT-7B/16 are open. <code>make_reference.py ViT-7B/16</code> needs 36.2 GB of free memory (36.6 GB with the measured ratio, F4). <code>test_reference_is_reproducible[ViT-7B/16]</code> loads ViT-7B/16 in fp32 on torch-cpu a second time, inside the test process (36.2 GB). The torch-mps cast modes need 20.1 GB each. Commands, one after the other: <code>uv run python scripts/make_reference.py ViT-7B/16</code>, then <code>DINOV3_SLOW=1 uv run pytest tests/test_reference.py tests/test_torch_mps_parity.py -k 7B</code>, then <code>uv run python scripts/parity_table.py</code>.</li>
+    <li><b>plan.html.</b> Fix the AC8 target (F1). Write the ratio rule (F5) and the memory definition (F6) into Sections 3.3 and 3.5.</li>
+    <li><b>Close stage.</b> At 17:26 the working tree has the final thresholds in Table 9 of <code>docs/plan.html</code> and in the parity row of <code>mission.md</code>, and ADR 0003 for the bf16 thresholds. The explainer, the steering files and this file are not committed yet.</li>
+    <li><b>Steps 4 and 5.</b> The bf16 thresholds have almost no headroom (F2). ViT-L/16 overflows in fp16 cast mode at every input resolution, not only ViT-H+/16 (Table 9). Its values are above 65,504 from block 1 on.</li>
+    <li><b>Small fixes.</b> F3 (docstring), F4 (ratio across invocations), F7 (test coverage), F8 (mixed rows in the results table) and F11 (two numbers in the texts).</li>
+  </ol>
+</section>
+
+<section id="commands">
+  <h2>10 Commands</h2>
+  <p>The verifier ran these commands in the repo folder on 2026-11-06, in this order. The shell had an unrelated <code>VIRTUAL_ENV</code>. uv ignored it with a warning.</p>
+  <pre><code>git show --stat 11fc2dd
+git diff 11fc2dd --stat -- src scripts tests      # no output: the working tree equals the commit
+uv run python -c "from dinov3_apple.memory import available_memory_bytes as a; print(a()/1e9)"   # before each heavy job
+uv run python scripts/make_reference.py ViT-S/16 ViT-S+/16 ViT-B/16 ViT-L/16 ViT-H+/16
+uv run pytest -q -rsx --durations=5
+DINOV3_SLOW=1 uv run pytest -q -rsxf --durations=10 -k "not 7B"
+uv run python scripts/parity_table.py
+uv run ruff format --check src scripts tests
+uv run ruff check src scripts tests
+DINOV3_SLOW=1 uv run pytest -q -k "not 7B" --junitxml=slow.xml
+# Own checks (scripts in the scratchpad of the verifier, not in the repo):
+#   compare the reference files with copies of the build files (keys and values)
+#   JPEG quantization tables, EXIF and SHA-256 of the test images
+#   Commons API: prop=imageinfo, iiprop=sha1|size|extmetadata for the 3 source files
+#   Pillow float resize, stored pixels and fp32 resize for all 12 configurations
+#   final layer norm of the last hidden-state row against the stored tokens; largest values
+#   results/parity-torch-mps.md against the test log, row by row
+#   4 bf16 probe values on torch-cpu, one process each; dtype of rope_embeddings.inv_freq
+#   ast scan of the type hints of the functions in the build commit</code></pre>
+</section>
+</main>
+</body>
+</html>

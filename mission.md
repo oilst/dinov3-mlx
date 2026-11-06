@@ -19,7 +19,7 @@ We use DINOv3 backbones to classify video frames on Apple silicon Macs. We do no
 
 | Goal | Measure |
 |---|---|
-| Parity | Frame embedding cosine similarity is at least 0.9999 in fp32 and at least 0.999 in fp16 and bf16, for every model size. For patch embeddings, we report the mean and the minimum cosine similarity. Step 2 confirms these thresholds. |
+| Parity | Frame embedding cosine similarity is at least 0.9999 in fp32, at least 0.999 in fp16 and at least 0.998 in bf16, for every model size. For patch embeddings, the mean is at least 0.9999, 0.999 and 0.995, and the 1st percentile is at least 0.9999, 0.99 and 0.96. We report the minimum. Step 2 set these thresholds (ADR 0003). |
 | Throughput | For each model size and dtype, the speedup is above 1. If it is not, `verify.html` of the step explains why. |
 | Understanding | Every DINOv3 part in `src/` has an explainer in `docs/learn/`. Every term that the code and the docs use is in `GLOSSARY.md`. |
 | Fine-tuning | MLX reproduces the reference fine-tuning setup with the same quality on a public dataset and with more images per second. A table compares LoRA, DoRA and the other adapters. |

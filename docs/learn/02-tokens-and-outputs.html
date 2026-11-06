@@ -1,0 +1,571 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tokens and Outputs</title>
+<style>
+/* Explainer page. White page, black text, no dark mode. */
+:root { --bg: #ffffff; --fg: #111414; --muted: #4a5655; --rule: #d6dedd; --panel: #f5f8f7; --accent: #057379; --cls: #057379; --patch: #9fd3d1; --reg: #e0a336; color-scheme: light; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif; }
+main { max-width: 62rem; margin: 0 auto; padding: 40px 20px 64px; display: grid; gap: 1.75rem; }
+h1 { font-size: 1.9rem; line-height: 1.15; margin: 0; }
+h2 { font-size: 1.3rem; margin: 0; }
+h3 { font-size: 1.05rem; margin: 0; }
+section { display: grid; gap: 0.8rem; }
+p, ul, ol { margin: 0; max-width: 46rem; }
+li + li { margin-top: 0.25rem; }
+code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.86em; }
+pre { margin: 0; background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 0.8rem 1rem; overflow-x: auto; }
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 0.92rem; }
+th, td { text-align: left; vertical-align: top; padding: 0.45rem 0.7rem 0.45rem 0; border-bottom: 1px solid var(--rule); }
+th { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); border-bottom: 1.5px solid var(--fg); }
+td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.caption, figcaption { font-size: 0.88rem; color: var(--muted); }
+figure { margin: 0; display: grid; gap: 0.4rem; }
+.fig { border: 1px solid var(--rule); border-radius: 6px; padding: 0.5rem; overflow-x: auto; }
+.fig svg { display: block; width: 100%; height: auto; min-width: 640px; }
+.note { border-left: 3px solid var(--accent); padding: 0.3rem 0 0.3rem 0.9rem; }
+details summary { cursor: pointer; color: var(--accent); }
+nav ol { columns: 2; }
+a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+<header>
+  <h1>Tokens and Outputs</h1>
+  <p>Explainer for roadmap step 2. Date: 2026-11-06.</p>
+</header>
+
+<nav>
+  <h2>Contents</h2>
+  <ol>
+    <li><a href="#why">Why this explainer</a></li>
+    <li><a href="#pixels">From image file to pixels</a></li>
+    <li><a href="#sequence">The token sequence</a></li>
+    <li><a href="#outputs">The final layer norm and the two outputs</a></li>
+    <li><a href="#registers">The large values of the register tokens</a></li>
+    <li><a href="#half">Half precision and the large values</a></li>
+    <li><a href="#parity">The parity metric</a></li>
+    <li><a href="#code">The code of Step 2</a></li>
+    <li><a href="#surprises">Surprises</a></li>
+    <li><a href="#sources">Sources</a></li>
+  </ol>
+</nav>
+
+<section id="why">
+  <h2>1 Why this explainer</h2>
+  <p>Step 2 makes the reference output: the output of the Hugging Face backbone on <code>torch-cpu</code> in fp32. Each model size gets one reference file with 12 configurations: 3 test images at 4 input resolutions. Every later step compares its output with these files. So we must know exactly which tokens the backbone gives and which slices of them are the two outputs.</p>
+  <p>This explainer shows the path from an image file to the frame embedding and the patch embeddings. It also shows a property of DINOv3 that the probe of <code>specs/02-reference/explore.html</code> found and that Step 2 measured for five model sizes: one register token holds very large values inside the backbone. These values decide where fp16 and bf16 can run.</p>
+  <p>The values in Sections 5 and 6 come from the stored reference files of ViT-S/16, ViT-S+/16, ViT-B/16, ViT-L/16 and ViT-H+/16. ViT-7B/16 has no reference file yet. Its memory check failed (36.5 GB needed, 23.2 GB available), and the user deferred it.</p>
+</section>
+
+<section id="pixels">
+  <h2>2 From image file to pixels</h2>
+  <p>The backbone takes a normalized fp32 tensor with shape (1, 3, H, W). H and W are multiples of 16. <code>src/dinov3_apple/preprocess.py</code> makes this tensor in four steps:</p>
+  <ol>
+    <li><code>load_image</code> decodes the file with Pillow to an (h, w, 3) uint8 RGB array.</li>
+    <li><code>preprocess</code> divides the pixels by 255.</li>
+    <li>It resizes the float pixels to (H, W) with a bilinear filter and antialiasing.</li>
+    <li>It subtracts the ImageNet mean and divides by the ImageNet standard deviation of each color channel.</li>
+  </ol>
+  <pre><code>def preprocess(image: np.ndarray, size: tuple[int, int]) -> torch.Tensor:
+    pixels = torch.from_numpy(image).permute(2, 0, 1).unsqueeze(0).to(torch.float64) / 255.0
+    resized = F.interpolate(pixels, size=size, mode="bilinear", antialias=True)  # float pixels
+    mean = IMAGENET_MEAN.to(torch.float64).view(1, 3, 1, 1)  # (0.485, 0.456, 0.406)
+    std = IMAGENET_STD.to(torch.float64).view(1, 3, 1, 1)    # (0.229, 0.224, 0.225)
+    return ((resized - mean) / std).to(torch.float32)          # fp64 math, fp32 result</code></pre>
+  <p>The Hugging Face image processor does the same math in fp32. Our version does it in fp64 and casts the result to fp32. On the test images, the fp32 resize of torch was up to 2.25e-5 away from an fp64 resize. A Pillow float resize (mode <code>F</code>) was within 9e-8. With the fp64 version, a second implementation of the resize can agree with the stored pixels to 1e-7. The stored pixels differ from the Hugging Face image processor by up to about 2e-5. A resize of 8-bit pixels differs by up to 0.004 and drops the patch minimum of ViT-H+/16 to 0.93 (Step 1).</p>
+  <p><code>scripts/make_reference.py</code> runs <code>preprocess</code> once and writes the result to <code>inputs.safetensors</code>. Every backend reads these stored pixels. So a parity test measures only the backbone. A separate test compares <code>preprocess</code> with the stored pixels (largest difference 0.0).</p>
+  <p><code>own_aspect_size(height, width, short_side=224)</code> gives the input resolution that keeps the aspect ratio of an image. The short side becomes 224 px. The long side is rounded to the nearest multiple of 16.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Test image</th><th>Stored size (W × H)</th><th>Square inputs</th><th>Own aspect ratio (H × W)</th><th>Patch grid</th><th>Tokens</th></tr></thead>
+      <tbody>
+        <tr><td>iss-kibo-lab</td><td class="num">1024 × 576</td><td>224, 448, 512</td><td class="num">224 × 400</td><td class="num">14 × 25</td><td class="num">355</td></tr>
+        <tr><td>forest</td><td class="num">1024 × 768</td><td>224, 448, 512</td><td class="num">224 × 304</td><td class="num">14 × 19</td><td class="num">271</td></tr>
+        <tr><td>iss-conference</td><td class="num">768 × 1024</td><td>224, 448, 512</td><td class="num">304 × 224</td><td class="num">19 × 14</td><td class="num">271</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 1.</b> The 12 configurations of each model size. The square inputs give 14 × 14, 28 × 28 and 32 × 32 patches, so 201, 789 and 1029 tokens. The forest grid and the iss-conference grid have the same size with rows and columns swapped. A swap of height and width in the code fails a test.</p>
+</section>
+
+<section id="sequence">
+  <h2>3 The token sequence</h2>
+  <p>The patch embedding cuts the image into patches of 16 × 16 px and maps each patch to one patch token. Then the backbone puts 5 learned tokens in front: the CLS token at position 0 and the 4 register tokens at positions 1 to 4. These 5 tokens are the prefix tokens. RoPE rotates only the patch tokens. Each block reads and writes the full sequence.</p>
+  <p>The patch tokens come in row-major order. The patch in row r and column c of a grid with W/16 columns is at sequence position 5 + r · (W/16) + c. For the input of 224 × 400 px, the grid has 14 rows and 25 columns, and the sequence has 5 + 350 = 355 tokens.</p>
+  <figure>
+    <div class="fig"><svg viewBox="0 0 960 270" role="img" aria-label="Token sequence of a 224 by 400 pixel input and the slices that give the two outputs" font-family="-apple-system, Helvetica Neue, Arial, sans-serif">
+      <rect width="960" height="270" fill="#ffffff"/>
+      <g font-size="13" fill="#111414">
+        <text x="20" y="24" font-weight="600">Token sequence after the last block. Input 224 × 400 px: 14 × 25 = 350 patches, 355 tokens</text>
+        <rect x="20" y="36" width="60" height="40" fill="#057379"/><text x="50" y="61" text-anchor="middle" fill="#ffffff">CLS</text>
+        <rect x="84" y="36" width="44" height="40" fill="#e0a336"/><text x="106" y="61" text-anchor="middle">R1</text>
+        <rect x="132" y="36" width="44" height="40" fill="#e0a336"/><text x="154" y="61" text-anchor="middle">R2</text>
+        <rect x="180" y="36" width="44" height="40" fill="#e0a336"/><text x="202" y="61" text-anchor="middle">R3</text>
+        <rect x="228" y="36" width="44" height="40" fill="#e0a336"/><text x="250" y="61" text-anchor="middle">R4</text>
+        <rect x="290" y="36" width="70" height="40" fill="#9fd3d1"/><text x="325" y="61" text-anchor="middle">P 0,0</text>
+        <rect x="364" y="36" width="70" height="40" fill="#9fd3d1"/><text x="399" y="61" text-anchor="middle">P 0,1</text>
+        <text x="458" y="61" text-anchor="middle">…</text>
+        <rect x="482" y="36" width="70" height="40" fill="#9fd3d1"/><text x="517" y="61" text-anchor="middle">P 0,24</text>
+        <rect x="556" y="36" width="70" height="40" fill="#9fd3d1"/><text x="591" y="61" text-anchor="middle">P 1,0</text>
+        <text x="650" y="61" text-anchor="middle">…</text>
+        <rect x="674" y="36" width="78" height="40" fill="#9fd3d1"/><text x="713" y="61" text-anchor="middle">P 13,24</text>
+        <g font-size="11" fill="#4a5655" text-anchor="middle">
+          <text x="50" y="92">0</text><text x="106" y="92">1</text><text x="154" y="92">2</text><text x="202" y="92">3</text><text x="250" y="92">4</text>
+          <text x="325" y="92">5</text><text x="399" y="92">6</text><text x="517" y="92">29</text><text x="591" y="92">30</text><text x="713" y="92">354</text>
+        </g>
+        <text x="770" y="54" font-size="11" fill="#4a5655">sequence position</text>
+        <text x="770" y="70" font-size="11" fill="#4a5655">under each token</text>
+        <line x1="500" y1="100" x2="500" y2="128" stroke="#4a5655" stroke-width="1.5"/>
+        <path d="M494,122 L500,132 L506,122 z" fill="#4a5655"/>
+        <text x="514" y="120" font-size="12" fill="#111414">final layer norm: each token alone, over its D channels</text>
+        <text x="20" y="150" font-weight="600">After the final layer norm</text>
+        <rect x="20" y="158" width="60" height="40" fill="#057379"/><text x="50" y="183" text-anchor="middle" fill="#ffffff">CLS</text>
+        <rect x="84" y="158" width="44" height="40" fill="#e3e8e7"/><text x="106" y="183" text-anchor="middle" fill="#4a5655">R1</text>
+        <rect x="132" y="158" width="44" height="40" fill="#e3e8e7"/><text x="154" y="183" text-anchor="middle" fill="#4a5655">R2</text>
+        <rect x="180" y="158" width="44" height="40" fill="#e3e8e7"/><text x="202" y="183" text-anchor="middle" fill="#4a5655">R3</text>
+        <rect x="228" y="158" width="44" height="40" fill="#e3e8e7"/><text x="250" y="183" text-anchor="middle" fill="#4a5655">R4</text>
+        <rect x="290" y="158" width="70" height="40" fill="#9fd3d1"/><text x="325" y="183" text-anchor="middle">P 0,0</text>
+        <rect x="364" y="158" width="70" height="40" fill="#9fd3d1"/><text x="399" y="183" text-anchor="middle">P 0,1</text>
+        <text x="458" y="183" text-anchor="middle">…</text>
+        <rect x="482" y="158" width="70" height="40" fill="#9fd3d1"/><text x="517" y="183" text-anchor="middle">P 0,24</text>
+        <rect x="556" y="158" width="70" height="40" fill="#9fd3d1"/><text x="591" y="183" text-anchor="middle">P 1,0</text>
+        <text x="650" y="183" text-anchor="middle">…</text>
+        <rect x="674" y="158" width="78" height="40" fill="#9fd3d1"/><text x="713" y="183" text-anchor="middle">P 13,24</text>
+        <path d="M20,206 L20,214 L80,214 L80,206" fill="none" stroke="#111414" stroke-width="1.5"/>
+        <path d="M84,206 L84,214 L272,214 L272,206" fill="none" stroke="#4a5655" stroke-width="1.5"/>
+        <path d="M290,206 L290,214 L752,214 L752,206" fill="none" stroke="#111414" stroke-width="1.5"/>
+        <text x="20" y="236" font-weight="600">frame embedding</text>
+        <text x="20" y="254" font-size="12" fill="#4a5655">row 0, shape (D)</text>
+        <text x="178" y="236" text-anchor="middle" fill="#4a5655">dropped</text>
+        <text x="521" y="236" text-anchor="middle" font-weight="600">patch embeddings</text>
+        <text x="521" y="254" text-anchor="middle" font-size="12" fill="#4a5655">rows 5 to 354, reshaped to (14, 25, D)</text>
+      </g>
+    </svg></div>
+    <figcaption><b>Figure 1.</b> The token sequence and the two outputs. Teal: the CLS token. Amber: the 4 register tokens. Light teal: the patch tokens in row-major order; "P r,c" is the patch in row r and column c. The final layer norm acts on every token. The outputs do not include the register tokens.</figcaption>
+  </figure>
+</section>
+
+<section id="outputs">
+  <h2>4 The final layer norm and the two outputs</h2>
+  <p>After the last block, the final layer norm normalizes each token over its D channels and applies a learned scale and shift. The Hugging Face model returns the normalized sequence as <code>last_hidden_state</code>. Its <code>pooler_output</code> is row 0 of it. The frame embedding is row 0. The patch embeddings are rows 5 to 5 + N − 1, as a grid. The register tokens are not part of either output.</p>
+  <pre><code>NUM_PREFIX_TOKENS = 5  # the CLS token and the 4 register tokens
+
+def split_tokens(tokens: np.ndarray, height: int, width: int) -> tuple[np.ndarray, np.ndarray]:
+    frame = tokens[..., 0, :]                    # the CLS token after the final layer norm
+    patches = tokens[..., NUM_PREFIX_TOKENS:, :] # rows 1 to 4 (register tokens) are dropped
+    grid = (height // PATCH_SIZE, width // PATCH_SIZE)
+    return frame, patches.reshape(*tokens.shape[:-2], *grid, tokens.shape[-1])</code></pre>
+  <p>The "..." in the slices keeps a batch axis when there is one. A test builds a synthetic sequence in which row i holds the value i. Then it checks that the frame embedding is row 0, that the first patch embedding is row 5, and that the patch below it is row 5 + W/16.</p>
+  <p>Each reference file stores all tokens after the final layer norm, (1 + 4 + N, D) for each configuration, so later steps can compare any slice. For one configuration (<code>iss-kibo-lab/224x224</code>) it also stores the hidden states: the sequence before block 1 and after each block, before the final layer norm, with shape (L + 1, 201, D). Step 4 uses them to find the first block that differs. Section 5 uses them for the register values.</p>
+</section>
+
+<section id="registers">
+  <h2>5 The large values of the register tokens</h2>
+  <p>Figure 2 shows the largest absolute value in the token sequence after each block, for <code>iss-kibo-lab</code> at 224 × 224 px. In every model size, a register token holds the largest value of the sequence after every block. The CLS token and the patch tokens stay far lower.</p>
+  <figure>
+    <div class="fig"><svg viewBox="0 0 960 340" role="img" aria-labelledby="fig2-title" font-family="-apple-system, Helvetica Neue, Arial, sans-serif">
+<title id="fig2-title">Largest absolute token value after each block, one panel for each model size, log scale</title>
+<rect width="960" height="340" fill="#ffffff"/>
+<text x="70" y="294.0" text-anchor="end" font-size="11" fill="#4a5655">1</text>
+<text x="70" y="255.0" text-anchor="end" font-size="11" fill="#4a5655">10</text>
+<text x="70" y="216.0" text-anchor="end" font-size="11" fill="#4a5655">100</text>
+<text x="70" y="177.0" text-anchor="end" font-size="11" fill="#4a5655">1,000</text>
+<text x="70" y="138.0" text-anchor="end" font-size="11" fill="#4a5655">10,000</text>
+<text x="70" y="99.0" text-anchor="end" font-size="11" fill="#4a5655">100,000</text>
+<text x="70" y="60.0" text-anchor="end" font-size="11" fill="#4a5655">1,000,000</text>
+<text x="16" y="173" font-size="11" fill="#4a5655" transform="rotate(-90 16 173)" text-anchor="middle">Largest absolute value (log scale)</text>
+<text x="78" y="26" font-size="13" font-weight="600" fill="#111414">ViT-S/16</text>
+<text x="78" y="42" font-size="11" fill="#4a5655">12 blocks</text>
+<line x1="78" x2="226" y1="290.0" y2="290.0" stroke="#e3e8e7" stroke-width="1"/>
+<line x1="78" x2="226" y1="251.0" y2="251.0" stroke="#e3e8e7" stroke-width="1"/>
+<line x1="78" x2="226" y1="212.0" y2="212.0" stroke="#e3e8e7" stroke-width="1"/>
+<line x1="78" x2="226" y1="173.0" y2="173.0" stroke="#e3e8e7" stroke-width="1"/>
+<line x1="78" x2="226" y1="134.0" y2="134.0" stroke="#e3e8e7" stroke-width="1"/>
+<line x1="78" x2="226" y1="95.0" y2="95.0" stroke="#e3e8e7" stroke-width="1"/>
+<line x1="78" x2="226" y1="56.0" y2="56.0" stroke="#e3e8e7" stroke-width="1"/>
+<line x1="78" x2="226" y1="102.2" y2="102.2" stroke="#b03a2e" stroke-width="1.5"/>
+<line x1="78.0" x2="78.0" y1="290" y2="294" stroke="#4a5655"/>
+<text x="78.0" y="307" text-anchor="middle" font-size="11" fill="#4a5655">0</text>
+<line x1="152.0" x2="152.0" y1="290" y2="294" stroke="#4a5655"/>
+<text x="152.0" y="307" text-anchor="middle" font-size="11" fill="#4a5655">6</text>
+<line x1="226.0" x2="226.0" y1="290" y2="294" stroke="#4a5655"/>
+<text x="226.0" y="307" text-anchor="middle" font-size="11" fill="#4a5655">12</text>
+<polyline points="78.0,249.9 90.3,224.6 102.7,227.4 115.0,196.3 127.3,196.7 139.7,193.4 152.0,192.9 164.3,173.6 176.7,173.6 189.0,173.2 201.3,170.5 213.7,163.9 226.0,166.4" fill="none" stroke="#057379" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="78.0" cy="249.9" r="6" fill="#057379" fill-opacity="0"><title>ViT-S/16, before block 1: 10.7</title></circle>
+<circle cx="90.3" cy="224.6" r="6" fill="#057379" fill-opacity="0"><title>ViT-S/16, after block 1: 47.5</title></circle>
+<circle cx="102.7" cy="227.4" r="6" fill="#057379" fill-opacity="0"><title>ViT-S/16, after block 2: 40.2</title></circle>
+<circle cx="115.0" cy="196.3" r="6" fill="#057379" fill-opacity="0"><title>ViT-S/16, after block 3: 252</title></circle>
+<circle cx="127.3" cy="196.7" r="6" fill="#057379" fill-opacity="0"><title>ViT-S/16, after block 4: 247</title></circle>
+<circle cx="139.7" cy="193.4" r="6" fill="#057379" fill-opacity="0"><title>ViT-S/16, after block 5: 300</title></circle>
+<circle cx="152.0" cy="192.9" r="6" fill="#057379" fill-opacity="0"><title>ViT-S/16, after block 6: 309</title></circle>
+<circle cx="164.3" cy="173.6" r="6" fill="#057379" fill-opacity="0"><title>ViT-S/16, after block 7: 968</title></circle>
+<circle cx="176.7" cy="173.6" r="6" fill="#057379" fill-opacity="0"><title>ViT-S/16, after block 8: 966</title></circle>
+<circle cx="189.0" cy="173.2" r="6" fill="#057379" fill-opacity="0"><title>ViT-S/16, after block 9: 987</title></circle>
+<circle cx="201.3" cy="170.5" r="6" fill="#057379" fill-opacity="0"><title>ViT-S/16, after block 10: 1,162</title></circle>
+<circle cx="213.7" cy="163.9" r="6" fill="#057379" fill-opacity="0"><title>ViT-S/16, after block 11: 1,708</title></circle>
+<circle cx="226.0" cy="166.4" r="6" fill="#057379" fill-opacity="0"><title>ViT-S/16, after block 12: 1,475</title></circle>
+<circle cx="213.7" cy="163.9" r="4" fill="#057379" stroke="#ffffff" stroke-width="2"/>
+<text x="213.7" y="154.9" text-anchor="end" font-size="11" font-weight="600" fill="#111414">1,708</text>
+<text x="258" y="26" font-size="13" font-weight="600" fill="#111414">ViT-S+/16</text>
+<text x="258" y="42" font-size="11" fill="#4a5655">12 blocks</text>
+<line x1="258" x2="406" y1="290.0" y2="290.0" stroke="#e3e8e7" stroke-width="1"/>
+<line x1="258" x2="406" y1="251.0" y2="251.0" stroke="#e3e8e7" stroke-width="1"/>
+<line x1="258" x2="406" y1="212.0" y2="212.0" stroke="#e3e8e7" stroke-width="1"/>
+<line x1="258" x2="406" y1="173.0" y2="173.0" stroke="#e3e8e7" stroke-width="1"/>
+<line x1="258" x2="406" y1="134.0" y2="134.0" stroke="#e3e8e7" stroke-width="1"/>
+<line x1="258" x2="406" y1="95.0" y2="95.0" stroke="#e3e8e7" stroke-width="1"/>
+<line x1="258" x2="406" y1="56.0" y2="56.0" stroke="#e3e8e7" stroke-width="1"/>
+<line x1="258" x2="406" y1="102.2" y2="102.2" stroke="#b03a2e" stroke-width="1.5"/>
+<line x1="258.0" x2="258.0" y1="290" y2="294" stroke="#4a5655"/>
+<text x="258.0" y="307" text-anchor="middle" font-size="11" fill="#4a5655">0</text>
+<line x1="332.0" x2="332.0" y1="290" y2="294" stroke="#4a5655"/>
+<text x="332.0" y="307" text-anchor="middle" font-size="11" fill="#4a5655">6</text>
+<line x1="406.0" x2="406.0" y1="290" y2="294" stroke="#4a5655"/>
+<text x="406.0" y="307" text-anchor="middle" font-size="11" fill="#4a5655">12</text>
+<polyline points="258.0,257.3 270.3,241.3 282.7,225.0 295.0,157.7 307.3,157.8 319.7,157.8 332.0,146.4 344.3,146.5 356.7,146.5 369.0,146.7 381.3,146.7 393.7,144.9 406.0,148.2" fill="none" stroke="#057379" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="258.0" cy="257.3" r="6" fill="#057379" fill-opacity="0"><title>ViT-S+/16, before block 1: 6.9</title></circle>
+<circle cx="270.3" cy="241.3" r="6" fill="#057379" fill-opacity="0"><title>ViT-S+/16, after block 1: 17.7</title></circle>
+<circle cx="282.7" cy="225.0" r="6" fill="#057379" fill-opacity="0"><title>ViT-S+/16, after block 2: 46.4</title></circle>
+<circle cx="295.0" cy="157.7" r="6" fill="#057379" fill-opacity="0"><title>ViT-S+/16, after block 3: 2,471</title></circle>
+<circle cx="307.3" cy="157.8" r="6" fill="#057379" fill-opacity="0"><title>ViT-S+/16, after block 4: 2,460</title></circle>
+<circle cx="319.7" cy="157.8" r="6" fill="#057379" fill-opacity="0"><title>ViT-S+/16, after block 5: 2,457</title></circle>
+<circle cx="332.0" cy="146.4" r="6" fill="#057379" fill-opacity="0"><title>ViT-S+/16, after block 6: 4,800</title></circle>
+<circle cx="344.3" cy="146.5" r="6" fill="#057379" fill-opacity="0"><title>ViT-S+/16, after block 7: 4,792</title></circle>
+<circle cx="356.7" cy="146.5" r="6" fill="#057379" fill-opacity="0"><title>ViT-S+/16, after block 8: 4,776</title></circle>
+<circle cx="369.0" cy="146.7" r="6" fill="#057379" fill-opacity="0"><title>ViT-S+/16, after block 9: 4,735</title></circle>
+<circle cx="381.3" cy="146.7" r="6" fill="#057379" fill-opacity="0"><title>ViT-S+/16, after block 10: 4,727</title></circle>
+<circle cx="393.7" cy="144.9" r="6" fill="#057379" fill-opacity="0"><title>ViT-S+/16, after block 11: 5,262</title></circle>
+<circle cx="406.0" cy="148.2" r="6" fill="#057379" fill-opacity="0"><title>ViT-S+/16, after block 12: 4,329</title></circle>
+<circle cx="393.7" cy="144.9" r="4" fill="#057379" stroke="#ffffff" stroke-width="2"/>
+<text x="393.7" y="135.9" text-anchor="end" font-size="11" font-weight="600" fill="#111414">5,262</text>
+<text x="438" y="26" font-size="13" font-weight="600" fill="#111414">ViT-B/16</text>
+<text x="438" y="42" font-size="11" fill="#4a5655">12 blocks</text>
+<line x1="438" x2="586" y1="290.0" y2="290.0" stroke="#e3e8e7" stroke-width="1"/>
+<line x1="438" x2="586" y1="251.0" y2="251.0" stroke="#e3e8e7" stroke-width="1"/>
+<line x1="438" x2="586" y1="212.0" y2="212.0" stroke="#e3e8e7" stroke-width="1"/>
+<line x1="438" x2="586" y1="173.0" y2="173.0" stroke="#e3e8e7" stroke-width="1"/>
+<line x1="438" x2="586" y1="134.0" y2="134.0" stroke="#e3e8e7" stroke-width="1"/>
+<line x1="438" x2="586" y1="95.0" y2="95.0" stroke="#e3e8e7" stroke-width="1"/>
+<line x1="438" x2="586" y1="56.0" y2="56.0" stroke="#e3e8e7" stroke-width="1"/>
+<line x1="438" x2="586" y1="102.2" y2="102.2" stroke="#b03a2e" stroke-width="1.5"/>
+<line x1="438.0" x2="438.0" y1="290" y2="294" stroke="#4a5655"/>
+<text x="438.0" y="307" text-anchor="middle" font-size="11" fill="#4a5655">0</text>
+<line x1="512.0" x2="512.0" y1="290" y2="294" stroke="#4a5655"/>
+<text x="512.0" y="307" text-anchor="middle" font-size="11" fill="#4a5655">6</text>
+<line x1="586.0" x2="586.0" y1="290" y2="294" stroke="#4a5655"/>
+<text x="586.0" y="307" text-anchor="middle" font-size="11" fill="#4a5655">12</text>
+<polyline points="438.0,255.9 450.3,232.4 462.7,225.3 475.0,134.7 487.3,134.7 499.7,134.7 512.0,134.7 524.3,134.7 536.7,134.7 549.0,134.7 561.3,134.7 573.7,127.2 586.0,127.5" fill="none" stroke="#057379" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="438.0" cy="255.9" r="6" fill="#057379" fill-opacity="0"><title>ViT-B/16, before block 1: 7.5</title></circle>
+<circle cx="450.3" cy="232.4" r="6" fill="#057379" fill-opacity="0"><title>ViT-B/16, after block 1: 29.9</title></circle>
+<circle cx="462.7" cy="225.3" r="6" fill="#057379" fill-opacity="0"><title>ViT-B/16, after block 2: 45.5</title></circle>
+<circle cx="475.0" cy="134.7" r="6" fill="#057379" fill-opacity="0"><title>ViT-B/16, after block 3: 9,606</title></circle>
+<circle cx="487.3" cy="134.7" r="6" fill="#057379" fill-opacity="0"><title>ViT-B/16, after block 4: 9,590</title></circle>
+<circle cx="499.7" cy="134.7" r="6" fill="#057379" fill-opacity="0"><title>ViT-B/16, after block 5: 9,588</title></circle>
+<circle cx="512.0" cy="134.7" r="6" fill="#057379" fill-opacity="0"><title>ViT-B/16, after block 6: 9,587</title></circle>
+<circle cx="524.3" cy="134.7" r="6" fill="#057379" fill-opacity="0"><title>ViT-B/16, after block 7: 9,587</title></circle>
+<circle cx="536.7" cy="134.7" r="6" fill="#057379" fill-opacity="0"><title>ViT-B/16, after block 8: 9,588</title></circle>
+<circle cx="549.0" cy="134.7" r="6" fill="#057379" fill-opacity="0"><title>ViT-B/16, after block 9: 9,589</title></circle>
+<circle cx="561.3" cy="134.7" r="6" fill="#057379" fill-opacity="0"><title>ViT-B/16, after block 10: 9,592</title></circle>
+<circle cx="573.7" cy="127.2" r="6" fill="#057379" fill-opacity="0"><title>ViT-B/16, after block 11: 14,926</title></circle>
+<circle cx="586.0" cy="127.5" r="6" fill="#057379" fill-opacity="0"><title>ViT-B/16, after block 12: 14,697</title></circle>
+<circle cx="573.7" cy="127.2" r="4" fill="#057379" stroke="#ffffff" stroke-width="2"/>
+<text x="573.7" y="118.2" text-anchor="end" font-size="11" font-weight="600" fill="#111414">14,926</text>
+<text x="618" y="26" font-size="13" font-weight="600" fill="#111414">ViT-L/16</text>
+<text x="618" y="42" font-size="11" fill="#4a5655">24 blocks</text>
+<line x1="618" x2="766" y1="290.0" y2="290.0" stroke="#e3e8e7" stroke-width="1"/>
+<line x1="618" x2="766" y1="251.0" y2="251.0" stroke="#e3e8e7" stroke-width="1"/>
+<line x1="618" x2="766" y1="212.0" y2="212.0" stroke="#e3e8e7" stroke-width="1"/>
+<line x1="618" x2="766" y1="173.0" y2="173.0" stroke="#e3e8e7" stroke-width="1"/>
+<line x1="618" x2="766" y1="134.0" y2="134.0" stroke="#e3e8e7" stroke-width="1"/>
+<line x1="618" x2="766" y1="95.0" y2="95.0" stroke="#e3e8e7" stroke-width="1"/>
+<line x1="618" x2="766" y1="56.0" y2="56.0" stroke="#e3e8e7" stroke-width="1"/>
+<line x1="618" x2="766" y1="102.2" y2="102.2" stroke="#b03a2e" stroke-width="1.5"/>
+<line x1="618.0" x2="618.0" y1="290" y2="294" stroke="#4a5655"/>
+<text x="618.0" y="307" text-anchor="middle" font-size="11" fill="#4a5655">0</text>
+<line x1="692.0" x2="692.0" y1="290" y2="294" stroke="#4a5655"/>
+<text x="692.0" y="307" text-anchor="middle" font-size="11" fill="#4a5655">12</text>
+<line x1="766.0" x2="766.0" y1="290" y2="294" stroke="#4a5655"/>
+<text x="766.0" y="307" text-anchor="middle" font-size="11" fill="#4a5655">24</text>
+<polyline points="618.0,243.9 624.2,87.5 630.3,87.5 636.5,87.5 642.7,87.5 648.8,87.5 655.0,87.5 661.2,87.5 667.3,87.5 673.5,87.5 679.7,87.5 685.8,87.5 692.0,87.5 698.2,87.5 704.3,87.5 710.5,87.5 716.7,87.5 722.8,87.5 729.0,87.5 735.2,87.5 741.3,87.5 747.5,87.5 753.7,87.4 759.8,87.3 766.0,87.6" fill="none" stroke="#057379" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="618.0" cy="243.9" r="6" fill="#057379" fill-opacity="0"><title>ViT-L/16, before block 1: 15.2</title></circle>
+<circle cx="624.2" cy="87.5" r="6" fill="#057379" fill-opacity="0"><title>ViT-L/16, after block 1: 155,923</title></circle>
+<circle cx="630.3" cy="87.5" r="6" fill="#057379" fill-opacity="0"><title>ViT-L/16, after block 2: 155,895</title></circle>
+<circle cx="636.5" cy="87.5" r="6" fill="#057379" fill-opacity="0"><title>ViT-L/16, after block 3: 155,891</title></circle>
+<circle cx="642.7" cy="87.5" r="6" fill="#057379" fill-opacity="0"><title>ViT-L/16, after block 4: 155,890</title></circle>
+<circle cx="648.8" cy="87.5" r="6" fill="#057379" fill-opacity="0"><title>ViT-L/16, after block 5: 155,890</title></circle>
+<circle cx="655.0" cy="87.5" r="6" fill="#057379" fill-opacity="0"><title>ViT-L/16, after block 6: 155,890</title></circle>
+<circle cx="661.2" cy="87.5" r="6" fill="#057379" fill-opacity="0"><title>ViT-L/16, after block 7: 155,890</title></circle>
+<circle cx="667.3" cy="87.5" r="6" fill="#057379" fill-opacity="0"><title>ViT-L/16, after block 8: 155,889</title></circle>
+<circle cx="673.5" cy="87.5" r="6" fill="#057379" fill-opacity="0"><title>ViT-L/16, after block 9: 155,887</title></circle>
+<circle cx="679.7" cy="87.5" r="6" fill="#057379" fill-opacity="0"><title>ViT-L/16, after block 10: 155,876</title></circle>
+<circle cx="685.8" cy="87.5" r="6" fill="#057379" fill-opacity="0"><title>ViT-L/16, after block 11: 155,870</title></circle>
+<circle cx="692.0" cy="87.5" r="6" fill="#057379" fill-opacity="0"><title>ViT-L/16, after block 12: 155,857</title></circle>
+<circle cx="698.2" cy="87.5" r="6" fill="#057379" fill-opacity="0"><title>ViT-L/16, after block 13: 155,834</title></circle>
+<circle cx="704.3" cy="87.5" r="6" fill="#057379" fill-opacity="0"><title>ViT-L/16, after block 14: 155,809</title></circle>
+<circle cx="710.5" cy="87.5" r="6" fill="#057379" fill-opacity="0"><title>ViT-L/16, after block 15: 155,812</title></circle>
+<circle cx="716.7" cy="87.5" r="6" fill="#057379" fill-opacity="0"><title>ViT-L/16, after block 16: 155,784</title></circle>
+<circle cx="722.8" cy="87.5" r="6" fill="#057379" fill-opacity="0"><title>ViT-L/16, after block 17: 155,828</title></circle>
+<circle cx="729.0" cy="87.5" r="6" fill="#057379" fill-opacity="0"><title>ViT-L/16, after block 18: 155,803</title></circle>
+<circle cx="735.2" cy="87.5" r="6" fill="#057379" fill-opacity="0"><title>ViT-L/16, after block 19: 155,848</title></circle>
+<circle cx="741.3" cy="87.5" r="6" fill="#057379" fill-opacity="0"><title>ViT-L/16, after block 20: 155,943</title></circle>
+<circle cx="747.5" cy="87.5" r="6" fill="#057379" fill-opacity="0"><title>ViT-L/16, after block 21: 156,063</title></circle>
+<circle cx="753.7" cy="87.4" r="6" fill="#057379" fill-opacity="0"><title>ViT-L/16, after block 22: 156,204</title></circle>
+<circle cx="759.8" cy="87.3" r="6" fill="#057379" fill-opacity="0"><title>ViT-L/16, after block 23: 157,130</title></circle>
+<circle cx="766.0" cy="87.6" r="6" fill="#057379" fill-opacity="0"><title>ViT-L/16, after block 24: 154,824</title></circle>
+<circle cx="759.8" cy="87.3" r="4" fill="#057379" stroke="#ffffff" stroke-width="2"/>
+<text x="759.8" y="78.3" text-anchor="end" font-size="11" font-weight="600" fill="#111414">157,130</text>
+<text x="798" y="26" font-size="13" font-weight="600" fill="#111414">ViT-H+/16</text>
+<text x="798" y="42" font-size="11" fill="#4a5655">32 blocks</text>
+<line x1="798" x2="946" y1="290.0" y2="290.0" stroke="#e3e8e7" stroke-width="1"/>
+<line x1="798" x2="946" y1="251.0" y2="251.0" stroke="#e3e8e7" stroke-width="1"/>
+<line x1="798" x2="946" y1="212.0" y2="212.0" stroke="#e3e8e7" stroke-width="1"/>
+<line x1="798" x2="946" y1="173.0" y2="173.0" stroke="#e3e8e7" stroke-width="1"/>
+<line x1="798" x2="946" y1="134.0" y2="134.0" stroke="#e3e8e7" stroke-width="1"/>
+<line x1="798" x2="946" y1="95.0" y2="95.0" stroke="#e3e8e7" stroke-width="1"/>
+<line x1="798" x2="946" y1="56.0" y2="56.0" stroke="#e3e8e7" stroke-width="1"/>
+<line x1="798" x2="946" y1="102.2" y2="102.2" stroke="#b03a2e" stroke-width="1.5"/>
+<line x1="798.0" x2="798.0" y1="290" y2="294" stroke="#4a5655"/>
+<text x="798.0" y="307" text-anchor="middle" font-size="11" fill="#4a5655">0</text>
+<line x1="872.0" x2="872.0" y1="290" y2="294" stroke="#4a5655"/>
+<text x="872.0" y="307" text-anchor="middle" font-size="11" fill="#4a5655">16</text>
+<line x1="946.0" x2="946.0" y1="290" y2="294" stroke="#4a5655"/>
+<text x="946.0" y="307" text-anchor="middle" font-size="11" fill="#4a5655">32</text>
+<polyline points="798.0,243.5 802.6,217.2 807.2,206.4 811.9,195.5 816.5,194.9 821.1,196.9 825.8,181.6 830.4,181.3 835.0,181.4 839.6,181.5 844.2,183.2 848.9,183.9 853.5,149.0 858.1,149.1 862.8,149.1 867.4,149.0 872.0,149.0 876.6,148.9 881.2,149.0 885.9,149.2 890.5,149.5 895.1,150.1 899.8,150.8 904.4,90.4 909.0,90.4 913.6,90.4 918.2,90.4 922.9,90.4 927.5,90.4 932.1,90.4 936.8,90.4 941.4,90.4 946.0,90.4" fill="none" stroke="#057379" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="798.0" cy="243.5" r="6" fill="#057379" fill-opacity="0"><title>ViT-H+/16, before block 1: 15.6</title></circle>
+<circle cx="802.6" cy="217.2" r="6" fill="#057379" fill-opacity="0"><title>ViT-H+/16, after block 1: 73.4</title></circle>
+<circle cx="807.2" cy="206.4" r="6" fill="#057379" fill-opacity="0"><title>ViT-H+/16, after block 2: 139</title></circle>
+<circle cx="811.9" cy="195.5" r="6" fill="#057379" fill-opacity="0"><title>ViT-H+/16, after block 3: 265</title></circle>
+<circle cx="816.5" cy="194.9" r="6" fill="#057379" fill-opacity="0"><title>ViT-H+/16, after block 4: 275</title></circle>
+<circle cx="821.1" cy="196.9" r="6" fill="#057379" fill-opacity="0"><title>ViT-H+/16, after block 5: 243</title></circle>
+<circle cx="825.8" cy="181.6" r="6" fill="#057379" fill-opacity="0"><title>ViT-H+/16, after block 6: 603</title></circle>
+<circle cx="830.4" cy="181.3" r="6" fill="#057379" fill-opacity="0"><title>ViT-H+/16, after block 7: 612</title></circle>
+<circle cx="835.0" cy="181.4" r="6" fill="#057379" fill-opacity="0"><title>ViT-H+/16, after block 8: 607</title></circle>
+<circle cx="839.6" cy="181.5" r="6" fill="#057379" fill-opacity="0"><title>ViT-H+/16, after block 9: 605</title></circle>
+<circle cx="844.2" cy="183.2" r="6" fill="#057379" fill-opacity="0"><title>ViT-H+/16, after block 10: 549</title></circle>
+<circle cx="848.9" cy="183.9" r="6" fill="#057379" fill-opacity="0"><title>ViT-H+/16, after block 11: 524</title></circle>
+<circle cx="853.5" cy="149.0" r="6" fill="#057379" fill-opacity="0"><title>ViT-H+/16, after block 12: 4,121</title></circle>
+<circle cx="858.1" cy="149.1" r="6" fill="#057379" fill-opacity="0"><title>ViT-H+/16, after block 13: 4,104</title></circle>
+<circle cx="862.8" cy="149.1" r="6" fill="#057379" fill-opacity="0"><title>ViT-H+/16, after block 14: 4,109</title></circle>
+<circle cx="867.4" cy="149.0" r="6" fill="#057379" fill-opacity="0"><title>ViT-H+/16, after block 15: 4,126</title></circle>
+<circle cx="872.0" cy="149.0" r="6" fill="#057379" fill-opacity="0"><title>ViT-H+/16, after block 16: 4,114</title></circle>
+<circle cx="876.6" cy="148.9" r="6" fill="#057379" fill-opacity="0"><title>ViT-H+/16, after block 17: 4,144</title></circle>
+<circle cx="881.2" cy="149.0" r="6" fill="#057379" fill-opacity="0"><title>ViT-H+/16, after block 18: 4,127</title></circle>
+<circle cx="885.9" cy="149.2" r="6" fill="#057379" fill-opacity="0"><title>ViT-H+/16, after block 19: 4,080</title></circle>
+<circle cx="890.5" cy="149.5" r="6" fill="#057379" fill-opacity="0"><title>ViT-H+/16, after block 20: 4,002</title></circle>
+<circle cx="895.1" cy="150.1" r="6" fill="#057379" fill-opacity="0"><title>ViT-H+/16, after block 21: 3,871</title></circle>
+<circle cx="899.8" cy="150.8" r="6" fill="#057379" fill-opacity="0"><title>ViT-H+/16, after block 22: 3,703</title></circle>
+<circle cx="904.4" cy="90.4" r="6" fill="#057379" fill-opacity="0"><title>ViT-H+/16, after block 23: 131,121</title></circle>
+<circle cx="909.0" cy="90.4" r="6" fill="#057379" fill-opacity="0"><title>ViT-H+/16, after block 24: 131,327</title></circle>
+<circle cx="913.6" cy="90.4" r="6" fill="#057379" fill-opacity="0"><title>ViT-H+/16, after block 25: 131,317</title></circle>
+<circle cx="918.2" cy="90.4" r="6" fill="#057379" fill-opacity="0"><title>ViT-H+/16, after block 26: 131,290</title></circle>
+<circle cx="922.9" cy="90.4" r="6" fill="#057379" fill-opacity="0"><title>ViT-H+/16, after block 27: 131,337</title></circle>
+<circle cx="927.5" cy="90.4" r="6" fill="#057379" fill-opacity="0"><title>ViT-H+/16, after block 28: 131,290</title></circle>
+<circle cx="932.1" cy="90.4" r="6" fill="#057379" fill-opacity="0"><title>ViT-H+/16, after block 29: 131,360</title></circle>
+<circle cx="936.8" cy="90.4" r="6" fill="#057379" fill-opacity="0"><title>ViT-H+/16, after block 30: 131,448</title></circle>
+<circle cx="941.4" cy="90.4" r="6" fill="#057379" fill-opacity="0"><title>ViT-H+/16, after block 31: 131,259</title></circle>
+<circle cx="946.0" cy="90.4" r="6" fill="#057379" fill-opacity="0"><title>ViT-H+/16, after block 32: 131,166</title></circle>
+<circle cx="936.8" cy="90.4" r="4" fill="#057379" stroke="#ffffff" stroke-width="2"/>
+<text x="936.8" y="81.4" text-anchor="end" font-size="11" font-weight="600" fill="#111414">131,448</text>
+<text x="512" y="326" text-anchor="middle" font-size="11" fill="#4a5655">Block (0 = the token sequence before block 1)</text>
+<text x="80" y="97.2" font-size="11" fill="#111414">fp16 maximum 65,504</text>
+</svg></div>
+    <figcaption><b>Figure 2.</b> Largest absolute value in the token sequence after each block, before the final layer norm, on <code>torch-cpu</code> in fp32. One panel for each model size, one log scale for all panels. The red line is the largest fp16 value. The label gives the largest value of each model size. Hover over a block to see its value. Table 5 gives all values.</figcaption>
+  </figure>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Model size</th><th>Blocks</th><th>Before block 1</th><th>Largest value</th><th>After block</th><th>Token</th><th>Share of fp16 maximum</th><th>Largest patch value</th><th>Largest output value</th></tr></thead>
+      <tbody>
+        <tr><td>ViT-S/16</td><td class="num">12</td><td class="num">10.7</td><td class="num">1,708</td><td class="num">11</td><td>R1</td><td class="num">2.6 %</td><td class="num">429</td><td class="num">9.2</td></tr>
+        <tr><td>ViT-S+/16</td><td class="num">12</td><td class="num">6.9</td><td class="num">5,262</td><td class="num">11</td><td>R3</td><td class="num">8.0 %</td><td class="num">877</td><td class="num">11.0</td></tr>
+        <tr><td>ViT-B/16</td><td class="num">12</td><td class="num">7.5</td><td class="num">14,926</td><td class="num">11</td><td>R1</td><td class="num">22.8 %</td><td class="num">1,298</td><td class="num">17.9</td></tr>
+        <tr><td>ViT-L/16</td><td class="num">24</td><td class="num">15.2</td><td class="num">157,130</td><td class="num">23</td><td>R2</td><td class="num">239.9 %</td><td class="num">2,649</td><td class="num">15.7</td></tr>
+        <tr><td>ViT-H+/16</td><td class="num">32</td><td class="num">15.6</td><td class="num">131,448</td><td class="num">30</td><td>R2</td><td class="num">200.7 %</td><td class="num">10,834</td><td class="num">12.3</td></tr>
+        <tr><td>ViT-7B/16</td><td class="num">40</td><td colspan="7">Not measured yet. The reference file does not exist (deferred by the user).</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 2.</b> Register values of <code>iss-kibo-lab</code> at 224 × 224 px. "Largest value" and "Largest patch value" are the largest absolute values inside the backbone, before the final layer norm, over all blocks. "Token" is the register token that holds the largest value (R1 is sequence position 1). "Largest output value" is the largest absolute value after the final layer norm over all 12 configurations.</p>
+  <p>Five facts follow from the data:</p>
+  <ul>
+    <li><b>Few channels.</b> The large values sit in 3 to 14 channels of one register token. In the channel with the largest value, the patch tokens hold only 26 to 221 (median). The norm of that register token is 14 times (ViT-S/16) to 206 times (ViT-L/16) the median norm of a patch token.</li>
+    <li><b>Steps, not growth.</b> The value jumps in a few blocks and then stays almost constant. The residual connections carry it from block to block. ViT-B/16 jumps after block 3 (9,606) and after block 11 (14,926).</li>
+    <li><b>ViT-L/16 from block 1.</b> Its register token R2 holds 155,923 after block 1 already and keeps about this value to the last block.</li>
+    <li><b>ViT-H+/16 from block 23.</b> Its largest value goes from 3,703 after block 22 to 131,121 after block 23. At 448 px the same jump reaches about 59,900 (probe, <code>iss-conference</code>), below the fp16 maximum.</li>
+    <li><b>The final layer norm removes them.</b> After the final layer norm, no output value is above 18. The register tokens are dropped anyway, but the other tokens saw the large values through the attention in every block.</li>
+  </ul>
+  <p class="note">The DINOv3 paper (Appendix A.1) explains why the registers exist. Without them, a large ViT puts tokens with a very high norm into some patches of low-information regions, for example the sky. These tokens carry the internal communication between the patches and the CLS token. Darcet et al. (2024) added register tokens to take over this role, and DINOv3 uses 4 of them. Our data shows the result: the high norm is in one register token, not in the patch tokens. Appendix A.2 of the paper also describes feature-dimension outliers in all tokens and recommends the final layer norm for the outputs. Our largest values sit in one register token only, so they match the first kind.</p>
+  <details>
+    <summary>Table 5. All values of Figure 2</summary>
+    <div class="table-wrap">
+      <table>
+<thead><tr><th>Position in the backbone</th><th>ViT-S/16</th><th>ViT-S+/16</th><th>ViT-B/16</th><th>ViT-L/16</th><th>ViT-H+/16</th></tr></thead>
+<tbody>
+<tr><td>before block 1</td><td class="num">10.7</td><td class="num">6.9</td><td class="num">7.5</td><td class="num">15.2</td><td class="num">15.6</td></tr>
+<tr><td>after block 1</td><td class="num">47.5</td><td class="num">17.7</td><td class="num">29.9</td><td class="num">155,923</td><td class="num">73.4</td></tr>
+<tr><td>after block 2</td><td class="num">40.2</td><td class="num">46.4</td><td class="num">45.5</td><td class="num">155,895</td><td class="num">139</td></tr>
+<tr><td>after block 3</td><td class="num">252</td><td class="num">2,471</td><td class="num">9,606</td><td class="num">155,891</td><td class="num">265</td></tr>
+<tr><td>after block 4</td><td class="num">247</td><td class="num">2,460</td><td class="num">9,590</td><td class="num">155,890</td><td class="num">275</td></tr>
+<tr><td>after block 5</td><td class="num">300</td><td class="num">2,457</td><td class="num">9,588</td><td class="num">155,890</td><td class="num">243</td></tr>
+<tr><td>after block 6</td><td class="num">309</td><td class="num">4,800</td><td class="num">9,587</td><td class="num">155,890</td><td class="num">603</td></tr>
+<tr><td>after block 7</td><td class="num">968</td><td class="num">4,792</td><td class="num">9,587</td><td class="num">155,890</td><td class="num">612</td></tr>
+<tr><td>after block 8</td><td class="num">966</td><td class="num">4,776</td><td class="num">9,588</td><td class="num">155,889</td><td class="num">607</td></tr>
+<tr><td>after block 9</td><td class="num">987</td><td class="num">4,735</td><td class="num">9,589</td><td class="num">155,887</td><td class="num">605</td></tr>
+<tr><td>after block 10</td><td class="num">1,162</td><td class="num">4,727</td><td class="num">9,592</td><td class="num">155,876</td><td class="num">549</td></tr>
+<tr><td>after block 11</td><td class="num">1,708</td><td class="num">5,262</td><td class="num">14,926</td><td class="num">155,870</td><td class="num">524</td></tr>
+<tr><td>after block 12</td><td class="num">1,475</td><td class="num">4,329</td><td class="num">14,697</td><td class="num">155,857</td><td class="num">4,121</td></tr>
+<tr><td>after block 13</td><td></td><td></td><td></td><td class="num">155,834</td><td class="num">4,104</td></tr>
+<tr><td>after block 14</td><td></td><td></td><td></td><td class="num">155,809</td><td class="num">4,109</td></tr>
+<tr><td>after block 15</td><td></td><td></td><td></td><td class="num">155,812</td><td class="num">4,126</td></tr>
+<tr><td>after block 16</td><td></td><td></td><td></td><td class="num">155,784</td><td class="num">4,114</td></tr>
+<tr><td>after block 17</td><td></td><td></td><td></td><td class="num">155,828</td><td class="num">4,144</td></tr>
+<tr><td>after block 18</td><td></td><td></td><td></td><td class="num">155,803</td><td class="num">4,127</td></tr>
+<tr><td>after block 19</td><td></td><td></td><td></td><td class="num">155,848</td><td class="num">4,080</td></tr>
+<tr><td>after block 20</td><td></td><td></td><td></td><td class="num">155,943</td><td class="num">4,002</td></tr>
+<tr><td>after block 21</td><td></td><td></td><td></td><td class="num">156,063</td><td class="num">3,871</td></tr>
+<tr><td>after block 22</td><td></td><td></td><td></td><td class="num">156,204</td><td class="num">3,703</td></tr>
+<tr><td>after block 23</td><td></td><td></td><td></td><td class="num">157,130</td><td class="num">131,121</td></tr>
+<tr><td>after block 24</td><td></td><td></td><td></td><td class="num">154,824</td><td class="num">131,327</td></tr>
+<tr><td>after block 25</td><td></td><td></td><td></td><td></td><td class="num">131,317</td></tr>
+<tr><td>after block 26</td><td></td><td></td><td></td><td></td><td class="num">131,290</td></tr>
+<tr><td>after block 27</td><td></td><td></td><td></td><td></td><td class="num">131,337</td></tr>
+<tr><td>after block 28</td><td></td><td></td><td></td><td></td><td class="num">131,290</td></tr>
+<tr><td>after block 29</td><td></td><td></td><td></td><td></td><td class="num">131,360</td></tr>
+<tr><td>after block 30</td><td></td><td></td><td></td><td></td><td class="num">131,448</td></tr>
+<tr><td>after block 31</td><td></td><td></td><td></td><td></td><td class="num">131,259</td></tr>
+<tr><td>after block 32</td><td></td><td></td><td></td><td></td><td class="num">131,166</td></tr>
+</tbody>
+      </table>
+    </div>
+    <p class="caption"><b>Table 5.</b> Largest absolute value in the token sequence before block 1 and after each block, for <code>iss-kibo-lab</code> at 224 × 224 px, <code>torch-cpu</code>, fp32, from the hidden states of the reference files.</p>
+  </details>
+</section>
+
+<section id="half">
+  <h2>6 Half precision and the large values</h2>
+  <p>The parity tests run <code>torch-mps</code> in five dtype modes. In cast mode, the weights, the inputs and the residual stream are in the half-precision dtype. In autocast mode, the weights and the residual stream stay in fp32, and <code>torch.autocast</code> runs the matrix products in the half-precision dtype.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Dtype mode</th><th>Weights and inputs</th><th>Autocast</th><th>Model sizes</th><th>Worst frame</th><th>Worst patch mean</th><th>Worst patch 1st percentile</th><th>Non-finite</th></tr></thead>
+      <tbody>
+        <tr><td>fp32</td><td>fp32</td><td>off</td><td>all except ViT-7B/16</td><td class="num">1.000000</td><td class="num">1.000000</td><td class="num">1.000000</td><td class="num">0</td></tr>
+        <tr><td>fp16-cast</td><td>fp16</td><td>off</td><td>all six</td><td class="num">0.999989</td><td class="num">0.999974</td><td class="num">0.999935</td><td class="num">18 of 60</td></tr>
+        <tr><td>bf16-cast</td><td>bf16</td><td>off</td><td>all six</td><td class="num">0.999411</td><td class="num">0.998206</td><td class="num">0.968878</td><td class="num">0</td></tr>
+        <tr><td>fp16-autocast</td><td>fp32</td><td>fp16</td><td>all except ViT-7B/16</td><td class="num">0.999986</td><td class="num">0.999956</td><td class="num">0.999781</td><td class="num">0</td></tr>
+        <tr><td>bf16-autocast</td><td>fp32</td><td>bf16</td><td>all except ViT-7B/16</td><td class="num">0.998365</td><td class="num">0.995177</td><td class="num">0.988774</td><td class="num">0</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 3.</b> The dtype modes and the worst parity of <code>torch-mps</code> over 5 model sizes × 12 configurations (ViT-7B/16 not yet run). The fp16-cast values cover only the 42 configurations with finite outputs. <code>results/parity-torch-mps.md</code> gives each model size.</p>
+  <p><b>fp16.</b> The largest fp16 value is 65,504. A larger value becomes infinite, and the next layer norm or softmax gives NaN. In fp16-cast mode, ViT-L/16 gives NaN in all 12 configurations, because its register value is above the fp16 maximum from block 1 on. ViT-H+/16 gives NaN in the 6 configurations with a short side of 224 px, and finite outputs at 448 and 512 px. The tests record each case as an expected failure. fp16-autocast keeps the residual stream in fp32. All its configurations give finite outputs and pass.</p>
+  <p><b>bf16.</b> bf16 has the range of fp32, so it does not overflow. But it has only 8 significant bits. Near 131,072 the step between two bf16 values is 1,024. The parity tests found 5 bf16 configurations below the first proposal of thresholds (0.999, 0.999 and 0.99). A probe ran the same configurations on <code>torch-cpu</code> in bf16 and got the same values, for example frame 0.998498 on <code>torch-cpu</code> and 0.998365 on <code>torch-mps</code> (ViT-S+/16, bf16-autocast, <code>iss-kibo-lab</code> at 224 × 400 px). So the cause is bf16 arithmetic, not the backend.</p>
+  <p>ViT-H+/16 at 224 px is sensitive to its input. In fp32, with only the stored pixels rounded to bf16, its patch 1st percentile is 0.9925 and its patch minimum 0.968 (<code>iss-conference</code>). At 448 px the same change gives 0.9999. In bf16-cast mode, the patch tokens move away from fp32 block by block after block 23, where the register value jumps: their 1st percentile goes from 0.994 to 0.953 at block 31. RoPE tables in fp32 and a final layer norm in fp32 did not fix this (patch 1st percentile 0.972 and 0.969).</p>
+  <p>On 2026-11-06 the user gave bf16 its own thresholds (Section 7). Step 5 must handle both effects in MLX: an fp32 residual stream, or another way to keep the register values out of fp16.</p>
+</section>
+
+<section id="parity">
+  <h2>7 The parity metric</h2>
+  <p><code>measure_parity(reference, output)</code> compares two token sequences of shape (1 + 4 + N, D). It computes the cosine similarity of each pair of rows in fp64. In fp64, two equal fp32 vectors give 1.0 within a few units of 1e-16. In fp32 the same vectors can give 0.9999996.</p>
+  <pre><code>def measure_parity(reference: np.ndarray, output: np.ndarray) -> Parity:
+    ref, out = reference.astype(np.float64), output.astype(np.float64)
+    cos = (ref * out).sum(-1) / (np.linalg.norm(ref, axis=-1) * np.linalg.norm(out, axis=-1))
+    cos = np.minimum(cos, 1.0)
+    patches = cos[NUM_PREFIX_TOKENS:]               # the register rows are not used
+    return Parity(frame=float(cos[0]), patch_mean=float(patches.mean()),
+                  patch_p01=float(np.quantile(patches, 0.01)), patch_min=float(patches.min()))</code></pre>
+  <p>Example (Table 10 of <code>docs/plan.html</code>): the reference (1, 2, 2) and the output (1, 2, 2.1) give 9.2 / (3 × 3.0676) = 0.9997. This fails the fp32 threshold and passes the fp16 and the bf16 threshold.</p>
+  <p>The 1st percentile replaces the minimum as the patch threshold. One sensitive patch sets the minimum: ViT-H+/16 in bf16-cast mode has a patch minimum of 0.845 at 224 px, and its 1st percentile is 0.969. With linear interpolation, the 1st percentile of 196 patches lies between the 2nd and the 3rd lowest value. An error in one row of patches (14 of 196, 7 %) still fails.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Dtype mode</th><th>Frame</th><th>Patch mean</th><th>Patch 1st percentile</th><th>Patch minimum</th></tr></thead>
+      <tbody>
+        <tr><td>fp32</td><td class="num">≥ 0.9999</td><td class="num">≥ 0.9999</td><td class="num">≥ 0.9999</td><td>report only</td></tr>
+        <tr><td>fp16-cast, fp16-autocast</td><td class="num">≥ 0.999</td><td class="num">≥ 0.999</td><td class="num">≥ 0.99</td><td>report only</td></tr>
+        <tr><td>bf16-cast, bf16-autocast</td><td class="num">≥ 0.998</td><td class="num">≥ 0.995</td><td class="num">≥ 0.96</td><td>report only</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 4.</b> <code>THRESHOLDS</code> in <code>src/dinov3_apple/parity.py</code>. They hold for every backend and model size. The bf16 row takes the worst measured bf16 values, rounded down (decision of the user, 2026-11-06).</p>
+</section>
+
+<section id="code">
+  <h2>8 The code of Step 2</h2>
+  <h3>8.1 <code>src/dinov3_apple/hub.py</code></h3>
+  <ul>
+    <li><code>CONVERTED_DIR</code> is the folder of the converted weights, <code>~/.cache/dinov3-apple/converted</code>. <code>scripts/convert_meta_checkpoint.py</code> now imports it from here.</li>
+    <li><code>weights_dir(model_size, cache_dir=None, converted_dir=CONVERTED_DIR)</code> returns the folder with <code>config.json</code> and the safetensors files. It takes the Hugging Face cache first, but only when every shard of the index is there. Else it takes the converted folder. Else it raises <code>WeightsNotFoundError</code>. The tests use a temporary cache folder, also one with a missing shard.</li>
+  </ul>
+  <h3>8.2 <code>src/dinov3_apple/memory.py</code></h3>
+  <ul>
+    <li><code>available_memory_bytes()</code> reads <code>vm_stat</code> and returns the free pages plus the inactive pages, times the page size.</li>
+    <li><code>check_free_memory(required_bytes, label)</code> logs one line ("memory check: ViT-S/16 torch-mps fp16-cast: needs 4.1 GB, 21.0 GB available, ok") and raises <code>InsufficientMemoryError</code> when the memory does not fit. It returns the available bytes. <code>GB</code> is 1e9, the unit of the log line.</li>
+  </ul>
+  <h3>8.3 <code>src/dinov3_apple/preprocess.py</code> and <code>outputs.py</code></h3>
+  <ul>
+    <li><code>IMAGENET_MEAN</code>, <code>IMAGENET_STD</code>, <code>PATCH_SIZE</code>, <code>own_aspect_size</code>, <code>load_image</code> and <code>preprocess</code>: Section 2.</li>
+    <li><code>NUM_PREFIX_TOKENS</code> and <code>split_tokens</code>: Section 4.</li>
+  </ul>
+  <h3>8.4 <code>src/dinov3_apple/parity.py</code></h3>
+  <ul>
+    <li><code>Parity</code> holds the four measures. <code>THRESHOLDS</code> maps each dtype mode to a <code>Parity</code> with the limits; its <code>patch_min</code> is −1 because the minimum is report only. <code>measure_parity</code>: Section 7. The module uses NumPy only, so the MLX tests of Steps 4 and 5 can use it without torch.</li>
+  </ul>
+  <h3>8.5 <code>src/dinov3_apple/reference.py</code></h3>
+  <ul>
+    <li><code>DtypeMode</code> holds the dtype of the weights and the dtype of autocast (or <code>None</code>). <code>DTYPE_MODES</code> maps the five names of Table 3 to it.</li>
+    <li><code>Configuration</code> is one test image at one input resolution. Its <code>id</code> is the key in the stored files, for example <code>forest/224x304</code>. It also gives <code>image_path</code> and <code>num_patches</code>. <code>configurations()</code> returns the 12 configurations of Table 1 in a fixed order.</li>
+    <li><code>model_slug</code> gives the part of the Hugging Face id between <code>dinov3-</code> and <code>-pretrain</code>, and <code>reference_path</code> gives <code>reference-{slug}.safetensors</code> in <code>REFERENCE_DIR</code>.</li>
+    <li><code>parameter_count</code> sums the tensor sizes from the safetensors headers without a load. <code>required_load_bytes</code> gives the memory check of a load: <code>LOAD_RATIO</code> (1.2) × the weight bytes in the load dtype + <code>LOAD_RESERVE_BYTES</code> (4 GB).</li>
+    <li><code>load_torch_backbone(model_size, device, dtype_mode)</code> runs the memory check, then loads <code>DINOv3ViTModel</code> from <code>weights_dir</code> in the weight dtype of the dtype mode, and moves it to the device.</li>
+    <li><code>run_torch(model, pixels, dtype_mode)</code> runs the backbone on stored pixels and returns all tokens after the final layer norm as fp32, shape (B, 1 + 4 + N, D). <code>run_torch_hidden_states</code> returns the (L + 1, 1 + 4 + N, D) hidden states.</li>
+    <li><code>read_inputs</code> and <code>read_reference</code> read the stored files with <code>safetensors</code> in NumPy mode. <code>read_reference</code> also returns the JSON metadata. <code>REQUIRED_METADATA</code> lists its fields: versions, SHA-256 of the test images and of the weight files, preprocessing settings, weight source, attention implementation, run time, peak memory and date. <code>REPO_ROOT</code>, <code>IMAGES_DIR</code>, <code>INPUTS_FILE</code>, <code>TEST_IMAGES</code>, <code>SQUARE_SIZES</code> and <code>HIDDEN_STATES_CONFIG</code> give the paths and the names. <code>REFERENCE_DIR</code> is <code>tests/fixtures/generated/reference/</code>, which git ignores.</li>
+  </ul>
+  <pre><code>@torch.inference_mode()
+def run_torch(model: DINOv3ViTModel, pixels: np.ndarray, dtype_mode: str) -> np.ndarray:
+    mode = DTYPE_MODES[dtype_mode]
+    device = _device_type(model)
+    tensor = torch.from_numpy(pixels).to(device=device, dtype=mode.weights)  # cast mode: fp16 or bf16
+    if mode.autocast is None:
+        output = model(pixel_values=tensor)
+    else:
+        with torch.autocast(device_type=device, dtype=mode.autocast):        # autocast mode
+            output = model(pixel_values=tensor)
+    return output.last_hidden_state.float().cpu().numpy()</code></pre>
+  <h3>8.6 The scripts and the tests</h3>
+  <ul>
+    <li><code>scripts/make_test_images.py</code> downloads the three photos from Wikimedia Commons, checks the SHA-1 of each against the Commons API, crops, resizes and writes <code>SOURCES.md</code>.</li>
+    <li><code>scripts/make_reference.py</code> writes the stored pixels. Then it starts one subprocess for each model size, smallest first, after a memory check. It learns the load ratio from the peak memory of model sizes with at least 1 GB of fp32 weights. ViT-L/16 gave 1.21, so the check for ViT-7B/16 asked for 36.5 GB.</li>
+    <li><code>scripts/parity_table.py</code> turns the JSON lines of the parity tests into <code>results/parity-torch-mps.md</code>.</li>
+    <li><code>tests/conftest.py</code> sets the MPS watermarks before torch is imported, keeps one model in memory at a time, logs each memory check and records every measured, non-finite or skipped configuration.</li>
+  </ul>
+</section>
+
+<section id="surprises">
+  <h2>9 Surprises</h2>
+  <ol>
+    <li class="note"><b>ViT-L/16 overflows in fp16 at every input resolution.</b> <code>explore.html</code> expected the fp16 overflow only for ViT-H+/16. ViT-L/16 has a register value above 155,000 from block 1 on, so fp16-cast mode gives NaN in all 12 configurations.</li>
+    <li class="note"><b>Every model size has large register values.</b> ViT-B/16 reaches 23 % of the fp16 maximum, ViT-S/16 only 2.6 %. The largest values do not grow with the model size: ViT-L/16 is above ViT-H+/16.</li>
+    <li class="note"><b>The fp32 resize of torch is not exact.</b> The antialiased fp32 resize is up to 2.25e-5 away from the fp64 resize; Pillow in mode <code>F</code> is within 9e-8. We now resize in fp64.</li>
+    <li class="note"><b>The bf16 failures are not a <code>torch-mps</code> defect.</b> <code>torch-cpu</code> in bf16 gives the same parity. For ViT-H+/16 at 224 px, a rounding of the input pixels alone moves some patch embeddings to a cosine of 0.968.</li>
+    <li class="note"><b>One ViT-S+/16 input is special.</b> Only <code>iss-kibo-lab</code> at 224 × 400 px fails the first bf16 proposal for ViT-S+/16. On this input, bf16 autocast is worse than bf16 cast (frame 0.9984 and 0.9994), on both backends. Its register values are normal.</li>
+    <li class="note"><b>Batches change nothing.</b> A batch of 8 gives the same output as 8 runs with batch size 1 on <code>torch-mps</code> in every dtype mode (parity 1.000000).</li>
+    <li class="note"><b>Free memory is less than it looks.</b> <code>memory_pressure</code> showed 60 % free memory, but the memory compressor held 20 GB. <code>vm_stat</code> gave 21 to 23 GB of free and inactive pages, too little for ViT-7B/16 in fp32.</li>
+  </ol>
+</section>
+
+<section id="sources">
+  <h2>10 Sources</h2>
+  <ul>
+    <li>Hugging Face transformers 5.22.1: <code>models/dinov3_vit/modeling_dinov3_vit.py</code>, Apache-2.0. Read in <code>.venv</code>.</li>
+    <li>DINOv3 paper: Siméoni et al., arXiv 2508.10104 (August 2025), Appendix A.1 (high-norm patch outliers and registers) and A.2 (feature-dimension outliers).</li>
+    <li>Darcet, Oquab, Mairal and Bojanowski, "Vision Transformers Need Registers", ICLR 2024.</li>
+    <li><code>specs/02-reference/explore.html</code> (the probe), <code>specs/02-reference/plan.html</code>, <code>results/parity-torch-mps.md</code> and the reference files of 2026-11-06 (<code>tests/fixtures/generated/reference/</code>, not in git).</li>
+  </ul>
+</section>
+</main>
+</body>
+</html>

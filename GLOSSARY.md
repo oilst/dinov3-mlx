@@ -164,11 +164,36 @@ The agreement of an output with the reference output, measured as cosine similar
 _Avoid_: accuracy, correctness, fidelity
 
 **Configuration**:
-One combination of model size, backend, dtype, input resolution, batch size and output.
+One combination of model size, backend, dtype, input resolution, batch size and output. In a parity test, the test image is also part of it.
 _Avoid_: setting, case, run (in this sense)
 
 **Benchmark matrix**:
 The set of configurations that the benchmarks measure.
+
+**Test image**:
+One of the three public-domain photos in `tests/fixtures/images/`. The parity tests use them at 4 input resolutions each.
+_Avoid_: sample image, fixture
+
+**Stored pixels**:
+The normalized fp32 pixel tensor of each test image at each input resolution, in `inputs.safetensors`. Every backend reads them, so a parity test measures only the backbone.
+
+**Reference file**:
+The safetensors file with the reference output of one model size: all tokens after the final layer norm for each configuration, the hidden states of one configuration and the metadata of the run.
+_Avoid_: golden file
+
+**Dtype mode**:
+The way a backend uses a dtype: fp32, cast mode or autocast mode. The five dtype modes are fp32, fp16-cast, bf16-cast, fp16-autocast and bf16-autocast.
+_Avoid_: precision mode
+
+**Cast mode**:
+A dtype mode in which the weights, the inputs and the residual stream are in fp16 or bf16.
+
+**Autocast mode**:
+A dtype mode in which the weights and the residual stream stay in fp32 and `torch.autocast` runs the matrix products in fp16 or bf16.
+_Avoid_: mixed precision (alone)
+
+**Memory check**:
+The comparison of the free memory with the need of a model load, before the load. A load that does not fit stops with a recorded reason.
 
 **Throughput**:
 Images per second in steady state, after warm-up.

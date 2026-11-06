@@ -3,7 +3,7 @@
 Each source photo comes from Wikimedia Commons. The script checks the SHA-1 of each download
 against the value of the Commons API and against the value that we checked on 2026-11-06. Then it
 crops the center to the aspect ratio of the test image, resizes it with Pillow LANCZOS to 1024 px
-on the long side and saves a JPEG with quality 95. Last, it writes SOURCES.md.
+on the long side and saves a JPEG with quality 92. Last, it writes SOURCES.md.
 """
 
 import hashlib

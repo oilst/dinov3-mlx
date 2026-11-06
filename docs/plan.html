@@ -845,18 +845,18 @@ figcaption { font-size: 0.88rem; color: var(--muted); max-width: 52rem; }
         <table>
           <thead><tr><th>Test</th><th>What it checks</th><th>Threshold</th></tr></thead>
           <tbody>
-            <tr><td><code>test_shapes</code></td><td>The frame embedding has D values. The patch embeddings have (H/16) × (W/16) × D values.</td><td>Exact</td></tr>
-            <tr><td><code>test_no_register_tokens</code></td><td>The patch embeddings hold exactly one vector for each patch.</td><td>Exact</td></tr>
-            <tr><td><code>test_frame_parity</code></td><td>Parity of the frame embedding</td><td>fp32 ≥ 0.9999. fp16 and bf16 ≥ 0.999.</td></tr>
-            <tr><td><code>test_patch_parity</code></td><td>Mean and minimum parity over all patch embeddings</td><td>Step 2 sets it from the measured values.</td></tr>
-            <tr><td><code>test_batch_consistency</code></td><td>A batch of 1 and a batch of 8 give the same outputs.</td><td>Same as frame parity</td></tr>
-            <tr><td><code>test_input_resolutions</code></td><td>224, 448 and 512 px, plus one non-square input, for example 224 × 320 px</td><td>Same as frame parity</td></tr>
+            <tr><td><code>test_shapes</code></td><td>The frame embedding has D values. The patch embeddings have (H/16) × (W/16) × D values. Step 2: <code>test_split_tokens_drops_register_tokens</code>.</td><td>Exact</td></tr>
+            <tr><td><code>test_no_register_tokens</code></td><td>The patch embeddings hold exactly one vector for each patch. Step 2: <code>test_split_tokens_drops_register_tokens</code>.</td><td>Exact</td></tr>
+            <tr><td><code>test_frame_parity</code></td><td>Parity of the frame embedding</td><td>fp32 ≥ 0.9999. fp16 ≥ 0.999. bf16 ≥ 0.998.</td></tr>
+            <tr><td><code>test_patch_parity</code></td><td>Mean, 1st percentile and minimum of the parity over all patch embeddings</td><td>Mean: fp32 ≥ 0.9999, fp16 ≥ 0.999, bf16 ≥ 0.995. 1st percentile: fp32 ≥ 0.9999, fp16 ≥ 0.99, bf16 ≥ 0.96. Minimum: report only.</td></tr>
+            <tr><td><code>test_batch_consistency</code></td><td>A batch of 1 and a batch of 8 give the same outputs.</td><td>The frame and patch thresholds of the dtype</td></tr>
+            <tr><td><code>test_input_resolutions</code></td><td>224, 448 and 512 px, plus the own aspect ratio of each test image with a short side of 224 px. Step 2: one parity test for each configuration.</td><td>The frame and patch thresholds of the dtype</td></tr>
             <tr><td><code>test_rope_tables</code></td><td>The MLX RoPE tables against the official tables</td><td>Largest difference ≤ 1e-6 in fp32</td></tr>
             <tr><td><code>test_quantized</code></td><td>Parity of the models with 8-bit and 4-bit weights</td><td>Report only</td></tr>
           </tbody>
         </table>
       </div>
-      <p><b>Table 9.</b> Parity tests. The thresholds are proposals. Step 2 confirms them.</p>
+      <p><b>Table 9.</b> Parity tests. Step 2 confirmed the fp32 and fp16 thresholds and set the patch thresholds. On 2026-11-06 the user gave bf16 its own thresholds (ADR 0003, <code>specs/02-reference/verify.html</code>). They hold for fp16 and bf16 in cast mode and in autocast mode.</p>
       <p>ViT-S/16 and ViT-B/16 run by default. The other model sizes run when the variable <code>DINOV3_SLOW</code> is 1. Each test name includes the model size, the backend, the dtype and the input resolution.</p>
     </div>
 
@@ -868,9 +868,9 @@ figcaption { font-size: 0.88rem; color: var(--muted); max-width: 52rem; }
       <ol class="steps">
         <li>Compute the output on the backend under test.</li>
         <li>Load the reference output for the same image, model size and input resolution.</li>
-        <li>Cast both outputs to fp32.</li>
+        <li>Cast both outputs to fp64.</li>
         <li>Compute the cosine similarity for each pair of vectors.</li>
-        <li>For patch embeddings, take the mean and the minimum over all patches.</li>
+        <li>For patch embeddings, take the mean, the 1st percentile and the minimum over all patches. The minimum is report only.</li>
       </ol>
 <pre class="eq"><span class="c">cosine</span>   cos(a, b) = (a · b) / (‖a‖ · ‖b‖)</pre>
       <p>Table 10 gives a worked example with three values per vector.</p>

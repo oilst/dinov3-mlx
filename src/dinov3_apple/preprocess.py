@@ -2,7 +2,7 @@
 
 The resize works on float pixels with antialiasing, as the Hugging Face image processor of DINOv3
 does (transformers, image_processing_dinov3_vit.py). A resize of 8-bit pixels moves each pixel by
-up to 0.004 and drops the patch parity of ViT-H+/16 to 0.93 (specs/02-reference/explore.html).
+up to 0.004 and drops the patch minimum of ViT-H+/16 to 0.93 (specs/02-reference/explore.html).
 
 The resize and the normalization run in fp64, and the result is cast to fp32. An fp32 antialiased
 resize in torch is off by up to 2.3e-5 per pixel; in fp64 the error is below 1e-7, so other resize

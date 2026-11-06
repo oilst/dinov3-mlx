@@ -295,7 +295,7 @@ def measure_parity(reference: np.ndarray, output: np.ndarray) -&gt; Parity:
     cos = (ref * out).sum(-1) / (np.linalg.norm(ref, axis=-1) * np.linalg.norm(out, axis=-1))
     patches = cos[NUM_PREFIX_TOKENS:]
     return Parity(cos[0], patches.mean(), np.quantile(patches, 0.01), patches.min())</code></pre>
-  <p>Change on 2026-11-06 by the user: <code>preprocess</code> resizes and normalizes in fp64 and casts the result to fp32. The fp32 resize of torch was up to 2.2e-5 per pixel away from an fp64 resize on the test images, and failed the 1e-5 limit of AC2. Pillow float resize is within 8e-8 of the fp64 resize. The stored pixels differ from the Hugging Face image processor (fp32) by about 2e-5. An 8-bit resize differs by 0.004.</p>
+  <p>Change on 2026-11-06 by the user: <code>preprocess</code> resizes and normalizes in fp64 and casts the result to fp32. The fp32 resize of torch was up to 2.2e-5 per pixel away from an fp64 resize on the test images, and failed the 1e-5 limit of AC2. Pillow float resize is within 9e-8 of the fp64 resize. The stored pixels differ from the Hugging Face image processor (fp32) by about 2e-5. An 8-bit resize differs by 0.004.</p>
   <p>The cosine runs in fp64. Then two equal fp32 vectors give 1.000000, not 0.9999996 (Table 3 of <code>explore.html</code>).</p>
   <pre><code># tests/test_parity.py (shape)
 @pytest.mark.parametrize("model_size", MODEL_SIZES_UNDER_TEST)
@@ -354,7 +354,7 @@ def test_parity(model_size, dtype_mode, config, mps_backbone, reference, inputs,
         <tr><td>AC5</td><td>Reference files for all model sizes</td><td>6 of 6 complete, or ViT-7B/16 skipped with a recorded memory reason</td><td>tests 10 and 11</td></tr>
         <tr><td>AC6</td><td>Outputs and parity metric</td><td>Register tokens dropped; Table 10 example gives 0.9997</td><td>tests 8 and 9</td></tr>
         <tr><td>AC7</td><td><code>torch-mps</code> fp32 parity</td><td>Frame, patch mean and patch 1st percentile ≥ 0.9999 for 5 model sizes × 12 configurations</td><td>test 12</td></tr>
-        <tr><td>AC8</td><td><code>torch-mps</code> half-precision parity</td><td>Frame and patch mean ≥ 0.999, patch 1st percentile ≥ 0.99, in all four modes; every fp16-cast overflow recorded as expected failure</td><td>test 12</td></tr>
+        <tr><td>AC8</td><td><code>torch-mps</code> half-precision parity</td><td>The fp16 and bf16 thresholds of Table 6 (bf16 changed by the user on 2026-11-06), in all four modes; every fp16-cast overflow recorded as expected failure</td><td>test 12</td></tr>
         <tr><td>AC9</td><td>Batch consistency</td><td>The thresholds of the dtype mode, all model sizes and dtype modes of Table 5</td><td>test 13</td></tr>
         <tr><td>AC10</td><td>Thresholds confirmed</td><td>Each threshold of Table 6 confirmed, or changed by the user with a reason</td><td><code>verify.html</code></td></tr>
         <tr><td>AC11</td><td>Results table in git</td><td><code>results/parity-torch-mps.md</code>: one row for each model size and dtype mode, with the minimum over the configurations of frame, patch mean, patch 1st percentile and patch minimum</td><td><code>scripts/parity_table.py</code></td></tr>

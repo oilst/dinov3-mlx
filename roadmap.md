@@ -6,8 +6,8 @@ One row for each step. `docs/plan.html` describes each step in detail. A step ge
 |---|---|---|---|---|
 | 0 Workflow | Mission, roadmap, tech stack, glossary and the plan | The model family and the training method (overview) | none | done |
 | 1 Scope | Prior art, repo license, Python project, access to the weights | What the other ports cover | `specs/01-scope/` | done (2026-11-06). All six model sizes are in the Hugging Face cache. |
-| 2 Reference | Reference outputs and parity tests for all model sizes | Tokens and outputs: CLS token, register tokens, patch tokens | `specs/02-reference/` | next |
-| 3 Baseline | Benchmark harness and the PyTorch MPS baseline | Where the compute goes for each model size and input resolution | `specs/03-baseline/` | open |
+| 2 Reference | Reference outputs and parity tests for all model sizes | Tokens and outputs: CLS token, register tokens, patch tokens | `specs/02-reference/` | done (2026-11-06). The ViT-7B/16 reference file is deferred: its memory check failed. |
+| 3 Baseline | Benchmark harness and the PyTorch MPS baseline | Where the compute goes for each model size and input resolution | `specs/03-baseline/` | next |
 | 4 MLX port | ViT-S/16 in MLX and the weight converter | Each part of a block: patch embedding, RoPE, attention, LayerScale, feed-forward network | `specs/04-mlx-port/` | open |
 | 5 All sizes | All model sizes in fp32, fp16 and bf16 | SwiGLU, model scaling, numeric range of the tokens | `specs/05-all-sizes/` | open |
 | 6 Speed | Compiled graphs, batch sizes, input resolutions, quantized weights | Attention cost at high input resolution | `specs/06-speed/` | open |
