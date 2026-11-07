@@ -260,7 +260,7 @@ a { color: var(--accent); }
     </table>
   </div>
   <p class="caption"><b>Table 8.</b> Trade-offs of D1.</p>
-  <div class="box"><p><b>Recommendation: Option A</b>, with the <code>_cast</code> patch in <code>src/dinov3_apple/coreml.py</code>. Option B is the fallback when a torch version breaks the trace. The user asked the agent to decide (night of 2026-11-07).</p></div>
+  <div class="box"><p><b>Recommendation: Option A</b>, with the <code>_cast</code> patch in <code>src/dinov3_apple/coreml.py</code>. Option B is the fallback when a torch version breaks the trace. The orchestrator added on 2026-11-08: the patch is a small named function (<code>patch_coremltools_cast</code>) with a test and a comment that names coremltools 9.0 and numpy 2.5.4; it never edits the installed package. The user asked the agent to decide (night of 2026-11-07).</p></div>
 
   <h3>3.2 D2: The graph for the Neural Engine</h3>
   <div class="table-wrap">

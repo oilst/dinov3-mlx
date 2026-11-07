@@ -39,7 +39,7 @@ a { color: var(--accent); }
 <main>
 <header>
   <h1>Step 6c Neural Engine: Plan</h1>
-  <p>Roadmap step 6c. Status: draft for approval. Date: 2026-11-07. The decisions come from <code>explore.html</code> (Table 12); the user asked the agent to decide (night of 2026-11-07).</p>
+  <p>Roadmap step 6c. Status: approved by the orchestrator for the user on 2026-11-08 at 00:27 (the user asked the agent to decide, night of 2026-11-07), with two changes: the default pytest session stays at or below 60 s, with every test that converts or loads a Core ML package in the slow session (AC12, Section 6); and the <code>_cast</code> patch is a small named function with a test (D1, Section 5). Date: 2026-11-07. The decisions come from <code>explore.html</code> (Table 12); the user asked the agent to decide (night of 2026-11-07).</p>
 </header>
 
 <section id="goal">
@@ -61,7 +61,7 @@ a { color: var(--accent); }
     <table>
       <thead><tr><th>File</th><th>Content</th><th>New or changed</th></tr></thead>
       <tbody>
-        <tr><td><code>src/dinov3_apple/coreml.py</code></td><td>The <code>_cast</code> patch, <code>ne_attention</code>, <code>residual_scale</code>, <code>rewrite_for_neural_engine</code>, <code>package_path</code>, <code>convert_backbone</code>, <code>load_package</code>, <code>run_coreml</code>, <code>compute_plan_report</code>. Imports coremltools inside the functions that need it</td><td>New</td></tr>
+        <tr><td><code>src/dinov3_apple/coreml.py</code></td><td><code>patch_coremltools_cast</code> (the <code>_cast</code> patch), <code>ne_attention</code>, <code>residual_scale</code>, <code>rewrite_for_neural_engine</code>, <code>package_path</code>, <code>convert_backbone</code>, <code>load_package</code>, <code>run_coreml</code>, <code>compute_plan_report</code>. Imports coremltools inside the functions that need it</td><td>New</td></tr>
         <tr><td><code>scripts/bench_coreml.py</code></td><td>The driver: subcommands <code>convert</code>, <code>parity</code>, <code>matrix</code>, <code>pairs</code>, <code>streams</code>, <code>table</code>; the worker entry points <code>coreml-worker</code> and <code>stream-worker</code></td><td>New</td></tr>
         <tr><td><code>tests/test_coreml.py</code></td><td>T1 to T12 (Section 6). <code>pytest.importorskip("coremltools")</code>; the tests with gated weights need <code>DINOV3_SLOW=1</code>, as in <code>tests/test_prior_art.py</code></td><td>New</td></tr>
         <tr><td><code>results/coreml.jsonl</code>, <code>results/coreml-table.md</code></td><td>The result lines and the table of Step 6c</td><td>New</td></tr>
@@ -130,7 +130,7 @@ a { color: var(--accent); }
         <tr><td>J3 matrix</td><td>20 configurations × (<code>coreml-ne</code>, <code>coreml-gpu</code>, <code>mlx</code>), 1 round</td><td class="num">60</td><td>22 s each; the slow Neural Engine rows (ViT-H+/16 512 px, 2.9 s a batch) reach the 60 s cap</td><td class="num">28 min</td></tr>
         <tr><td>J4 pairs, run 1</td><td>P1 and P2 at batch size 8 and 1 × 3 or 4 sides × 5 rounds</td><td class="num">70</td><td>As J3</td><td class="num">32 min</td></tr>
         <tr><td>J5 streams</td><td>P1 and P2 at batch size 8 and 1 × 3 cases × 3 rounds</td><td class="num">36 cases</td><td>Probe p8: 6 cases in 301 s</td><td class="num">20 min</td></tr>
-        <tr><td>J6 tests</td><td>Default session, <code>tests/test_coreml.py</code> with <code>DINOV3_SLOW=1</code>, ruff</td><td class="num">–</td><td>Default session 55 to 62 s; slow tests 3 packages</td><td class="num">8 min</td></tr>
+        <tr><td>J6 tests</td><td>Default session (≤ 60 s), <code>tests/test_coreml.py</code> with <code>DINOV3_SLOW=1</code>, ruff</td><td class="num">–</td><td>Default session 55 to 62 s; slow tests 3 packages</td><td class="num">8 min</td></tr>
       </tbody>
     </table>
   </div>
@@ -198,8 +198,13 @@ def ne_attention(module, query, key, value, attention_mask, scaling=None, dropou
                 if proj.bias is not None:
                     proj.bias.mul_(1.0 / residual_scale)
     return NeuralEngineBackbone(model, residual_scale)  # embeddings / r, blocks, final layer norm</code></pre>
-  <pre><code>def _cast(context, node, dtype, dtype_name):
-    """coremltools 9.0 _cast with .item(): numpy 2.5 refuses int() of a 1-element array."""
+  <pre><code>def _cast_with_item(context, node, dtype, dtype_name) -> None:
+    """The torch op aten::Int (and bool) of coremltools 9.0, with .item() for a constant.
+
+    coremltools 9.0 calls int() on a constant array with one value. numpy 2.5.4 (the version
+    of uv.lock) refuses this: "only 0-dimensional arrays can be converted to Python scalars".
+    Remove this function when a coremltools release after 9.0 fixes _cast.
+    """
     x = torch_ops._get_inputs(context, node, expected=1)[0]
     ...
     if x.can_be_folded_to_const():
@@ -207,25 +212,35 @@ def ne_attention(module, query, key, value, attention_mask, scaling=None, dropou
         res = x if isinstance(x.val, dtype) else mb.const(val=dtype(value), name=node.name)
     ...
 
-# applied once, by convert_backbone; the probe version is in explore.html Section 2.2</code></pre>
+
+def patch_coremltools_cast() -> None:
+    """Point coremltools' torch frontend at _cast_with_item, once, at run time.
+
+    The installed coremltools files do not change. Raises CoremltoolsVersionError for a
+    coremltools version other than 9.0, so a new release gets a fresh check.
+    """
+    if coremltools.__version__ != "9.0":
+        raise CoremltoolsVersionError(coremltools.__version__)
+    torch_ops._cast = _cast_with_item  # _int and _bool look _cast up in the module at each call</code></pre>
 </section>
 
 <section id="tests">
   <h2>6 Tests</h2>
-  <p>Write each test first and see it go red. <code>tests/test_coreml.py</code> starts with <code>pytest.importorskip("coremltools")</code>. T1 to T9 use the small model of <code>tests/small_model.py</code> or synthetic tensors and run in the default session (target: at most 15 s together). T10 to T12 need the gated weights and run only with <code>DINOV3_SLOW=1</code>.</p>
+  <p>Write each test first and see it go red. <code>tests/test_coreml.py</code> starts with <code>pytest.importorskip("coremltools")</code>. T1 to T5, T9 and T13 use synthetic tensors or the small model of <code>tests/small_model.py</code> in torch only, and run in the default session (target: at most 5 s together; the default session stays at or below 60 s). Every test that converts or loads a Core ML package (T6 to T8, T10 to T12) runs only in the slow session (<code>DINOV3_SLOW=1</code>), as in <code>tests/test_prior_art.py</code>.</p>
   <ol>
     <li><code>test_ne_attention_equals_eager_in_fp32</code> (T1): synthetic q, k, v (B 2, 3 heads, 41 tokens, head dimension 64) with scores up to 1e7; <code>ne_attention</code> against <code>eager_attention_forward</code> in fp64: largest relative difference ≤ 1e-6.</li>
     <li><code>test_ne_attention_fp16_stays_finite</code> (T2, F1): the same tensors in fp16 on torch-cpu: eager attention gives a non-finite value (red part of the evidence); <code>ne_attention</code> gives finite values with cosine ≥ 0.999 against fp64.</li>
     <li><code>test_rewrite_is_exact_in_fp32</code> (T3): the small models <code>vits16</code> and <code>vits16plus</code> with r = 1 and r = 8, rewritten against the Hugging Face model on torch-cpu fp32: tokens equal within 1e-5 relative (the layer norm ε is the only change, 1e-5 · r²).</li>
     <li><code>test_rewrite_keeps_layer_scale</code> (T4): after the rewrite each block still has <code>layer_scale1</code> and <code>layer_scale2</code> with the original factors, and <code>o_proj.weight</code> equals the original / r bit for bit (r a power of two).</li>
     <li><code>test_residual_scale_from_token_range</code> (T5): r = 1, 1, 1, 8, 8 for ViT-S/16 to ViT-H+/16 from <code>results/token-range-mlx.md</code>; ViT-7B/16 raises <code>RunRuleError</code>; a table with a largest value of 70,000 gives 4.</li>
-    <li><code>test_cast_patch_converts_with_numpy_2_5</code> (T6): convert the small model <code>vits16</code> at 32 px, batch size 1. Without the patch: <code>TypeError</code> (red). With it: a package with the input <code>pixels</code> and the output <code>tokens</code>.</li>
-    <li><code>test_small_package_parity_on_each_unit</code> (T7): the T6 package on CPU_AND_NE, CPU_AND_GPU and ALL against the small model on torch-cpu fp32: cosine ≥ 0.999 (frame) and finite.</li>
-    <li><code>test_compute_plan_report</code> (T8): the report of the T6 package: device counts sum to the number of non-constant ops; the cost shares sum to 1 ± 1e-6; the list of ops off the Neural Engine has name, op type and cost.</li>
+    <li><code>test_cast_patch_converts_with_numpy_2_5</code> (T6, slow): convert the small model <code>vits16</code> at 32 px, batch size 1. Without the patch: <code>TypeError</code> (red). With it: a package with the input <code>pixels</code> and the output <code>tokens</code>.</li>
+    <li><code>test_small_package_parity_on_each_unit</code> (T7, slow): the T6 package on CPU_AND_NE, CPU_AND_GPU and ALL against the small model on torch-cpu fp32: cosine ≥ 0.999 (frame) and finite.</li>
+    <li><code>test_compute_plan_report</code> (T8, slow): the report of the T6 package: device counts sum to the number of non-constant ops; the cost shares sum to 1 ± 1e-6; the list of ops off the Neural Engine has name, op type and cost.</li>
     <li><code>test_package_path_and_line_fields</code> (T9): the package name holds slug, side, batch size, s, r and the coremltools version; a fake worker line has the fields of Table 3; a broken first output (frame 0.035) gives <code>valid</code> false (risk R53); the stream schedule rotates the three cases over 3 rounds.</li>
     <li><code>test_plain_graph_fails_on_neural_engine</code> (T10, slow, F1 evidence): the plain ViT-S/16 package at 224 px on CPU_AND_NE: frame cosine below 0.5 for <code>iss-kibo-lab</code>; on CPU_AND_GPU ≥ 0.999.</li>
     <li><code>test_vits16_package_passes_on_neural_engine</code> (T11, slow): the rewritten ViT-S/16 package at 224 px batch size 1 on CPU_AND_NE: the fp16 thresholds of ADR 0003 for the 3 test images.</li>
     <li><code>test_convert_refuses_vit7b16_before_load</code> (T12, slow only because it reads the config): <code>convert_backbone("ViT-7B/16", 224, 1)</code> raises <code>RunRuleError</code> before any weight read.</li>
+    <li><code>test_patch_coremltools_cast</code> (T13, default session): <code>patch_coremltools_cast()</code> sets <code>coremltools.converters.mil.frontend.torch.ops._cast</code> to <code>_cast_with_item</code>; a second call changes nothing; with a faked version "9.1" it raises <code>CoremltoolsVersionError</code> and leaves <code>_cast</code> as it was; the installed file <code>ops.py</code> has the same SHA-256 before and after the test; <code>_cast_with_item</code> gives the value 3 for a constant <code>np.array([3])</code> where the original raises <code>TypeError</code> (red).</li>
   </ol>
 </section>
 
@@ -262,7 +277,7 @@ def ne_attention(module, query, key, value, attention_mask, scaling=None, dropou
         <tr><td>AC9</td><td>Paired runs at P1 and P2</td><td>Batch size 8 and 1, 5 rounds in the build run (J4) and, at batch size 8, 5 rounds in the Verify run: the median paired ratio of <code>coreml-ne</code>, <code>coreml-gpu</code> and <code>coreml-all</code> to <code>mlx</code>, the spread between runs, and the verdict rule D21 of Step 6 (report only: Step 6c has no speed target)</td><td>J4, Verify</td></tr>
         <tr><td>AC10</td><td>Two-stream run</td><td>P1 and P2 at batch size 8 and 1, 3 rounds: the median stream ratio (both) / (<code>mlx</code> alone), and the throughput of each side. Expected from the probe: P1 batch size 8 ≥ 1.10 (probe 1.20). A value below 1.05 gets a reason in <code>verify.html</code></td><td>J5, Verify</td></tr>
         <tr><td>AC11</td><td>Run rules</td><td>Every job and test session through the GPU lock: 0 lines with an entry in <code>other_heavy_jobs_seen</code>; a memory-check line before each conversion and each load; no load of ViT-7B/16</td><td>gpu-lock.log, J1 to J5</td></tr>
-        <tr><td>AC12</td><td>Tests, lint and docs</td><td><code>uv run pytest</code> 0 failed and the default session ≤ 75 s; <code>uv run --group coreml pytest tests/test_coreml.py</code> with <code>DINOV3_SLOW=1</code> 0 failed; ruff clean; the terms of <code>explore.html</code> Section 7 in <code>GLOSSARY.md</code>; ADR 0014 (the Neural Engine rewrite, no LayerScale fold) and ADR 0015 (Core ML packages: fixed shapes, outside the repo, coremltools 9.0 with the <code>_cast</code> patch)</td><td>J6, Close</td></tr>
+        <tr><td>AC12</td><td>Tests, lint and docs</td><td><code>uv run pytest</code> 0 failed and the default session ≤ 60 s (as AC25 of Step 6); every test that converts or loads a Core ML package is in the slow session; <code>uv run --group coreml pytest tests/test_coreml.py</code> with <code>DINOV3_SLOW=1</code> 0 failed; T13 green; ruff clean; the terms of <code>explore.html</code> Section 7 in <code>GLOSSARY.md</code>; ADR 0014 (the Neural Engine rewrite, no LayerScale fold) and ADR 0015 (Core ML packages: fixed shapes, outside the repo, coremltools 9.0 with the <code>_cast</code> patch)</td><td>J6, Close</td></tr>
       </tbody>
     </table>
   </div>
