@@ -208,6 +208,9 @@ The comparison of the free memory with the need of a model load, before the load
 Images per second in steady state, after warm-up.
 _Avoid_: speed (as a number), FPS
 
+**Reached TFLOP/s**:
+The FLOPs of one batch divided by its time: the compute rate that one configuration reaches. A low value shows a fixed cost, for example at batch size 1.
+
 **Peak memory**:
 The largest memory use during one benchmark run: the lifetime maximum of the process footprint of the benchmark worker. The same measure serves torch-mps and mlx.
 

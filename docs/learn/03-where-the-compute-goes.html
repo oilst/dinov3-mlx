@@ -1,0 +1,1330 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Where the Compute Goes</title>
+<style>
+/* Explainer page. White page, black text, no dark mode. */
+:root { --bg: #ffffff; --fg: #111414; --muted: #4a5655; --rule: #d6dedd; --panel: #f5f8f7; --accent: #057379; --cls: #057379; --patch: #9fd3d1; --reg: #e0a336; color-scheme: light; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif; }
+main { max-width: 62rem; margin: 0 auto; padding: 40px 20px 64px; display: grid; gap: 1.75rem; }
+main > *, section > * { min-width: 0; }
+h1 { font-size: 1.9rem; line-height: 1.15; margin: 0; }
+h2 { font-size: 1.3rem; margin: 0; }
+h3 { font-size: 1.05rem; margin: 0.4rem 0 0; }
+section { display: grid; gap: 0.8rem; }
+p, ul, ol { margin: 0; max-width: 46rem; }
+li + li { margin-top: 0.25rem; }
+code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.86em; }
+p code, li code, td code { overflow-wrap: anywhere; }
+pre { margin: 0; background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 0.8rem 1rem; overflow-x: auto; }
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 0.92rem; }
+th, td { text-align: left; vertical-align: top; padding: 0.45rem 0.7rem 0.45rem 0; border-bottom: 1px solid var(--rule); }
+th { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); border-bottom: 1.5px solid var(--fg); }
+th.group { border-bottom: 1px solid var(--rule); text-align: center; }
+th.num { text-align: right; }
+td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+table.dense { font-size: 0.85rem; }
+table.dense th, table.dense td { padding: 0.3rem 0.55rem 0.3rem 0; }
+.caption, figcaption { font-size: 0.88rem; color: var(--muted); }
+figure { margin: 0; display: grid; gap: 0.4rem; }
+.fig { border: 1px solid var(--rule); border-radius: 6px; padding: 0.5rem; overflow-x: auto; }
+.fig svg { display: block; width: 100%; height: auto; min-width: 640px; }
+.note { border-left: 3px solid var(--accent); padding: 0.3rem 0 0.3rem 0.9rem; }
+details summary { cursor: pointer; color: var(--accent); }
+details[open] summary { margin-bottom: 0.6rem; }
+nav ol { columns: 2; }
+a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+<header>
+  <h1>Where the Compute Goes</h1>
+  <p>Explainer for roadmap step 3. Date: 2026-11-07.</p>
+</header>
+
+<nav>
+  <h2>Contents</h2>
+  <ol>
+    <li><a href="#why">Why this explainer</a></li>
+    <li><a href="#parts">The parts of one block</a></li>
+    <li><a href="#flops">The FLOP count</a></li>
+    <li><a href="#zero">The parts without FLOPs</a></li>
+    <li><a href="#method">How Step 3 measures time</a></li>
+    <li><a href="#shares">The measured time share of each part</a></li>
+    <li><a href="#throughput">Throughput against FLOPs</a></li>
+    <li><a href="#memory">Peak memory and the memory need</a></li>
+    <li><a href="#noise">Noise, the power adapter and the baseline row</a></li>
+    <li><a href="#code">The code of Step 3</a></li>
+    <li><a href="#surprises">Surprises</a></li>
+    <li><a href="#sources">Sources</a></li>
+  </ol>
+</nav>
+
+<section id="why">
+  <h2>1 Why this explainer</h2>
+  <p>Step 3 measures the baseline: the throughput and the peak memory of the Hugging Face backbone on <code>torch-mps</code>. Step 6 divides the throughput of <code>mlx</code> by these values to get each speedup. To make the backbone faster, we must know where its time goes. This explainer shows it in three views. The FLOP view covers each model size and input resolution. The time view covers ViT-S/16 and ViT-H+/16 at 224 and 512 px. The throughput view covers the five model sizes of B1.</p>
+  <ol>
+    <li><b>FLOPs.</b> The FLOP count of each part of a block (Section 3). The attention scores take a larger share of the FLOPs when the token count T grows, and a smaller share when the embedding dimension D grows.</li>
+    <li><b>Time.</b> The measured time share of each part (Section 6). Layer norms, RoPE, LayerScale, the activation function and the residual adds have almost no FLOPs. They read and write every token, so they take time.</li>
+    <li><b>Throughput against FLOPs.</b> The throughput of a configuration times the FLOPs of one image gives the reached TFLOP/s (Section 7). A low value shows a fixed cost, for example ViT-S/16 at batch size 1.</li>
+  </ol>
+  <p>Sections 5, 8 and 9 explain how Step 3 measures: the host-to-host time of one batch, the time budget, the process footprint, the memory need, the noise of this Mac and the rule for the baseline row. Section 10 annotates the code. Section 11 lists the surprises.</p>
+  <p>All measured values come from the committed results files <code>results/baseline-torch-mps.md</code> and <code>results/block-profile-torch-mps.md</code> and their JSON lines. The verifier measured them on the 94 W power adapter on 2026-11-06, from 22:43 to 01:00 local time (Section 14 of <code>specs/03-baseline/verify.html</code>). These results replace the first results, which ran on a 30 W adapter (Section 9.1). The machine is an Apple M5 Max with 64 GiB unified memory, macOS 26.5.2, torch 2.15.0 and transformers 5.22.1 with SDPA attention. The FLOP counts come from <code>src/dinov3_apple/flops.py</code>. For this page, nobody loaded a model or ran a benchmark: the numbers come from the committed files.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Run</th><th>Model sizes</th><th>Dtype modes</th><th>Input resolutions</th><th>Batch sizes</th><th>Configurations</th><th>Result on 94 W</th></tr></thead>
+      <tbody>
+        <tr><td>B1 Main matrix</td><td>ViT-S/16 to ViT-H+/16</td><td>all five</td><td>224, 448, 512 px</td><td>1, 8, 32</td><td class="num">225</td><td>225 "done"</td></tr>
+        <tr><td>B2 Repeats</td><td colspan="4">P1 and P2 in all five dtype modes, two more runs each</td><td class="num">20</td><td>20 "done"</td></tr>
+        <tr><td>B3 Compile rows</td><td colspan="4">P1 and P2 in all five dtype modes, with <code>torch.compile</code></td><td class="num">10</td><td>10 "done", all valid</td></tr>
+        <tr><td>B4 ViT-7B/16</td><td>ViT-7B/16</td><td>fp16-cast, bf16-cast</td><td>224, 448, 512 px</td><td>1, 8, 32</td><td class="num">18</td><td>18 "deferred" (user decision)</td></tr>
+        <tr><td>B5 Block profile</td><td>ViT-S/16, ViT-H+/16</td><td>fp32, fp16-cast</td><td>224, 512 px</td><td>1, 8</td><td class="num">16</td><td>16 lines</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 1.</b> The runs of Step 3 (Table 2 of <code>specs/03-baseline/plan.html</code>). The priority configurations are P1 (ViT-S/16, 224 px, batch size 8, frame embedding) and P2 (ViT-H+/16, 512 px, batch size 8, patch embeddings). Each configuration of B1 to B4 gives a row for the frame embedding and a row for the patch embeddings.</p>
+</section>
+
+<section id="parts">
+  <h2>2 The parts of one block</h2>
+  <p>A block has two branches. The attention branch mixes information between the tokens. The feed-forward branch transforms each token alone. Each branch starts with a layer norm and ends with LayerScale and a residual add. <code>block_parts</code> in <code>src/dinov3_apple/block_profile.py</code> splits block 1 of the Hugging Face backbone into 11 parts. It uses the Hugging Face modules and functions (Figure 1, Table 2). A test runs the 11 parts in order and compares the result with the output of the block. On <code>torch-cpu</code> in fp32 the largest difference is 0.0 for ViT-S/16 and ViT-S+/16 (AC11).</p>
+  <figure>
+    <div class="fig"><svg viewBox="0 0 960 380" role="img" aria-labelledby="fig1-title" font-family="-apple-system, Helvetica Neue, Arial, sans-serif">
+      <title id="fig1-title">The 11 parts of one block in two rows: the attention branch and the feed-forward branch, with the residual connections</title>
+      <rect width="960" height="380" fill="#ffffff"/>
+      <text x="20" y="20" font-size="13" font-weight="600" fill="#111414">One block, split by block_parts into 11 parts. The input x has the shape (B, T, D).</text>
+      <!-- input and residual of row 1 -->
+      <text x="30" y="120" font-size="14" font-weight="600" fill="#111414">x</text>
+      <line x1="46" y1="115" x2="90" y2="115" stroke="#111414" stroke-width="1.5"/>
+      <path d="M90,111 L96,115 L90,119 z" fill="#111414"/>
+      <path d="M70,115 L70,42 L865,42 L865,74" fill="none" stroke="#4a5655" stroke-width="1.5"/>
+      <path d="M861,74 L865,80 L869,74 z" fill="#4a5655"/>
+      <text x="480" y="37" font-size="11" fill="#4a5655" text-anchor="middle">residual connection: x</text>
+      <!-- v bypass -->
+      <path d="M297,80 L297,63 L581,63 L581,74" fill="none" stroke="#4a5655" stroke-width="1.2" stroke-dasharray="4 3"/>
+      <path d="M577,74 L581,80 L585,74 z" fill="#4a5655"/>
+      <text x="439" y="58" font-size="11" fill="#4a5655" text-anchor="middle">v (no RoPE)</text>
+      <!-- row 1 boxes -->
+      <g font-size="12" fill="#111414" text-anchor="middle">
+        <rect x="96" y="80" width="118" height="70" fill="#ffffff" stroke="#c3cccb" stroke-width="2"/><rect x="96" y="80" width="118" height="6" fill="#c3cccb"/>
+        <text x="155" y="106" font-weight="600">1 norm1</text><text x="155" y="124" font-size="11">0 FLOPs</text><text x="155" y="141" font-size="10.5" fill="#4a5655">→ h1</text>
+        <rect x="238" y="80" width="118" height="70" fill="#ffffff" stroke="#057379" stroke-width="2"/><rect x="238" y="80" width="118" height="6" fill="#057379"/>
+        <text x="297" y="106" font-weight="600">2 qkv_proj</text><text x="297" y="124" font-size="11">6 B T D²</text><text x="297" y="141" font-size="10.5" fill="#4a5655">→ q, k, v</text>
+        <rect x="380" y="80" width="118" height="70" fill="#ffffff" stroke="#b03a2e" stroke-width="2"/><rect x="380" y="80" width="118" height="6" fill="#b03a2e"/>
+        <text x="439" y="106" font-weight="600">3 rope</text><text x="439" y="124" font-size="11">0 FLOPs</text><text x="439" y="141" font-size="10.5" fill="#4a5655">→ qr, kr</text>
+        <rect x="522" y="80" width="118" height="70" fill="#ffffff" stroke="#e0a336" stroke-width="2"/><rect x="522" y="80" width="118" height="6" fill="#e0a336"/>
+        <text x="581" y="106" font-weight="600">4 sdpa</text><text x="581" y="124" font-size="11">4 B T² D</text><text x="581" y="141" font-size="10.5" fill="#4a5655">→ a</text>
+        <rect x="664" y="80" width="118" height="70" fill="#ffffff" stroke="#057379" stroke-width="2"/><rect x="664" y="80" width="118" height="6" fill="#057379"/>
+        <text x="723" y="106" font-weight="600">5 o_proj</text><text x="723" y="124" font-size="11">2 B T D²</text><text x="723" y="141" font-size="10.5" fill="#4a5655">→ o</text>
+        <rect x="806" y="80" width="118" height="70" fill="#ffffff" stroke="#c3cccb" stroke-width="2"/><rect x="806" y="80" width="118" height="6" fill="#c3cccb"/>
+        <text x="865" y="106" font-weight="600">6 layer_scale1</text><text x="865" y="124" font-size="11">0 FLOPs, + x</text><text x="865" y="141" font-size="10.5" fill="#4a5655">→ x2</text>
+      </g>
+      <g stroke="#111414" stroke-width="1.5">
+        <line x1="214" y1="115" x2="232" y2="115"/><line x1="356" y1="115" x2="374" y2="115"/><line x1="498" y1="115" x2="516" y2="115"/><line x1="640" y1="115" x2="658" y2="115"/><line x1="782" y1="115" x2="800" y2="115"/>
+      </g>
+      <g fill="#111414">
+        <path d="M232,111 L238,115 L232,119 z"/><path d="M374,111 L380,115 L374,119 z"/><path d="M516,111 L522,115 L516,119 z"/><path d="M658,111 L664,115 L658,119 z"/><path d="M800,111 L806,115 L800,119 z"/>
+      </g>
+      <!-- RoPE tables into rope -->
+      <line x1="439" y1="174" x2="439" y2="156" stroke="#b03a2e" stroke-width="1.5"/>
+      <path d="M435,156 L439,150 L443,156 z" fill="#b03a2e"/>
+      <text x="439" y="188" font-size="11" fill="#b03a2e" text-anchor="middle">cos, sin: the RoPE tables, made once outside the blocks</text>
+      <!-- return path to row 2 -->
+      <path d="M865,150 L865,198 L40,198 L40,265 L90,265" fill="none" stroke="#111414" stroke-width="1.5"/>
+      <path d="M90,261 L96,265 L90,269 z" fill="#111414"/>
+      <text x="874" y="180" font-size="12" font-weight="600" fill="#111414">x2</text>
+      <path d="M70,265 L70,216 L723,216 L723,224" fill="none" stroke="#4a5655" stroke-width="1.5"/>
+      <path d="M719,224 L723,230 L727,224 z" fill="#4a5655"/>
+      <text x="396" y="211" font-size="11" fill="#4a5655" text-anchor="middle">residual connection: x2</text>
+      <!-- row 2 boxes -->
+      <g font-size="12" fill="#111414" text-anchor="middle">
+        <rect x="96" y="230" width="118" height="70" fill="#ffffff" stroke="#c3cccb" stroke-width="2"/><rect x="96" y="230" width="118" height="6" fill="#c3cccb"/>
+        <text x="155" y="256" font-weight="600">7 norm2</text><text x="155" y="274" font-size="11">0 FLOPs</text><text x="155" y="291" font-size="10.5" fill="#4a5655">→ h2</text>
+        <rect x="238" y="230" width="118" height="70" fill="#ffffff" stroke="#5fa9a4" stroke-width="2"/><rect x="238" y="230" width="118" height="6" fill="#9fd3d1"/>
+        <text x="297" y="256" font-weight="600">8 ff_in</text><text x="297" y="274" font-size="11">2k B T D F</text><text x="297" y="291" font-size="10.5" fill="#4a5655">→ up (and gate)</text>
+        <rect x="380" y="230" width="118" height="70" fill="#ffffff" stroke="#c3cccb" stroke-width="2"/><rect x="380" y="230" width="118" height="6" fill="#c3cccb"/>
+        <text x="439" y="256" font-weight="600">9 activation</text><text x="439" y="274" font-size="11">0 FLOPs</text><text x="439" y="291" font-size="10.5" fill="#4a5655">→ g</text>
+        <rect x="522" y="230" width="118" height="70" fill="#ffffff" stroke="#5fa9a4" stroke-width="2"/><rect x="522" y="230" width="118" height="6" fill="#9fd3d1"/>
+        <text x="581" y="256" font-weight="600">10 ff_out</text><text x="581" y="274" font-size="11">2 B T F D</text><text x="581" y="291" font-size="10.5" fill="#4a5655">→ y</text>
+        <rect x="664" y="230" width="118" height="70" fill="#ffffff" stroke="#c3cccb" stroke-width="2"/><rect x="664" y="230" width="118" height="6" fill="#c3cccb"/>
+        <text x="723" y="256" font-weight="600">11 layer_scale2</text><text x="723" y="274" font-size="11">0 FLOPs, + x2</text><text x="723" y="291" font-size="10.5" fill="#4a5655">→ out</text>
+      </g>
+      <g stroke="#111414" stroke-width="1.5">
+        <line x1="214" y1="265" x2="232" y2="265"/><line x1="356" y1="265" x2="374" y2="265"/><line x1="498" y1="265" x2="516" y2="265"/><line x1="640" y1="265" x2="658" y2="265"/><line x1="782" y1="265" x2="820" y2="265"/>
+      </g>
+      <g fill="#111414">
+        <path d="M232,261 L238,265 L232,269 z"/><path d="M374,261 L380,265 L374,269 z"/><path d="M516,261 L522,265 L516,269 z"/><path d="M658,261 L664,265 L658,269 z"/><path d="M820,261 L826,265 L820,269 z"/>
+      </g>
+      <text x="832" y="262" font-size="12" font-weight="600" fill="#111414">out (B, T, D)</text>
+      <text x="832" y="278" font-size="11" fill="#4a5655">to the next block</text>
+      <!-- legend -->
+      <g font-size="11.5" fill="#111414">
+        <rect x="20" y="326" width="14" height="14" fill="#057379"/><text x="40" y="338">qkv_proj, o_proj</text>
+        <rect x="160" y="326" width="14" height="14" fill="#9fd3d1"/><text x="180" y="338">ff_in, ff_out</text>
+        <rect x="280" y="326" width="14" height="14" fill="#e0a336"/><text x="300" y="338">sdpa</text>
+        <rect x="350" y="326" width="14" height="14" fill="#b03a2e"/><text x="370" y="338">rope</text>
+        <rect x="420" y="326" width="14" height="14" fill="#c3cccb"/><text x="440" y="338">other parts without FLOPs</text>
+        <text x="20" y="364" fill="#4a5655">B batch size, T tokens, D embedding dimension, F feed-forward size, k number of ff_in matrices</text>
+      </g>
+    </svg></div>
+    <figcaption><b>Figure 1.</b> The 11 parts of one block, as <code>block_parts</code> splits them. Each box gives the part number and name, its FLOPs for a batch of B images with T tokens each, and the names of its output tensors in the state of <code>run_parts</code>. The grey lines are the residual connections: layer_scale1 adds x, layer_scale2 adds x2. The value tensor v goes from qkv_proj to sdpa without RoPE. The RoPE tables come from outside the blocks. In Hugging Face, the RoPE tables have one row for each patch token only: (N, head size), with N the number of patch tokens. They have no rows for the prefix tokens: <code>apply_rotary_pos_emb</code> splits q and k and rotates only the patch tokens (Section 4). k is the number of ff_in matrices: 1 for the MLP, 2 for SwiGLU. The colors are the five groups of Figure 3.</figcaption>
+  </figure>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>No.</th><th>Part</th><th>Code</th><th>FLOPs</th><th>Bytes moved, in units of s</th></tr></thead>
+      <tbody>
+        <tr><td class="num">1</td><td>norm1</td><td><code>layer.norm1(x)</code></td><td>0</td><td>2 BTD</td></tr>
+        <tr><td class="num">2</td><td>qkv_proj</td><td><code>attention.q_proj</code>, <code>k_proj</code>, <code>v_proj</code> and the reshape to heads</td><td>6 BTD²</td><td>4 BTD + 3 D²</td></tr>
+        <tr><td class="num">3</td><td>rope</td><td><code>apply_rotary_pos_emb(q, k, cos, sin)</code></td><td>0</td><td>6 BTD</td></tr>
+        <tr><td class="num">4</td><td>sdpa</td><td><code>F.scaled_dot_product_attention(q, k, v, scale=attention.scaling)</code></td><td>4 BT²D</td><td>4 BTD (inputs and output only)</td></tr>
+        <tr><td class="num">5</td><td>o_proj</td><td>the reshape and <code>attention.o_proj</code></td><td>2 BTD²</td><td>2 BTD + D²</td></tr>
+        <tr><td class="num">6</td><td>layer_scale1</td><td><code>layer.layer_scale1(o) + x</code></td><td>0</td><td>3 BTD</td></tr>
+        <tr><td class="num">7</td><td>norm2</td><td><code>layer.norm2(x2)</code></td><td>0</td><td>2 BTD</td></tr>
+        <tr><td class="num">8</td><td>ff_in</td><td>MLP: <code>up_proj</code>. SwiGLU: <code>gate_proj</code> and <code>up_proj</code></td><td>2k BTDF</td><td>BTD + k (BTF + DF)</td></tr>
+        <tr><td class="num">9</td><td>activation</td><td>MLP: GELU. SwiGLU: <code>silu(gate) * up</code></td><td>0</td><td>2 BTF (MLP), 3 BTF (SwiGLU)</td></tr>
+        <tr><td class="num">10</td><td>ff_out</td><td><code>mlp.down_proj</code></td><td>2 BTFD</td><td>BTF + BTD + FD</td></tr>
+        <tr><td class="num">11</td><td>layer_scale2</td><td><code>layer.layer_scale2(y) + x2</code></td><td>0</td><td>3 BTD</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 2.</b> The parts of one block (Table 6 of the plan). B batch size, T token count, D embedding dimension, F feed-forward size, k = 1 for the MLP and 2 for SwiGLU, s bytes per value (4 for fp32, 2 for fp16 and bf16). One multiply-add counts as 2 FLOPs. The bias adds and the softmax inside sdpa count as 0 FLOPs. The columns are the formulas of <code>part_flops</code> and <code>part_bytes</code> in <code>flops.py</code>. The byte count of sdpa leaves out the score matrix, so a kernel that writes the scores moves more.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Model size</th><th>D</th><th>Blocks L</th><th>Heads</th><th>Head size</th><th>F</th><th>Feed-forward network</th><th>sdpa FLOPs / linear FLOPs</th></tr></thead>
+      <tbody>
+        <tr><td>ViT-S/16</td><td class="num">384</td><td class="num">12</td><td class="num">6</td><td class="num">64</td><td class="num">1,536</td><td>MLP</td><td>T / (6 D)</td></tr>
+        <tr><td>ViT-S+/16</td><td class="num">384</td><td class="num">12</td><td class="num">6</td><td class="num">64</td><td class="num">1,536</td><td>SwiGLU</td><td>T / (8 D)</td></tr>
+        <tr><td>ViT-B/16</td><td class="num">768</td><td class="num">12</td><td class="num">12</td><td class="num">64</td><td class="num">3,072</td><td>MLP</td><td>T / (6 D)</td></tr>
+        <tr><td>ViT-L/16</td><td class="num">1,024</td><td class="num">24</td><td class="num">16</td><td class="num">64</td><td class="num">4,096</td><td>MLP</td><td>T / (6 D)</td></tr>
+        <tr><td>ViT-H+/16</td><td class="num">1,280</td><td class="num">32</td><td class="num">20</td><td class="num">64</td><td class="num">5,120</td><td>SwiGLU</td><td>T / (8 D)</td></tr>
+        <tr><td>ViT-7B/16</td><td class="num">4,096</td><td class="num">40</td><td class="num">32</td><td class="num">128</td><td class="num">8,192</td><td>SwiGLU</td><td>T / (5 D)</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 3.</b> <code>MODEL_SHAPES</code> in <code>flops.py</code>, from the <code>config.json</code> of each model size. Head size = D / heads. The last column comes from Section 3.</p>
+</section>
+
+<section id="flops">
+  <h2>3 The FLOP count</h2>
+  <p>A product of an (M, K) matrix and a (K, N) matrix has M · K · N multiply-adds, so 2 · M · K · N FLOPs. For one image (B = 1), one block has these FLOPs:</p>
+  <pre><code>linear parts:  qkv_proj 6 T D²  +  o_proj 2 T D²  +  ff_in 2k T D F  +  ff_out 2 T D F
+sdpa:          Q Kᵀ 2 T² D  +  softmax(Q Kᵀ) V 2 T² D  =  4 T² D
+
+sdpa / linear  =  4 T² D / (8 T D² + 2 (k + 1) T D F)  =  2 T / (4 D + (k + 1) F)</code></pre>
+  <p>The heads do not change the count. Each head has D / heads channels, and all heads together have D channels. The linear parts grow with T. The attention scores grow with T². So the sdpa share of the FLOPs grows with T and falls with D:</p>
+  <ul>
+    <li>ViT-S/16, ViT-B/16 and ViT-L/16 have an MLP with F = 4 D and k = 1. The ratio is T / (6 D). Section 2 of the plan writes N / (6 D), with N for the token count.</li>
+    <li>ViT-S+/16 and ViT-H+/16 have SwiGLU with F = 4 D and k = 2. The ratio is T / (8 D).</li>
+    <li>ViT-7B/16 has SwiGLU with F = 2 D and k = 2. The ratio is T / (5 D).</li>
+  </ul>
+  <p>Example: ViT-S/16 at 224 px has T = 5 + 14² = 201 tokens. The ratio is 201 / (6 × 384) = 0.087. So sdpa has 8.0 % of the block FLOPs.</p>
+  <p><code>image_flops</code> adds the patch embedding to L blocks. The patch embedding is a 16 × 16 convolution from 3 color channels to D channels: 2 × 3 × 16 × 16 × D FLOPs for each patch. The count leaves out the final layer norm. Table 4 gives the FLOPs of one image for each model size and input resolution.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Model size</th><th class="num">Input resolution (px)</th><th class="num">Tokens T</th><th class="num">GFLOP per image</th><th class="num">sdpa (%)</th><th class="num">Linear parts (%)</th><th class="num">Patch embedding (%)</th></tr></thead>
+      <tbody>
+<tr><td>ViT-S/16</td><td class="num">224</td><td class="num">201</td><td class="num">9.4</td><td class="num">7.9</td><td class="num">90.8</td><td class="num">1.23</td></tr>
+<tr><td>ViT-S/16</td><td class="num">448</td><td class="num">789</td><td class="num">45.4</td><td class="num">25.2</td><td class="num">73.7</td><td class="num">1.02</td></tr>
+<tr><td>ViT-S/16</td><td class="num">512</td><td class="num">1,029</td><td class="num">63.8</td><td class="num">30.6</td><td class="num">68.5</td><td class="num">0.95</td></tr>
+<tr><td>ViT-S+/16</td><td class="num">224</td><td class="num">201</td><td class="num">12.2</td><td class="num">6.1</td><td class="num">93.0</td><td class="num">0.94</td></tr>
+<tr><td>ViT-S+/16</td><td class="num">448</td><td class="num">789</td><td class="num">56.6</td><td class="num">20.3</td><td class="num">78.9</td><td class="num">0.82</td></tr>
+<tr><td>ViT-S+/16</td><td class="num">512</td><td class="num">1,029</td><td class="num">78.4</td><td class="num">24.9</td><td class="num">74.3</td><td class="num">0.77</td></tr>
+<tr><td>ViT-B/16</td><td class="num">224</td><td class="num">201</td><td class="num">35.9</td><td class="num">4.2</td><td class="num">95.2</td><td class="num">0.64</td></tr>
+<tr><td>ViT-B/16</td><td class="num">448</td><td class="num">789</td><td class="num">157.9</td><td class="num">14.5</td><td class="num">84.9</td><td class="num">0.59</td></tr>
+<tr><td>ViT-B/16</td><td class="num">512</td><td class="num">1,029</td><td class="num">215.0</td><td class="num">18.2</td><td class="num">81.3</td><td class="num">0.56</td></tr>
+<tr><td>ViT-L/16</td><td class="num">224</td><td class="num">201</td><td class="num">125.7</td><td class="num">3.2</td><td class="num">96.6</td><td class="num">0.25</td></tr>
+<tr><td>ViT-L/16</td><td class="num">448</td><td class="num">789</td><td class="num">539.0</td><td class="num">11.4</td><td class="num">88.4</td><td class="num">0.23</td></tr>
+<tr><td>ViT-L/16</td><td class="num">512</td><td class="num">1,029</td><td class="num">727.2</td><td class="num">14.3</td><td class="num">85.5</td><td class="num">0.22</td></tr>
+<tr><td>ViT-H+/16</td><td class="num">224</td><td class="num">201</td><td class="num">344.2</td><td class="num">1.9</td><td class="num">98.0</td><td class="num">0.11</td></tr>
+<tr><td>ViT-H+/16</td><td class="num">448</td><td class="num">789</td><td class="num">1,427.3</td><td class="num">7.1</td><td class="num">92.7</td><td class="num">0.11</td></tr>
+<tr><td>ViT-H+/16</td><td class="num">512</td><td class="num">1,029</td><td class="num">1,901.9</td><td class="num">9.1</td><td class="num">90.8</td><td class="num">0.11</td></tr>
+<tr><td>ViT-7B/16</td><td class="num">224</td><td class="num">201</td><td class="num">2,725.5</td><td class="num">1.0</td><td class="num">99.0</td><td class="num">0.05</td></tr>
+<tr><td>ViT-7B/16</td><td class="num">448</td><td class="num">789</td><td class="num">11,002.7</td><td class="num">3.7</td><td class="num">96.2</td><td class="num">0.04</td></tr>
+<tr><td>ViT-7B/16</td><td class="num">512</td><td class="num">1,029</td><td class="num">14,511.4</td><td class="num">4.8</td><td class="num">95.2</td><td class="num">0.04</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 4.</b> FLOPs of one image, from <code>image_flops</code>. The shares are in % of these FLOPs. "Linear parts" = qkv_proj + o_proj + ff_in + ff_out. The other parts count as 0 FLOPs, so the three shares add up to 100 %. T = 5 + (side / 16)².</p>
+  <p>Four facts follow from Table 4:</p>
+  <ul>
+    <li><b>The linear parts have most of the FLOPs.</b> Their share is 68.5 % (ViT-S/16, 512 px) to 99.0 % (ViT-7B/16, 224 px).</li>
+    <li><b>sdpa matters only for small D at large T.</b> It has 30.6 % for ViT-S/16 at 512 px, but only 1.0 % for ViT-7B/16 at 224 px.</li>
+    <li><b>The patch embedding is small.</b> Its share is 1.23 % or less.</li>
+    <li><b>The FLOPs grow faster than T.</b> From 224 px to 512 px, T grows 5.1 times (201 to 1,029). The FLOPs grow 6.8 times for ViT-S/16 (9.4 to 63.8 GFLOP) and 5.5 times for ViT-H+/16 (344.2 to 1,901.9 GFLOP), because the T² term is larger for a small D.</li>
+  </ul>
+  <p>sdpa has as many FLOPs as the linear parts when 2 T = 4 D + (k + 1) F, so at T* = 2 D + (k + 1) F / 2. Table 5 gives T* for each model size.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Model size</th><th>T*</th><th>Square input resolution at T*</th></tr></thead>
+      <tbody>
+        <tr><td>ViT-S/16</td><td class="num">2,304</td><td class="num">about 767 px</td></tr>
+        <tr><td>ViT-S+/16</td><td class="num">3,072</td><td class="num">about 886 px</td></tr>
+        <tr><td>ViT-B/16</td><td class="num">4,608</td><td class="num">about 1,086 px</td></tr>
+        <tr><td>ViT-L/16</td><td class="num">6,144</td><td class="num">about 1,254 px</td></tr>
+        <tr><td>ViT-H+/16</td><td class="num">10,240</td><td class="num">about 1,619 px</td></tr>
+        <tr><td>ViT-7B/16</td><td class="num">20,480</td><td class="num">about 2,290 px</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 5.</b> The token count T* at which sdpa has as many FLOPs as the linear parts. Input resolution = 16 × √(T* − 5). All input resolutions of Step 3 are far below these values, so the linear parts have most of the FLOPs in every configuration of the benchmark matrix.</p>
+</section>
+
+<section id="zero">
+  <h2>4 The parts without FLOPs</h2>
+  <p>Six of the 11 parts have no matrix product: norm1, rope, layer_scale1, norm2, activation and layer_scale2. The residual adds are inside layer_scale1 and layer_scale2. <code>part_flops</code> counts these six parts as 0 FLOPs. They still take time. Each of them reads every token from memory and writes a result back. So their time depends on the bytes that they move and on the number of GPU kernels that they start, not on FLOPs.</p>
+  <p><code>part_bytes</code> estimates the bytes (Table 2). Example: ViT-S/16 at 224 px, batch size 8, fp32. One (B, T, D) tensor has 8 × 201 × 384 = 617,472 values. norm1 reads x and writes h1: 2 × 617,472 × 4 bytes = 4.9 MB. RoPE reads q and k and writes qr and kr: 4 × 617,472 values. cos and sin are small: 196 × 64 values each, the same for all 8 images and all 6 heads. <code>part_bytes</code> counts 6 BTD for RoPE, so its estimate is 6 × 617,472 × 4 bytes = 14.8 MB. In B5, this RoPE takes 190.9 µs, so <code>part_bytes</code> / time is about 78 GB/s.</p>
+  <p>RoPE is the largest part without FLOPs. The Hugging Face function rotates only the patch tokens. It splits q and k into the prefix tokens and the patch tokens, rotates the patch tokens and joins the two pieces again:</p>
+  <pre><code># transformers 5.22.1, models/dinov3_vit/modeling_dinov3_vit.py (Apache-2.0)
+q_prefix_tokens, q_patches = q.split((num_prefix_tokens, num_patches), dim=-2)
+k_prefix_tokens, k_patches = k.split((num_prefix_tokens, num_patches), dim=-2)
+q_patches = (q_patches * cos) + (rotate_half(q_patches) * sin)   # rotate_half: slice, negate, cat
+k_patches = (k_patches * cos) + (rotate_half(k_patches) * sin)
+q = torch.cat((q_prefix_tokens, q_patches), dim=-2)
+k = torch.cat((k_prefix_tokens, k_patches), dim=-2)</code></pre>
+  <p>For each of q and k, this is a chain of element-wise operations: two products, a negation and a concatenation in <code>rotate_half</code>, a sum and the concatenation with the prefix tokens. Each operation reads and writes the full tensor. Section 6.3 gives the measured cost.</p>
+</section>
+
+<section id="method">
+  <h2>5 How Step 3 measures time</h2>
+  <h3>5.1 One worker for each configuration</h3>
+  <p><code>scripts/benchmark.py</code> is the driver. For each configuration it does these actions:</p>
+  <ol>
+    <li>Read the machine state. Stop on battery power, in Low Power Mode or on a power adapter below 90 W.</li>
+    <li>Compute the memory need and do the memory check. A configuration that does not fit gets a "skipped" line.</li>
+    <li>Start one worker subprocess with the MPS watermarks 0.8 and 0.6.</li>
+    <li>Write one JSON line with the result, the machine state and the versions.</li>
+  </ol>
+  <p>The worker runs <code>run_worker</code> of <code>src/dinov3_apple/torch_bench.py</code>. It loads the backbone, times the first batch, checks the validity of the first output, runs the warm-up batches and the timed batches, and reads the process footprint. Only one worker runs at a time. So the lifetime maximum of the footprint belongs to one configuration, and no other job uses the GPU.</p>
+
+  <h3>5.2 Host to host: <code>time_batch</code></h3>
+  <p>A user of the backbone starts with pixels on the host and needs the output on the host. So <code>time_batch</code> times one batch from host to host (D3). The forward pass runs once for the two outputs. The copy of the frame embeddings and the copy of the patch embeddings have separate times, so one worker gives the throughput of both outputs.</p>
+  <pre><code>t0 = time.perf_counter()
+pixels = torch.from_numpy(batch).to("mps", mode.weights)    # stored fp32 pixels to the GPU
+with _autocast(mode):                                       # autocast modes only
+    tokens = model(pixel_values=pixels).last_hidden_state
+torch.mps.synchronize()                                     # wait for the GPU
+t1 = time.perf_counter()
+frame = tokens[:, 0].cpu()                                  # frame embeddings, (B, D)
+t2 = time.perf_counter()
+patches = tokens[:, NUM_PREFIX_TOKENS:].cpu()               # patch embeddings, (B, N, D)
+t3 = time.perf_counter()
+return (t1 - t0, t2 - t0, (t1 - t0) + (t3 - t2)), frame, patches</code></pre>
+  <figure>
+    <div class="fig"><svg viewBox="0 0 960 200" role="img" aria-labelledby="fig2-title" font-family="-apple-system, Helvetica Neue, Arial, sans-serif">
+      <title id="fig2-title">The four times of one timed batch and the three batch times that time_batch returns</title>
+      <rect width="960" height="200" fill="#ffffff"/>
+      <g font-size="12" fill="#111414" text-anchor="middle">
+        <text x="60" y="38" font-weight="600">t0</text><text x="640" y="38" font-weight="600">t1</text><text x="740" y="38" font-weight="600">t2</text><text x="880" y="38" font-weight="600">t3</text>
+      </g>
+      <rect x="60" y="48" width="580" height="40" fill="#057379"/>
+      <text x="350" y="73" font-size="12" fill="#ffffff" text-anchor="middle">pixels to the GPU, forward pass, torch.mps.synchronize()</text>
+      <rect x="640" y="48" width="100" height="40" fill="#9fd3d1"/>
+      <text x="690" y="65" font-size="11" fill="#111414" text-anchor="middle">frame copy</text>
+      <text x="690" y="80" font-size="10" fill="#111414" text-anchor="middle">tokens[:, 0]</text>
+      <rect x="740" y="48" width="140" height="40" fill="#e0a336"/>
+      <text x="810" y="65" font-size="11" fill="#111414" text-anchor="middle">patch copy</text>
+      <text x="810" y="80" font-size="10" fill="#111414" text-anchor="middle">tokens[:, 5:]</text>
+      <g stroke="#111414" stroke-width="1.3" fill="none">
+        <path d="M60,104 L60,110 L640,110 L640,104"/>
+        <path d="M60,134 L60,140 L740,140 L740,134"/>
+        <path d="M60,164 L60,170 L640,170 L640,164"/>
+        <path d="M740,164 L740,170 L880,170 L880,164"/>
+      </g>
+      <line x1="640" y1="170" x2="740" y2="170" stroke="#111414" stroke-width="1" stroke-dasharray="3 3"/>
+      <g font-size="12" fill="#111414">
+        <text x="70" y="126">device time = t1 − t0</text>
+        <text x="70" y="156">frame time = t2 − t0</text>
+        <text x="70" y="188">patch time = (t1 − t0) + (t3 − t2)</text>
+      </g>
+    </svg></div>
+    <figcaption><b>Figure 2.</b> One timed batch. The widths are not to scale: the device time is much longer than the two copies. The patch time leaves out the frame copy, so each output has its own host-to-host time. Plan Table 4 defines the four times.</figcaption>
+  </figure>
+  <p><code>summarize</code> turns the batch times of one output into three numbers. The throughput is batch size × timed batches / sum of the batch times. The median and the p90 of the batch times give the latency. On unified memory the copy to the host is cheap. Over the 255 "done" lines of the 94 W results, the throughput of the patch embeddings is 0.994 to 1.006 times the throughput of the frame embedding (own count from <code>results/baseline-torch-mps.jsonl</code>). So Section 7 uses the frame embedding rows only.</p>
+
+  <h3>5.3 The time budget</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Budget</th><th>Continue while</th><th>Time limit</th><th>Batches before the time limit can stop</th></tr></thead>
+      <tbody>
+        <tr><td><code>WARM_UP</code></td><td>fewer than 3 batches or less than 2 s</td><td>none</td><td>–</td></tr>
+        <tr><td><code>TIMED</code></td><td>fewer than 30 batches or less than 10 s</td><td>60 s</td><td>10</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 6.</b> The time budget (Table 5 of the plan). <code>keep_going</code> applies it after each batch. The elapsed time is the sum of the patch times, the longest of the three times. The first batch counts as neither warm-up nor timed: it holds the compile time of a compile row, and the validity check uses its output.</p>
+  <p>All 255 "done" lines of the 94 W results meet the time budget. The timed batches are 10 to 2,319 for each configuration, and the timed time is 10.0 to 103.4 s. 15 lines end at the 60 s limit. The time limit stops the timed batches only after 10 batches. So ViT-H+/16 at 512 px, batch size 32, fp32 (3.1 img/s, about 10 s for each batch) runs for more than 60 s.</p>
+
+  <h3>5.4 The input batch and the validity check</h3>
+  <p><code>make_batch</code> fills a batch with the stored pixels of the 3 test images at the input resolution, in the order of <code>TEST_IMAGES</code>, again and again. Batch size 8 gives the images 0, 1, 2, 0, 1, 2, 0, 1. Every timed batch is the same array.</p>
+  <p><code>check_validity</code> takes the frame embedding and the patch embeddings of image 0 of the first batch. The output is valid when all values are finite and the parity passes <code>THRESHOLDS</code> for the frame, the patch mean and the patch 1st percentile. A configuration with an output that is not valid still runs its timed batches. Its line has <code>"valid": false</code> and the reason, and it never becomes a baseline row. On 94 W, 12 lines are not valid, all with "non-finite output" (Surprise 5).</p>
+
+  <h3>5.5 The block profile: <code>time_part</code></h3>
+  <p>A synchronize after each part costs about 170 µs on <code>torch-mps</code>. Some parts take less (docstring of <code>block_profile.py</code>). So <code>profile_block</code> does not time a part between two synchronizes. It runs block 1 once and keeps the input tensors of each part. Then <code>time_part</code> runs each part alone in a loop with one synchronize at the end:</p>
+  <pre><code>def loop(n: int) -> float:
+    _synchronize(device)
+    start = time.perf_counter()
+    for _ in range(n):
+        fn()                         # the GPU queues n calls; the CPU does not wait
+    _synchronize(device)             # one wait for all n calls
+    return time.perf_counter() - start
+
+n, elapsed = 1, loop(1)
+while n < min_calls or elapsed < min_seconds:    # at least 20 calls and 0.5 s; also the warm-up
+    n = max(min_calls, math.ceil(1.2 * n * min_seconds / max(elapsed, 1e-9)), n + 1)
+    elapsed = loop(n)
+return statistics.median(loop(n) / n for _ in range(loops))   # median of 5 loops</code></pre>
+  <p><code>profile_block</code> times the whole block, the parts outside the blocks (patch embedding, RoPE tables, final layer norm) and the forward pass the same way. It times the forward pass before and after the parts (finding F4). A change between the two shows that the Mac ran faster or slower during the profile.</p>
+  <p>Two checks guard the split. The sum of the 11 part times must be within 15 % of the block time: 16 of 16 configurations pass (0.926 to 1.065). L × block time + the parts outside the blocks must be within 15 % of the forward pass: 11 of 16 configurations pass. The 5 others have small kernels: ViT-S/16 at 224 px, batch size 1 in fp32 (1.611) and fp16-cast (1.690), ViT-S/16 fp16-cast at 224 px, batch size 8 (1.342) and at 512 px, batch size 1 (1.252), and ViT-H+/16 fp16-cast at 224 px, batch size 1 (1.170). Surprise 3 explains them.</p>
+</section>
+
+<section id="shares">
+  <h2>6 The measured time share of each part</h2>
+  <p>B5 profiles block 1 of ViT-S/16 and ViT-H+/16 in fp32 and fp16-cast, at 224 and 512 px and at batch size 1 and 8: 16 configurations. B5 uses fp16-cast, not the fp16 baseline row. In block 1 the largest token value is below 100 for both model sizes, so fp16-cast does not overflow there. MLX has no autocast, so a cast mode is the direct match for the fp16 and bf16 dtype modes of <code>mlx</code> in Step 5. Step 4 has only the fp32 dtype mode of <code>mlx</code>.</p>
+  <p>The time share of a part is its time divided by the sum of the 11 part times. The FLOP share is its share of the block FLOPs, without the patch embedding. Figure 3 puts the 11 parts into five groups. Tables 7 and 8 give each part.</p>
+  <figure>
+    <div class="fig">
+<svg viewBox="0 0 960 688" role="img" aria-labelledby="fig3-title" font-family="-apple-system, Helvetica Neue, Arial, sans-serif">
+<title id="fig3-title">FLOP share and measured time share of the parts of block 1, ViT-S/16 and ViT-H+/16, grouped into five groups</title>
+<rect width="960" height="688" fill="#ffffff"/>
+<g font-size="12" fill="#111414">
+<rect x="20" y="12" width="14" height="14" fill="#057379"/>
+<text x="40" y="24">qkv_proj, o_proj</text>
+<rect x="162" y="12" width="14" height="14" fill="#9fd3d1"/>
+<text x="182" y="24">ff_in, ff_out</text>
+<rect x="285" y="12" width="14" height="14" fill="#e0a336"/>
+<text x="305" y="24">sdpa</text>
+<rect x="350" y="12" width="14" height="14" fill="#b03a2e"/>
+<text x="370" y="24">rope</text>
+<rect x="415" y="12" width="14" height="14" fill="#c3cccb"/>
+<text x="435" y="24">norm1, norm2, layer_scale1, layer_scale2, activation</text>
+</g>
+<text x="20" y="46" font-size="11" fill="#4a5655">qkv_proj, o_proj, ff_in, ff_out and sdpa have FLOPs. rope and the parts in grey count as 0 FLOPs. * = the forward pass changed by more than 3 % during the profile.</text>
+<text x="20" y="82" font-size="13" font-weight="600" fill="#111414">ViT-S/16: D = 384, MLP, 12 blocks</text>
+<line x1="250.0" x2="250.0" y1="88" y2="350" stroke="#e3e8e7" stroke-width="1"/>
+<text x="250.0" y="363" text-anchor="middle" font-size="10" fill="#4a5655">0 %</text>
+<line x1="420.0" x2="420.0" y1="88" y2="350" stroke="#e3e8e7" stroke-width="1"/>
+<text x="420.0" y="363" text-anchor="middle" font-size="10" fill="#4a5655">25 %</text>
+<line x1="590.0" x2="590.0" y1="88" y2="350" stroke="#e3e8e7" stroke-width="1"/>
+<text x="590.0" y="363" text-anchor="middle" font-size="10" fill="#4a5655">50 %</text>
+<line x1="760.0" x2="760.0" y1="88" y2="350" stroke="#e3e8e7" stroke-width="1"/>
+<text x="760.0" y="363" text-anchor="middle" font-size="10" fill="#4a5655">75 %</text>
+<line x1="930.0" x2="930.0" y1="88" y2="350" stroke="#e3e8e7" stroke-width="1"/>
+<text x="930.0" y="363" text-anchor="middle" font-size="10" fill="#4a5655">100 %</text>
+<text x="240" y="104.5" text-anchor="end" font-size="11.5" fill="#111414" font-weight="600">FLOP share, 224 px</text>
+<rect x="250.0" y="92" width="208.6" height="17" fill="#057379" stroke="#ffffff" stroke-width="0.6"><title>ViT-S/16, FLOP share, 224 px: qkv_proj, o_proj 30.7 % (FLOP share)</title></rect>
+<text x="354.3" y="104.5" text-anchor="middle" font-size="10.5" fill="#ffffff">30.7</text>
+<rect x="458.6" y="92" width="417.1" height="17" fill="#9fd3d1" stroke="#ffffff" stroke-width="0.6"><title>ViT-S/16, FLOP share, 224 px: ff_in, ff_out 61.3 % (FLOP share)</title></rect>
+<text x="667.1" y="104.5" text-anchor="middle" font-size="10.5" fill="#111414">61.3</text>
+<rect x="875.7" y="92" width="54.3" height="17" fill="#e0a336" stroke="#ffffff" stroke-width="0.6"><title>ViT-S/16, FLOP share, 224 px: sdpa 8.0 % (FLOP share)</title></rect>
+<text x="902.8" y="104.5" text-anchor="middle" font-size="10.5" fill="#111414">8.0</text>
+<text x="240" y="128.5" text-anchor="end" font-size="11.5" fill="#111414" font-weight="600">FLOP share, 512 px</text>
+<rect x="250.0" y="116" width="157.1" height="17" fill="#057379" stroke="#ffffff" stroke-width="0.6"><title>ViT-S/16, FLOP share, 512 px: qkv_proj, o_proj 23.0 % (FLOP share)</title></rect>
+<text x="328.5" y="128.5" text-anchor="middle" font-size="10.5" fill="#ffffff">23.0</text>
+<rect x="407.1" y="116" width="312.8" height="17" fill="#9fd3d1" stroke="#ffffff" stroke-width="0.6"><title>ViT-S/16, FLOP share, 512 px: ff_in, ff_out 46.1 % (FLOP share)</title></rect>
+<text x="563.5" y="128.5" text-anchor="middle" font-size="10.5" fill="#111414">46.1</text>
+<rect x="719.9" y="116" width="210.1" height="17" fill="#e0a336" stroke="#ffffff" stroke-width="0.6"><title>ViT-S/16, FLOP share, 512 px: sdpa 30.9 % (FLOP share)</title></rect>
+<text x="824.9" y="128.5" text-anchor="middle" font-size="10.5" fill="#111414">30.9</text>
+<text x="240" y="160.5" text-anchor="end" font-size="11.5" fill="#111414">fp32, 224 px, batch size 1</text>
+<rect x="250.0" y="148" width="224.2" height="17" fill="#057379" stroke="#ffffff" stroke-width="0.6"><title>ViT-S/16, fp32, 224 px, batch size 1: qkv_proj, o_proj 33.0 % (time share)</title></rect>
+<text x="362.1" y="160.5" text-anchor="middle" font-size="10.5" fill="#ffffff">33.0</text>
+<rect x="474.2" y="148" width="226.2" height="17" fill="#9fd3d1" stroke="#ffffff" stroke-width="0.6"><title>ViT-S/16, fp32, 224 px, batch size 1: ff_in, ff_out 33.3 % (time share)</title></rect>
+<text x="587.3" y="160.5" text-anchor="middle" font-size="10.5" fill="#111414">33.3</text>
+<rect x="700.4" y="148" width="44.2" height="17" fill="#e0a336" stroke="#ffffff" stroke-width="0.6"><title>ViT-S/16, fp32, 224 px, batch size 1: sdpa 6.5 % (time share)</title></rect>
+<text x="722.5" y="160.5" text-anchor="middle" font-size="10.5" fill="#111414">6.5</text>
+<rect x="744.5" y="148" width="122.3" height="17" fill="#b03a2e" stroke="#ffffff" stroke-width="0.6"><title>ViT-S/16, fp32, 224 px, batch size 1: rope 18.0 % (time share)</title></rect>
+<text x="805.7" y="160.5" text-anchor="middle" font-size="10.5" fill="#ffffff">18.0</text>
+<rect x="866.8" y="148" width="63.2" height="17" fill="#c3cccb" stroke="#ffffff" stroke-width="0.6"><title>ViT-S/16, fp32, 224 px, batch size 1: norm1, norm2, layer_scale1, layer_scale2, activation 9.2 % (time share)</title></rect>
+<text x="898.4" y="160.5" text-anchor="middle" font-size="10.5" fill="#111414">9.2</text>
+<text x="240" y="184.5" text-anchor="end" font-size="11.5" fill="#111414">fp32, 224 px, batch size 8</text>
+<rect x="250.0" y="172" width="171.9" height="17" fill="#057379" stroke="#ffffff" stroke-width="0.6"><title>ViT-S/16, fp32, 224 px, batch size 8: qkv_proj, o_proj 25.3 % (time share)</title></rect>
+<text x="335.9" y="184.5" text-anchor="middle" font-size="10.5" fill="#ffffff">25.3</text>
+<rect x="421.9" y="172" width="286.7" height="17" fill="#9fd3d1" stroke="#ffffff" stroke-width="0.6"><title>ViT-S/16, fp32, 224 px, batch size 8: ff_in, ff_out 42.2 % (time share)</title></rect>
+<text x="565.2" y="184.5" text-anchor="middle" font-size="10.5" fill="#111414">42.2</text>
+<rect x="708.5" y="172" width="52.3" height="17" fill="#e0a336" stroke="#ffffff" stroke-width="0.6"><title>ViT-S/16, fp32, 224 px, batch size 8: sdpa 7.7 % (time share)</title></rect>
+<text x="734.7" y="184.5" text-anchor="middle" font-size="10.5" fill="#111414">7.7</text>
+<rect x="760.8" y="172" width="101.9" height="17" fill="#b03a2e" stroke="#ffffff" stroke-width="0.6"><title>ViT-S/16, fp32, 224 px, batch size 8: rope 15.0 % (time share)</title></rect>
+<text x="811.8" y="184.5" text-anchor="middle" font-size="10.5" fill="#ffffff">15.0</text>
+<rect x="862.7" y="172" width="67.3" height="17" fill="#c3cccb" stroke="#ffffff" stroke-width="0.6"><title>ViT-S/16, fp32, 224 px, batch size 8: norm1, norm2, layer_scale1, layer_scale2, activation 9.8 % (time share)</title></rect>
+<text x="896.4" y="184.5" text-anchor="middle" font-size="10.5" fill="#111414">9.8</text>
+<text x="240" y="208.5" text-anchor="end" font-size="11.5" fill="#111414">fp32, 512 px, batch size 1</text>
+<rect x="250.0" y="196" width="148.4" height="17" fill="#057379" stroke="#ffffff" stroke-width="0.6"><title>ViT-S/16, fp32, 512 px, batch size 1: qkv_proj, o_proj 21.8 % (time share)</title></rect>
+<text x="324.2" y="208.5" text-anchor="middle" font-size="10.5" fill="#ffffff">21.8</text>
+<rect x="398.4" y="196" width="234.2" height="17" fill="#9fd3d1" stroke="#ffffff" stroke-width="0.6"><title>ViT-S/16, fp32, 512 px, batch size 1: ff_in, ff_out 34.4 % (time share)</title></rect>
+<text x="515.5" y="208.5" text-anchor="middle" font-size="10.5" fill="#111414">34.4</text>
+<rect x="632.5" y="196" width="170.2" height="17" fill="#e0a336" stroke="#ffffff" stroke-width="0.6"><title>ViT-S/16, fp32, 512 px, batch size 1: sdpa 25.0 % (time share)</title></rect>
+<text x="717.6" y="208.5" text-anchor="middle" font-size="10.5" fill="#111414">25.0</text>
+<rect x="802.7" y="196" width="74.2" height="17" fill="#b03a2e" stroke="#ffffff" stroke-width="0.6"><title>ViT-S/16, fp32, 512 px, batch size 1: rope 10.9 % (time share)</title></rect>
+<text x="839.8" y="208.5" text-anchor="middle" font-size="10.5" fill="#ffffff">10.9</text>
+<rect x="876.9" y="196" width="53.1" height="17" fill="#c3cccb" stroke="#ffffff" stroke-width="0.6"><title>ViT-S/16, fp32, 512 px, batch size 1: norm1, norm2, layer_scale1, layer_scale2, activation 7.9 % (time share)</title></rect>
+<text x="903.5" y="208.5" text-anchor="middle" font-size="10.5" fill="#111414">7.9</text>
+<text x="240" y="232.5" text-anchor="end" font-size="11.5" fill="#111414">fp32, 512 px, batch size 8 *</text>
+<rect x="250.0" y="220" width="119.2" height="17" fill="#057379" stroke="#ffffff" stroke-width="0.6"><title>ViT-S/16, fp32, 512 px, batch size 8: qkv_proj, o_proj 17.6 % (time share)</title></rect>
+<text x="309.6" y="232.5" text-anchor="middle" font-size="10.5" fill="#ffffff">17.6</text>
+<rect x="369.2" y="220" width="220.1" height="17" fill="#9fd3d1" stroke="#ffffff" stroke-width="0.6"><title>ViT-S/16, fp32, 512 px, batch size 8: ff_in, ff_out 32.4 % (time share)</title></rect>
+<text x="479.3" y="232.5" text-anchor="middle" font-size="10.5" fill="#111414">32.4</text>
+<rect x="589.3" y="220" width="175.8" height="17" fill="#e0a336" stroke="#ffffff" stroke-width="0.6"><title>ViT-S/16, fp32, 512 px, batch size 8: sdpa 25.8 % (time share)</title></rect>
+<text x="677.2" y="232.5" text-anchor="middle" font-size="10.5" fill="#111414">25.8</text>
+<rect x="765.1" y="220" width="92.7" height="17" fill="#b03a2e" stroke="#ffffff" stroke-width="0.6"><title>ViT-S/16, fp32, 512 px, batch size 8: rope 13.6 % (time share)</title></rect>
+<text x="811.4" y="232.5" text-anchor="middle" font-size="10.5" fill="#ffffff">13.6</text>
+<rect x="857.8" y="220" width="72.2" height="17" fill="#c3cccb" stroke="#ffffff" stroke-width="0.6"><title>ViT-S/16, fp32, 512 px, batch size 8: norm1, norm2, layer_scale1, layer_scale2, activation 10.6 % (time share)</title></rect>
+<text x="893.9" y="232.5" text-anchor="middle" font-size="10.5" fill="#111414">10.6</text>
+<text x="240" y="264.5" text-anchor="end" font-size="11.5" fill="#111414">fp16-cast, 224 px, batch size 1</text>
+<rect x="250.0" y="252" width="250.0" height="17" fill="#057379" stroke="#ffffff" stroke-width="0.6"><title>ViT-S/16, fp16-cast, 224 px, batch size 1: qkv_proj, o_proj 36.9 % (time share)</title></rect>
+<text x="375.0" y="264.5" text-anchor="middle" font-size="10.5" fill="#ffffff">36.9</text>
+<rect x="500.0" y="252" width="167.1" height="17" fill="#9fd3d1" stroke="#ffffff" stroke-width="0.6"><title>ViT-S/16, fp16-cast, 224 px, batch size 1: ff_in, ff_out 24.5 % (time share)</title></rect>
+<text x="583.5" y="264.5" text-anchor="middle" font-size="10.5" fill="#111414">24.5</text>
+<rect x="667.1" y="252" width="26.5" height="17" fill="#e0a336" stroke="#ffffff" stroke-width="0.6"><title>ViT-S/16, fp16-cast, 224 px, batch size 1: sdpa 3.9 % (time share)</title></rect>
+<rect x="693.6" y="252" width="157.6" height="17" fill="#b03a2e" stroke="#ffffff" stroke-width="0.6"><title>ViT-S/16, fp16-cast, 224 px, batch size 1: rope 23.2 % (time share)</title></rect>
+<text x="772.4" y="264.5" text-anchor="middle" font-size="10.5" fill="#ffffff">23.2</text>
+<rect x="851.2" y="252" width="78.8" height="17" fill="#c3cccb" stroke="#ffffff" stroke-width="0.6"><title>ViT-S/16, fp16-cast, 224 px, batch size 1: norm1, norm2, layer_scale1, layer_scale2, activation 11.6 % (time share)</title></rect>
+<text x="890.6" y="264.5" text-anchor="middle" font-size="10.5" fill="#111414">11.6</text>
+<text x="240" y="288.5" text-anchor="end" font-size="11.5" fill="#111414">fp16-cast, 224 px, batch size 8 *</text>
+<rect x="250.0" y="276" width="146.3" height="17" fill="#057379" stroke="#ffffff" stroke-width="0.6"><title>ViT-S/16, fp16-cast, 224 px, batch size 8: qkv_proj, o_proj 21.5 % (time share)</title></rect>
+<text x="323.2" y="288.5" text-anchor="middle" font-size="10.5" fill="#ffffff">21.5</text>
+<rect x="396.3" y="276" width="170.2" height="17" fill="#9fd3d1" stroke="#ffffff" stroke-width="0.6"><title>ViT-S/16, fp16-cast, 224 px, batch size 8: ff_in, ff_out 25.0 % (time share)</title></rect>
+<text x="481.4" y="288.5" text-anchor="middle" font-size="10.5" fill="#111414">25.0</text>
+<rect x="566.5" y="276" width="34.7" height="17" fill="#e0a336" stroke="#ffffff" stroke-width="0.6"><title>ViT-S/16, fp16-cast, 224 px, batch size 8: sdpa 5.1 % (time share)</title></rect>
+<text x="583.9" y="288.5" text-anchor="middle" font-size="10.5" fill="#111414">5.1</text>
+<rect x="601.2" y="276" width="207.6" height="17" fill="#b03a2e" stroke="#ffffff" stroke-width="0.6"><title>ViT-S/16, fp16-cast, 224 px, batch size 8: rope 30.5 % (time share)</title></rect>
+<text x="705.0" y="288.5" text-anchor="middle" font-size="10.5" fill="#ffffff">30.5</text>
+<rect x="808.8" y="276" width="121.2" height="17" fill="#c3cccb" stroke="#ffffff" stroke-width="0.6"><title>ViT-S/16, fp16-cast, 224 px, batch size 8: norm1, norm2, layer_scale1, layer_scale2, activation 17.9 % (time share)</title></rect>
+<text x="869.4" y="288.5" text-anchor="middle" font-size="10.5" fill="#111414">17.9</text>
+<text x="240" y="312.5" text-anchor="end" font-size="11.5" fill="#111414">fp16-cast, 512 px, batch size 1</text>
+<rect x="250.0" y="300" width="161.3" height="17" fill="#057379" stroke="#ffffff" stroke-width="0.6"><title>ViT-S/16, fp16-cast, 512 px, batch size 1: qkv_proj, o_proj 23.8 % (time share)</title></rect>
+<text x="330.7" y="312.5" text-anchor="middle" font-size="10.5" fill="#ffffff">23.8</text>
+<rect x="411.3" y="300" width="159.3" height="17" fill="#9fd3d1" stroke="#ffffff" stroke-width="0.6"><title>ViT-S/16, fp16-cast, 512 px, batch size 1: ff_in, ff_out 23.4 % (time share)</title></rect>
+<text x="491.0" y="312.5" text-anchor="middle" font-size="10.5" fill="#111414">23.4</text>
+<rect x="570.6" y="300" width="97.3" height="17" fill="#e0a336" stroke="#ffffff" stroke-width="0.6"><title>ViT-S/16, fp16-cast, 512 px, batch size 1: sdpa 14.3 % (time share)</title></rect>
+<text x="619.3" y="312.5" text-anchor="middle" font-size="10.5" fill="#111414">14.3</text>
+<rect x="667.9" y="300" width="159.3" height="17" fill="#b03a2e" stroke="#ffffff" stroke-width="0.6"><title>ViT-S/16, fp16-cast, 512 px, batch size 1: rope 23.4 % (time share)</title></rect>
+<text x="747.6" y="312.5" text-anchor="middle" font-size="10.5" fill="#ffffff">23.4</text>
+<rect x="827.2" y="300" width="102.8" height="17" fill="#c3cccb" stroke="#ffffff" stroke-width="0.6"><title>ViT-S/16, fp16-cast, 512 px, batch size 1: norm1, norm2, layer_scale1, layer_scale2, activation 15.1 % (time share)</title></rect>
+<text x="878.6" y="312.5" text-anchor="middle" font-size="10.5" fill="#111414">15.1</text>
+<text x="240" y="336.5" text-anchor="end" font-size="11.5" fill="#111414">fp16-cast, 512 px, batch size 8 *</text>
+<rect x="250.0" y="324" width="91.8" height="17" fill="#057379" stroke="#ffffff" stroke-width="0.6"><title>ViT-S/16, fp16-cast, 512 px, batch size 8: qkv_proj, o_proj 13.5 % (time share)</title></rect>
+<text x="295.9" y="336.5" text-anchor="middle" font-size="10.5" fill="#ffffff">13.5</text>
+<rect x="341.8" y="324" width="148.9" height="17" fill="#9fd3d1" stroke="#ffffff" stroke-width="0.6"><title>ViT-S/16, fp16-cast, 512 px, batch size 8: ff_in, ff_out 22.0 % (time share)</title></rect>
+<text x="416.3" y="336.5" text-anchor="middle" font-size="10.5" fill="#111414">22.0</text>
+<rect x="490.7" y="324" width="121.0" height="17" fill="#e0a336" stroke="#ffffff" stroke-width="0.6"><title>ViT-S/16, fp16-cast, 512 px, batch size 8: sdpa 17.8 % (time share)</title></rect>
+<text x="551.2" y="336.5" text-anchor="middle" font-size="10.5" fill="#111414">17.8</text>
+<rect x="611.8" y="324" width="185.0" height="17" fill="#b03a2e" stroke="#ffffff" stroke-width="0.6"><title>ViT-S/16, fp16-cast, 512 px, batch size 8: rope 27.2 % (time share)</title></rect>
+<text x="704.2" y="336.5" text-anchor="middle" font-size="10.5" fill="#ffffff">27.2</text>
+<rect x="796.7" y="324" width="133.3" height="17" fill="#c3cccb" stroke="#ffffff" stroke-width="0.6"><title>ViT-S/16, fp16-cast, 512 px, batch size 8: norm1, norm2, layer_scale1, layer_scale2, activation 19.5 % (time share)</title></rect>
+<text x="863.4" y="336.5" text-anchor="middle" font-size="10.5" fill="#111414">19.5</text>
+<text x="20" y="396" font-size="13" font-weight="600" fill="#111414">ViT-H+/16: D = 1280, SwiGLU, 32 blocks</text>
+<line x1="250.0" x2="250.0" y1="402" y2="664" stroke="#e3e8e7" stroke-width="1"/>
+<text x="250.0" y="677" text-anchor="middle" font-size="10" fill="#4a5655">0 %</text>
+<line x1="420.0" x2="420.0" y1="402" y2="664" stroke="#e3e8e7" stroke-width="1"/>
+<text x="420.0" y="677" text-anchor="middle" font-size="10" fill="#4a5655">25 %</text>
+<line x1="590.0" x2="590.0" y1="402" y2="664" stroke="#e3e8e7" stroke-width="1"/>
+<text x="590.0" y="677" text-anchor="middle" font-size="10" fill="#4a5655">50 %</text>
+<line x1="760.0" x2="760.0" y1="402" y2="664" stroke="#e3e8e7" stroke-width="1"/>
+<text x="760.0" y="677" text-anchor="middle" font-size="10" fill="#4a5655">75 %</text>
+<line x1="930.0" x2="930.0" y1="402" y2="664" stroke="#e3e8e7" stroke-width="1"/>
+<text x="930.0" y="677" text-anchor="middle" font-size="10" fill="#4a5655">100 %</text>
+<text x="240" y="418.5" text-anchor="end" font-size="11.5" fill="#111414" font-weight="600">FLOP share, 224 px</text>
+<rect x="250.0" y="406" width="166.8" height="17" fill="#057379" stroke="#ffffff" stroke-width="0.6"><title>ViT-H+/16, FLOP share, 224 px: qkv_proj, o_proj 24.5 % (FLOP share)</title></rect>
+<text x="333.4" y="418.5" text-anchor="middle" font-size="10.5" fill="#ffffff">24.5</text>
+<rect x="416.8" y="406" width="500.3" height="17" fill="#9fd3d1" stroke="#ffffff" stroke-width="0.6"><title>ViT-H+/16, FLOP share, 224 px: ff_in, ff_out 73.6 % (FLOP share)</title></rect>
+<text x="666.9" y="418.5" text-anchor="middle" font-size="10.5" fill="#111414">73.6</text>
+<rect x="917.1" y="406" width="12.9" height="17" fill="#e0a336" stroke="#ffffff" stroke-width="0.6"><title>ViT-H+/16, FLOP share, 224 px: sdpa 1.9 % (FLOP share)</title></rect>
+<text x="240" y="442.5" text-anchor="end" font-size="11.5" fill="#111414" font-weight="600">FLOP share, 512 px</text>
+<rect x="250.0" y="430" width="154.5" height="17" fill="#057379" stroke="#ffffff" stroke-width="0.6"><title>ViT-H+/16, FLOP share, 512 px: qkv_proj, o_proj 22.7 % (FLOP share)</title></rect>
+<text x="327.3" y="442.5" text-anchor="middle" font-size="10.5" fill="#ffffff">22.7</text>
+<rect x="404.5" y="430" width="463.5" height="17" fill="#9fd3d1" stroke="#ffffff" stroke-width="0.6"><title>ViT-H+/16, FLOP share, 512 px: ff_in, ff_out 68.2 % (FLOP share)</title></rect>
+<text x="636.3" y="442.5" text-anchor="middle" font-size="10.5" fill="#111414">68.2</text>
+<rect x="868.1" y="430" width="61.9" height="17" fill="#e0a336" stroke="#ffffff" stroke-width="0.6"><title>ViT-H+/16, FLOP share, 512 px: sdpa 9.1 % (FLOP share)</title></rect>
+<text x="899.0" y="442.5" text-anchor="middle" font-size="10.5" fill="#111414">9.1</text>
+<text x="240" y="474.5" text-anchor="end" font-size="11.5" fill="#111414">fp32, 224 px, batch size 1 *</text>
+<rect x="250.0" y="462" width="162.5" height="17" fill="#057379" stroke="#ffffff" stroke-width="0.6"><title>ViT-H+/16, fp32, 224 px, batch size 1: qkv_proj, o_proj 23.9 % (time share)</title></rect>
+<text x="331.3" y="474.5" text-anchor="middle" font-size="10.5" fill="#ffffff">23.9</text>
+<rect x="412.5" y="462" width="441.3" height="17" fill="#9fd3d1" stroke="#ffffff" stroke-width="0.6"><title>ViT-H+/16, fp32, 224 px, batch size 1: ff_in, ff_out 64.9 % (time share)</title></rect>
+<text x="633.2" y="474.5" text-anchor="middle" font-size="10.5" fill="#111414">64.9</text>
+<rect x="853.8" y="462" width="16.3" height="17" fill="#e0a336" stroke="#ffffff" stroke-width="0.6"><title>ViT-H+/16, fp32, 224 px, batch size 1: sdpa 2.4 % (time share)</title></rect>
+<rect x="870.2" y="462" width="34.0" height="17" fill="#b03a2e" stroke="#ffffff" stroke-width="0.6"><title>ViT-H+/16, fp32, 224 px, batch size 1: rope 5.0 % (time share)</title></rect>
+<text x="887.2" y="474.5" text-anchor="middle" font-size="10.5" fill="#ffffff">5.0</text>
+<rect x="904.2" y="462" width="25.8" height="17" fill="#c3cccb" stroke="#ffffff" stroke-width="0.6"><title>ViT-H+/16, fp32, 224 px, batch size 1: norm1, norm2, layer_scale1, layer_scale2, activation 3.8 % (time share)</title></rect>
+<text x="240" y="498.5" text-anchor="end" font-size="11.5" fill="#111414">fp32, 224 px, batch size 8</text>
+<rect x="250.0" y="486" width="150.8" height="17" fill="#057379" stroke="#ffffff" stroke-width="0.6"><title>ViT-H+/16, fp32, 224 px, batch size 8: qkv_proj, o_proj 22.2 % (time share)</title></rect>
+<text x="325.4" y="498.5" text-anchor="middle" font-size="10.5" fill="#ffffff">22.2</text>
+<rect x="400.8" y="486" width="435.4" height="17" fill="#9fd3d1" stroke="#ffffff" stroke-width="0.6"><title>ViT-H+/16, fp32, 224 px, batch size 8: ff_in, ff_out 64.1 % (time share)</title></rect>
+<text x="618.5" y="498.5" text-anchor="middle" font-size="10.5" fill="#111414">64.1</text>
+<rect x="836.3" y="486" width="17.7" height="17" fill="#e0a336" stroke="#ffffff" stroke-width="0.6"><title>ViT-H+/16, fp32, 224 px, batch size 8: sdpa 2.6 % (time share)</title></rect>
+<rect x="853.9" y="486" width="38.7" height="17" fill="#b03a2e" stroke="#ffffff" stroke-width="0.6"><title>ViT-H+/16, fp32, 224 px, batch size 8: rope 5.7 % (time share)</title></rect>
+<text x="873.3" y="498.5" text-anchor="middle" font-size="10.5" fill="#ffffff">5.7</text>
+<rect x="892.6" y="486" width="37.4" height="17" fill="#c3cccb" stroke="#ffffff" stroke-width="0.6"><title>ViT-H+/16, fp32, 224 px, batch size 8: norm1, norm2, layer_scale1, layer_scale2, activation 5.4 % (time share)</title></rect>
+<text x="911.3" y="498.5" text-anchor="middle" font-size="10.5" fill="#111414">5.4</text>
+<text x="240" y="522.5" text-anchor="end" font-size="11.5" fill="#111414">fp32, 512 px, batch size 1</text>
+<rect x="250.0" y="510" width="142.0" height="17" fill="#057379" stroke="#ffffff" stroke-width="0.6"><title>ViT-H+/16, fp32, 512 px, batch size 1: qkv_proj, o_proj 20.8 % (time share)</title></rect>
+<text x="321.0" y="522.5" text-anchor="middle" font-size="10.5" fill="#ffffff">20.8</text>
+<rect x="392.0" y="510" width="412.3" height="17" fill="#9fd3d1" stroke="#ffffff" stroke-width="0.6"><title>ViT-H+/16, fp32, 512 px, batch size 1: ff_in, ff_out 60.7 % (time share)</title></rect>
+<text x="598.2" y="522.5" text-anchor="middle" font-size="10.5" fill="#111414">60.7</text>
+<rect x="804.3" y="510" width="66.6" height="17" fill="#e0a336" stroke="#ffffff" stroke-width="0.6"><title>ViT-H+/16, fp32, 512 px, batch size 1: sdpa 9.8 % (time share)</title></rect>
+<text x="837.6" y="522.5" text-anchor="middle" font-size="10.5" fill="#111414">9.8</text>
+<rect x="870.9" y="510" width="27.9" height="17" fill="#b03a2e" stroke="#ffffff" stroke-width="0.6"><title>ViT-H+/16, fp32, 512 px, batch size 1: rope 4.1 % (time share)</title></rect>
+<rect x="898.8" y="510" width="31.2" height="17" fill="#c3cccb" stroke="#ffffff" stroke-width="0.6"><title>ViT-H+/16, fp32, 512 px, batch size 1: norm1, norm2, layer_scale1, layer_scale2, activation 4.6 % (time share)</title></rect>
+<text x="914.4" y="522.5" text-anchor="middle" font-size="10.5" fill="#111414">4.6</text>
+<text x="240" y="546.5" text-anchor="end" font-size="11.5" fill="#111414">fp32, 512 px, batch size 8</text>
+<rect x="250.0" y="534" width="131.1" height="17" fill="#057379" stroke="#ffffff" stroke-width="0.6"><title>ViT-H+/16, fp32, 512 px, batch size 8: qkv_proj, o_proj 19.3 % (time share)</title></rect>
+<text x="315.6" y="546.5" text-anchor="middle" font-size="10.5" fill="#ffffff">19.3</text>
+<rect x="381.1" y="534" width="409.0" height="17" fill="#9fd3d1" stroke="#ffffff" stroke-width="0.6"><title>ViT-H+/16, fp32, 512 px, batch size 8: ff_in, ff_out 60.1 % (time share)</title></rect>
+<text x="585.6" y="546.5" text-anchor="middle" font-size="10.5" fill="#111414">60.1</text>
+<rect x="790.1" y="534" width="66.6" height="17" fill="#e0a336" stroke="#ffffff" stroke-width="0.6"><title>ViT-H+/16, fp32, 512 px, batch size 8: sdpa 9.8 % (time share)</title></rect>
+<text x="823.3" y="546.5" text-anchor="middle" font-size="10.5" fill="#111414">9.8</text>
+<rect x="856.6" y="534" width="36.7" height="17" fill="#b03a2e" stroke="#ffffff" stroke-width="0.6"><title>ViT-H+/16, fp32, 512 px, batch size 8: rope 5.4 % (time share)</title></rect>
+<text x="875.0" y="546.5" text-anchor="middle" font-size="10.5" fill="#ffffff">5.4</text>
+<rect x="893.3" y="534" width="36.7" height="17" fill="#c3cccb" stroke="#ffffff" stroke-width="0.6"><title>ViT-H+/16, fp32, 512 px, batch size 8: norm1, norm2, layer_scale1, layer_scale2, activation 5.4 % (time share)</title></rect>
+<text x="911.7" y="546.5" text-anchor="middle" font-size="10.5" fill="#111414">5.4</text>
+<text x="240" y="578.5" text-anchor="end" font-size="11.5" fill="#111414">fp16-cast, 224 px, batch size 1</text>
+<rect x="250.0" y="566" width="162.0" height="17" fill="#057379" stroke="#ffffff" stroke-width="0.6"><title>ViT-H+/16, fp16-cast, 224 px, batch size 1: qkv_proj, o_proj 23.8 % (time share)</title></rect>
+<text x="331.0" y="578.5" text-anchor="middle" font-size="10.5" fill="#ffffff">23.8</text>
+<rect x="412.0" y="566" width="349.9" height="17" fill="#9fd3d1" stroke="#ffffff" stroke-width="0.6"><title>ViT-H+/16, fp16-cast, 224 px, batch size 1: ff_in, ff_out 51.4 % (time share)</title></rect>
+<text x="586.9" y="578.5" text-anchor="middle" font-size="10.5" fill="#111414">51.4</text>
+<rect x="761.9" y="566" width="16.3" height="17" fill="#e0a336" stroke="#ffffff" stroke-width="0.6"><title>ViT-H+/16, fp16-cast, 224 px, batch size 1: sdpa 2.4 % (time share)</title></rect>
+<rect x="778.2" y="566" width="96.7" height="17" fill="#b03a2e" stroke="#ffffff" stroke-width="0.6"><title>ViT-H+/16, fp16-cast, 224 px, batch size 1: rope 14.2 % (time share)</title></rect>
+<text x="826.5" y="578.5" text-anchor="middle" font-size="10.5" fill="#ffffff">14.2</text>
+<rect x="874.9" y="566" width="55.1" height="17" fill="#c3cccb" stroke="#ffffff" stroke-width="0.6"><title>ViT-H+/16, fp16-cast, 224 px, batch size 1: norm1, norm2, layer_scale1, layer_scale2, activation 8.2 % (time share)</title></rect>
+<text x="902.4" y="578.5" text-anchor="middle" font-size="10.5" fill="#111414">8.2</text>
+<text x="240" y="602.5" text-anchor="end" font-size="11.5" fill="#111414">fp16-cast, 224 px, batch size 8</text>
+<rect x="250.0" y="590" width="128.5" height="17" fill="#057379" stroke="#ffffff" stroke-width="0.6"><title>ViT-H+/16, fp16-cast, 224 px, batch size 8: qkv_proj, o_proj 18.9 % (time share)</title></rect>
+<text x="314.3" y="602.5" text-anchor="middle" font-size="10.5" fill="#ffffff">18.9</text>
+<rect x="378.5" y="590" width="367.2" height="17" fill="#9fd3d1" stroke="#ffffff" stroke-width="0.6"><title>ViT-H+/16, fp16-cast, 224 px, batch size 8: ff_in, ff_out 54.1 % (time share)</title></rect>
+<text x="562.1" y="602.5" text-anchor="middle" font-size="10.5" fill="#111414">54.1</text>
+<rect x="745.7" y="590" width="17.0" height="17" fill="#e0a336" stroke="#ffffff" stroke-width="0.6"><title>ViT-H+/16, fp16-cast, 224 px, batch size 8: sdpa 2.5 % (time share)</title></rect>
+<rect x="762.7" y="590" width="93.8" height="17" fill="#b03a2e" stroke="#ffffff" stroke-width="0.6"><title>ViT-H+/16, fp16-cast, 224 px, batch size 8: rope 13.8 % (time share)</title></rect>
+<text x="809.6" y="602.5" text-anchor="middle" font-size="10.5" fill="#ffffff">13.8</text>
+<rect x="856.6" y="590" width="73.4" height="17" fill="#c3cccb" stroke="#ffffff" stroke-width="0.6"><title>ViT-H+/16, fp16-cast, 224 px, batch size 8: norm1, norm2, layer_scale1, layer_scale2, activation 10.7 % (time share)</title></rect>
+<text x="893.3" y="602.5" text-anchor="middle" font-size="10.5" fill="#111414">10.7</text>
+<text x="240" y="626.5" text-anchor="end" font-size="11.5" fill="#111414">fp16-cast, 512 px, batch size 1</text>
+<rect x="250.0" y="614" width="128.6" height="17" fill="#057379" stroke="#ffffff" stroke-width="0.6"><title>ViT-H+/16, fp16-cast, 512 px, batch size 1: qkv_proj, o_proj 19.0 % (time share)</title></rect>
+<text x="314.3" y="626.5" text-anchor="middle" font-size="10.5" fill="#ffffff">19.0</text>
+<rect x="378.6" y="614" width="355.3" height="17" fill="#9fd3d1" stroke="#ffffff" stroke-width="0.6"><title>ViT-H+/16, fp16-cast, 512 px, batch size 1: ff_in, ff_out 52.2 % (time share)</title></rect>
+<text x="556.3" y="626.5" text-anchor="middle" font-size="10.5" fill="#111414">52.2</text>
+<rect x="734.0" y="614" width="57.2" height="17" fill="#e0a336" stroke="#ffffff" stroke-width="0.6"><title>ViT-H+/16, fp16-cast, 512 px, batch size 1: sdpa 8.4 % (time share)</title></rect>
+<text x="762.6" y="626.5" text-anchor="middle" font-size="10.5" fill="#111414">8.4</text>
+<rect x="791.1" y="614" width="75.6" height="17" fill="#b03a2e" stroke="#ffffff" stroke-width="0.6"><title>ViT-H+/16, fp16-cast, 512 px, batch size 1: rope 11.1 % (time share)</title></rect>
+<text x="828.9" y="626.5" text-anchor="middle" font-size="10.5" fill="#ffffff">11.1</text>
+<rect x="866.7" y="614" width="63.3" height="17" fill="#c3cccb" stroke="#ffffff" stroke-width="0.6"><title>ViT-H+/16, fp16-cast, 512 px, batch size 1: norm1, norm2, layer_scale1, layer_scale2, activation 9.3 % (time share)</title></rect>
+<text x="898.3" y="626.5" text-anchor="middle" font-size="10.5" fill="#111414">9.3</text>
+<text x="240" y="650.5" text-anchor="end" font-size="11.5" fill="#111414">fp16-cast, 512 px, batch size 8</text>
+<rect x="250.0" y="638" width="110.6" height="17" fill="#057379" stroke="#ffffff" stroke-width="0.6"><title>ViT-H+/16, fp16-cast, 512 px, batch size 8: qkv_proj, o_proj 16.2 % (time share)</title></rect>
+<text x="305.3" y="650.5" text-anchor="middle" font-size="10.5" fill="#ffffff">16.2</text>
+<rect x="360.6" y="638" width="346.8" height="17" fill="#9fd3d1" stroke="#ffffff" stroke-width="0.6"><title>ViT-H+/16, fp16-cast, 512 px, batch size 8: ff_in, ff_out 51.1 % (time share)</title></rect>
+<text x="534.0" y="650.5" text-anchor="middle" font-size="10.5" fill="#111414">51.1</text>
+<rect x="707.4" y="638" width="55.6" height="17" fill="#e0a336" stroke="#ffffff" stroke-width="0.6"><title>ViT-H+/16, fp16-cast, 512 px, batch size 8: sdpa 8.2 % (time share)</title></rect>
+<text x="735.2" y="650.5" text-anchor="middle" font-size="10.5" fill="#111414">8.2</text>
+<rect x="763.1" y="638" width="87.5" height="17" fill="#b03a2e" stroke="#ffffff" stroke-width="0.6"><title>ViT-H+/16, fp16-cast, 512 px, batch size 8: rope 12.9 % (time share)</title></rect>
+<text x="806.8" y="650.5" text-anchor="middle" font-size="10.5" fill="#ffffff">12.9</text>
+<rect x="850.6" y="638" width="79.4" height="17" fill="#c3cccb" stroke="#ffffff" stroke-width="0.6"><title>ViT-H+/16, fp16-cast, 512 px, batch size 8: norm1, norm2, layer_scale1, layer_scale2, activation 11.6 % (time share)</title></rect>
+<text x="890.3" y="650.5" text-anchor="middle" font-size="10.5" fill="#111414">11.6</text>
+</svg>
+    </div>
+    <figcaption><b>Figure 3.</b> FLOP share (the first two bars of each panel) and measured time share (the other bars) of block 1, in five groups. Each bar adds up to 100 %. The numbers are the share of the group in %. Hover over a segment to see its value. The FLOP share does not depend on the batch size or the dtype mode. A large grey and red part at the right end of a time bar is time without FLOPs.</figcaption>
+  </figure>
+
+  <h3>6.1 The time share of each part</h3>
+  <div class="table-wrap">
+    <table class="dense">
+      <thead>
+        <tr><th rowspan="2">Part</th><th colspan="4" class="group">fp32: time share (%)</th><th colspan="4" class="group">fp16-cast: time share (%)</th><th colspan="2" class="group">FLOP share (%)</th></tr>
+        <tr><th class="num">224 b1</th><th class="num">224 b8</th><th class="num">512 b1</th><th class="num">512 b8 *</th><th class="num">224 b1</th><th class="num">224 b8 *</th><th class="num">512 b1</th><th class="num">512 b8 *</th><th class="num">224 px</th><th class="num">512 px</th></tr>
+      </thead>
+      <tbody>
+<tr><td><code>norm1</code></td><td class="num">1.7</td><td class="num">0.9</td><td class="num">0.8</td><td class="num">0.6</td><td class="num">2.1</td><td class="num">1.8</td><td class="num">1.8</td><td class="num">1.4</td><td class="num">0.0</td><td class="num">0.0</td></tr>
+<tr><td><code>qkv_proj</code></td><td class="num">22.7</td><td class="num">18.3</td><td class="num">15.7</td><td class="num">12.7</td><td class="num">25.2</td><td class="num">14.5</td><td class="num">16.2</td><td class="num">9.3</td><td class="num">23.0</td><td class="num">17.3</td></tr>
+<tr><td><code>rope</code></td><td class="num">18.0</td><td class="num">15.0</td><td class="num">10.9</td><td class="num">13.6</td><td class="num">23.2</td><td class="num">30.5</td><td class="num">23.4</td><td class="num">27.2</td><td class="num">0.0</td><td class="num">0.0</td></tr>
+<tr><td><code>sdpa</code></td><td class="num">6.5</td><td class="num">7.7</td><td class="num">25.0</td><td class="num">25.8</td><td class="num">3.9</td><td class="num">5.1</td><td class="num">14.3</td><td class="num">17.8</td><td class="num">8.0</td><td class="num">30.9</td></tr>
+<tr><td><code>o_proj</code></td><td class="num">10.3</td><td class="num">7.0</td><td class="num">6.1</td><td class="num">4.8</td><td class="num">11.6</td><td class="num">7.0</td><td class="num">7.5</td><td class="num">4.2</td><td class="num">7.7</td><td class="num">5.8</td></tr>
+<tr><td><code>layer_scale1</code></td><td class="num">2.4</td><td class="num">3.1</td><td class="num">2.3</td><td class="num">3.4</td><td class="num">3.0</td><td class="num">5.8</td><td class="num">4.6</td><td class="num">6.4</td><td class="num">0.0</td><td class="num">0.0</td></tr>
+<tr><td><code>norm2</code></td><td class="num">1.7</td><td class="num">0.9</td><td class="num">0.8</td><td class="num">0.6</td><td class="num">2.1</td><td class="num">1.8</td><td class="num">1.7</td><td class="num">1.4</td><td class="num">0.0</td><td class="num">0.0</td></tr>
+<tr><td><code>ff_in</code></td><td class="num">14.0</td><td class="num">20.1</td><td class="num">16.6</td><td class="num">15.8</td><td class="num">10.6</td><td class="num">12.8</td><td class="num">11.9</td><td class="num">10.9</td><td class="num">30.7</td><td class="num">23.0</td></tr>
+<tr><td><code>activation</code></td><td class="num">1.2</td><td class="num">2.0</td><td class="num">1.6</td><td class="num">2.8</td><td class="num">1.5</td><td class="num">2.6</td><td class="num">2.1</td><td class="num">3.6</td><td class="num">0.0</td><td class="num">0.0</td></tr>
+<tr><td><code>ff_out</code></td><td class="num">19.3</td><td class="num">22.1</td><td class="num">17.8</td><td class="num">16.5</td><td class="num">14.0</td><td class="num">12.2</td><td class="num">11.5</td><td class="num">11.0</td><td class="num">30.7</td><td class="num">23.0</td></tr>
+<tr><td><code>layer_scale2</code></td><td class="num">2.3</td><td class="num">3.0</td><td class="num">2.3</td><td class="num">3.2</td><td class="num">2.9</td><td class="num">5.8</td><td class="num">4.9</td><td class="num">6.8</td><td class="num">0.0</td><td class="num">0.0</td></tr>
+<tr><td><b>block (µs)</b></td><td class="num">359</td><td class="num">1,298</td><td class="num">1,058</td><td class="num">7,254</td><td class="num">289</td><td class="num">576</td><td class="num">467</td><td class="num">3,073</td><td></td><td></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 7.</b> ViT-S/16 (MLP). Time share of each part of block 1 in B5, and the FLOP share. "224 b1" is 224 px at batch size 1. The last row is the time of the whole block. * marks a configuration whose forward pass changed by more than 3 % during the profile (Table 11).</p>
+  <div class="table-wrap">
+    <table class="dense">
+      <thead>
+        <tr><th rowspan="2">Part</th><th colspan="4" class="group">fp32: time share (%)</th><th colspan="4" class="group">fp16-cast: time share (%)</th><th colspan="2" class="group">FLOP share (%)</th></tr>
+        <tr><th class="num">224 b1 *</th><th class="num">224 b8</th><th class="num">512 b1</th><th class="num">512 b8</th><th class="num">224 b1</th><th class="num">224 b8</th><th class="num">512 b1</th><th class="num">512 b8</th><th class="num">224 px</th><th class="num">512 px</th></tr>
+      </thead>
+      <tbody>
+<tr><td><code>norm1</code></td><td class="num">0.4</td><td class="num">0.3</td><td class="num">0.3</td><td class="num">0.3</td><td class="num">1.0</td><td class="num">0.7</td><td class="num">0.7</td><td class="num">0.6</td><td class="num">0.0</td><td class="num">0.0</td></tr>
+<tr><td><code>qkv_proj</code></td><td class="num">17.8</td><td class="num">16.6</td><td class="num">15.6</td><td class="num">14.4</td><td class="num">17.1</td><td class="num">13.8</td><td class="num">14.0</td><td class="num">12.0</td><td class="num">18.4</td><td class="num">17.0</td></tr>
+<tr><td><code>rope</code></td><td class="num">5.0</td><td class="num">5.7</td><td class="num">4.1</td><td class="num">5.4</td><td class="num">14.2</td><td class="num">13.8</td><td class="num">11.1</td><td class="num">12.9</td><td class="num">0.0</td><td class="num">0.0</td></tr>
+<tr><td><code>sdpa</code></td><td class="num">2.4</td><td class="num">2.6</td><td class="num">9.8</td><td class="num">9.8</td><td class="num">2.4</td><td class="num">2.5</td><td class="num">8.4</td><td class="num">8.2</td><td class="num">1.9</td><td class="num">9.1</td></tr>
+<tr><td><code>o_proj</code></td><td class="num">6.1</td><td class="num">5.6</td><td class="num">5.3</td><td class="num">4.9</td><td class="num">6.7</td><td class="num">5.1</td><td class="num">4.9</td><td class="num">4.3</td><td class="num">6.1</td><td class="num">5.7</td></tr>
+<tr><td><code>layer_scale1</code></td><td class="num">0.8</td><td class="num">1.1</td><td class="num">1.0</td><td class="num">1.3</td><td class="num">2.2</td><td class="num">2.9</td><td class="num">2.5</td><td class="num">3.2</td><td class="num">0.0</td><td class="num">0.0</td></tr>
+<tr><td><code>norm2</code></td><td class="num">0.4</td><td class="num">0.3</td><td class="num">0.3</td><td class="num">0.3</td><td class="num">1.0</td><td class="num">0.7</td><td class="num">0.7</td><td class="num">0.6</td><td class="num">0.0</td><td class="num">0.0</td></tr>
+<tr><td><code>ff_in</code></td><td class="num">41.9</td><td class="num">42.0</td><td class="num">40.1</td><td class="num">37.2</td><td class="num">34.0</td><td class="num">35.4</td><td class="num">34.3</td><td class="num">31.1</td><td class="num">49.0</td><td class="num">45.4</td></tr>
+<tr><td><code>activation</code></td><td class="num">1.4</td><td class="num">2.7</td><td class="num">2.1</td><td class="num">2.2</td><td class="num">1.7</td><td class="num">3.8</td><td class="num">3.0</td><td class="num">4.1</td><td class="num">0.0</td><td class="num">0.0</td></tr>
+<tr><td><code>ff_out</code></td><td class="num">23.0</td><td class="num">22.1</td><td class="num">20.6</td><td class="num">23.0</td><td class="num">17.4</td><td class="num">18.6</td><td class="num">17.9</td><td class="num">20.0</td><td class="num">24.5</td><td class="num">22.7</td></tr>
+<tr><td><code>layer_scale2</code></td><td class="num">0.8</td><td class="num">1.1</td><td class="num">0.9</td><td class="num">1.3</td><td class="num">2.2</td><td class="num">2.7</td><td class="num">2.4</td><td class="num">3.2</td><td class="num">0.0</td><td class="num">0.0</td></tr>
+<tr><td><b>block (µs)</b></td><td class="num">1,997</td><td class="num">12,601</td><td class="num">8,676</td><td class="num">70,377</td><td class="num">739</td><td class="num">3,980</td><td class="num">2,750</td><td class="num">23,842</td><td></td><td></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 8.</b> ViT-H+/16 (SwiGLU). The same columns as Table 7. ff_in holds two matrices (gate_proj and up_proj), so it has twice the FLOPs of ff_out.</p>
+  <p>What Tables 7 and 8 show:</p>
+  <ul>
+    <li><b>The linear parts take less time than their FLOP share.</b> The four linear parts have 69.1 to 98.1 % of the block FLOPs and take 35.4 to 88.8 % of the time (Table 9).</li>
+    <li><b>The parts without FLOPs take 8.7 to 48.4 % of the time.</b> In ViT-H+/16 fp32 they take 8.7 to 11.1 %. In ViT-S/16 fp16-cast they take 34.7 to 48.4 %. A small embedding dimension and fp16 make them large.</li>
+    <li><b>sdpa follows its FLOPs.</b> At 512 px it takes 25.0 and 25.8 % of the time of ViT-S/16 in fp32, against 30.9 % of the FLOPs. At 224 px it takes 2.4 to 7.7 %.</li>
+    <li><b>ff_in is the largest part of ViT-H+/16.</b> It takes 31.1 to 42.0 % of the time, against 45.4 to 49.0 % of the FLOPs.</li>
+  </ul>
+
+  <h3>6.2 Reached TFLOP/s of each part</h3>
+  <div class="table-wrap">
+    <table class="dense">
+      <thead><tr><th>Model size</th><th>Dtype mode</th><th class="num">px</th><th class="num">Batch size</th><th class="num">qkv_proj</th><th class="num">o_proj</th><th class="num">ff_in</th><th class="num">ff_out</th><th class="num">sdpa</th><th class="num">Block</th><th class="num">Linear parts: time % / FLOP %</th><th class="num">Parts without FLOPs: time %</th></tr></thead>
+      <tbody>
+<tr><td>ViT-S/16</td><td>fp32</td><td class="num">224</td><td class="num">1</td><td class="num">2.26</td><td class="num">1.66</td><td class="num">4.88</td><td class="num">3.54</td><td class="num">2.75</td><td class="num">2.23</td><td class="num">66.2 / 92.0</td><td class="num">27.3</td></tr>
+<tr><td>ViT-S/16</td><td>fp32</td><td class="num">224</td><td class="num">8</td><td class="num">6.10</td><td class="num">5.36</td><td class="num">7.41</td><td class="num">6.74</td><td class="num">5.06</td><td class="num">4.86</td><td class="num">67.5 / 92.0</td><td class="num">24.8</td></tr>
+<tr><td>ViT-S/16</td><td>fp32</td><td class="num">512</td><td class="num">1</td><td class="num">5.45</td><td class="num">4.66</td><td class="num">6.88</td><td class="num">6.42</td><td class="num">6.12</td><td class="num">4.95</td><td class="num">56.2 / 69.1</td><td class="num">18.8</td></tr>
+<tr><td>ViT-S/16</td><td>fp32</td><td class="num">512</td><td class="num">8 *</td><td class="num">7.40</td><td class="num">6.52</td><td class="num">7.94</td><td class="num">7.60</td><td class="num">6.52</td><td class="num">5.45</td><td class="num">49.9 / 69.1</td><td class="num">24.2</td></tr>
+<tr><td>ViT-S/16</td><td>fp16-cast</td><td class="num">224</td><td class="num">1</td><td class="num">2.64</td><td class="num">1.91</td><td class="num">8.39</td><td class="num">6.35</td><td class="num">6.01</td><td class="num">2.89</td><td class="num">61.4 / 92.0</td><td class="num">34.7</td></tr>
+<tr><td>ViT-S/16</td><td>fp16-cast</td><td class="num">224</td><td class="num">8 *</td><td class="num">17.00</td><td class="num">11.80</td><td class="num">25.84</td><td class="num">26.98</td><td class="num">16.91</td><td class="num">10.75</td><td class="num">46.5 / 92.0</td><td class="num">48.4</td></tr>
+<tr><td>ViT-S/16</td><td>fp16-cast</td><td class="num">512</td><td class="num">1</td><td class="num">11.96</td><td class="num">8.61</td><td class="num">21.69</td><td class="num">22.60</td><td class="num">24.20</td><td class="num">11.25</td><td class="num">47.2 / 69.1</td><td class="num">38.5</td></tr>
+<tr><td>ViT-S/16</td><td>fp16-cast</td><td class="num">512</td><td class="num">8 *</td><td class="num">27.38</td><td class="num">20.27</td><td class="num">30.98</td><td class="num">30.65</td><td class="num">25.49</td><td class="num">14.70</td><td class="num">35.4 / 69.1</td><td class="num">46.8</td></tr>
+<tr><td>ViT-H+/16</td><td>fp32</td><td class="num">224</td><td class="num">1 *</td><td class="num">5.95</td><td class="num">5.82</td><td class="num">6.74</td><td class="num">6.16</td><td class="num">4.66</td><td class="num">5.77</td><td class="num">88.8 / 98.1</td><td class="num">8.8</td></tr>
+<tr><td>ViT-H+/16</td><td>fp32</td><td class="num">224</td><td class="num">8</td><td class="num">7.89</td><td class="num">7.78</td><td class="num">8.29</td><td class="num">7.89</td><td class="num">5.18</td><td class="num">7.10</td><td class="num">86.2 / 98.1</td><td class="num">11.1</td></tr>
+<tr><td>ViT-H+/16</td><td>fp32</td><td class="num">512</td><td class="num">1</td><td class="num">7.62</td><td class="num">7.47</td><td class="num">7.88</td><td class="num">7.68</td><td class="num">6.47</td><td class="num">6.95</td><td class="num">81.5 / 90.9</td><td class="num">8.7</td></tr>
+<tr><td>ViT-H+/16</td><td>fp32</td><td class="num">512</td><td class="num">8</td><td class="num">7.60</td><td class="num">7.44</td><td class="num">7.83</td><td class="num">6.34</td><td class="num">5.98</td><td class="num">6.41</td><td class="num">79.4 / 90.9</td><td class="num">10.8</td></tr>
+<tr><td>ViT-H+/16</td><td>fp16-cast</td><td class="num">224</td><td class="num">1</td><td class="num">16.70</td><td class="num">14.24</td><td class="num">22.42</td><td class="num">21.85</td><td class="num">12.38</td><td class="num">15.55</td><td class="num">75.3 / 98.1</td><td class="num">22.3</td></tr>
+<tr><td>ViT-H+/16</td><td>fp16-cast</td><td class="num">224</td><td class="num">8</td><td class="num">29.61</td><td class="num">26.65</td><td class="num">30.75</td><td class="num">29.29</td><td class="num">17.20</td><td class="num">22.22</td><td class="num">73.0 / 98.1</td><td class="num">24.6</td></tr>
+<tr><td>ViT-H+/16</td><td>fp16-cast</td><td class="num">512</td><td class="num">1</td><td class="num">27.45</td><td class="num">26.06</td><td class="num">30.00</td><td class="num">28.69</td><td class="num">24.50</td><td class="num">22.62</td><td class="num">71.1 / 90.9</td><td class="num">20.4</td></tr>
+<tr><td>ViT-H+/16</td><td>fp16-cast</td><td class="num">512</td><td class="num">8</td><td class="num">28.74</td><td class="num">26.87</td><td class="num">29.46</td><td class="num">22.92</td><td class="num">22.51</td><td class="num">20.18</td><td class="num">67.4 / 90.9</td><td class="num">24.5</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 9.</b> Reached TFLOP/s of each part with FLOPs = part FLOPs / part time, in B5. "Block" = block FLOPs / sum of the 11 part times. The last two columns compare the time share of the four linear parts with their FLOP share, and give the time share of the six parts without FLOPs. * as in Table 7.</p>
+  <ul>
+    <li><b>The ceilings.</b> The linear parts reach at most about 8.3 TFLOP/s in fp32 (ff_in of ViT-H+/16 at 224 px, batch size 8: 8.29) and about 31 TFLOP/s in fp16-cast (ff_in of ViT-S/16 at 512 px, batch size 8: 30.98).</li>
+    <li><b>fp16 helps the parts unevenly.</b> fp16-cast makes the linear parts and sdpa 2.2 to 4.0 times faster, except for ViT-S/16 at batch size 1 (1.15 to 3.96 times). As a group, the parts without FLOPs get only 1.02 to 1.42 times faster. The five parts norm1, rope, layer_scale1, norm2 and layer_scale2 alone get 0.95 to 1.70 times faster, and the activation gets 1.06 to 2.25 times faster. So the time share of the parts without FLOPs grows in fp16.</li>
+    <li><b>Small configurations stay far below the ceiling.</b> ViT-S/16 at 224 px, batch size 1 has only 201 token rows in each matrix product. Its linear parts reach 1.66 to 4.88 TFLOP/s in fp32 and 1.91 to 8.39 TFLOP/s in fp16-cast.</li>
+    <li><b>ViT-H+/16 in fp16-cast at 224 px is not valid in B1.</b> Its full forward pass gives non-finite output. The B5 timing of block 1 is still a valid timing, because block 1 has small values.</li>
+  </ul>
+
+  <h3>6.3 RoPE</h3>
+  <div class="table-wrap">
+    <table class="dense">
+      <thead><tr><th>Model size</th><th>Dtype mode</th><th class="num">px</th><th class="num">Batch size</th><th class="num">RoPE time (µs)</th><th class="num">Time share</th><th class="num">× L share of the forward pass</th><th class="num">Bandwidth (GB/s)</th><th class="num">RoPE time / qkv_proj time</th></tr></thead>
+      <tbody>
+<tr><td>ViT-S/16</td><td>fp32</td><td class="num">224</td><td class="num">1</td><td class="num">62.6</td><td class="num">18.0 %</td><td class="num">27.3 %</td><td class="num">30</td><td class="num">0.79</td></tr>
+<tr><td>ViT-S/16</td><td>fp32</td><td class="num">224</td><td class="num">8</td><td class="num">190.9</td><td class="num">15.0 %</td><td class="num">14.8 %</td><td class="num">78</td><td class="num">0.82</td></tr>
+<tr><td>ViT-S/16</td><td>fp32</td><td class="num">512</td><td class="num">1</td><td class="num">116.3</td><td class="num">10.9 %</td><td class="num">11.7 %</td><td class="num">82</td><td class="num">0.70</td></tr>
+<tr><td>ViT-S/16</td><td>fp32</td><td class="num">512</td><td class="num">8 *</td><td class="num">1,052.7</td><td class="num">13.6 %</td><td class="num">14.0 %</td><td class="num">72</td><td class="num">1.07</td></tr>
+<tr><td>ViT-S/16</td><td>fp16-cast</td><td class="num">224</td><td class="num">1</td><td class="num">61.9</td><td class="num">23.2 %</td><td class="num">34.9 %</td><td class="num">15</td><td class="num">0.92</td></tr>
+<tr><td>ViT-S/16</td><td>fp16-cast</td><td class="num">224</td><td class="num">8 *</td><td class="num">175.7</td><td class="num">30.5 %</td><td class="num">39.2 %</td><td class="num">42</td><td class="num">2.10</td></tr>
+<tr><td>ViT-S/16</td><td>fp16-cast</td><td class="num">512</td><td class="num">1</td><td class="num">109.6</td><td class="num">23.4 %</td><td class="num">28.2 %</td><td class="num">43</td><td class="num">1.44</td></tr>
+<tr><td>ViT-S/16</td><td>fp16-cast</td><td class="num">512</td><td class="num">8 *</td><td class="num">780.2</td><td class="num">27.2 %</td><td class="num">25.7 %</td><td class="num">49</td><td class="num">2.93</td></tr>
+<tr><td>ViT-H+/16</td><td>fp32</td><td class="num">224</td><td class="num">1 *</td><td class="num">93.3</td><td class="num">5.0 %</td><td class="num">5.3 %</td><td class="num">66</td><td class="num">0.28</td></tr>
+<tr><td>ViT-H+/16</td><td>fp32</td><td class="num">224</td><td class="num">8</td><td class="num">690.5</td><td class="num">5.7 %</td><td class="num">5.6 %</td><td class="num">72</td><td class="num">0.34</td></tr>
+<tr><td>ViT-H+/16</td><td>fp32</td><td class="num">512</td><td class="num">1</td><td class="num">351.6</td><td class="num">4.1 %</td><td class="num">4.1 %</td><td class="num">90</td><td class="num">0.26</td></tr>
+<tr><td>ViT-H+/16</td><td>fp32</td><td class="num">512</td><td class="num">8</td><td class="num">3,986.6</td><td class="num">5.4 %</td><td class="num">5.5 %</td><td class="num">63</td><td class="num">0.37</td></tr>
+<tr><td>ViT-H+/16</td><td>fp16-cast</td><td class="num">224</td><td class="num">1</td><td class="num">97.9</td><td class="num">14.2 %</td><td class="num">15.4 %</td><td class="num">32</td><td class="num">0.83</td></tr>
+<tr><td>ViT-H+/16</td><td>fp16-cast</td><td class="num">224</td><td class="num">8</td><td class="num">533.9</td><td class="num">13.8 %</td><td class="num">13.7 %</td><td class="num">46</td><td class="num">1.00</td></tr>
+<tr><td>ViT-H+/16</td><td>fp16-cast</td><td class="num">512</td><td class="num">1</td><td class="num">291.9</td><td class="num">11.1 %</td><td class="num">10.8 %</td><td class="num">54</td><td class="num">0.79</td></tr>
+<tr><td>ViT-H+/16</td><td>fp16-cast</td><td class="num">512</td><td class="num">8</td><td class="num">3,031.2</td><td class="num">12.9 %</td><td class="num">12.6 %</td><td class="num">42</td><td class="num">1.08</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 10.</b> RoPE in B5. "× L share" = RoPE time of block 1 × the number of blocks, as a share of the forward pass. This is an approximation, because RoPE runs alone in B5. Bandwidth = <code>part_bytes</code> / time. * as in Table 7.</p>
+  <ul>
+    <li>RoPE has 0 FLOPs, but it takes 10.9 to 30.5 % of the block time of ViT-S/16 and 4.1 to 14.2 % of ViT-H+/16.</li>
+    <li>fp16-cast makes RoPE only 0.95 to 1.35 times faster. So the RoPE share grows in fp16, up to 30.5 %. For ViT-S/16 in fp16-cast at 512 px, batch size 8, RoPE takes 2.93 times the time of qkv_proj.</li>
+    <li><code>part_bytes</code> / time gives only 15 to 90 GB/s for RoPE, against 265 to 793 GB/s for the activation part and 55 to 524 GB/s for norm1. But <code>part_bytes</code> counts only 6 BTD for RoPE. The Hugging Face chain of Section 4 runs 12 element-wise kernels, and each of them reads and writes a full q or k tensor: about 24 BTD. One fused kernel needs only 4 BTD. So RoPE is a candidate for one fused kernel in Step 6.</li>
+  </ul>
+
+  <h3>6.4 A timing caveat</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Configuration</th><th>Forward pass before → after the parts</th><th>Change</th></tr></thead>
+      <tbody>
+        <tr><td>ViT-S/16, fp32, 512 px, batch size 8</td><td class="num">96.56 → 83.93 ms</td><td class="num">14.0 %</td></tr>
+        <tr><td>ViT-S/16, fp16-cast, 224 px, batch size 8</td><td class="num">4.96 → 5.80 ms</td><td class="num">15.7 %</td></tr>
+        <tr><td>ViT-S/16, fp16-cast, 512 px, batch size 8</td><td class="num">35.43 → 37.47 ms</td><td class="num">5.6 %</td></tr>
+        <tr><td>ViT-H+/16, fp32, 224 px, batch size 1</td><td class="num">53.82 → 59.36 ms</td><td class="num">9.8 %</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 11.</b> The 4 B5 configurations whose forward pass changed by more than 3 % between the start and the end of the profile. The change is relative to the mean of the two values. The other 12 configurations change by 3.0 % or less; ViT-S/16 fp32 at 512 px, batch size 1 changes by exactly 3.0 %.</p>
+  <p>B5 times the 11 parts, the block, the outer parts and the forward pass one after the other, over several minutes. In these 4 configurations the Mac ran faster or slower during that time, so the part times of one configuration do not all come from the same level. The time shares are still robust: between the build and the verifier re-run on 30 W, the largest difference of a time share was 0.6 to 6.2 percentage points for each configuration (Section 6 of <code>verify.html</code>).</p>
+</section>
+
+<section id="throughput">
+  <h2>7 Throughput against FLOPs</h2>
+  <p>Reached TFLOP/s = throughput (img/s) × GFLOP per image / 1000. All costs of one batch are in the time: the copy of the pixels to the GPU, the parts without FLOPs, the start of each kernel, the synchronize and the copy to the host. So the reached TFLOP/s shows how close a configuration comes to the ceilings of Section 6.2.</p>
+  <p>Figure 4 uses the baseline rows of the frame embedding (ADR 0004, Section 9.3). Each point is the fastest valid dtype mode of fp32 or of fp16, with the median of its runs. At P1 and P2 the baseline rows are compile rows.</p>
+  <figure>
+    <div class="fig">
+<svg viewBox="0 0 960 500" role="img" aria-labelledby="fig4-title" font-family="-apple-system, Helvetica Neue, Arial, sans-serif">
+<title id="fig4-title">Reached TFLOP/s against FLOPs per batch for the 45 B1 configurations, fp32 and fp16 baseline rows of the frame embedding</title>
+<rect width="960" height="500" fill="#ffffff"/>
+<line x1="80" x2="760" y1="430.0" y2="430.0" stroke="#e3e8e7"/>
+<text x="72" y="434.0" text-anchor="end" font-size="11" fill="#4a5655">0</text>
+<line x1="80" x2="760" y1="380.0" y2="380.0" stroke="#e3e8e7"/>
+<text x="72" y="384.0" text-anchor="end" font-size="11" fill="#4a5655">4</text>
+<line x1="80" x2="760" y1="330.0" y2="330.0" stroke="#e3e8e7"/>
+<text x="72" y="334.0" text-anchor="end" font-size="11" fill="#4a5655">8</text>
+<line x1="80" x2="760" y1="280.0" y2="280.0" stroke="#e3e8e7"/>
+<text x="72" y="284.0" text-anchor="end" font-size="11" fill="#4a5655">12</text>
+<line x1="80" x2="760" y1="230.0" y2="230.0" stroke="#e3e8e7"/>
+<text x="72" y="234.0" text-anchor="end" font-size="11" fill="#4a5655">16</text>
+<line x1="80" x2="760" y1="180.0" y2="180.0" stroke="#e3e8e7"/>
+<text x="72" y="184.0" text-anchor="end" font-size="11" fill="#4a5655">20</text>
+<line x1="80" x2="760" y1="130.0" y2="130.0" stroke="#e3e8e7"/>
+<text x="72" y="134.0" text-anchor="end" font-size="11" fill="#4a5655">24</text>
+<line x1="80" x2="760" y1="80.0" y2="80.0" stroke="#e3e8e7"/>
+<text x="72" y="84.0" text-anchor="end" font-size="11" fill="#4a5655">28</text>
+<line x1="80" x2="760" y1="30.0" y2="30.0" stroke="#e3e8e7"/>
+<text x="72" y="34.0" text-anchor="end" font-size="11" fill="#4a5655">32</text>
+<line x1="127.6" x2="127.6" y1="30" y2="430" stroke="#e3e8e7"/>
+<text x="127.6" y="448" text-anchor="middle" font-size="11" fill="#4a5655">10</text>
+<line x1="285.7" x2="285.7" y1="30" y2="430" stroke="#e3e8e7"/>
+<text x="285.7" y="448" text-anchor="middle" font-size="11" fill="#4a5655">100</text>
+<line x1="443.8" x2="443.8" y1="30" y2="430" stroke="#e3e8e7"/>
+<text x="443.8" y="448" text-anchor="middle" font-size="11" fill="#4a5655">1,000</text>
+<line x1="601.9" x2="601.9" y1="30" y2="430" stroke="#e3e8e7"/>
+<text x="601.9" y="448" text-anchor="middle" font-size="11" fill="#4a5655">10,000</text>
+<line x1="760.0" x2="760.0" y1="30" y2="430" stroke="#e3e8e7"/>
+<text x="760.0" y="448" text-anchor="middle" font-size="11" fill="#4a5655">100,000</text>
+<line x1="80" x2="760" y1="430" y2="430" stroke="#4a5655"/>
+<line x1="80" x2="80" y1="30" y2="430" stroke="#4a5655"/>
+<text x="420.0" y="470" text-anchor="middle" font-size="12" fill="#111414">FLOPs per batch (GFLOP, log scale) = batch size × GFLOP per image</text>
+<text x="22" y="230.0" font-size="12" fill="#111414" transform="rotate(-90 22 230.0)" text-anchor="middle">Reached TFLOP/s</text>
+<line x1="80" x2="760" y1="326.2" y2="326.2" stroke="#4a5655" stroke-width="1.2" stroke-dasharray="5 4"/>
+<text x="86" y="321.2" font-size="11" fill="#4a5655">fp32: best linear part in B5, about 8.3</text>
+<line x1="80" x2="760" y1="42.5" y2="42.5" stroke="#057379" stroke-width="1.2" stroke-dasharray="5 4"/>
+<text x="86" y="37.5" font-size="11" fill="#057379">fp16-cast: best linear part in B5, about 31</text>
+<polyline points="123.3,414.6 266.1,354.5 361.3,340.1" fill="none" stroke="#4a5655" stroke-opacity="0.35" stroke-width="1"/>
+<polyline points="123.3,414.8 266.1,211.5 361.3,280.2" fill="none" stroke="#057379" stroke-opacity="0.35" stroke-width="1"/>
+<polyline points="231.5,370.9 374.3,340.0 469.5,339.2" fill="none" stroke="#4a5655" stroke-opacity="0.35" stroke-width="1"/>
+<polyline points="231.5,369.0 374.3,257.4 469.5,260.6" fill="none" stroke="#057379" stroke-opacity="0.35" stroke-width="1"/>
+<polyline points="254.9,364.4 397.6,339.9 492.8,353.2" fill="none" stroke="#4a5655" stroke-opacity="0.35" stroke-width="1"/>
+<polyline points="254.9,338.0 397.6,253.4 492.8,260.4" fill="none" stroke="#057379" stroke-opacity="0.35" stroke-width="1"/>
+<polyline points="141.5,412.6 284.3,366.6 379.4,359.0" fill="none" stroke="#4a5655" stroke-opacity="0.35" stroke-width="1"/>
+<polyline points="141.5,411.4 284.3,313.6 379.4,286.6" fill="none" stroke="#057379" stroke-opacity="0.35" stroke-width="1"/>
+<polyline points="246.6,370.8 389.4,356.0 484.6,363.0" fill="none" stroke="#4a5655" stroke-opacity="0.35" stroke-width="1"/>
+<polyline points="246.6,354.6 389.4,230.8 484.6,246.6" fill="none" stroke="#057379" stroke-opacity="0.35" stroke-width="1"/>
+<polyline points="269.0,368.2 411.8,360.8 506.9,372.8" fill="none" stroke="#4a5655" stroke-opacity="0.35" stroke-width="1"/>
+<polyline points="269.0,330.8 411.8,237.1 506.9,277.2" fill="none" stroke="#057379" stroke-opacity="0.35" stroke-width="1"/>
+<polyline points="215.3,383.5 358.1,341.4 453.3,350.1" fill="none" stroke="#4a5655" stroke-opacity="0.35" stroke-width="1"/>
+<polyline points="215.3,381.6 358.1,252.4 453.3,254.2" fill="none" stroke="#057379" stroke-opacity="0.35" stroke-width="1"/>
+<polyline points="317.1,352.0 459.8,352.5 555.0,360.0" fill="none" stroke="#4a5655" stroke-opacity="0.35" stroke-width="1"/>
+<polyline points="317.1,247.2 459.8,231.6 555.0,254.0" fill="none" stroke="#057379" stroke-opacity="0.35" stroke-width="1"/>
+<polyline points="338.3,354.4 481.0,355.9 576.2,366.9" fill="none" stroke="#4a5655" stroke-opacity="0.35" stroke-width="1"/>
+<polyline points="338.3,240.8 481.0,230.6 576.2,259.4" fill="none" stroke="#057379" stroke-opacity="0.35" stroke-width="1"/>
+<polyline points="301.4,369.6 444.2,343.9 539.4,350.2" fill="none" stroke="#4a5655" stroke-opacity="0.35" stroke-width="1"/>
+<polyline points="301.4,343.8 444.2,254.9 539.4,237.1" fill="none" stroke="#057379" stroke-opacity="0.35" stroke-width="1"/>
+<polyline points="401.4,350.2 544.1,352.1 639.3,360.2" fill="none" stroke="#4a5655" stroke-opacity="0.35" stroke-width="1"/>
+<polyline points="401.4,251.5 544.1,230.6 639.3,247.1" fill="none" stroke="#057379" stroke-opacity="0.35" stroke-width="1"/>
+<polyline points="421.9,353.0 564.7,358.1 659.9,364.0" fill="none" stroke="#4a5655" stroke-opacity="0.35" stroke-width="1"/>
+<polyline points="421.9,245.8 564.7,256.4 659.9,274.5" fill="none" stroke="#057379" stroke-opacity="0.35" stroke-width="1"/>
+<polyline points="370.6,360.0 513.4,329.9 608.5,338.0" fill="none" stroke="#4a5655" stroke-opacity="0.35" stroke-width="1"/>
+<polyline points="370.6,314.9 513.4,222.2 608.5,230.2" fill="none" stroke="#057379" stroke-opacity="0.35" stroke-width="1"/>
+<polyline points="468.2,339.1 611.0,346.5 706.2,356.9" fill="none" stroke="#4a5655" stroke-opacity="0.35" stroke-width="1"/>
+<polyline points="468.2,175.6 611.0,188.6 706.2,218.6" fill="none" stroke="#057379" stroke-opacity="0.35" stroke-width="1"/>
+<polyline points="487.9,348.5 630.7,339.9 725.9,356.4" fill="none" stroke="#4a5655" stroke-opacity="0.35" stroke-width="1"/>
+<polyline points="487.9,171.0 630.7,140.0 725.9,223.6" fill="none" stroke="#057379" stroke-opacity="0.35" stroke-width="1"/>
+<circle cx="123.3" cy="414.6" r="4.5" fill="#ffffff" stroke="#4a5655" stroke-width="1.6"><title>ViT-S/16, 224 px, batch size 1, fp32: 130.7 img/s, 9.4 GFLOP per batch, 1.23 TFLOP/s</title></circle>
+<circle cx="266.1" cy="354.5" r="4.5" fill="#ffffff" stroke="#4a5655" stroke-width="1.6"><title>ViT-S/16, 224 px, batch size 8, fp32 + compile: 642.3 img/s, 75.2 GFLOP per batch, 6.04 TFLOP/s</title></circle>
+<circle cx="266.1" cy="354.5" r="8.5" fill="none" stroke="#111414" stroke-width="1.2"/>
+<circle cx="361.3" cy="340.1" r="4.5" fill="#ffffff" stroke="#4a5655" stroke-width="1.6"><title>ViT-S/16, 224 px, batch size 32, fp32: 765.5 img/s, 300.7 GFLOP per batch, 7.19 TFLOP/s</title></circle>
+<circle cx="123.3" cy="414.8" r="4.5" fill="#057379"><title>ViT-S/16, 224 px, batch size 1, fp16-cast: 129.8 img/s, 9.4 GFLOP per batch, 1.22 TFLOP/s</title></circle>
+<circle cx="266.1" cy="211.5" r="4.5" fill="#057379"><title>ViT-S/16, 224 px, batch size 8, fp16-cast + compile: 1860.0 img/s, 75.2 GFLOP per batch, 17.48 TFLOP/s</title></circle>
+<circle cx="266.1" cy="211.5" r="8.5" fill="none" stroke="#111414" stroke-width="1.2"/>
+<circle cx="361.3" cy="280.2" r="4.5" fill="#057379"><title>ViT-S/16, 224 px, batch size 32, fp16-cast: 1275.3 img/s, 300.7 GFLOP per batch, 11.98 TFLOP/s</title></circle>
+<circle cx="231.5" cy="370.9" r="4.5" fill="#ffffff" stroke="#4a5655" stroke-width="1.6"><title>ViT-S/16, 448 px, batch size 1, fp32: 104.0 img/s, 45.4 GFLOP per batch, 4.73 TFLOP/s</title></circle>
+<circle cx="374.3" cy="340.0" r="4.5" fill="#ffffff" stroke="#4a5655" stroke-width="1.6"><title>ViT-S/16, 448 px, batch size 8, fp32: 158.5 img/s, 363.5 GFLOP per batch, 7.20 TFLOP/s</title></circle>
+<circle cx="469.5" cy="339.2" r="4.5" fill="#ffffff" stroke="#4a5655" stroke-width="1.6"><title>ViT-S/16, 448 px, batch size 32, fp32: 159.7 img/s, 1,454.2 GFLOP per batch, 7.26 TFLOP/s</title></circle>
+<circle cx="231.5" cy="369.0" r="4.5" fill="#057379"><title>ViT-S/16, 448 px, batch size 1, fp16-cast: 107.4 img/s, 45.4 GFLOP per batch, 4.88 TFLOP/s</title></circle>
+<circle cx="374.3" cy="257.4" r="4.5" fill="#057379"><title>ViT-S/16, 448 px, batch size 8, fp16-cast: 303.9 img/s, 363.5 GFLOP per batch, 13.81 TFLOP/s</title></circle>
+<circle cx="469.5" cy="260.6" r="4.5" fill="#057379"><title>ViT-S/16, 448 px, batch size 32, fp16-cast: 298.2 img/s, 1,454.2 GFLOP per batch, 13.55 TFLOP/s</title></circle>
+<circle cx="254.9" cy="364.4" r="4.5" fill="#ffffff" stroke="#4a5655" stroke-width="1.6"><title>ViT-S/16, 512 px, batch size 1, fp32: 82.2 img/s, 63.8 GFLOP per batch, 5.25 TFLOP/s</title></circle>
+<circle cx="397.6" cy="339.9" r="4.5" fill="#ffffff" stroke="#4a5655" stroke-width="1.6"><title>ViT-S/16, 512 px, batch size 8, fp32: 112.9 img/s, 510.6 GFLOP per batch, 7.21 TFLOP/s</title></circle>
+<circle cx="492.8" cy="353.2" r="4.5" fill="#ffffff" stroke="#4a5655" stroke-width="1.6"><title>ViT-S/16, 512 px, batch size 32, fp32: 96.2 img/s, 2,042.2 GFLOP per batch, 6.14 TFLOP/s</title></circle>
+<circle cx="254.9" cy="338.0" r="4.5" fill="#057379"><title>ViT-S/16, 512 px, batch size 1, fp16-autocast: 115.3 img/s, 63.8 GFLOP per batch, 7.36 TFLOP/s</title></circle>
+<circle cx="397.6" cy="253.4" r="4.5" fill="#057379"><title>ViT-S/16, 512 px, batch size 8, fp16-cast: 221.4 img/s, 510.6 GFLOP per batch, 14.13 TFLOP/s</title></circle>
+<circle cx="492.8" cy="260.4" r="4.5" fill="#057379"><title>ViT-S/16, 512 px, batch size 32, fp16-cast: 212.6 img/s, 2,042.2 GFLOP per batch, 13.57 TFLOP/s</title></circle>
+<circle cx="141.5" cy="412.6" r="4.5" fill="#ffffff" stroke="#4a5655" stroke-width="1.6"><title>ViT-S+/16, 224 px, batch size 1, fp32: 113.3 img/s, 12.2 GFLOP per batch, 1.39 TFLOP/s</title></circle>
+<circle cx="284.3" cy="366.6" r="4.5" fill="#ffffff" stroke="#4a5655" stroke-width="1.6"><title>ViT-S+/16, 224 px, batch size 8, fp32: 414.5 img/s, 97.9 GFLOP per batch, 5.07 TFLOP/s</title></circle>
+<circle cx="379.4" cy="359.0" r="4.5" fill="#ffffff" stroke="#4a5655" stroke-width="1.6"><title>ViT-S+/16, 224 px, batch size 32, fp32: 464.3 img/s, 391.7 GFLOP per batch, 5.68 TFLOP/s</title></circle>
+<circle cx="141.5" cy="411.4" r="4.5" fill="#057379"><title>ViT-S+/16, 224 px, batch size 1, fp16-cast: 121.6 img/s, 12.2 GFLOP per batch, 1.49 TFLOP/s</title></circle>
+<circle cx="284.3" cy="313.6" r="4.5" fill="#057379"><title>ViT-S+/16, 224 px, batch size 8, fp16-cast: 760.2 img/s, 97.9 GFLOP per batch, 9.31 TFLOP/s</title></circle>
+<circle cx="379.4" cy="286.6" r="4.5" fill="#057379"><title>ViT-S+/16, 224 px, batch size 32, fp16-cast: 937.2 img/s, 391.7 GFLOP per batch, 11.47 TFLOP/s</title></circle>
+<circle cx="246.6" cy="370.8" r="4.5" fill="#ffffff" stroke="#4a5655" stroke-width="1.6"><title>ViT-S+/16, 448 px, batch size 1, fp32: 83.7 img/s, 56.6 GFLOP per batch, 4.74 TFLOP/s</title></circle>
+<circle cx="389.4" cy="356.0" r="4.5" fill="#ffffff" stroke="#4a5655" stroke-width="1.6"><title>ViT-S+/16, 448 px, batch size 8, fp32: 104.5 img/s, 452.9 GFLOP per batch, 5.92 TFLOP/s</title></circle>
+<circle cx="484.6" cy="363.0" r="4.5" fill="#ffffff" stroke="#4a5655" stroke-width="1.6"><title>ViT-S+/16, 448 px, batch size 32, fp32: 94.6 img/s, 1,811.6 GFLOP per batch, 5.36 TFLOP/s</title></circle>
+<circle cx="246.6" cy="354.6" r="4.5" fill="#057379"><title>ViT-S+/16, 448 px, batch size 1, fp16-cast: 106.6 img/s, 56.6 GFLOP per batch, 6.03 TFLOP/s</title></circle>
+<circle cx="389.4" cy="230.8" r="4.5" fill="#057379"><title>ViT-S+/16, 448 px, batch size 8, fp16-cast: 281.6 img/s, 452.9 GFLOP per batch, 15.94 TFLOP/s</title></circle>
+<circle cx="484.6" cy="246.6" r="4.5" fill="#057379"><title>ViT-S+/16, 448 px, batch size 32, fp16-cast: 259.2 img/s, 1,811.6 GFLOP per batch, 14.67 TFLOP/s</title></circle>
+<circle cx="269.0" cy="368.2" r="4.5" fill="#ffffff" stroke="#4a5655" stroke-width="1.6"><title>ViT-S+/16, 512 px, batch size 1, fp32: 63.0 img/s, 78.4 GFLOP per batch, 4.94 TFLOP/s</title></circle>
+<circle cx="411.8" cy="360.8" r="4.5" fill="#ffffff" stroke="#4a5655" stroke-width="1.6"><title>ViT-S+/16, 512 px, batch size 8, fp32: 70.7 img/s, 627.1 GFLOP per batch, 5.54 TFLOP/s</title></circle>
+<circle cx="506.9" cy="372.8" r="4.5" fill="#ffffff" stroke="#4a5655" stroke-width="1.6"><title>ViT-S+/16, 512 px, batch size 32, fp32: 58.4 img/s, 2,508.3 GFLOP per batch, 4.58 TFLOP/s</title></circle>
+<circle cx="269.0" cy="330.8" r="4.5" fill="#057379"><title>ViT-S+/16, 512 px, batch size 1, fp16-cast: 101.4 img/s, 78.4 GFLOP per batch, 7.94 TFLOP/s</title></circle>
+<circle cx="411.8" cy="237.1" r="4.5" fill="#057379"><title>ViT-S+/16, 512 px, batch size 8, fp16-cast: 196.8 img/s, 627.1 GFLOP per batch, 15.43 TFLOP/s</title></circle>
+<circle cx="506.9" cy="277.2" r="4.5" fill="#057379"><title>ViT-S+/16, 512 px, batch size 32, fp16-cast: 155.9 img/s, 2,508.3 GFLOP per batch, 12.22 TFLOP/s</title></circle>
+<circle cx="215.3" cy="383.5" r="4.5" fill="#ffffff" stroke="#4a5655" stroke-width="1.6"><title>ViT-B/16, 224 px, batch size 1, fp32: 103.6 img/s, 35.9 GFLOP per batch, 3.72 TFLOP/s</title></circle>
+<circle cx="358.1" cy="341.4" r="4.5" fill="#ffffff" stroke="#4a5655" stroke-width="1.6"><title>ViT-B/16, 224 px, batch size 8, fp32: 197.7 img/s, 286.9 GFLOP per batch, 7.09 TFLOP/s</title></circle>
+<circle cx="453.3" cy="350.1" r="4.5" fill="#ffffff" stroke="#4a5655" stroke-width="1.6"><title>ViT-B/16, 224 px, batch size 32, fp32: 178.1 img/s, 1,147.7 GFLOP per batch, 6.39 TFLOP/s</title></circle>
+<circle cx="215.3" cy="381.6" r="4.5" fill="#057379"><title>ViT-B/16, 224 px, batch size 1, fp16-cast: 107.9 img/s, 35.9 GFLOP per batch, 3.87 TFLOP/s</title></circle>
+<circle cx="358.1" cy="252.4" r="4.5" fill="#057379"><title>ViT-B/16, 224 px, batch size 8, fp16-cast: 396.3 img/s, 286.9 GFLOP per batch, 14.21 TFLOP/s</title></circle>
+<circle cx="453.3" cy="254.2" r="4.5" fill="#057379"><title>ViT-B/16, 224 px, batch size 32, fp16-cast: 392.1 img/s, 1,147.7 GFLOP per batch, 14.06 TFLOP/s</title></circle>
+<circle cx="317.1" cy="352.0" r="4.5" fill="#ffffff" stroke="#4a5655" stroke-width="1.6"><title>ViT-B/16, 448 px, batch size 1, fp32: 39.5 img/s, 157.9 GFLOP per batch, 6.24 TFLOP/s</title></circle>
+<circle cx="459.8" cy="352.5" r="4.5" fill="#ffffff" stroke="#4a5655" stroke-width="1.6"><title>ViT-B/16, 448 px, batch size 8, fp32: 39.3 img/s, 1,263.2 GFLOP per batch, 6.20 TFLOP/s</title></circle>
+<circle cx="555.0" cy="360.0" r="4.5" fill="#ffffff" stroke="#4a5655" stroke-width="1.6"><title>ViT-B/16, 448 px, batch size 32, fp32: 35.5 img/s, 5,052.8 GFLOP per batch, 5.60 TFLOP/s</title></circle>
+<circle cx="317.1" cy="247.2" r="4.5" fill="#057379"><title>ViT-B/16, 448 px, batch size 1, fp16-cast: 92.6 img/s, 157.9 GFLOP per batch, 14.62 TFLOP/s</title></circle>
+<circle cx="459.8" cy="231.6" r="4.5" fill="#057379"><title>ViT-B/16, 448 px, batch size 8, fp16-cast: 100.5 img/s, 1,263.2 GFLOP per batch, 15.87 TFLOP/s</title></circle>
+<circle cx="555.0" cy="254.0" r="4.5" fill="#057379"><title>ViT-B/16, 448 px, batch size 32, fp16-cast: 89.2 img/s, 5,052.8 GFLOP per batch, 14.08 TFLOP/s</title></circle>
+<circle cx="338.3" cy="354.4" r="4.5" fill="#ffffff" stroke="#4a5655" stroke-width="1.6"><title>ViT-B/16, 512 px, batch size 1, fp32: 28.1 img/s, 215.0 GFLOP per batch, 6.05 TFLOP/s</title></circle>
+<circle cx="481.0" cy="355.9" r="4.5" fill="#ffffff" stroke="#4a5655" stroke-width="1.6"><title>ViT-B/16, 512 px, batch size 8, fp32: 27.6 img/s, 1,720.3 GFLOP per batch, 5.93 TFLOP/s</title></circle>
+<circle cx="576.2" cy="366.9" r="4.5" fill="#ffffff" stroke="#4a5655" stroke-width="1.6"><title>ViT-B/16, 512 px, batch size 32, fp32: 23.5 img/s, 6,881.2 GFLOP per batch, 5.05 TFLOP/s</title></circle>
+<circle cx="338.3" cy="240.8" r="4.5" fill="#057379"><title>ViT-B/16, 512 px, batch size 1, fp16-cast: 70.4 img/s, 215.0 GFLOP per batch, 15.14 TFLOP/s</title></circle>
+<circle cx="481.0" cy="230.6" r="4.5" fill="#057379"><title>ViT-B/16, 512 px, batch size 8, fp16-cast: 74.2 img/s, 1,720.3 GFLOP per batch, 15.95 TFLOP/s</title></circle>
+<circle cx="576.2" cy="259.4" r="4.5" fill="#057379"><title>ViT-B/16, 512 px, batch size 32, fp16-cast: 63.5 img/s, 6,881.2 GFLOP per batch, 13.65 TFLOP/s</title></circle>
+<circle cx="301.4" cy="369.6" r="4.5" fill="#ffffff" stroke="#4a5655" stroke-width="1.6"><title>ViT-L/16, 224 px, batch size 1, fp32: 38.5 img/s, 125.7 GFLOP per batch, 4.83 TFLOP/s</title></circle>
+<circle cx="444.2" cy="343.9" r="4.5" fill="#ffffff" stroke="#4a5655" stroke-width="1.6"><title>ViT-L/16, 224 px, batch size 8, fp32: 54.9 img/s, 1,005.4 GFLOP per batch, 6.89 TFLOP/s</title></circle>
+<circle cx="539.4" cy="350.2" r="4.5" fill="#ffffff" stroke="#4a5655" stroke-width="1.6"><title>ViT-L/16, 224 px, batch size 32, fp32: 50.8 img/s, 4,021.8 GFLOP per batch, 6.38 TFLOP/s</title></circle>
+<circle cx="301.4" cy="343.8" r="4.5" fill="#057379"><title>ViT-L/16, 224 px, batch size 1, fp16-autocast: 54.9 img/s, 125.7 GFLOP per batch, 6.90 TFLOP/s</title></circle>
+<circle cx="444.2" cy="254.9" r="4.5" fill="#057379"><title>ViT-L/16, 224 px, batch size 8, fp16-autocast: 111.5 img/s, 1,005.4 GFLOP per batch, 14.01 TFLOP/s</title></circle>
+<circle cx="539.4" cy="237.1" r="4.5" fill="#057379"><title>ViT-L/16, 224 px, batch size 32, fp16-autocast: 122.8 img/s, 4,021.8 GFLOP per batch, 15.43 TFLOP/s</title></circle>
+<circle cx="401.4" cy="350.2" r="4.5" fill="#ffffff" stroke="#4a5655" stroke-width="1.6"><title>ViT-L/16, 448 px, batch size 1, fp32: 11.8 img/s, 539.0 GFLOP per batch, 6.38 TFLOP/s</title></circle>
+<circle cx="544.1" cy="352.1" r="4.5" fill="#ffffff" stroke="#4a5655" stroke-width="1.6"><title>ViT-L/16, 448 px, batch size 8, fp32: 11.6 img/s, 4,311.8 GFLOP per batch, 6.23 TFLOP/s</title></circle>
+<circle cx="639.3" cy="360.2" r="4.5" fill="#ffffff" stroke="#4a5655" stroke-width="1.6"><title>ViT-L/16, 448 px, batch size 32, fp32: 10.4 img/s, 17,247.0 GFLOP per batch, 5.58 TFLOP/s</title></circle>
+<circle cx="401.4" cy="251.5" r="4.5" fill="#057379"><title>ViT-L/16, 448 px, batch size 1, fp16-autocast: 26.5 img/s, 539.0 GFLOP per batch, 14.28 TFLOP/s</title></circle>
+<circle cx="544.1" cy="230.6" r="4.5" fill="#057379"><title>ViT-L/16, 448 px, batch size 8, fp16-autocast: 29.6 img/s, 4,311.8 GFLOP per batch, 15.95 TFLOP/s</title></circle>
+<circle cx="639.3" cy="247.1" r="4.5" fill="#057379"><title>ViT-L/16, 448 px, batch size 32, fp16-autocast: 27.1 img/s, 17,247.0 GFLOP per batch, 14.63 TFLOP/s</title></circle>
+<circle cx="421.9" cy="353.0" r="4.5" fill="#ffffff" stroke="#4a5655" stroke-width="1.6"><title>ViT-L/16, 512 px, batch size 1, fp32: 8.5 img/s, 727.2 GFLOP per batch, 6.16 TFLOP/s</title></circle>
+<circle cx="564.7" cy="358.1" r="4.5" fill="#ffffff" stroke="#4a5655" stroke-width="1.6"><title>ViT-L/16, 512 px, batch size 8, fp32: 7.9 img/s, 5,817.6 GFLOP per batch, 5.75 TFLOP/s</title></circle>
+<circle cx="659.9" cy="364.0" r="4.5" fill="#ffffff" stroke="#4a5655" stroke-width="1.6"><title>ViT-L/16, 512 px, batch size 32, fp32: 7.3 img/s, 23,270.2 GFLOP per batch, 5.28 TFLOP/s</title></circle>
+<circle cx="421.9" cy="245.8" r="4.5" fill="#057379"><title>ViT-L/16, 512 px, batch size 1, fp16-autocast: 20.3 img/s, 727.2 GFLOP per batch, 14.74 TFLOP/s</title></circle>
+<circle cx="564.7" cy="256.4" r="4.5" fill="#057379"><title>ViT-L/16, 512 px, batch size 8, fp16-autocast: 19.1 img/s, 5,817.6 GFLOP per batch, 13.89 TFLOP/s</title></circle>
+<circle cx="659.9" cy="274.5" r="4.5" fill="#057379"><title>ViT-L/16, 512 px, batch size 32, fp16-autocast: 17.1 img/s, 23,270.2 GFLOP per batch, 12.44 TFLOP/s</title></circle>
+<circle cx="370.6" cy="360.0" r="4.5" fill="#ffffff" stroke="#4a5655" stroke-width="1.6"><title>ViT-H+/16, 224 px, batch size 1, fp32: 16.3 img/s, 344.2 GFLOP per batch, 5.60 TFLOP/s</title></circle>
+<circle cx="513.4" cy="329.9" r="4.5" fill="#ffffff" stroke="#4a5655" stroke-width="1.6"><title>ViT-H+/16, 224 px, batch size 8, fp32: 23.3 img/s, 2,753.8 GFLOP per batch, 8.01 TFLOP/s</title></circle>
+<circle cx="608.5" cy="338.0" r="4.5" fill="#ffffff" stroke="#4a5655" stroke-width="1.6"><title>ViT-H+/16, 224 px, batch size 32, fp32: 21.4 img/s, 11,015.3 GFLOP per batch, 7.36 TFLOP/s</title></circle>
+<circle cx="370.6" cy="314.9" r="4.5" fill="#057379"><title>ViT-H+/16, 224 px, batch size 1, fp16-autocast: 26.8 img/s, 344.2 GFLOP per batch, 9.21 TFLOP/s</title></circle>
+<circle cx="513.4" cy="222.2" r="4.5" fill="#057379"><title>ViT-H+/16, 224 px, batch size 8, fp16-autocast: 48.3 img/s, 2,753.8 GFLOP per batch, 16.62 TFLOP/s</title></circle>
+<circle cx="608.5" cy="230.2" r="4.5" fill="#057379"><title>ViT-H+/16, 224 px, batch size 32, fp16-autocast: 46.4 img/s, 11,015.3 GFLOP per batch, 15.98 TFLOP/s</title></circle>
+<circle cx="468.2" cy="339.1" r="4.5" fill="#ffffff" stroke="#4a5655" stroke-width="1.6"><title>ViT-H+/16, 448 px, batch size 1, fp32: 5.1 img/s, 1,427.3 GFLOP per batch, 7.27 TFLOP/s</title></circle>
+<circle cx="611.0" cy="346.5" r="4.5" fill="#ffffff" stroke="#4a5655" stroke-width="1.6"><title>ViT-H+/16, 448 px, batch size 8, fp32: 4.7 img/s, 11,418.1 GFLOP per batch, 6.68 TFLOP/s</title></circle>
+<circle cx="706.2" cy="356.9" r="4.5" fill="#ffffff" stroke="#4a5655" stroke-width="1.6"><title>ViT-H+/16, 448 px, batch size 32, fp32: 4.1 img/s, 45,672.2 GFLOP per batch, 5.85 TFLOP/s</title></circle>
+<circle cx="468.2" cy="175.6" r="4.5" fill="#057379"><title>ViT-H+/16, 448 px, batch size 1, fp16-cast: 14.3 img/s, 1,427.3 GFLOP per batch, 20.35 TFLOP/s</title></circle>
+<circle cx="611.0" cy="188.6" r="4.5" fill="#057379"><title>ViT-H+/16, 448 px, batch size 8, fp16-cast: 13.5 img/s, 11,418.1 GFLOP per batch, 19.31 TFLOP/s</title></circle>
+<circle cx="706.2" cy="218.6" r="4.5" fill="#057379"><title>ViT-H+/16, 448 px, batch size 32, fp16-cast: 11.8 img/s, 45,672.2 GFLOP per batch, 16.91 TFLOP/s</title></circle>
+<circle cx="487.9" cy="348.5" r="4.5" fill="#ffffff" stroke="#4a5655" stroke-width="1.6"><title>ViT-H+/16, 512 px, batch size 1, fp32: 3.4 img/s, 1,901.9 GFLOP per batch, 6.52 TFLOP/s</title></circle>
+<circle cx="630.7" cy="339.9" r="4.5" fill="#ffffff" stroke="#4a5655" stroke-width="1.6"><title>ViT-H+/16, 512 px, batch size 8, fp32 + compile: 3.8 img/s, 15,215.0 GFLOP per batch, 7.21 TFLOP/s</title></circle>
+<circle cx="630.7" cy="339.9" r="8.5" fill="none" stroke="#111414" stroke-width="1.2"/>
+<circle cx="725.9" cy="356.4" r="4.5" fill="#ffffff" stroke="#4a5655" stroke-width="1.6"><title>ViT-H+/16, 512 px, batch size 32, fp32: 3.1 img/s, 60,859.8 GFLOP per batch, 5.89 TFLOP/s</title></circle>
+<circle cx="487.9" cy="171.0" r="4.5" fill="#057379"><title>ViT-H+/16, 512 px, batch size 1, fp16-cast: 10.9 img/s, 1,901.9 GFLOP per batch, 20.72 TFLOP/s</title></circle>
+<circle cx="630.7" cy="140.0" r="4.5" fill="#057379"><title>ViT-H+/16, 512 px, batch size 8, fp16-cast + compile: 12.2 img/s, 15,215.0 GFLOP per batch, 23.20 TFLOP/s</title></circle>
+<circle cx="630.7" cy="140.0" r="8.5" fill="none" stroke="#111414" stroke-width="1.2"/>
+<circle cx="725.9" cy="223.6" r="4.5" fill="#057379"><title>ViT-H+/16, 512 px, batch size 32, fp16-cast: 8.7 img/s, 60,859.8 GFLOP per batch, 16.51 TFLOP/s</title></circle>
+<line x1="123.3" y1="414.6" x2="183.3" y2="422.6" stroke="#111414" stroke-width="0.8"/>
+<text x="186.3" y="426.6" font-size="11" fill="#111414" text-anchor="start">ViT-S/16, 224 px, batch size 1: 1.2 TFLOP/s</text>
+<line x1="266.1" y1="211.5" x2="286.1" y2="193.5" stroke="#111414" stroke-width="0.8"/>
+<text x="289.1" y="190.5" font-size="11" fill="#111414" text-anchor="start">ViT-S/16, 224 px, batch size 8, compile: 17.5</text>
+<line x1="630.7" y1="140.0" x2="614.7" y2="112.0" stroke="#111414" stroke-width="0.8"/>
+<text x="611.7" y="109.0" font-size="11" fill="#111414" text-anchor="end">ViT-H+/16, 512 px, batch size 8, compile: 23.2</text>
+<g font-size="11.5" fill="#111414">
+<circle cx="786" cy="60" r="4.5" fill="#ffffff" stroke="#4a5655" stroke-width="1.6"/>
+<text x="798" y="64">fp32 baseline row</text>
+<circle cx="786" cy="84" r="4.5" fill="#057379"/>
+<text x="798" y="88">fp16 baseline row</text>
+<circle cx="786" cy="108" r="8.5" fill="none" stroke="#111414" stroke-width="1.2"/>
+<text x="798" y="112">compile row</text>
+<line x1="780" x2="792" y1="132" y2="132" stroke="#4a5655" stroke-opacity="0.5"/>
+<text x="798" y="136">batch size 1 → 8 → 32</text>
+<text x="798" y="150" fill="#4a5655">(one model size,</text>
+<text x="798" y="164" fill="#4a5655">one input resolution)</text>
+</g>
+</svg>
+    </div>
+    <figcaption><b>Figure 4.</b> Reached TFLOP/s of the 45 B1 configurations (5 model sizes × 3 input resolutions × 3 batch sizes), frame embedding, fp32 and fp16 baseline rows. A thin line joins the batch sizes 1, 8 and 32 of one model size and input resolution. The rings mark the compile rows of P1 and P2. Without compile, P1 reaches 7.71 TFLOP/s in fp16 (eager median, 820.7 img/s). The dashed lines are the best linear part of B5 (Table 9). Hover over a point to see its configuration. Table 12 gives all values.</figcaption>
+  </figure>
+  <details>
+    <summary>Table 12. All values of Figure 4</summary>
+    <div class="table-wrap">
+      <table class="dense">
+        <thead><tr><th>Model size</th><th class="num">px</th><th class="num">Batch size</th><th class="num">GFLOP per batch</th><th class="num">fp32 img/s</th><th class="num">fp32 TFLOP/s</th><th>fp32 dtype mode</th><th class="num">fp16 img/s</th><th class="num">fp16 TFLOP/s</th><th>fp16 dtype mode</th></tr></thead>
+        <tbody>
+<tr><td>ViT-S/16</td><td class="num">224</td><td class="num">1</td><td class="num">9.4</td><td class="num">130.7</td><td class="num">1.23</td><td>fp32</td><td class="num">129.8</td><td class="num">1.22</td><td>fp16-cast</td></tr>
+<tr><td>ViT-S/16</td><td class="num">224</td><td class="num">8</td><td class="num">75.2</td><td class="num">642.3</td><td class="num">6.04</td><td>fp32 + compile</td><td class="num">1860.0</td><td class="num">17.48</td><td>fp16-cast + compile</td></tr>
+<tr><td>ViT-S/16</td><td class="num">224</td><td class="num">32</td><td class="num">300.7</td><td class="num">765.5</td><td class="num">7.19</td><td>fp32</td><td class="num">1275.3</td><td class="num">11.98</td><td>fp16-cast</td></tr>
+<tr><td>ViT-S/16</td><td class="num">448</td><td class="num">1</td><td class="num">45.4</td><td class="num">104.0</td><td class="num">4.73</td><td>fp32</td><td class="num">107.4</td><td class="num">4.88</td><td>fp16-cast</td></tr>
+<tr><td>ViT-S/16</td><td class="num">448</td><td class="num">8</td><td class="num">363.5</td><td class="num">158.5</td><td class="num">7.20</td><td>fp32</td><td class="num">303.9</td><td class="num">13.81</td><td>fp16-cast</td></tr>
+<tr><td>ViT-S/16</td><td class="num">448</td><td class="num">32</td><td class="num">1,454.2</td><td class="num">159.7</td><td class="num">7.26</td><td>fp32</td><td class="num">298.2</td><td class="num">13.55</td><td>fp16-cast</td></tr>
+<tr><td>ViT-S/16</td><td class="num">512</td><td class="num">1</td><td class="num">63.8</td><td class="num">82.2</td><td class="num">5.25</td><td>fp32</td><td class="num">115.3</td><td class="num">7.36</td><td>fp16-autocast</td></tr>
+<tr><td>ViT-S/16</td><td class="num">512</td><td class="num">8</td><td class="num">510.6</td><td class="num">112.9</td><td class="num">7.21</td><td>fp32</td><td class="num">221.4</td><td class="num">14.13</td><td>fp16-cast</td></tr>
+<tr><td>ViT-S/16</td><td class="num">512</td><td class="num">32</td><td class="num">2,042.2</td><td class="num">96.2</td><td class="num">6.14</td><td>fp32</td><td class="num">212.6</td><td class="num">13.57</td><td>fp16-cast</td></tr>
+<tr><td>ViT-S+/16</td><td class="num">224</td><td class="num">1</td><td class="num">12.2</td><td class="num">113.3</td><td class="num">1.39</td><td>fp32</td><td class="num">121.6</td><td class="num">1.49</td><td>fp16-cast</td></tr>
+<tr><td>ViT-S+/16</td><td class="num">224</td><td class="num">8</td><td class="num">97.9</td><td class="num">414.5</td><td class="num">5.07</td><td>fp32</td><td class="num">760.2</td><td class="num">9.31</td><td>fp16-cast</td></tr>
+<tr><td>ViT-S+/16</td><td class="num">224</td><td class="num">32</td><td class="num">391.7</td><td class="num">464.3</td><td class="num">5.68</td><td>fp32</td><td class="num">937.2</td><td class="num">11.47</td><td>fp16-cast</td></tr>
+<tr><td>ViT-S+/16</td><td class="num">448</td><td class="num">1</td><td class="num">56.6</td><td class="num">83.7</td><td class="num">4.74</td><td>fp32</td><td class="num">106.6</td><td class="num">6.03</td><td>fp16-cast</td></tr>
+<tr><td>ViT-S+/16</td><td class="num">448</td><td class="num">8</td><td class="num">452.9</td><td class="num">104.5</td><td class="num">5.92</td><td>fp32</td><td class="num">281.6</td><td class="num">15.94</td><td>fp16-cast</td></tr>
+<tr><td>ViT-S+/16</td><td class="num">448</td><td class="num">32</td><td class="num">1,811.6</td><td class="num">94.6</td><td class="num">5.36</td><td>fp32</td><td class="num">259.2</td><td class="num">14.67</td><td>fp16-cast</td></tr>
+<tr><td>ViT-S+/16</td><td class="num">512</td><td class="num">1</td><td class="num">78.4</td><td class="num">63.0</td><td class="num">4.94</td><td>fp32</td><td class="num">101.4</td><td class="num">7.94</td><td>fp16-cast</td></tr>
+<tr><td>ViT-S+/16</td><td class="num">512</td><td class="num">8</td><td class="num">627.1</td><td class="num">70.7</td><td class="num">5.54</td><td>fp32</td><td class="num">196.8</td><td class="num">15.43</td><td>fp16-cast</td></tr>
+<tr><td>ViT-S+/16</td><td class="num">512</td><td class="num">32</td><td class="num">2,508.3</td><td class="num">58.4</td><td class="num">4.58</td><td>fp32</td><td class="num">155.9</td><td class="num">12.22</td><td>fp16-cast</td></tr>
+<tr><td>ViT-B/16</td><td class="num">224</td><td class="num">1</td><td class="num">35.9</td><td class="num">103.6</td><td class="num">3.72</td><td>fp32</td><td class="num">107.9</td><td class="num">3.87</td><td>fp16-cast</td></tr>
+<tr><td>ViT-B/16</td><td class="num">224</td><td class="num">8</td><td class="num">286.9</td><td class="num">197.7</td><td class="num">7.09</td><td>fp32</td><td class="num">396.3</td><td class="num">14.21</td><td>fp16-cast</td></tr>
+<tr><td>ViT-B/16</td><td class="num">224</td><td class="num">32</td><td class="num">1,147.7</td><td class="num">178.1</td><td class="num">6.39</td><td>fp32</td><td class="num">392.1</td><td class="num">14.06</td><td>fp16-cast</td></tr>
+<tr><td>ViT-B/16</td><td class="num">448</td><td class="num">1</td><td class="num">157.9</td><td class="num">39.5</td><td class="num">6.24</td><td>fp32</td><td class="num">92.6</td><td class="num">14.62</td><td>fp16-cast</td></tr>
+<tr><td>ViT-B/16</td><td class="num">448</td><td class="num">8</td><td class="num">1,263.2</td><td class="num">39.3</td><td class="num">6.20</td><td>fp32</td><td class="num">100.5</td><td class="num">15.87</td><td>fp16-cast</td></tr>
+<tr><td>ViT-B/16</td><td class="num">448</td><td class="num">32</td><td class="num">5,052.8</td><td class="num">35.5</td><td class="num">5.60</td><td>fp32</td><td class="num">89.2</td><td class="num">14.08</td><td>fp16-cast</td></tr>
+<tr><td>ViT-B/16</td><td class="num">512</td><td class="num">1</td><td class="num">215.0</td><td class="num">28.1</td><td class="num">6.05</td><td>fp32</td><td class="num">70.4</td><td class="num">15.14</td><td>fp16-cast</td></tr>
+<tr><td>ViT-B/16</td><td class="num">512</td><td class="num">8</td><td class="num">1,720.3</td><td class="num">27.6</td><td class="num">5.93</td><td>fp32</td><td class="num">74.2</td><td class="num">15.95</td><td>fp16-cast</td></tr>
+<tr><td>ViT-B/16</td><td class="num">512</td><td class="num">32</td><td class="num">6,881.2</td><td class="num">23.5</td><td class="num">5.05</td><td>fp32</td><td class="num">63.5</td><td class="num">13.65</td><td>fp16-cast</td></tr>
+<tr><td>ViT-L/16</td><td class="num">224</td><td class="num">1</td><td class="num">125.7</td><td class="num">38.5</td><td class="num">4.83</td><td>fp32</td><td class="num">54.9</td><td class="num">6.90</td><td>fp16-autocast</td></tr>
+<tr><td>ViT-L/16</td><td class="num">224</td><td class="num">8</td><td class="num">1,005.4</td><td class="num">54.9</td><td class="num">6.89</td><td>fp32</td><td class="num">111.5</td><td class="num">14.01</td><td>fp16-autocast</td></tr>
+<tr><td>ViT-L/16</td><td class="num">224</td><td class="num">32</td><td class="num">4,021.8</td><td class="num">50.8</td><td class="num">6.38</td><td>fp32</td><td class="num">122.8</td><td class="num">15.43</td><td>fp16-autocast</td></tr>
+<tr><td>ViT-L/16</td><td class="num">448</td><td class="num">1</td><td class="num">539.0</td><td class="num">11.8</td><td class="num">6.38</td><td>fp32</td><td class="num">26.5</td><td class="num">14.28</td><td>fp16-autocast</td></tr>
+<tr><td>ViT-L/16</td><td class="num">448</td><td class="num">8</td><td class="num">4,311.8</td><td class="num">11.6</td><td class="num">6.23</td><td>fp32</td><td class="num">29.6</td><td class="num">15.95</td><td>fp16-autocast</td></tr>
+<tr><td>ViT-L/16</td><td class="num">448</td><td class="num">32</td><td class="num">17,247.0</td><td class="num">10.4</td><td class="num">5.58</td><td>fp32</td><td class="num">27.1</td><td class="num">14.63</td><td>fp16-autocast</td></tr>
+<tr><td>ViT-L/16</td><td class="num">512</td><td class="num">1</td><td class="num">727.2</td><td class="num">8.5</td><td class="num">6.16</td><td>fp32</td><td class="num">20.3</td><td class="num">14.74</td><td>fp16-autocast</td></tr>
+<tr><td>ViT-L/16</td><td class="num">512</td><td class="num">8</td><td class="num">5,817.6</td><td class="num">7.9</td><td class="num">5.75</td><td>fp32</td><td class="num">19.1</td><td class="num">13.89</td><td>fp16-autocast</td></tr>
+<tr><td>ViT-L/16</td><td class="num">512</td><td class="num">32</td><td class="num">23,270.2</td><td class="num">7.3</td><td class="num">5.28</td><td>fp32</td><td class="num">17.1</td><td class="num">12.44</td><td>fp16-autocast</td></tr>
+<tr><td>ViT-H+/16</td><td class="num">224</td><td class="num">1</td><td class="num">344.2</td><td class="num">16.3</td><td class="num">5.60</td><td>fp32</td><td class="num">26.8</td><td class="num">9.21</td><td>fp16-autocast</td></tr>
+<tr><td>ViT-H+/16</td><td class="num">224</td><td class="num">8</td><td class="num">2,753.8</td><td class="num">23.3</td><td class="num">8.01</td><td>fp32</td><td class="num">48.3</td><td class="num">16.62</td><td>fp16-autocast</td></tr>
+<tr><td>ViT-H+/16</td><td class="num">224</td><td class="num">32</td><td class="num">11,015.3</td><td class="num">21.4</td><td class="num">7.36</td><td>fp32</td><td class="num">46.4</td><td class="num">15.98</td><td>fp16-autocast</td></tr>
+<tr><td>ViT-H+/16</td><td class="num">448</td><td class="num">1</td><td class="num">1,427.3</td><td class="num">5.1</td><td class="num">7.27</td><td>fp32</td><td class="num">14.3</td><td class="num">20.35</td><td>fp16-cast</td></tr>
+<tr><td>ViT-H+/16</td><td class="num">448</td><td class="num">8</td><td class="num">11,418.1</td><td class="num">4.7</td><td class="num">6.68</td><td>fp32</td><td class="num">13.5</td><td class="num">19.31</td><td>fp16-cast</td></tr>
+<tr><td>ViT-H+/16</td><td class="num">448</td><td class="num">32</td><td class="num">45,672.2</td><td class="num">4.1</td><td class="num">5.85</td><td>fp32</td><td class="num">11.8</td><td class="num">16.91</td><td>fp16-cast</td></tr>
+<tr><td>ViT-H+/16</td><td class="num">512</td><td class="num">1</td><td class="num">1,901.9</td><td class="num">3.4</td><td class="num">6.52</td><td>fp32</td><td class="num">10.9</td><td class="num">20.72</td><td>fp16-cast</td></tr>
+<tr><td>ViT-H+/16</td><td class="num">512</td><td class="num">8</td><td class="num">15,215.0</td><td class="num">3.8</td><td class="num">7.21</td><td>fp32 + compile</td><td class="num">12.2</td><td class="num">23.20</td><td>fp16-cast + compile</td></tr>
+<tr><td>ViT-H+/16</td><td class="num">512</td><td class="num">32</td><td class="num">60,859.8</td><td class="num">3.1</td><td class="num">5.89</td><td>fp32</td><td class="num">8.7</td><td class="num">16.51</td><td>fp16-cast</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="caption"><b>Table 12.</b> Baseline rows of the frame embedding with the reached TFLOP/s. Each dtype mode counts with the median of its valid runs; compile rows count (ADR 0004). The P1 rows need care: in fp16 the eager median is 820.7 img/s (7.71 TFLOP/s) and the compile row is 1,860.0 img/s (17.48 TFLOP/s). In fp32 the eager median of three runs is 516.0 img/s and the compile row is 642.3 img/s.</p>
+  </details>
+
+  <h3>7.1 Where the reached TFLOP/s is low</h3>
+  <ul>
+    <li><b>Batch size 1 at 224 px with a small model size has the lowest values.</b> fp32: ViT-S/16 1.23, ViT-S+/16 1.39, ViT-B/16 3.72 TFLOP/s. fp16: ViT-S/16 1.22, ViT-S+/16 1.49, ViT-B/16 3.87 TFLOP/s.</li>
+    <li><b>These configurations have a floor of about 8 ms for each batch, in each dtype.</b> The median batch times are 7.99 ms (fp32) and 8.01 ms (fp16) for ViT-S/16, 9.08 and 8.51 ms for ViT-S+/16, and 9.62 and 9.48 ms for ViT-B/16.</li>
+    <li><b>fp16 gives no gain there.</b> The fp16 / fp32 throughput ratio is 0.99 to 1.07 for ViT-S/16, ViT-S+/16 and ViT-B/16 at 224 px, batch size 1.</li>
+  </ul>
+  <p>About 5 ms of each batch is a fixed cost. B5 times the forward pass in a loop with one synchronize at the end, so there is no synchronize between two calls. In that loop, ViT-S/16 at 224 px, batch size 1 takes 2.75 ms (fp32) and 2.13 ms (fp16-cast). The benchmark batch takes about 5.2 to 5.9 ms more (Table 13).</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Configuration</th><th>Benchmark batch (median)</th><th>B5 forward pass</th><th>Ratio</th></tr></thead>
+      <tbody>
+        <tr><td>ViT-S/16, fp32, 224 px, batch size 1</td><td class="num">7.99 ms</td><td class="num">2.75 ms</td><td class="num">2.91</td></tr>
+        <tr><td>ViT-S/16, fp16-cast, 224 px, batch size 1</td><td class="num">8.01 ms</td><td class="num">2.13 ms</td><td class="num">3.77</td></tr>
+        <tr><td>ViT-S/16, fp16-cast, 224 px, batch size 8</td><td class="num">9.78 ms</td><td class="num">5.38 ms</td><td class="num">1.82</td></tr>
+        <tr><td>ViT-S/16, fp16-cast, 512 px, batch size 1</td><td class="num">9.48 ms</td><td class="num">4.66 ms</td><td class="num">2.04</td></tr>
+        <tr><td>ViT-H+/16, fp16-cast, 224 px, batch size 1</td><td class="num">25.6 ms</td><td class="num">20.4 ms</td><td class="num">1.26</td></tr>
+        <tr><td>The large B5 configurations</td><td class="num">–</td><td class="num">–</td><td class="num">0.76 to 1.10</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 13.</b> The median batch time of the benchmark (eager runs) against the forward pass of B5 (the mean of before and after) for the same configuration. Two large configurations are below 0.99: ViT-S/16 fp32 512 px batch size 8 (0.76; its forward pass changed by 14.0 % during B5) and ViT-H+/16 fp32 224 px batch size 8 (0.87). The other 9 give 0.99 to 1.10. The frame throughput is 96.8 % or more of the device throughput in these rows, so the copy to the host is not the fixed cost. The fixed cost is inside the device time: pixels to the GPU, forward pass and synchronize. Step 3 did not find its parts.</p>
+
+  <h3>7.2 Where it is high, and the batch-size pattern</h3>
+  <ul>
+    <li><b>fp32 reaches 5 to 8 TFLOP/s</b> in nearly all medium and large configurations. The maximum is 8.01 TFLOP/s (ViT-H+/16, 224 px, batch size 8). This is close to the fp32 ceiling of the linear parts (8.3).</li>
+    <li><b>fp16 reaches 12 to 23 TFLOP/s for ViT-B/16 and the larger model sizes at batch sizes 8 and 32.</b> The maximum is 23.20 TFLOP/s (ViT-H+/16, 512 px, batch size 8, compile row). Without compile the maximum is 20.72 TFLOP/s (ViT-H+/16, 512 px, batch size 1). For ViT-H+/16 at 448 and 512 px, fp16 gives 2.8 to 3.2 times the throughput of fp32. The bf16 rows track the fp16 rows: the bf16 throughput is 0.83 to 1.18 times the fp16 throughput. The exception is ViT-L/16 and ViT-H+/16 at 224 px. There the fp16 row is fp16-autocast, and bf16-cast is 1.09 to 1.48 times faster (Surprise 5). The maximum of the bf16 rows is 22.88 TFLOP/s (ViT-H+/16, 512 px, batch size 8, compile row).</li>
+    <li><b>Batch size 32 is mostly slower than batch size 8.</b> The ratio of the throughputs is 0.79 to 0.93 for most configurations. ViT-S/16 at 224 px in fp16 gives 0.69, and ViT-H+/16 at 512 px in fp16 gives 0.71. Five configurations gain: ViT-S/16 at 224 px in fp32 (1.19), ViT-S+/16 at 224 px (fp32 1.12, fp16 1.23), ViT-L/16 at 224 px in fp16 (1.10) and ViT-S/16 at 448 px in fp32 (1.01).</li>
+    <li><b>Batch size 8 against batch size 1 helps mainly at 224 px.</b> ViT-S/16 gains 4.91 times in fp32 and 14.33 times in fp16; both of its batch size 8 rows are compile rows. At 448 and 512 px, ViT-B/16 and the larger model sizes gain only 0.92 to 1.12 times.</li>
+  </ul>
+  <p>So a large model size at a large input resolution gets almost no gain from a larger batch: batch size 1 already gives enough work for each kernel. A small model size needs a batch to fill the GPU, and it still loses time in the fixed cost of each batch and in the parts without FLOPs.</p>
+</section>
+
+<section id="memory">
+  <h2>8 Peak memory and the memory need</h2>
+  <h3>8.1 The process footprint</h3>
+  <p>Peak memory is the lifetime maximum of the process footprint of the worker (D5). macOS charges the process footprint to one process. On unified memory it includes the GPU memory of <code>torch-mps</code> and <code>mlx</code>, so one measure serves both backends. <code>read_footprint</code> reads it with <code>proc_pid_rusage</code>, which fills the <code>rusage_info_v4</code> struct of <code>sys/resource.h</code>:</p>
+  <pre><code>info = _RusageInfoV4()                         # a 16-byte uuid, then 35 uint64 fields
+if _libc.proc_pid_rusage(pid or os.getpid(), RUSAGE_INFO_V4, ctypes.byref(info)) != 0:
+    raise OSError(ctypes.get_errno(), "proc_pid_rusage failed")
+return Footprint(info.ri_phys_footprint, info.ri_lifetime_max_phys_footprint)</code></pre>
+  <p>The footprint does not fall after <code>torch.mps.empty_cache()</code>. A test puts a 256 MB tensor on <code>torch-mps</code> and checks that the footprint grows by at least 230 MB. <code>run_worker</code> reads the footprint three times and records five memory values:</p>
+  <ul>
+    <li><code>footprint_base_bytes</code>: the footprint before the load (0.30 GB in the largest configurations).</li>
+    <li><code>load_peak_bytes</code>: the lifetime maximum after the load.</li>
+    <li><code>peak_bytes</code>: the lifetime maximum at the end. This is the peak memory of the results table.</li>
+    <li><code>run_peak_bytes</code>: the peak memory when it is above the load peak, else null with the note "below the load peak" (14 lines on 94 W).</li>
+    <li><code>mps_driver_max_bytes</code>: the largest <code>torch.mps.driver_allocated_memory()</code> after the warm-up and after each timed batch.</li>
+  </ul>
+
+  <h3>8.2 The memory need</h3>
+  <p>The driver does the memory check before each worker. <code>required_bench_bytes</code> gives the need of one configuration:</p>
+  <pre><code>need = load_bytes(weights)                    # 1.2 × weight bytes + 4 GB (Step 2)
+     + B × T × (8 D + 3 F) × a                # tokens and feed-forward activations
+     + 2 × B × heads × T² × a                 # attention scores and softmax
+a = 2 bytes in cast mode, 4 bytes otherwise; activation factor 1.0</code></pre>
+  <p>The attention term assumes that SDPA on <code>torch-mps</code> keeps the full score matrix and its softmax. This is the safe case. The build may raise the activation factor when a peak memory is above the need. It may never lower the factor alone.</p>
+
+  <h3>8.3 Measured against the need</h3>
+  <ul>
+    <li><b>The need is always above the peak memory.</b> Over the 255 "done" lines, peak / need is 0.138 to 0.612, with a median of 0.391. So the need is 1.6 to 7.3 times the peak memory.</li>
+    <li><b>Largest peak / need, 0.61:</b> ViT-H+/16 fp16-cast and bf16-cast at 224 px, batch size 1 (3.69 / 6.03 GB); the same at 512 px, batch size 8 (4.31 / 7.12 GB); ViT-H+/16 fp32 compile row at 512 px, batch size 8 (6.24 / 10.23 GB).</li>
+    <li><b>Smallest peak / need, 0.14:</b> ViT-S/16 at 224 px, batch size 1 (0.56 to 0.57 / 4.06 to 4.11 GB). The 4 GB reserve of the load dominates the need.</li>
+    <li><b>Peak memory is stable.</b> It equals the 30 W value within 0.8 % in all 225 B1 configurations. The throughput is noisy (Section 9); the peak memory is not.</li>
+  </ul>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Configuration</th><th>Peak memory</th><th>Load peak</th><th>MPS driver maximum</th><th>Need</th></tr></thead>
+      <tbody>
+        <tr><td>ViT-H+/16, fp32, 512 px, batch size 32</td><td class="num">9.27</td><td class="num">4.76</td><td class="num">8.12</td><td class="num">16.83</td></tr>
+        <tr><td>ViT-H+/16, fp16-autocast or bf16-autocast, 512 px, batch size 32</td><td class="num">8.69</td><td class="num">4.76</td><td class="num">7.56</td><td class="num">16.83</td></tr>
+        <tr><td>ViT-H+/16, fp32 or autocast, 448 px, batch size 32</td><td class="num">7.46 to 7.48</td><td class="num">–</td><td class="num">–</td><td class="num">13.81</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 14.</b> The largest peak memory values, in GB. The footprint before the load is 0.30 GB in each of these rows.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Model size</th><th>fp32</th><th>fp16-cast</th><th>bf16-cast</th><th>fp16-autocast</th><th>Need (fp32 / cast mode)</th></tr></thead>
+      <tbody>
+        <tr><td>ViT-S/16</td><td class="num">3.04</td><td class="num">1.86</td><td class="num">1.85</td><td class="num">1.89</td><td class="num">6.74 / 5.37</td></tr>
+        <tr><td>ViT-S+/16</td><td class="num">3.08</td><td class="num">1.90</td><td class="num">1.90</td><td class="num">1.92</td><td class="num">6.78 / 5.39</td></tr>
+        <tr><td>ViT-B/16</td><td class="num">4.66</td><td class="num">3.23</td><td class="num">3.23</td><td class="num">3.40</td><td class="num">9.69 / 6.84</td></tr>
+        <tr><td>ViT-L/16</td><td class="num">5.62</td><td class="num">4.22 (not valid)</td><td class="num">4.25</td><td class="num">5.35</td><td class="num">12.49 / 8.24</td></tr>
+        <tr><td>ViT-H+/16</td><td class="num">9.27</td><td class="num">5.69</td><td class="num">5.68</td><td class="num">8.69</td><td class="num">16.83 / 10.41</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 15.</b> Peak memory in GB at 512 px, batch size 32 (eager, main run). For ViT-S/16 to ViT-B/16 the bf16 values equal the fp16 values within 0.01 GB. Autocast keeps the fp32 weights, so fp16-autocast needs more memory than fp16-cast: 8.69 against 5.69 GB for ViT-H+/16.</p>
+  <p>Why is the need so high? An estimate from the shapes for ViT-H+/16 at 512 px, batch size 32, fp32: the score term of the need assumes two full score matrices of size B · heads · T² · a, which is 5.42 GB. The activation term is 3.37 GB. But the peak memory minus the load peak is only 4.51 GB, less than the score term alone. So SDPA on <code>torch-mps</code> does not keep two full score matrices of this size at the same time. This estimate comes from the shapes and the committed values; Step 3 did not measure the memory of SDPA alone.</p>
+  <p>ViT-7B/16 is not measured. All 18 of its lines are "deferred" (D8). In cast mode its need is 20.15 to 28.23 GB.</p>
+</section>
+
+<section id="noise">
+  <h2>9 Noise, the power adapter and the baseline row</h2>
+  <h3>9.1 The power adapter</h3>
+  <p>The build and the first verifier runs ran on a 30 W USB-C power adapter (finding F11). <code>system_profiler</code> reported the adapter, and the battery charge fell from 10 % to 8 % while <code>pmset</code> reported "AC Power". An M5 Max draws much more than 30 W under GPU load, so it took the missing power from the battery. The machine state did not record the adapter, so no check caught it.</p>
+  <p>On the 96 W adapter of the Mac (it reports 94 W), the verifier measured all of Step 3 again (Section 14 of <code>verify.html</code>). The frame throughput of 94 W / 30 W for each B1 configuration has a median of 1.30 and a range of 0.89 to 3.47. 210 of 225 configurations are faster. By model size, the median ratio is 1.52 (ViT-S/16), 1.30 (ViT-S+/16), 1.29 (ViT-B/16), 1.27 (ViT-L/16) and 1.35 (ViT-H+/16). A speedup against the 30 W baseline would have been about 30 % too high.</p>
+  <p>The fix (commit <code>a1e7d4e</code>): the machine state now records <code>adapter_watts</code> and <code>battery_percent</code>, and <code>check_machine_state</code> refuses an adapter below <code>MIN_ADAPTER_WATTS</code> = 90 W. All 273 lines of the 94 W results record 94 W, with a battery charge of 22 to 89 %.</p>
+
+  <h3>9.2 Noise from run to run</h3>
+  <p>On 30 W, the throughput of one configuration changed by up to 2 times from one run to the next (finding F1). The noise was in the GPU time: the device time was 97.2 % or more of the frame time in every P1 run. Inside one run the batch times were tight (p90 / median 1.01 to 1.10 for P2), but the level moved between runs. One P1 run even changed its level in the middle: fp16-cast, median 25.2 ms in the first half and 16.1 ms in the second half. Free memory, power source, thermal notes and the worker before P1 did not explain it.</p>
+  <p>On 94 W the noise is smaller, but it is still there. This page uses the spreads of the final re-measurement (Section 14 of <code>verify.html</code>, Table 16). The first three rounds on 94 W, before the final re-measurement, gave larger spreads: P1 16.6 to 48.0 % and P2 5.5 to 36.9 % (F11).</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Priority configuration</th><th>Dtype mode</th><th>Throughput of the 3 runs (img/s)</th><th>Spread</th></tr></thead>
+      <tbody>
+        <tr><td>P1, frame embedding</td><td>fp32</td><td class="num">587.8, 492.1, 516.0</td><td class="num">18.5 %</td></tr>
+        <tr><td>P1, frame embedding</td><td>fp16-cast</td><td class="num">847.4, 810.6, 820.7</td><td class="num">4.5 %</td></tr>
+        <tr><td>P1, frame embedding</td><td>bf16-cast</td><td class="num">818.7, 817.1, 820.5</td><td class="num">0.4 %</td></tr>
+        <tr><td>P1, frame embedding</td><td>fp16-autocast</td><td class="num">733.7, 713.0, 734.3</td><td class="num">2.9 %</td></tr>
+        <tr><td>P1, frame embedding</td><td>bf16-autocast</td><td class="num">718.4, 747.3, 775.0</td><td class="num">7.6 %</td></tr>
+        <tr><td>P2, patch embeddings</td><td>fp32</td><td class="num">3.2, 4.0, 3.5</td><td class="num">23.2 %</td></tr>
+        <tr><td>P2, patch embeddings</td><td>fp16-cast</td><td class="num">9.9, 11.1, 10.0</td><td class="num">12.2 %</td></tr>
+        <tr><td>P2, patch embeddings</td><td>bf16-cast</td><td class="num">10.1, 10.5, 10.1</td><td class="num">4.8 %</td></tr>
+        <tr><td>P2, patch embeddings</td><td>fp16-autocast</td><td class="num">8.4, 8.8, 8.6</td><td class="num">5.1 %</td></tr>
+        <tr><td>P2, patch embeddings</td><td>bf16-autocast</td><td class="num">8.7, 8.5, 8.9</td><td class="num">3.5 %</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 16.</b> The main run and the two repeats of P1 and P2 on 94 W (Section 4 of <code>results/baseline-torch-mps.md</code>). Spread = (largest − smallest) / median. AC5 asks for 5 % or less: 5 of 10 rows pass (0 of 10 on 30 W). The fastest run of one configuration is at most 1.3 times the slowest (1.9 times on 30 W). The fp32 rows stay the noisiest.</p>
+
+  <h3>9.3 The baseline row (ADR 0004)</h3>
+  <p>A speedup divides the throughput of <code>mlx</code> by the throughput of the baseline row. <code>baseline_rows</code> picks one baseline row for each model size, input resolution, batch size, output and dtype:</p>
+  <ol>
+    <li>Take the lines of the dtype modes of the dtype: fp32 → fp32; fp16 → fp16-cast and fp16-autocast; bf16 → bf16-cast and bf16-autocast. A compile row counts as its own configuration.</li>
+    <li>Drop the lines that are not "done" and the lines with <code>"valid": false</code>.</li>
+    <li>For each configuration, take the run with the median throughput of its runs: the main run, the repeats and the rounds. For an even number of runs, take the lower of the two middle runs.</li>
+    <li>Take the configuration with the highest median throughput. The row names its dtype mode, "+ compile" for a compile row, and its number of runs.</li>
+  </ol>
+  <p>Two decisions changed the first rule of the plan. <b>Median of the runs:</b> one run can be far off (F1), and the fastest run would depend on luck. <b>Compile rows join the baseline:</b> the user decided this on 2026-11-06, so that a speedup does not count a gain that <code>torch.compile</code> also gives. Only P1 and P2 have compile rows. So at P1 and P2 the baseline is compiled torch: 6 of the 135 baseline rows of each output are compile rows (fp32, fp16 and bf16 of P1 and P2). The other rows are eager torch, and most of them have 1 run. Step 6 therefore measures each speedup again with <code>torch-mps</code> and <code>mlx</code> runs in alternation in one session.</p>
+  <pre><code>def _median_run(runs: list[dict], output: str) -> tuple[dict, int]:
+    ordered = sorted(runs, key=lambda line: line[output]["throughput_ips"])
+    return ordered[(len(ordered) - 1) // 2], len(ordered)   # lower middle run for an even count</code></pre>
+</section>
+
+<section id="code">
+  <h2>10 The code of Step 3</h2>
+  <p>Step 3 adds six modules to <code>src/dinov3_apple/</code> and adds names to three modules of Step 2: <code>hub.py</code>, <code>memory.py</code> and <code>parity.py</code> (Section 10.7). <code>bench.py</code> and <code>flops.py</code> do not import torch, so the <code>mlx</code> harness of Step 6 can use them without the memory of torch in its process footprint. A test checks this (<code>test_bench_module_does_not_import_torch</code>).</p>
+
+  <h3>10.1 <code>flops.py</code>: FLOPs and bytes, pure Python</h3>
+  <ul>
+    <li><code>PART_NAMES</code>: the 11 part names in the order of the forward pass (Table 2).</li>
+    <li><code>ModelShape</code>: <code>dim</code> (D), <code>blocks</code> (L), <code>heads</code>, <code>ff</code> (F, the <code>intermediate_size</code>) and <code>gated</code> (True for SwiGLU). <code>MODEL_SHAPES</code> maps each model size to its shape (Table 3). A test compares it with the <code>config.json</code> of each model size.</li>
+    <li><code>tokens(side)</code>: T = 5 + (side / 16)², the prefix tokens plus the patch tokens.</li>
+    <li><code>part_flops(shape, batch_size, num_tokens)</code>: the FLOPs of each part. The six parts without FLOPs stay 0.</li>
+    <li><code>part_bytes(shape, batch_size, num_tokens, bytes_per_value)</code>: the approximate bytes that each part reads and writes, with the activations and the weight matrices (Table 2).</li>
+    <li><code>image_flops(shape, side)</code>: the FLOPs of one square image (patch embedding + L blocks) and the sdpa share. A test checks the values against Table 2 of <code>explore.html</code> within 0.5 %.</li>
+  </ul>
+  <pre><code>bt, d, f = batch_size * num_tokens, shape.dim, shape.ff
+ff_in_matrices = 2 if shape.gated else 1                      # SwiGLU: gate_proj and up_proj
+flops = dict.fromkeys(PART_NAMES, 0)                          # parts without FLOPs stay 0
+flops["qkv_proj"] = 3 * 2 * bt * d * d
+flops["sdpa"] = 4 * batch_size * num_tokens * num_tokens * d  # Q Kᵀ and (scores) V
+flops["o_proj"] = 2 * bt * d * d
+flops["ff_in"] = ff_in_matrices * 2 * bt * d * f
+flops["ff_out"] = 2 * bt * f * d</code></pre>
+
+  <h3>10.2 <code>block_profile.py</code>: the block profile</h3>
+  <ul>
+    <li><code>Part</code>: one part of a block, with its <code>name</code>, its computation <code>fn</code>, and the names of its <code>inputs</code> and <code>outputs</code> in a state dict.</li>
+    <li><code>block_parts(layer)</code>: the 11 parts of one block with the Hugging Face modules and functions. It checks for <code>gate_proj</code> to choose between SwiGLU (two ff_in matrices, <code>silu(gate) * up</code>) and the MLP (one matrix, GELU).</li>
+    <li><code>run_parts(parts, state)</code>: runs the parts in order and returns a new state with every input and output.</li>
+    <li><code>time_part(fn, device, min_calls=20, min_seconds=0.5, loops=5)</code>: the median time of one call (Section 5.5).</li>
+    <li><code>profile_block(model, pixels, dtype_mode, **timing)</code>: the forward pass before the parts, the 11 parts, the whole block, the three parts outside the blocks and the forward pass after the parts. It returns the times and the number of blocks L.</li>
+  </ul>
+  <pre><code>return [
+    Part("norm1", lambda x: (layer.norm1(x),), ("x",), ("h1",)),
+    Part("qkv_proj", qkv_proj, ("h1",), ("q", "k", "v")),
+    Part("rope", apply_rotary_pos_emb, ("q", "k", "cos", "sin"), ("qr", "kr")),
+    Part("sdpa", sdpa, ("qr", "kr", "v"), ("a",)),
+    # ... o_proj, layer_scale1, norm2, ff_in, activation, ff_out ...
+    Part("layer_scale2", lambda y, x: (layer.layer_scale2(y) + x,), ("y", "x2"), ("out",)),
+]
+
+# run_parts: each part reads its inputs from the state and adds its outputs to it.
+for part in parts:
+    outputs = part.fn(*(state[name] for name in part.inputs))
+    state |= dict(zip(part.outputs, outputs, strict=True))</code></pre>
+  <p><code>profile_block</code> binds the stored inputs of each part to a closure, so a timed call does no lookup: <code>parts_s = {part.name: time_part(bound(part), device, **timing) for part in parts}</code>.</p>
+
+  <h3>10.3 <code>bench.py</code>: the benchmark matrix, the time budget and the baseline rows</h3>
+  <ul>
+    <li><b>Constants.</b> <code>MAIN_MODEL_SIZES</code> (the five sizes of B1), <code>GIANT_MODEL_SIZE</code> (ViT-7B/16), <code>DTYPE_MODE_NAMES</code>, <code>CAST_MODES</code>, <code>SIDES</code> (224, 448, 512), <code>BATCH_SIZES</code> (1, 8, 32), <code>OUTPUTS</code> ("frame", "patch"), <code>DTYPE_OF_MODE</code> (dtype mode → dtype), <code>WEIGHT_BYTES</code> (autocast keeps fp32 weights), <code>ACTIVATION_FACTOR</code> (1.0), <code>PRIORITY</code> (P1 and P2), <code>DEFERRED_REASON</code> and <code>LINE_FIELDS</code> (the fields of one JSON line).</li>
+    <li><code>TimeBudget</code>: <code>min_batches</code>, <code>min_seconds</code>, <code>max_seconds</code> and <code>floor_batches</code>. <code>WARM_UP</code> and <code>TIMED</code> are the two budgets of Table 6.</li>
+    <li><code>keep_going(budget, batches, elapsed_s)</code>: True while a batch loop needs another batch.</li>
+    <li><code>BenchConfig</code>: one configuration: <code>run</code>, <code>model_size</code>, <code>dtype_mode</code>, <code>side</code>, <code>batch_size</code>, <code>compile</code> and <code>repeat</code>. The output is not part of it (D3). Its <code>key</code> is the identity in the results, without the run; its <code>label</code> is a short name for the log.</li>
+    <li><code>line_key(line)</code>: the <code>BenchConfig.key</code> of one JSON line. <code>latest_lines(lines)</code>: the last line of each configuration, so a later "done" line replaces an earlier "skipped" line.</li>
+    <li><code>bench_configurations(model_sizes, priority, repeats, compile)</code>: the configurations of B1 to B4, from the smallest to the largest model size. ViT-7B/16 gets the cast modes only, because it never loads fp32 weights on this Mac.</li>
+    <li><code>add_rounds(configs, lines, rounds)</code>: returns the configuration list N times, round after round, for <code>benchmark.py --rounds N</code>. Each round gives each configuration the next free repeat number. With 0 rounds it returns the list unchanged.</li>
+    <li><code>required_bench_bytes(config, activation_factor)</code>: the memory need of Section 8.2.</li>
+    <li><code>make_batch(inputs, side, batch_size)</code>: the input batch of Section 5.4.</li>
+    <li><code>Validity</code>: <code>valid</code>, <code>finite</code>, <code>parity</code> and <code>note</code>. <code>check_validity(frame, patches, reference, dtype_mode)</code>: the validity check of Section 5.4. Without a reference file (ViT-7B/16) it checks only that the values are finite.</li>
+    <li><code>summarize(times, batch_size)</code>: the throughput, the median and the p90 of the batch times.</li>
+    <li><code>result_line(config, worker, need_bytes, available_bytes, machine)</code>: one JSON line with every field of <code>LINE_FIELDS</code>. A line without a worker ("skipped", "deferred") gets the time of the driver (finding F6).</li>
+    <li><code>BaselineRow</code>: the chosen <code>line</code> (or None), the <code>reason</code> for an empty row and the number of valid <code>runs</code>. <code>baseline_rows(lines, output)</code>: the rule of Section 9.3.</li>
+  </ul>
+  <pre><code># keep_going
+stop_time = budget.max_seconds is not None and elapsed_s >= budget.max_seconds
+if stop_time and batches >= budget.floor_batches:
+    return False                                    # 60 s and at least 10 batches
+return batches < budget.min_batches or elapsed_s < budget.min_seconds
+
+# required_bench_bytes
+weights = _parameter_count(config.model_size) * WEIGHT_BYTES[config.dtype_mode]
+a = 2 if config.dtype_mode in CAST_MODES else 4
+b, t = config.batch_size, tokens(config.side)
+activations = b * t * (8 * shape.dim + 3 * shape.ff) * a + 2 * b * shape.heads * t * t * a
+return load_bytes(weights) + round(activation_factor * activations)
+
+# make_batch
+images = [inputs[f"{image}/{side}x{side}"][0] for image in TEST_IMAGES]
+batch = np.stack([images[i % len(images)] for i in range(batch_size)])
+
+# check_validity: the timed copy has no register tokens, so they come from the reference.
+tokens_ = np.concatenate([frame[None], reference[1 : 1 + 4], patches])
+parity = measure_parity(reference, tokens_)
+
+# summarize
+"throughput_ips": float(batch_size * len(values) / values.sum()),
+
+# add_rounds
+return [
+    replace(config, repeat=taken.get(config.key[:-1], -1) + 1 + index)
+    for index in range(rounds)
+    for config in configs
+]</code></pre>
+  <p><code>measure_parity</code> does not use the register rows, so the register rows from the reference do not change the parity of the frame embedding and the patch embeddings.</p>
+
+  <h3>10.4 <code>torch_bench.py</code>: the worker on <code>torch-mps</code></h3>
+  <ul>
+    <li><code>time_batch(model, batch, mode)</code>: one batch from host to host (Section 5.2). It returns the three times, the frame embeddings and the patch embeddings. The outputs stay torch tensors in the dtype of the backend output, because NumPy has no bf16.</li>
+    <li><code>run_worker(config, warm_up, timed, bench_dir)</code>: the work of one worker subprocess. It refuses fp32 weights for ViT-7B/16 with a <code>ValueError</code>. It writes the device time, the frame time and the patch time of each timed batch to <code>bench_dir</code> (default <code>BENCH_DIR</code>, <code>tests/fixtures/generated/bench/</code>, which git ignores) and returns the worker fields of <code>LINE_FIELDS</code>.</li>
+  </ul>
+  <pre><code>base = read_footprint()                                           # footprint before the load
+model = load_torch_backbone(config.model_size, "mps", config.dtype_mode)
+if config.compile:
+    model = torch.compile(model)                                  # compile rows (B3)
+load_peak = read_footprint().lifetime_max_bytes
+batch = make_batch(read_inputs(), config.side, config.batch_size)
+(_, _, first_call_s), frame, patches = time_batch(model, batch, mode)   # first batch
+validity = check_validity(...)                                    # image 0 of the first batch
+warm = _phase(model, batch, mode, warm_up)
+driver_max = [torch.mps.driver_allocated_memory()]                # after the warm-up
+timed_times = _phase(
+    model, batch, mode, timed, lambda: driver_max.append(torch.mps.driver_allocated_memory())
+)
+end = read_footprint()                                            # peak memory at the end</code></pre>
+
+  <h3>10.5 <code>footprint.py</code>: the process footprint</h3>
+  <ul>
+    <li><code>Footprint</code>: <code>current_bytes</code> and <code>lifetime_max_bytes</code> of one process.</li>
+    <li><code>read_footprint(pid=None)</code>: reads both values with <code>proc_pid_rusage</code> and <code>RUSAGE_INFO_V4</code> through <code>ctypes</code> (Section 8.1). It raises <code>OSError</code> when the call fails. <code>None</code> means this process.</li>
+  </ul>
+
+  <h3>10.6 <code>machine.py</code>: the machine state</h3>
+  <ul>
+    <li><code>MachineState</code>: <code>power_source</code>, <code>low_power_mode</code>, <code>thermal</code>, <code>available_bytes</code>, <code>chip</code>, <code>memory_bytes</code>, <code>versions</code>, <code>adapter_watts</code> and <code>battery_percent</code>.</li>
+    <li><code>read_versions()</code>: the macOS, Python, torch, transformers, mlx, NumPy and safetensors versions (<code>VERSIONED_PACKAGES</code>). A missing package gives "not installed".</li>
+    <li><code>read_machine_state(batt_text, pmset_text, therm_text, ac_text)</code>: runs <code>pmset -g batt</code>, <code>pmset -g</code>, <code>pmset -g therm</code> and <code>pmset -g ac</code>, unless a test gives the texts. It reads the chip name and the memory size with <code>sysctl</code>. Without a <code>lowpowermode</code> line it reads the <code>powermode</code> line (1 is Low Power Mode); this Mac has only the <code>powermode</code> line.</li>
+    <li><code>check_machine_state(state)</code>: raises <code>MachineStateError</code> on battery power, in Low Power Mode or with an adapter below <code>MIN_ADAPTER_WATTS</code> (90). The driver then stops and writes no line.</li>
+  </ul>
+  <pre><code>MIN_ADAPTER_WATTS = 90          # the 96 W adapter of this Mac reports 94 W
+
+if state.adapter_watts is not None and state.adapter_watts < MIN_ADAPTER_WATTS:
+    raise MachineStateError(
+        f"The power adapter gives {state.adapter_watts} W, less than {MIN_ADAPTER_WATTS} W. "
+        "Connect the adapter of the Mac."
+    )</code></pre>
+
+  <h3>10.7 Helpers moved from <code>reference.py</code></h3>
+  <p><code>parameter_count</code>, <code>TEST_IMAGES</code>, <code>LOAD_RATIO</code> and <code>LOAD_RESERVE_BYTES</code> moved out of <code>reference.py</code>, which imports torch, so that <code>bench.py</code> can use them without torch. <code>load_bytes</code> is new. It holds the formula that <code>required_load_bytes</code> had inline. <code>reference.py</code> imports <code>parameter_count</code>, <code>LOAD_RATIO</code> and <code>TEST_IMAGES</code> again, so their old imports still work.</p>
+  <ul>
+    <li><code>hub.parameter_count(model_size)</code>: the number of weights, summed from the safetensors headers without a load. <code>required_bench_bytes</code> caches it for each model size.</li>
+    <li><code>memory.load_bytes(weight_bytes, ratio=LOAD_RATIO)</code>: <code>LOAD_RATIO</code> (1.2) × the weight bytes + <code>LOAD_RESERVE_BYTES</code> (4 GB). <code>reference.required_load_bytes</code> now calls it.</li>
+    <li><code>parity.TEST_IMAGES</code>: the three test images in the order of a benchmark batch.</li>
+  </ul>
+
+  <h3>10.8 The scripts</h3>
+  <ul>
+    <li><code>scripts/benchmark.py</code>: the driver of Section 5.1. Options: <code>--model-size</code>, <code>--priority</code>, <code>--repeats</code>, <code>--compile</code>, <code>--rounds</code>, <code>--dry-run</code> (prints each need, loads no model), <code>--only-skipped</code>, <code>--skip-done</code> and <code>--activation-factor</code> (refuses values below 1.0).</li>
+    <li><code>scripts/profile_block.py</code>: B5, one subprocess for each model size and dtype mode. A failed subprocess gives a line with status "error", and a hidden <code>--results</code> option writes to another file (finding F7).</li>
+    <li><code>scripts/baseline_table.py</code>: turns the JSON lines into the two results tables, with the checks, the baseline rows, the repeats and the spread, the compile gains and the machine state.</li>
+  </ul>
+</section>
+
+<section id="surprises">
+  <h2>11 Surprises</h2>
+  <ol>
+    <li class="note"><b>The first baseline ran on a 30 W power adapter.</b> <code>pmset</code> reported "AC Power", but the battery charge fell from 10 % to 8 % (F11). On the 94 W adapter, P2 fp32 gave 3.17, 3.97 and 3.46 img/s against 2.40 to 2.62 img/s, and P1 fp16-cast gave 811 to 847 img/s against 383 to 784 img/s (Table 16). Over all B1 configurations the median gain was 1.30 times. The adapter made the baseline too slow, but it is not the only cause of the noise. The driver now refuses an adapter below 90 W.</li>
+    <li class="note"><b>One run is one sample.</b> On 30 W, the throughput of one configuration changed by up to 2 times between runs (F1). P1 had five runs with a spread of 32.3 to 74.8 %, and only 15 of 45 ViT-S/16 configurations of the verifier re-run were within 5 % of the build (ratios 0.846 to 1.518). Inside one process, a forward pass changed from 2.38 to 4.99 ms within about one minute. On 94 W the largest ratio of the fastest to the slowest run is 1.3, but the fp32 rows still miss 5 %. The cause stays open. So the baseline row takes the median of the runs, and Step 6 measures each speedup in pairs.</li>
+    <li class="note"><b>At batch size 1, a block alone is slower than a block inside the forward pass.</b> For ViT-S/16 at 224 px, batch size 1, block 1 alone takes 0.36 ms (fp32) and 0.29 ms (fp16-cast), but forward pass / L is only 0.23 and 0.18 ms. The verifier tested this on 30 W (Section 6 of <code>verify.html</code>). The 12 blocks in sequence, the same work as in the forward pass, also took as long as 12 × block 1 alone (6.95 against 6.24 ms in fp32). All blocks, called on stored inputs without the patch embedding, took 25 to 32 % longer than the full forward pass, which does more work. The CPU time to issue the work was the same (2.9 to 3.6 ms). The effect needs small kernels: in the verifier test on 30 W, batch size 8 or 512 px gave 1.03. On 94 W the GPU is faster, so more configurations show the effect, for example ViT-S/16 fp16-cast at 224 px, batch size 8 (1.342). So the time shares of B5 are robust, but the absolute block time at batch size 1 is too high. Use forward pass / L for the time of one block (F4).</li>
+    <li class="note"><b>RoPE has 0 FLOPs and takes up to 30.5 % of the block time.</b> It takes 10.9 to 30.5 % of the block time of ViT-S/16 and 4.1 to 14.2 % of ViT-H+/16 (Table 10). <code>part_bytes</code> / time is only 15 to 90 GB/s: the Hugging Face chain runs 12 small kernels and moves about four times the bytes that <code>part_bytes</code> counts. fp16 makes it only 0.95 to 1.35 times faster. On 30 W, F9 found that RoPE was slower in fp16-cast than in fp32 for ViT-S/16 at 224 px, batch size 8 (250 against 208 µs). On 94 W this does not hold: 176 µs in fp16-cast against 191 µs in fp32. RoPE is a candidate for one fused kernel in Step 6.</li>
+    <li class="note"><b>fp16-cast overflows for ViT-L/16 and for ViT-H+/16 at 224 px.</b> The 12 lines that are not valid are exactly ViT-L/16 fp16-cast (9) and ViT-H+/16 fp16-cast at 224 px (3), all with "non-finite output". Their register values are above the fp16 maximum of 65,504 (Section 6 of <code>docs/learn/02-tokens-and-outputs.html</code>). So the fp16 baseline row there is fp16-autocast, which keeps fp32 weights and an fp32 residual stream. At batch sizes 8 and 32 it reaches 12.4 to 16.6 TFLOP/s, while bf16-cast reaches 15.3 to 20.5 TFLOP/s in the same configurations. The block profile can still use fp16-cast for ViT-H+/16 at 224 px, because block 1 has values below 100.</li>
+    <li class="note"><b>The small frame copy costs as much as the large patch copy.</b> The frame copy runs first and copies B × D values. The patch copy copies B × N × D values: 84 MB against 82 KB for ViT-H+/16 at 512 px, batch size 32 in fp16 (<code>explore.html</code>). Over the 255 "done" lines of 94 W, the frame copy has a median of 0.31 ms and the patch copy 0.39 ms. In 91 of 255 lines the median frame time is longer than the median patch time, by 0.67 % or less (on 30 W: 93 of 254 lines, 0.8 % or less). <code>explore.html</code> expected this order effect: the first copy can make the second copy a little faster. The effect is real but below 1 %. A copy costs mostly a fixed time, not a time for each byte. (Own count from <code>results/baseline-torch-mps.jsonl</code>.)</li>
+    <li class="note"><b>torch.compile gives large gains at P1.</b> Against the median of the three eager runs, the compile rows of P1 are 24.5 to 126.7 % faster, and those of P2 are 9.5 to 30.0 % faster. P1 fp16-cast goes from 820.7 to 1,860.0 img/s. 9 of 10 compile rows are more than 10 % faster; P2 fp32 is +9.5 %. The first call with compile took 1.0 to 3.2 s on 94 W (4.3 to 12.7 s on 30 W), because the compile cache on disk was warm. The gain is largest where small kernels dominate. Step 3 did not profile the compiled graph. A likely cause is that <code>torch.compile</code> joins small element-wise operations into fewer kernels.</li>
+    <li class="note"><b>Batch size 32 is mostly slower than batch size 8.</b> The throughput ratio is 0.79 to 0.93 for most configurations, and 0.69 for ViT-S/16 at 224 px in fp16. Only five configurations gain, four of them by 10 % or more. Step 3 did not look for the cause.</li>
+    <li class="note"><b>A batch has a fixed cost of about 5 ms.</b> ViT-S/16 at 224 px, batch size 1 needs about 8 ms for each batch in fp32 and in fp16. The same forward pass takes 2.13 to 2.75 ms in a loop without a synchronize between the calls (Table 13). The cost is in the device time, not in the copy to the host.</li>
+    <li class="note"><b>The memory need is 1.6 to 7.3 times the peak memory.</b> The need formula assumes two full score matrices. For ViT-H+/16 at 512 px, batch size 32, fp32, the score term alone (5.42 GB) is larger than the measured growth above the load peak (4.51 GB). The formula is safe, but it skips configurations that fit. On 30 W, the verifier ran the one skipped configuration: it fitted with a peak memory of 8.70 GB against a need of 16.83 GB (F3).</li>
+  </ol>
+</section>
+
+<section id="sources">
+  <h2>12 Sources</h2>
+  <ul>
+    <li>Repo files: <code>specs/03-baseline/explore.html</code>, <code>specs/03-baseline/plan.html</code> (Sections 2, 3 and Table 6), <code>specs/03-baseline/verify.html</code> (Sections 5, 6, 9, 13 and 14), <code>docs/adr/0004-baseline-row-median-of-runs-with-compile-rows.md</code>, <code>GLOSSARY.md</code>, <code>docs/learn/02-tokens-and-outputs.html</code>.</li>
+    <li>Results: <code>results/baseline-torch-mps.md</code>, <code>results/baseline-torch-mps.jsonl</code>, <code>results/block-profile-torch-mps.md</code> and <code>results/block-profile-torch-mps.jsonl</code>, 94 W re-measurement of 2026-11-06.</li>
+    <li>Code: <code>src/dinov3_apple/flops.py</code>, <code>block_profile.py</code>, <code>bench.py</code>, <code>torch_bench.py</code>, <code>footprint.py</code>, <code>machine.py</code>, <code>hub.py</code>, <code>memory.py</code>, <code>parity.py</code>; <code>scripts/benchmark.py</code>, <code>scripts/profile_block.py</code>, <code>scripts/baseline_table.py</code>.</li>
+    <li>Hugging Face transformers 5.22.1: <code>models/dinov3_vit/modeling_dinov3_vit.py</code> (<code>apply_rotary_pos_emb</code>, <code>rotate_half</code>), Apache-2.0. <a href="https://github.com/huggingface/transformers">github.com/huggingface/transformers</a>.</li>
+    <li>DINOv3 paper: Siméoni et al., arXiv 2508.10104 (August 2025). <a href="https://arxiv.org/abs/2508.10104">arxiv.org/abs/2508.10104</a>.</li>
+    <li>RoPE: Su et al., "RoFormer: Enhanced Transformer with Rotary Position Embedding", arXiv 2104.09864. <a href="https://arxiv.org/abs/2104.09864">arxiv.org/abs/2104.09864</a>.</li>
+    <li>SwiGLU: Shazeer, "GLU Variants Improve Transformer", arXiv 2002.05202. <a href="https://arxiv.org/abs/2002.05202">arxiv.org/abs/2002.05202</a>.</li>
+    <li>LayerScale: Touvron et al., "Going deeper with Image Transformers", arXiv 2103.17239. <a href="https://arxiv.org/abs/2103.17239">arxiv.org/abs/2103.17239</a>.</li>
+    <li><code>struct rusage_info_v4</code> and <code>proc_pid_rusage</code>: <code>bsd/sys/resource.h</code> of the XNU kernel. <a href="https://github.com/apple-oss-distributions/xnu">github.com/apple-oss-distributions/xnu</a>.</li>
+    <li>PyTorch MPS backend: <code>torch.mps.synchronize</code> and <code>torch.mps.driver_allocated_memory</code>. <a href="https://pytorch.org/docs/stable/mps.html">pytorch.org/docs/stable/mps.html</a>.</li>
+  </ul>
+</section>
+</main>
+</body>
+</html>

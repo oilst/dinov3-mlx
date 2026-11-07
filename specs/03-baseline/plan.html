@@ -215,12 +215,14 @@ T = tokens (201, 789 or 1,029), F = feed-forward size, a = 2 bytes in cast mode,
     <li>If no line is left, the baseline row is empty, with the reason.</li>
   </ol>
   <p>The results table names the dtype mode of each baseline row. The Close stage writes this rule as ADR 0004.</p>
+  <p><b>Changed after Verify (2026-11-07).</b> <code>docs/adr/0004-baseline-row-median-of-runs-with-compile-rows.md</code> replaces this rule: compile rows join the baseline (decision of the user), and each configuration counts with the median of its valid runs (finding F1 of <code>verify.html</code>).</p>
 
   <h3>3.8 Machine state</h3>
   <p>The driver reads the machine state before each worker and adds it to the JSON line:</p>
   <ul>
     <li>Power source, from <code>pmset -g batt</code> ("AC Power" or "Battery Power").</li>
-    <li>Low Power Mode, from the <code>lowpowermode</code> line of <code>pmset -g</code>. On this Mac the line is missing; then the value is "not reported".</li>
+    <li>Low Power Mode, from the <code>lowpowermode</code> line of <code>pmset -g</code>. On this Mac the line is missing; then the value is "not reported". <b>Changed in the build:</b> without that line, the code reads the <code>powermode</code> line (1 is Low Power Mode), so this Mac records "off".</li>
+    <li><b>Added after Verify (2026-11-07):</b> the wattage of the power adapter, from <code>pmset -g ac</code>, and the battery charge. The driver refuses an adapter below 90 W (finding F11 of <code>verify.html</code>).</li>
     <li>Thermal notes, from <code>pmset -g therm</code>. On 2026-11-06 it gave "No thermal warning level has been recorded".</li>
     <li>The free memory before the worker, from <code>available_memory_bytes</code>.</li>
     <li>macOS, Python, torch and transformers versions, the chip name and the memory size (once per run, in each line).</li>
