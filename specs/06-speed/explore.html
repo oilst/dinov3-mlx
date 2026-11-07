@@ -1,0 +1,1364 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Step 6 Speed: Explore</title>
+<style>
+/* Spec page. White page, black text, no dark mode. */
+:root { --bg: #ffffff; --fg: #111414; --muted: #4a5655; --rule: #d6dedd; --panel: #f5f8f7; --accent: #057379; --pass: #1d7a3a; --fail: #b3261e; color-scheme: light; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif; }
+main { max-width: 64rem; margin: 0 auto; padding: 40px 20px 64px; display: grid; gap: 1.75rem; }
+main > *, section > * { min-width: 0; }
+h1 { font-size: 1.9rem; line-height: 1.15; margin: 0; }
+h2 { font-size: 1.3rem; margin: 0; }
+h3 { font-size: 1.05rem; margin: 0; }
+h4 { font-size: 0.95rem; margin: 0; }
+section { display: grid; gap: 0.8rem; }
+p, ul, ol { margin: 0; max-width: 46rem; }
+li + li { margin-top: 0.25rem; }
+code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.86em; }
+p code, li code, td code { overflow-wrap: anywhere; }
+pre { margin: 0; background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 0.8rem 1rem; overflow-x: auto; }
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+th, td { text-align: left; vertical-align: top; padding: 0.45rem 0.7rem 0.45rem 0; border-bottom: 1px solid var(--rule); }
+th { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); border-bottom: 1.5px solid var(--fg); }
+td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+tr.group td { background: var(--panel); font-weight: 600; }
+.caption { font-size: 0.88rem; color: var(--muted); }
+.fail { color: var(--fail); font-weight: 600; }
+.pass { color: var(--pass); font-weight: 600; }
+.rec { color: var(--accent); font-weight: 600; }
+.box { border: 1.5px solid var(--accent); border-radius: 6px; padding: 0.8rem 1rem; display: grid; gap: 0.5rem; }
+.warn { border: 1.5px solid var(--fail); border-radius: 6px; padding: 0.8rem 1rem; display: grid; gap: 0.5rem; }
+figure { margin: 0; display: grid; gap: 0.4rem; }
+.fig { border: 1px solid var(--rule); border-radius: 6px; padding: 0.5rem; overflow-x: auto; }
+.fig svg { display: block; width: 100%; height: auto; min-width: 640px; }
+figcaption { font-size: 0.88rem; color: var(--muted); }
+a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+<header>
+  <h1>Step 6 Speed: Explore</h1>
+  <p>Roadmap step 6. Status: options picked. On 2026-11-07 the user answered "Take all recommendations": the recommended option of Table 39 applies to each decision, and Table 41 (Section 6.1) gives the answer to each question. Date: 2026-11-07.</p>
+</header>
+
+<section id="task">
+  <h2>1 What Step 6 must do and the starting point</h2>
+  <p>Step 6 makes the MLX backbone fast. Section 6 of <code>docs/plan.html</code> lists nine actions (Table 1). We measure each change against the previous result, so <code>verify.html</code> shows the gain of each change. The step ends when the speedup table covers all configurations. The explainer covers the attention cost at high input resolution and the effect of the batch size. <code>mission.md</code> asks for a speedup above 1 for each model size and dtype. If a speedup is not above 1, <code>verify.html</code> explains why.</p>
+  <p>These points are fixed. They are not options:</p>
+  <ul>
+    <li>mlx 0.32.4 and mlx-metal 0.32.4 stay pinned during Step 6. A version change goes into its own commit (<code>tech-stack.md</code>).</li>
+    <li>The parity thresholds of ADR 0003. Only the user changes them. Quantized weights have no thresholds yet (Section 6, question 1).</li>
+    <li>The baseline row of ADR 0004: the fastest valid dtype mode of each dtype, with the median of its runs. At P1 and P2 the baseline is a compile row of <code>torch.compile</code>.</li>
+    <li>ADR 0005 (fp32 on <code>mlx</code> with TF32 off), ADR 0006 (Hugging Face RoPE tables), ADR 0007 (the <code>mlx</code> autocast modes keep fp16 or bf16 weights) and ADR 0008 (ViT-7B/16 never loads its fp32 weights).</li>
+    <li>The run rules of <code>CLAUDE.md</code>: one heavy job at a time, a memory check before each one, <code>mx.set_memory_limit</code> for MLX, the MPS watermarks for torch-mps.</li>
+    <li>Later steps: Step 7 writes <code>embed_frames</code> and <code>embed_patches</code> on top of the Step 6 forward pass. Step 8a puts LoRA on <code>q_proj</code> and <code>v_proj</code> in fp16 autocast. Step 6 must keep these module names.</li>
+  </ul>
+
+  <h3>1.1 The actions of Step 6</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>No.</th><th>Action of <code>docs/plan.html</code></th><th>Place in this page</th></tr></thead>
+      <tbody>
+        <tr><td>A1</td><td>Run the benchmark matrix for <code>mlx</code> with the configurations of Step 3</td><td>D7 (rows and protocol), D8 (memory need), D9 (baseline rows), order step 6</td></tr>
+        <tr><td>A2</td><td>Compile the forward pass with <code>mx.compile</code></td><td>D1, D3, D4, D6</td></tr>
+        <tr><td>A3</td><td>Cache the RoPE tables for each input resolution</td><td>D2. The cache exists since Step 4; Step 6 changes its layout</td></tr>
+        <tr><td>A4</td><td>Find the best batch size for each model size and input resolution</td><td>D10</td></tr>
+        <tr><td>A5</td><td>Move the preprocessing to MLX</td><td>D12</td></tr>
+        <tr><td>A6</td><td>Return patch embeddings in fp16 when the parity tests allow it</td><td>D13</td></tr>
+        <tr><td>A7</td><td>Quantize ViT-H+/16 and ViT-7B/16 to 8 bits and to 4 bits</td><td>D14 to D17</td></tr>
+        <tr><td>A8</td><td>Measure the parity and the throughput of each quantized model</td><td>D18 (thresholds, user decision), order step 7</td></tr>
+        <tr><td>A9</td><td>Record the MLX and macOS versions that enable the Neural Accelerators</td><td>D19. Section 2.4 has the record</td></tr>
+        <tr><td>L</td><td>Explainer: the attention cost at high input resolution and the effect of the batch size</td><td>D10, D11, Figure 3, order step 11</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 1.</b> The nine actions of Step 6 in Section 6 of <code>docs/plan.html</code>, the explainer topic, and where this page decides each one.</p>
+
+  <h3>1.2 Open items that Step 6 takes over</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Item</th><th>Source</th><th>Content</th><th>Place in this page</th></tr></thead>
+      <tbody>
+        <tr><td>F2</td><td>Step 5 verify</td><td>The sign of the cast-mode paired ratio at P2 changed between two runs. The spread between runs is about 20 %</td><td>D7: more rounds, two runs at different times, the spread between runs</td></tr>
+        <tr><td>F15</td><td>Step 5 verify</td><td>The time estimates of Step 5 were 7 to 12 times too high</td><td>Section 5.1: all times come from measured times</td></tr>
+        <tr><td>F14</td><td>Step 5 verify</td><td>Light jobs of other agents overlapped timing runs. The wait loop protects only the agent that runs it</td><td>Order step 1: the wait loop also before light GPU work, and a lock</td></tr>
+        <tr><td>R30</td><td>Step 5 explore</td><td>About 4 extra cast kernels per block in the autocast modes: 3 to 5 % slower than the cast modes</td><td>D3</td></tr>
+        <tr><td>Benchmark need</td><td>ADR 0007</td><td><code>required_bench_bytes</code> counts 4 bytes per weight in the <code>mlx</code> autocast modes: 10.23 GB instead of about 8.2 GB at P2</td><td>D8</td></tr>
+        <tr><td>F17</td><td>Step 5 verify</td><td>"Load peak" has two meanings: the result field <code>load_peak_bytes</code> is a footprint value</td><td>Order step 1: rename the field; Section 7 gives the new term</td></tr>
+        <tr><td>F1</td><td>Step 4 and Step 5 verify</td><td>Step 4: the pixel cast broke a quantized patch embedding (fixed). Step 5: the load-peak checks got a lower bound (fixed). Neither check knows quantized weights yet</td><td>D17: the bounds and the targets learn <code>QuantizedLinear</code> before the first quantized load</td></tr>
+        <tr><td>F5, F6</td><td>Step 4 verify</td><td>F5 and F6 are fixed in <code>scripts/bench_mlx_port.py</code>. <code>scripts/benchmark.py</code> still drops the memory-check line of its worker (F6)</td><td>Order step 1</td></tr>
+        <tr><td>F8</td><td>Step 4 verify, ADR 0005</td><td>An fp32 dtype mode with TF32 on needs its own name and thresholds</td><td>D5</td></tr>
+        <tr><td>F3</td><td>Step 5 verify, ADR 0007</td><td>The half SDPA kernel uses <code>relaxed_precision</code>: about 11 bits inside, no fp32 P · V</td><td>D19: a report-only test</td></tr>
+        <tr><td>B4</td><td>Step 3 verify</td><td>The torch-mps baseline of ViT-7B/16 is deferred</td><td>D9</td></tr>
+        <tr><td>V1</td><td>Step 5 verify, Section 12</td><td>No test reads a block with a missing tensor in the streamed reference</td><td>Order step 1: one small-model test</td></tr>
+        <tr><td>V2</td><td>Step 5 verify, Section 12</td><td><code>make_reference.py --streamed</code> without model sizes writes the five full-model reference files again</td><td>Order step 1: write only the model sizes of <code>NO_FP32_WEIGHTS</code> by default</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 2.</b> The open items of Steps 3 to 5 that Step 6 takes over. Each item gets a decision or a place in the order of the work (Table 40). No item is out of Step 6.</p>
+
+  <h3>1.3 The starting point</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Dtype mode</th><th><code>mlx</code> eager, Step 5 build / re-run</th><th>torch-mps eager, Step 5 build / re-run</th><th>torch-mps <code>torch.compile</code> (Step 3)</th><th>Median paired ratio, build / re-run</th></tr></thead>
+      <tbody>
+        <tr><td>fp32</td><td class="num">3.91 / 4.56</td><td class="num">3.49 / 4.26</td><td class="num">3.79</td><td class="num">1.118 / 1.094</td></tr>
+        <tr><td>fp16-cast</td><td class="num">10.10 / 12.03</td><td class="num">9.83 / 12.43</td><td class="num">12.20</td><td class="num">1.028 / 0.968</td></tr>
+        <tr><td>bf16-cast</td><td class="num">10.15 / 12.12</td><td class="num">9.77 / 12.45</td><td class="num">12.03</td><td class="num">1.039 / 0.973</td></tr>
+        <tr><td>fp16-autocast</td><td class="num">9.76 / 11.43</td><td class="num">8.44 / 10.42</td><td class="num">11.15</td><td class="num">1.156 / 1.096</td></tr>
+        <tr><td>bf16-autocast</td><td class="num">9.86 / 11.55</td><td class="num">8.53 / 10.45</td><td class="num">11.12</td><td class="num">1.159 / 1.105</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 3.</b> Throughput (img/s, frame embedding) at P2: ViT-H+/16, 512 px, batch size 8. Sources: Table 6 of <code>specs/05-all-sizes/verify.html</code> and the compile rows of <code>results/baseline-torch-mps.jsonl</code>. So <code>mlx</code> without compile is about equal to eager torch-mps or faster. In the build run it was 11 to 17 % below the <code>torch.compile</code> rows in the half modes, but the compile rows ran on another day. At P1 (ViT-S/16, 224 px), Step 4 measured <code>mlx</code> only in fp32: 846.9 img/s at batch size 8 and 357.3 img/s at batch size 1, paired ratio 1.39 and 3.12 against eager torch-mps. The P1 compile rows of torch-mps: fp32 642.33, fp16-cast 1860.04, bf16-cast 1848.41, fp16-autocast 1502.14, bf16-autocast 1497.10 img/s.</p>
+
+  <h3>1.4 The target: a compiled and quantized forward pass</h3>
+  <p>Figure 1 shows the data flow that the recommended options give. One <code>mx.compile</code> function holds the whole forward pass. The weights enter it as inputs. The element-wise chains become fused kernels. The layer norms stay their own kernels. In a quantized model, the matmuls of the block <code>nn.Linear</code> modules read 8-bit weights.</p>
+  <figure>
+    <div class="fig"><svg viewBox="0 0 960 580" role="img" aria-label="Data flow of a compiled and quantized forward pass. A video frame goes to the preprocessing on the GPU, then to one compiled function. Inside: the patch embedding, the prefix tokens, the RoPE tables from the cache, and for each block the layer norm, a cast, the q, k and v matmuls, a fused RoPE kernel, the SDPA kernel, the output matmul and a fused LayerScale and residual kernel; then the same for the feed-forward branch. After the last block: the final layer norm and the output cast." font-family="-apple-system, Helvetica Neue, Arial, sans-serif">
+      <defs><marker id="arrowf1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#4a5655"/></marker></defs>
+      <rect width="960" height="580" fill="#ffffff"/>
+      <g font-size="12" fill="#111414" text-anchor="middle">
+        <rect x="20" y="16" width="150" height="64" rx="6" fill="#ffffff" stroke="#111414" stroke-width="1.5"/>
+        <text x="95" y="42" font-weight="600">Video frame</text>
+        <text x="95" y="62" font-size="11.5">uint8, any size</text>
+        <rect x="190" y="16" width="250" height="64" rx="6" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="315" y="36" font-weight="600">Preprocessing on the GPU (D12)</text>
+        <text x="315" y="54" font-size="11.5">separable resize: 2 matmuls</text>
+        <text x="315" y="71" font-size="11.5">÷ 255, normalize: fp32 pixels</text>
+        <rect x="460" y="16" width="210" height="64" rx="6" fill="#ffffff" stroke="#4a5655" stroke-width="1.5"/>
+        <text x="565" y="36" font-weight="600">Trace cache (D1)</text>
+        <text x="565" y="54" font-size="11.5">key: B, H, W and dtypes</text>
+        <text x="565" y="71" font-size="11.5">new key: trace, 2 to 6 ms</text>
+        <rect x="690" y="16" width="250" height="64" rx="6" fill="#ffffff" stroke="#111414" stroke-width="1.5"/>
+        <text x="815" y="36" font-weight="600">Weights: inputs=model.state</text>
+        <text x="815" y="54" font-size="11.5">block nn.Linear: affine 8 bits,</text>
+        <text x="815" y="71" font-size="11.5">group 64 (D14 to D17)</text>
+        <text x="135" y="102" font-size="11" fill="#4a5655" text-anchor="start">fp32 pixels (B, 3, H, W)</text>
+
+        <rect x="20" y="108" width="920" height="354" rx="8" fill="none" stroke="#057379" stroke-width="1.5" stroke-dasharray="6 4"/>
+        <text x="36" y="128" font-weight="600" font-size="12.5" text-anchor="start">Compiled forward pass (D1): one mx.compile function, replayed for each batch of the same shape</text>
+
+        <rect x="40" y="138" width="170" height="50" rx="6" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="125" y="158" font-weight="600">Patch embedding</text>
+        <text x="125" y="177" font-size="11.5">1 matmul, not quantized</text>
+        <rect x="230" y="138" width="170" height="50" rx="6" fill="#f5f8f7" stroke="#4a5655" stroke-width="1.5"/>
+        <text x="315" y="158" font-weight="600">+ CLS, 4 registers</text>
+        <text x="315" y="177" font-size="11.5">stream dtype</text>
+        <rect x="420" y="138" width="230" height="50" rx="6" fill="#ffffff" stroke="#111414" stroke-width="1.5"/>
+        <text x="535" y="158" font-weight="600">RoPE tables (D2), fp32</text>
+        <text x="535" y="177" font-size="11.5">cos2, signed sin2, per grid</text>
+        <rect x="670" y="138" width="250" height="50" rx="6" fill="#ffffff" stroke="#d6dedd" stroke-width="1.5"/>
+        <text x="795" y="158" font-weight="600">Kernels per SwiGLU block</text>
+        <text x="795" y="177" font-size="11.5">eager 33, compiled 21, with R2 15</text>
+        <text x="560" y="202" font-size="11" fill="#4a5655" text-anchor="start">next block: L = 12, 24, 32 or 40 blocks</text>
+
+        <rect x="40" y="220" width="110" height="50" rx="6" fill="#f5f8f7" stroke="#4a5655" stroke-width="1.5"/>
+        <text x="95" y="241" font-weight="600">norm1</text>
+        <text x="95" y="259" font-size="11.5">layer norm</text>
+        <rect x="168" y="220" width="110" height="50" rx="6" fill="#ffffff" stroke="#4a5655" stroke-width="1.5" stroke-dasharray="4 3"/>
+        <text x="223" y="241" font-weight="600">cast</text>
+        <text x="223" y="259" font-size="11.5">autocast only</text>
+        <rect x="296" y="220" width="110" height="50" rx="6" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="351" y="241" font-weight="600">q, k, v</text>
+        <text x="351" y="259" font-size="11.5">3 matmuls</text>
+        <rect x="424" y="220" width="110" height="50" rx="6" fill="#fbf1df" stroke="#b26b00" stroke-width="1.5"/>
+        <text x="479" y="241" font-weight="600">RoPE</text>
+        <text x="479" y="259" font-size="11.5">fused, q and k</text>
+        <rect x="552" y="220" width="110" height="50" rx="6" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="607" y="241" font-weight="600">SDPA</text>
+        <text x="607" y="259" font-size="11.5">NAX kernel</text>
+        <rect x="680" y="220" width="110" height="50" rx="6" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="735" y="241" font-weight="600">o_proj</text>
+        <text x="735" y="259" font-size="11.5">1 matmul</text>
+        <rect x="808" y="220" width="110" height="50" rx="6" fill="#fbf1df" stroke="#b26b00" stroke-width="1.5"/>
+        <text x="863" y="241" font-weight="600">LayerScale 1</text>
+        <text x="863" y="259" font-size="11.5">bias, λ, add</text>
+        <text x="480" y="286" font-size="11" fill="#4a5655">residual stream (stream dtype)</text>
+
+        <rect x="40" y="310" width="110" height="50" rx="6" fill="#f5f8f7" stroke="#4a5655" stroke-width="1.5"/>
+        <text x="95" y="331" font-weight="600">norm2</text>
+        <text x="95" y="349" font-size="11.5">layer norm</text>
+        <rect x="168" y="310" width="110" height="50" rx="6" fill="#ffffff" stroke="#4a5655" stroke-width="1.5" stroke-dasharray="4 3"/>
+        <text x="223" y="331" font-weight="600">cast</text>
+        <text x="223" y="349" font-size="11.5">autocast only</text>
+        <rect x="296" y="310" width="110" height="50" rx="6" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="351" y="331" font-weight="600">gate, up</text>
+        <text x="351" y="349" font-size="11.5">2 matmuls</text>
+        <rect x="424" y="310" width="110" height="50" rx="6" fill="#fbf1df" stroke="#b26b00" stroke-width="1.5"/>
+        <text x="479" y="331" font-weight="600">silu · up</text>
+        <text x="479" y="349" font-size="11.5">1 fused kernel</text>
+        <rect x="552" y="310" width="110" height="50" rx="6" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="607" y="331" font-weight="600">down_proj</text>
+        <text x="607" y="349" font-size="11.5">1 matmul</text>
+        <rect x="680" y="310" width="110" height="50" rx="6" fill="#fbf1df" stroke="#b26b00" stroke-width="1.5"/>
+        <text x="735" y="331" font-weight="600">LayerScale 2</text>
+        <text x="735" y="349" font-size="11.5">bias, λ, add</text>
+        <text x="560" y="376" font-size="11" fill="#4a5655" text-anchor="start">after the last block</text>
+
+        <rect x="40" y="396" width="150" height="46" rx="6" fill="#f5f8f7" stroke="#4a5655" stroke-width="1.5"/>
+        <text x="115" y="415" font-weight="600">Final layer norm</text>
+        <text x="115" y="433" font-size="11.5">fusion barrier</text>
+        <rect x="220" y="396" width="330" height="46" rx="6" fill="#ffffff" stroke="#4a5655" stroke-width="1.5" stroke-dasharray="4 3"/>
+        <text x="385" y="415" font-weight="600">Output cast (D13)</text>
+        <text x="385" y="433" font-size="11.5">frame embedding fp32, patch embeddings fp16</text>
+        <rect x="580" y="396" width="160" height="46" rx="6" fill="#ffffff" stroke="#111414" stroke-width="1.5"/>
+        <text x="660" y="415" font-weight="600">Host</text>
+        <text x="660" y="433" font-size="11.5">NumPy array</text>
+        <rect x="755" y="396" width="170" height="46" rx="6" fill="#ffffff" stroke="#d6dedd" stroke-width="1.5"/>
+        <text x="840" y="415" font-weight="600">Eager only (D4)</text>
+        <text x="840" y="433" font-size="11.5">hidden states, token range</text>
+
+        <rect x="20" y="480" width="16" height="12" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="44" y="490" font-size="11.5" text-anchor="start">matmul: a NAX kernel. In a quantized model, a quantized matmul; its bias add moves into the next fused kernel</text>
+        <rect x="20" y="502" width="16" height="12" fill="#fbf1df" stroke="#b26b00" stroke-width="1.5"/>
+        <text x="44" y="512" font-size="11.5" text-anchor="start">fused kernel: one kernel for a chain of element-wise operations (mx.compile)</text>
+        <rect x="20" y="524" width="16" height="12" fill="#f5f8f7" stroke="#4a5655" stroke-width="1.5"/>
+        <text x="44" y="534" font-size="11.5" text-anchor="start">fusion barrier: mx.fast.layer_norm, its own kernel; it also blocks the fusion of the cast after it</text>
+        <rect x="20" y="546" width="16" height="12" fill="#ffffff" stroke="#4a5655" stroke-width="1.5" stroke-dasharray="4 3"/>
+        <text x="44" y="556" font-size="11.5" text-anchor="start">cast: its own kernel in the autocast modes; it does nothing in fp32 and in the cast modes</text>
+      </g>
+      <g stroke="#4a5655" stroke-width="1.5" fill="none">
+        <path d="M170,48 H186" marker-end="url(#arrowf1)"/>
+        <path d="M315,80 V90 H125 V134" marker-end="url(#arrowf1)"/>
+        <path d="M565,80 V104" marker-end="url(#arrowf1)"/>
+        <path d="M815,80 V104" marker-end="url(#arrowf1)"/>
+        <path d="M210,163 H226" marker-end="url(#arrowf1)"/>
+        <path d="M315,188 V208"/>
+        <path d="M790,335 H915 V208 H95 V216" marker-end="url(#arrowf1)"/>
+        <path d="M150,245 H164" marker-end="url(#arrowf1)"/>
+        <path d="M278,245 H292" marker-end="url(#arrowf1)"/>
+        <path d="M406,245 H420" marker-end="url(#arrowf1)"/>
+        <path d="M534,245 H548" marker-end="url(#arrowf1)"/>
+        <path d="M662,245 H676" marker-end="url(#arrowf1)"/>
+        <path d="M790,245 H804" marker-end="url(#arrowf1)"/>
+        <path d="M863,270 V292 H95 V306" marker-end="url(#arrowf1)"/>
+        <path d="M150,335 H164" marker-end="url(#arrowf1)"/>
+        <path d="M278,335 H292" marker-end="url(#arrowf1)"/>
+        <path d="M406,335 H420" marker-end="url(#arrowf1)"/>
+        <path d="M534,335 H548" marker-end="url(#arrowf1)"/>
+        <path d="M662,335 H676" marker-end="url(#arrowf1)"/>
+        <path d="M735,360 V382 H115 V392" marker-end="url(#arrowf1)"/>
+        <path d="M190,419 H216" marker-end="url(#arrowf1)"/>
+        <path d="M550,419 H576" marker-end="url(#arrowf1)"/>
+      </g>
+      <path d="M480,188 V216" stroke="#057379" stroke-width="1.5" stroke-dasharray="4 3" fill="none" marker-end="url(#arrowf1)"/>
+    </svg></div>
+    <figcaption><b>Figure 1.</b> Data flow of a compiled and quantized forward pass (recommended options D1, D2, D12 to D17), for a SwiGLU model size in an autocast mode. Teal: matmuls. Amber: fused kernels. Grey: layer norms. Dashed: casts. The kernel counts are for one SwiGLU block in bf16-cast, from a graph export without evaluation (Section 2.2). A new input shape (batch size, height, width) gives one new trace. The hidden states and the token range stay on the eager forward pass. The MLP model sizes have one matmul (<code>up_proj</code>) and GELU in place of <code>gate</code>, <code>up</code> and SiLU.</figcaption>
+  </figure>
+</section>
+
+<section id="facts">
+  <h2>2 Measured facts and probe results</h2>
+  <p>On 2026-11-07, research agents read the repo, the results of Steps 3 to 5 and the MLX 0.32.4 package. They ran small CPU probes without a model load. Then one agent ran the GPU probes outside the repo: 24 probe runs in 762 s (12.7 min) of wall time, one heavy job at a time, each after the wait loop and a memory check, with <code>mx.set_memory_limit</code> in each MLX worker. Later the same day, after the power adapter was connected, the seven probes that check the machine state ran on AC power (Section 2.9): 3.8 min for p1-compile-pairs and 11.3 min for the other six. No repo file changed. This section gives the results. A throughput ratio divides the throughput of the new form by the throughput of the old form; above 1 means faster. Tables 9 and 11 also give time ratios; above 1 means slower.</p>
+  <div class="warn">
+    <p><b>Limits of all probe values.</b></p>
+    <ul>
+      <li><b>Battery power, then AC power.</b> The first 24 probe runs ran on battery power (99 % down to 66 %, no adapter). Seven probes check the machine state and stopped at their first worker. They ran again on AC power and gave complete results (Table 4, Section 2.9).</li>
+      <li><b>Battery power did not lower the throughput.</b> ViT-S/16 fp32 eager at P1 gave 891 img/s (batch size 8) and 367 img/s (batch size 1), against 830 to 852 and 351 to 360 img/s in Step 4 on AC power.</li>
+      <li><b>Thermal drift on battery power is large.</b> On battery power, ViT-H+/16 bf16-cast eager at P2 took 434 ms per batch at the start of one process and 512 ms 40 s later (+18 %). Two minutes later, the next process took 650 to 690 ms. Step 5 on AC power measured 780 to 930 ms. So absolute values of the battery-power probes do not compare with other sessions. Only the paired values compare: the forms alternate in one process, in a rotated order, over 3 to 5 rounds.</li>
+      <li><b>On AC power the drift is small.</b> The probe long-phase gave a last-third / first-third throughput ratio of 0.987 (ViT-S/16) and 0.981 (ViT-H+/16) over about 90 s, with no thermal warning. The probe paired-noise gave a spread inside one arm of 1.6 % (torch-mps) and 3.0 % (<code>mlx</code>) over 6 runs each. The spread between runs on different days stays about 20 % (F2).</li>
+    </ul>
+  </div>
+
+  <h3>2.1 The probes</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Probe</th><th>Priority</th><th>Question</th><th>Status</th><th>For</th></tr></thead>
+      <tbody>
+        <tr><td>compile-p1</td><td>must</td><td>Change ratio of the compiled forward pass at P1, batch sizes 1 and 8, five dtype modes</td><td class="pass">ran</td><td>D1, D2</td></tr>
+        <tr><td>compile-parity</td><td>must</td><td>Bit equality of compiled and eager on the GPU; parity in 12 configurations</td><td class="pass">ran</td><td>D4</td></tr>
+        <tr><td>compile-p2-half, compile-p2-fp32</td><td>must, should</td><td>Change ratio at P2 in the five dtype modes; MLX peak</td><td class="pass">ran</td><td>D1, D2</td></tr>
+        <tr><td>r30</td><td>extra</td><td>Autocast / cast in one process, eager and compiled</td><td class="pass">ran</td><td>D3</td></tr>
+        <tr><td>elementwise</td><td>should</td><td>Time of each part of block 1 at P2, eager and compiled</td><td class="pass">ran</td><td>D1 to D3</td></tr>
+        <tr><td>retrace</td><td>should</td><td>Cost of a new batch size or input resolution with the compiled forward pass</td><td class="pass">ran</td><td>D1, D2</td></tr>
+        <tr><td>fuse-proj</td><td>could</td><td>One matmul for q, k and v (and for gate and up) at batch size 1</td><td class="pass">ran</td><td>D6</td></tr>
+        <tr><td>tf32</td><td>must</td><td>Throughput and fp32 parity with TF32 on, ViT-S/16 and ViT-H+/16</td><td class="pass">ran</td><td>D5</td></tr>
+        <tr><td>nax-record, nax-ab</td><td>must, should</td><td>Which versions run the NAX kernels; the throughput with and without them</td><td class="pass">ran</td><td>D19</td></tr>
+        <tr><td>sdpa</td><td>must</td><td>Memory and FLOP rate of the SDPA kernel against the token count</td><td class="pass">ran</td><td>D8, D11</td></tr>
+        <tr><td>highres</td><td>should</td><td>Batch time at 768 and 1024 px; the token range at high input resolution</td><td class="pass">ran</td><td>D10, D11</td></tr>
+        <tr><td>preprocess</td><td>should</td><td>CPU against two MLX resize paths: time and pixel difference</td><td class="pass">ran</td><td>D12</td></tr>
+        <tr><td>fp16-output</td><td>could</td><td>Time and parity loss of an fp16 output</td><td class="pass">ran</td><td>D13</td></tr>
+        <tr><td>Q1, Q5, Q6</td><td>must, should, could</td><td>Parity of quantized weights: bits, module groups, formats</td><td class="pass">ran</td><td>D14 to D16, D18</td></tr>
+        <tr><td>Q2, Q7</td><td>must, could</td><td>Time of a quantized matmul against a dense matmul</td><td class="pass">ran</td><td>D14, D15</td></tr>
+        <tr><td>Q3, Q8</td><td>must, could</td><td>Throughput of quantized ViT-H+/16 and ViT-S/16</td><td class="pass">ran</td><td>D14, D15</td></tr>
+        <tr><td>Q4a, Q4b</td><td>must, should</td><td>Load peak of quantization in the loader, ViT-H+/16 and ViT-7B/16</td><td class="pass">ran</td><td>D17</td></tr>
+        <tr><td>p1-compile-pairs</td><td>must</td><td>Paired speedup of compiled <code>mlx</code> against <code>torch.compile</code> at P1</td><td class="pass">ran (AC power)</td><td>D7, D21, Table 14</td></tr>
+        <tr><td>torch-compile-offp</td><td>should</td><td>Gain of <code>torch.compile</code> outside P1 and P2</td><td class="pass">ran (AC power)</td><td>D9, D20</td></tr>
+        <tr><td>vit7b-calibration</td><td>should</td><td>Batch times of ViT-7B/16 on both backends, for the time estimates</td><td class="pass">ran (AC power)</td><td>D9, Section 5.1</td></tr>
+        <tr><td>batch-knee</td><td>should</td><td>Throughput against the batch size, ViT-S/16 at 224 px and ViT-H+/16 at 512 px</td><td class="pass">ran (AC power)</td><td>D10</td></tr>
+        <tr><td>long-phase, paired-noise</td><td>could</td><td>Drift over 90 s; noise of paired rounds</td><td class="pass">ran (AC power)</td><td>D7, D20</td></tr>
+        <tr><td>memory-limit</td><td>could</td><td>Throughput with the MLX limit at the load need against the benchmark need</td><td class="pass">ran (AC power)</td><td>D8</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 4.</b> The GPU probes of 2026-11-07. Some probes merge two planned probes (for example sdpa-peak and sdpa-sweep). The last seven probes stopped on battery power at first. They ran again on AC power, one at a time, in 15.1 min. Section 2.9 gives their results.</p>
+
+  <h3>2.2 The compiled forward pass</h3>
+  <p>Three forms of the forward pass ran in each probe process: <b>E</b>, the eager forward pass of Step 5; <b>A</b>, <code>mx.compile(lambda p: model(p), inputs=model.state)</code>; <b>R</b>, A with the concat-free RoPE (D2, option R2). Tables 5 and 6 give the throughput and the change ratios. Figure 2 shows the change ratios with their ranges.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Dtype mode</th><th>Batch size</th><th>E, img/s</th><th>A, img/s</th><th>R, img/s</th><th>A / E</th><th>R / E</th></tr></thead>
+      <tbody>
+        <tr><td>fp32</td><td class="num">1</td><td class="num">367</td><td class="num">398</td><td class="num">403</td><td class="num">1.087 [1.083–1.091]</td><td class="num">1.102 [1.096–1.106]</td></tr>
+        <tr><td>fp32</td><td class="num">8</td><td class="num">891</td><td class="num">937</td><td class="num">951</td><td class="num">1.052 [1.017–1.059]</td><td class="num">1.068 [1.059–1.078]</td></tr>
+        <tr><td>fp16-cast</td><td class="num">1</td><td class="num">449</td><td class="num">536</td><td class="num">596</td><td class="num">1.193 [1.183–1.205]</td><td class="num">1.319 [1.312–1.330]</td></tr>
+        <tr><td>fp16-cast</td><td class="num">8</td><td class="num">1482</td><td class="num">1980</td><td class="num">2098</td><td class="num">1.311 [1.253–1.419]</td><td class="num">1.427 [1.405–1.429]</td></tr>
+        <tr><td>bf16-cast</td><td class="num">1</td><td class="num">454</td><td class="num">537</td><td class="num">598</td><td class="num">1.185 [1.180–1.188]</td><td class="num">1.305 [1.298–1.327]</td></tr>
+        <tr><td>bf16-cast</td><td class="num">8</td><td class="num">1412</td><td class="num">1949</td><td class="num">2054</td><td class="num">1.354 [1.293–1.412]</td><td class="num">1.452 [1.410–1.459]</td></tr>
+        <tr><td>fp16-autocast</td><td class="num">1</td><td class="num">440</td><td class="num">527</td><td class="num">572</td><td class="num">1.200 [1.192–1.223]</td><td class="num">1.310 [1.293–1.318]</td></tr>
+        <tr><td>fp16-autocast</td><td class="num">8</td><td class="num">1328</td><td class="num">1761</td><td class="num">1928</td><td class="num">1.328 [1.304–1.354]</td><td class="num">1.449 [1.405–1.468]</td></tr>
+        <tr><td>bf16-autocast</td><td class="num">1</td><td class="num">437</td><td class="num">524</td><td class="num">572</td><td class="num">1.211 [1.198–1.230]</td><td class="num">1.315 [1.305–1.321]</td></tr>
+        <tr><td>bf16-autocast</td><td class="num">8</td><td class="num">1340</td><td class="num">1818</td><td class="num">1918</td><td class="num">1.307 [1.273–1.381]</td><td class="num">1.427 [1.407–1.443]</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 5.</b> P1 (ViT-S/16, 224 px). Median throughput and change ratio, median [min–max] over 5 rounds in a rotated order. 3 warm-up batches and 50 (batch size 1) or 20 (batch size 8) timed batches for each form and round. A and R are bit for bit equal to E in all 10 cells, and image 0 is valid in all. Trace (the compiled call before <code>mx.eval</code>): 1.5 to 1.8 ms. First evaluation of the first compiled call of a process: 165 to 435 ms in the half modes (the Metal compile of the fused kernels); later first calls 3 to 17 ms. MLX peak (Section 7) at batch size 8: E 0.61 to 0.78 GB, A 0.41 to 0.55 GB, R 0.33 to 0.52 GB. In the half modes, R needs about half the MLX peak of E.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Dtype mode</th><th>E, img/s</th><th>A, img/s</th><th>R, img/s</th><th>A / E</th><th>R / E</th><th>MLX peak E / A / R</th></tr></thead>
+      <tbody>
+        <tr><td>fp32</td><td class="num">4.7</td><td class="num">4.9</td><td class="num">5.0</td><td class="num">1.054 [1.031–1.073]</td><td class="num">1.084 [1.027–1.094]</td><td class="num">5.01 / 5.01 / 4.92 GB</td></tr>
+        <tr><td>fp16-cast</td><td class="num">12.3</td><td class="num">14.7</td><td class="num">15.1</td><td class="num">1.189 [1.116–1.337]</td><td class="num">1.229 [1.194–1.326]</td><td class="num">2.99 / 2.74 / 2.63 GB</td></tr>
+        <tr><td>bf16-cast</td><td class="num">16.4</td><td class="num">20.0</td><td class="num">20.6</td><td class="num">1.241 [1.148–1.285]</td><td class="num">1.258 [1.236–1.269]</td><td class="num">2.99 / 2.74 / 2.63 GB</td></tr>
+        <tr><td>fp16-autocast</td><td class="num">13.2</td><td class="num">15.5</td><td class="num">16.6</td><td class="num">1.186 [1.152–1.198]</td><td class="num">1.235 [1.205–1.313]</td><td class="num">3.03 / 2.84 / 2.80 GB</td></tr>
+        <tr><td>bf16-autocast</td><td class="num">13.5</td><td class="num">16.0</td><td class="num">16.6</td><td class="num">1.182 [1.140–1.205]</td><td class="num">1.224 [1.157–1.240]</td><td class="num">3.03 / 2.84 / 2.80 GB</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 6.</b> P2 (ViT-H+/16, 512 px, batch size 8). One process for each dtype mode; 4 rounds (fp32: 3) in a rotated order; 1 warm-up batch and 4 (fp32: 3) timed batches for each form and round. A and R are bit for bit equal to E, and image 0 is valid (fp16-cast at 512 px: frame 0.999999, patch 1st percentile 0.999996). Trace 4 to 6 ms. First evaluation of A and R: fp32 about 1.15 s (median batch time of a round 1.58 to 1.75 s, weights 3.36 GB); half modes 0.30 to 0.64 s (median batch time of a round 0.43 to 0.65 s, weights 1.68 GB). The fp32 and fp16-cast rows come from the probe compile-p2-fp32, the other rows from compile-p2-half. The throughput differs between the processes because of the thermal drift. Compare the ratios only.</p>
+  <figure>
+    <div class="fig"><svg viewBox="0 0 960 516" role="img" aria-label="Change ratio of the compiled forward pass (A) and of the compiled forward pass with the concat-free RoPE (R) against the eager forward pass (E), for P1 at batch sizes 1 and 8 and for P2, in the five dtype modes. All ratios are above 1." font-family="-apple-system, Helvetica Neue, Arial, sans-serif">
+<rect width="960" height="516" fill="#ffffff"/>
+<text x="20" y="24" font-size="13" font-weight="600" fill="#111414">Change ratio against the eager forward pass E (median of 3 to 5 rounds, bar = range)</text>
+<line x1="300" y1="48" x2="300" y2="442" stroke="#d6dedd" stroke-width="1"/>
+<text x="300" y="458" font-size="11.5" fill="#4a5655" text-anchor="middle">0.95</text>
+<line x1="354.5" y1="48" x2="354.5" y2="442" stroke="#111414" stroke-width="1.2" stroke-dasharray="4 3"/>
+<text x="354.5" y="458" font-size="11.5" fill="#4a5655" text-anchor="middle">1.00</text>
+<line x1="409.1" y1="48" x2="409.1" y2="442" stroke="#d6dedd" stroke-width="1"/>
+<text x="409.1" y="458" font-size="11.5" fill="#4a5655" text-anchor="middle">1.05</text>
+<line x1="463.6" y1="48" x2="463.6" y2="442" stroke="#d6dedd" stroke-width="1"/>
+<text x="463.6" y="458" font-size="11.5" fill="#4a5655" text-anchor="middle">1.10</text>
+<line x1="518.2" y1="48" x2="518.2" y2="442" stroke="#d6dedd" stroke-width="1"/>
+<text x="518.2" y="458" font-size="11.5" fill="#4a5655" text-anchor="middle">1.15</text>
+<line x1="572.7" y1="48" x2="572.7" y2="442" stroke="#d6dedd" stroke-width="1"/>
+<text x="572.7" y="458" font-size="11.5" fill="#4a5655" text-anchor="middle">1.20</text>
+<line x1="627.3" y1="48" x2="627.3" y2="442" stroke="#d6dedd" stroke-width="1"/>
+<text x="627.3" y="458" font-size="11.5" fill="#4a5655" text-anchor="middle">1.25</text>
+<line x1="681.8" y1="48" x2="681.8" y2="442" stroke="#d6dedd" stroke-width="1"/>
+<text x="681.8" y="458" font-size="11.5" fill="#4a5655" text-anchor="middle">1.30</text>
+<line x1="736.4" y1="48" x2="736.4" y2="442" stroke="#d6dedd" stroke-width="1"/>
+<text x="736.4" y="458" font-size="11.5" fill="#4a5655" text-anchor="middle">1.35</text>
+<line x1="790.9" y1="48" x2="790.9" y2="442" stroke="#d6dedd" stroke-width="1"/>
+<text x="790.9" y="458" font-size="11.5" fill="#4a5655" text-anchor="middle">1.40</text>
+<line x1="845.5" y1="48" x2="845.5" y2="442" stroke="#d6dedd" stroke-width="1"/>
+<text x="845.5" y="458" font-size="11.5" fill="#4a5655" text-anchor="middle">1.45</text>
+<line x1="900" y1="48" x2="900" y2="442" stroke="#d6dedd" stroke-width="1"/>
+<text x="900" y="458" font-size="11.5" fill="#4a5655" text-anchor="middle">1.50</text>
+<text x="600" y="476" font-size="11.5" fill="#4a5655" text-anchor="middle">throughput of A or R / throughput of E, in one process, rotated order</text>
+<text x="20" y="72" font-size="12" font-weight="600" fill="#111414">P1, b1</text>
+<text x="288" y="72" font-size="12" fill="#111414" text-anchor="end">fp32</text>
+<line x1="445.1" y1="64" x2="453.8" y2="64" stroke="#4a5655" stroke-width="2"/>
+<circle cx="449.5" cy="64" r="4.2" fill="#ffffff" stroke="#4a5655" stroke-width="1.6"/>
+<line x1="459.3" y1="72" x2="470.2" y2="72" stroke="#057379" stroke-width="2"/>
+<circle cx="465.8" cy="72" r="4.2" fill="#057379" stroke="#057379" stroke-width="1.6"/>
+<text x="288" y="96" font-size="12" fill="#111414" text-anchor="end">fp16-cast</text>
+<line x1="554.2" y1="88" x2="578.2" y2="88" stroke="#4a5655" stroke-width="2"/>
+<circle cx="565.1" cy="88" r="4.2" fill="#ffffff" stroke="#4a5655" stroke-width="1.6"/>
+<line x1="694.9" y1="96" x2="714.5" y2="96" stroke="#057379" stroke-width="2"/>
+<circle cx="702.5" cy="96" r="4.2" fill="#057379" stroke="#057379" stroke-width="1.6"/>
+<text x="288" y="120" font-size="12" fill="#111414" text-anchor="end">bf16-cast</text>
+<line x1="550.9" y1="112" x2="559.6" y2="112" stroke="#4a5655" stroke-width="2"/>
+<circle cx="556.4" cy="112" r="4.2" fill="#ffffff" stroke="#4a5655" stroke-width="1.6"/>
+<line x1="679.6" y1="120" x2="711.3" y2="120" stroke="#057379" stroke-width="2"/>
+<circle cx="687.3" cy="120" r="4.2" fill="#057379" stroke="#057379" stroke-width="1.6"/>
+<text x="288" y="144" font-size="12" fill="#111414" text-anchor="end">fp16-autocast</text>
+<line x1="564" y1="136" x2="597.8" y2="136" stroke="#4a5655" stroke-width="2"/>
+<circle cx="572.7" cy="136" r="4.2" fill="#ffffff" stroke="#4a5655" stroke-width="1.6"/>
+<line x1="674.2" y1="144" x2="701.5" y2="144" stroke="#057379" stroke-width="2"/>
+<circle cx="692.7" cy="144" r="4.2" fill="#057379" stroke="#057379" stroke-width="1.6"/>
+<text x="288" y="168" font-size="12" fill="#111414" text-anchor="end">bf16-autocast</text>
+<line x1="570.5" y1="160" x2="605.5" y2="160" stroke="#4a5655" stroke-width="2"/>
+<circle cx="584.7" cy="160" r="4.2" fill="#ffffff" stroke="#4a5655" stroke-width="1.6"/>
+<line x1="687.3" y1="168" x2="704.7" y2="168" stroke="#057379" stroke-width="2"/>
+<circle cx="698.2" cy="168" r="4.2" fill="#057379" stroke="#057379" stroke-width="1.6"/>
+<text x="20" y="202" font-size="12" font-weight="600" fill="#111414">P1, b8</text>
+<text x="288" y="202" font-size="12" fill="#111414" text-anchor="end">fp32</text>
+<line x1="373.1" y1="194" x2="418.9" y2="194" stroke="#4a5655" stroke-width="2"/>
+<circle cx="411.3" cy="194" r="4.2" fill="#ffffff" stroke="#4a5655" stroke-width="1.6"/>
+<line x1="418.9" y1="202" x2="439.6" y2="202" stroke="#057379" stroke-width="2"/>
+<circle cx="428.7" cy="202" r="4.2" fill="#057379" stroke="#057379" stroke-width="1.6"/>
+<text x="288" y="226" font-size="12" fill="#111414" text-anchor="end">fp16-cast</text>
+<line x1="630.5" y1="218" x2="811.6" y2="218" stroke="#4a5655" stroke-width="2"/>
+<circle cx="693.8" cy="218" r="4.2" fill="#ffffff" stroke="#4a5655" stroke-width="1.6"/>
+<line x1="796.4" y1="226" x2="822.5" y2="226" stroke="#057379" stroke-width="2"/>
+<circle cx="820.4" cy="226" r="4.2" fill="#057379" stroke="#057379" stroke-width="1.6"/>
+<text x="288" y="250" font-size="12" fill="#111414" text-anchor="end">bf16-cast</text>
+<line x1="674.2" y1="242" x2="804" y2="242" stroke="#4a5655" stroke-width="2"/>
+<circle cx="740.7" cy="242" r="4.2" fill="#ffffff" stroke="#4a5655" stroke-width="1.6"/>
+<line x1="801.8" y1="250" x2="855.3" y2="250" stroke="#057379" stroke-width="2"/>
+<circle cx="847.6" cy="250" r="4.2" fill="#057379" stroke="#057379" stroke-width="1.6"/>
+<text x="288" y="274" font-size="12" fill="#111414" text-anchor="end">fp16-autocast</text>
+<line x1="686.2" y1="266" x2="740.7" y2="266" stroke="#4a5655" stroke-width="2"/>
+<circle cx="712.4" cy="266" r="4.2" fill="#ffffff" stroke="#4a5655" stroke-width="1.6"/>
+<line x1="796.4" y1="274" x2="865.1" y2="274" stroke="#057379" stroke-width="2"/>
+<circle cx="844.4" cy="274" r="4.2" fill="#057379" stroke="#057379" stroke-width="1.6"/>
+<text x="288" y="298" font-size="12" fill="#111414" text-anchor="end">bf16-autocast</text>
+<line x1="652.4" y1="290" x2="770.2" y2="290" stroke="#4a5655" stroke-width="2"/>
+<circle cx="689.5" cy="290" r="4.2" fill="#ffffff" stroke="#4a5655" stroke-width="1.6"/>
+<line x1="798.5" y1="298" x2="837.8" y2="298" stroke="#057379" stroke-width="2"/>
+<circle cx="820.4" cy="298" r="4.2" fill="#057379" stroke="#057379" stroke-width="1.6"/>
+<text x="20" y="332" font-size="12" font-weight="600" fill="#111414">P2, b8</text>
+<text x="288" y="332" font-size="12" fill="#111414" text-anchor="end">fp32</text>
+<line x1="388.4" y1="324" x2="434.2" y2="324" stroke="#4a5655" stroke-width="2"/>
+<circle cx="413.5" cy="324" r="4.2" fill="#ffffff" stroke="#4a5655" stroke-width="1.6"/>
+<line x1="384" y1="332" x2="457.1" y2="332" stroke="#057379" stroke-width="2"/>
+<circle cx="446.2" cy="332" r="4.2" fill="#057379" stroke="#057379" stroke-width="1.6"/>
+<text x="288" y="356" font-size="12" fill="#111414" text-anchor="end">fp16-cast</text>
+<line x1="481.1" y1="348" x2="722.2" y2="348" stroke="#4a5655" stroke-width="2"/>
+<circle cx="560.7" cy="348" r="4.2" fill="#ffffff" stroke="#4a5655" stroke-width="1.6"/>
+<line x1="566.2" y1="356" x2="710.2" y2="356" stroke="#057379" stroke-width="2"/>
+<circle cx="604.4" cy="356" r="4.2" fill="#057379" stroke="#057379" stroke-width="1.6"/>
+<text x="288" y="380" font-size="12" fill="#111414" text-anchor="end">bf16-cast</text>
+<line x1="516" y1="372" x2="665.5" y2="372" stroke="#4a5655" stroke-width="2"/>
+<circle cx="617.5" cy="372" r="4.2" fill="#ffffff" stroke="#4a5655" stroke-width="1.6"/>
+<line x1="612" y1="380" x2="648" y2="380" stroke="#057379" stroke-width="2"/>
+<circle cx="636" cy="380" r="4.2" fill="#057379" stroke="#057379" stroke-width="1.6"/>
+<text x="288" y="404" font-size="12" fill="#111414" text-anchor="end">fp16-autocast</text>
+<line x1="520.4" y1="396" x2="570.5" y2="396" stroke="#4a5655" stroke-width="2"/>
+<circle cx="557.5" cy="396" r="4.2" fill="#ffffff" stroke="#4a5655" stroke-width="1.6"/>
+<line x1="578.2" y1="404" x2="696" y2="404" stroke="#057379" stroke-width="2"/>
+<circle cx="610.9" cy="404" r="4.2" fill="#057379" stroke="#057379" stroke-width="1.6"/>
+<text x="288" y="428" font-size="12" fill="#111414" text-anchor="end">bf16-autocast</text>
+<line x1="507.3" y1="420" x2="578.2" y2="420" stroke="#4a5655" stroke-width="2"/>
+<circle cx="553.1" cy="420" r="4.2" fill="#ffffff" stroke="#4a5655" stroke-width="1.6"/>
+<line x1="525.8" y1="428" x2="616.4" y2="428" stroke="#057379" stroke-width="2"/>
+<circle cx="598.9" cy="428" r="4.2" fill="#057379" stroke="#057379" stroke-width="1.6"/>
+<circle cx="310" cy="498" r="4.2" fill="#ffffff" stroke="#4a5655" stroke-width="1.6"/><text x="322" y="502" font-size="11.5" fill="#111414">A: compiled forward pass</text>
+<circle cx="520" cy="498" r="4.2" fill="#057379" stroke="#057379" stroke-width="1.6"/><text x="532" y="502" font-size="11.5" fill="#111414">R: A with the concat-free RoPE (R2)</text>
+</svg></div>
+    <figcaption><b>Figure 2.</b> Change ratio of A and R against E, from Tables 5 and 6. All 30 ratios are above 1. Compile gains 5 to 9 % in fp32 and 18 to 35 % in the half modes. The concat-free RoPE adds 1.5 to 13 percentage points. Each P2 round has only 3 or 4 timed batches for each form.</figcaption>
+  </figure>
+  <p>More facts of the compiled forward pass:</p>
+  <ul>
+    <li><b>Bit equality.</b> compile-parity: ViT-S/16 (MLP) and ViT-S+/16 (SwiGLU), five dtype modes, 12 configurations at batch size 1, forms A and R: 360 of 360 rows are bit for bit equal to E (largest difference 0). All 360 pass <code>THRESHOLDS[mode]</code>. The worst values equal the eager values of <code>results/parity-mlx.md</code>, for example the ViT-S+/16 bf16-autocast patch mean 0.995136. On the CPU stream, compiled and eager differ by 1.6e-6 to 2.0e-6 (fp32, small widths).</li>
+    <li><b>Kernels.</b> Kernel nodes of one forward pass from a graph export (no evaluation), eager / compiled / compiled with the concat-free RoPE: 12-block MLP in fp32 292 / 220 / 172, bf16-cast 365 / 245 / 173, bf16-autocast 414 / 270 / 198; 32-block SwiGLU in fp32 836 / 612 / 484, bf16-cast 1061 / 677 / 485, bf16-autocast 1190 / 742 / 550.</li>
+    <li><b>Graph build.</b> Python time to build one forward pass, without evaluation: 12 blocks eager 0.26 ms, compiled 0.11 ms; 32 blocks 0.77 and 0.32 ms; 40 blocks 0.63 to 0.68 and 0.21 to 0.23 ms. <code>inputs=model.state</code> adds 0.010 ms (12 blocks) to 0.026 ms (40 blocks) to each call.</li>
+    <li><b>New shapes.</b> retrace (ViT-H+/16 bf16-autocast): a new batch size or input resolution costs one trace of 2 to 6 ms. A second process starts as fast as the first: the fused kernels come from the on-disk shader cache. The RoPE cache gets one small entry for each patch grid. The MLX buffer cache grows to 4.9 GB over five shapes; the active memory stays at 1.7 to 1.85 GB.</li>
+    <li><b>Hazards.</b> After an in-place weight change, a compiled forward pass that captures the weights in a closure, and <code>mx.compile(model)</code>, give the old output without an error. With <code>inputs=model.state</code>, the output follows the change. A compiled function stored on the model forms a reference cycle: 12.52 MiB of weights stayed after <code>del model</code> until <code>gc.collect()</code>. <code>shapeless=True</code> fails: "Slice cannot infer output shapes".</li>
+  </ul>
+
+  <h3>2.3 Where the time goes in one block</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Part</th><th>bf16-cast, eager</th><th>bf16-cast, compiled</th><th>bf16-autocast, eager</th><th>bf16-autocast, compiled</th></tr></thead>
+      <tbody>
+        <tr><td>RoPE (q and k), current form</td><td class="num">2.28</td><td class="num">1.33</td><td class="num">2.28</td><td class="num">1.31</td></tr>
+        <tr><td>RoPE, concat-free form (R2)</td><td class="num">–</td><td class="num">0.74</td><td class="num">–</td><td class="num">0.75</td></tr>
+        <tr><td>SwiGLU activation (silu · up)</td><td class="num">3.16</td><td class="num">0.66</td><td class="num">3.17</td><td class="num">0.67</td></tr>
+        <tr><td>LayerScale and residual add</td><td class="num">0.32</td><td class="num">0.29</td><td class="num">0.58</td><td class="num">0.39</td></tr>
+        <tr><td>norm1 and cast</td><td class="num">0.24</td><td class="num">0.23</td><td class="num">0.46</td><td class="num">0.46</td></tr>
+        <tr><td>q, k, v matmuls</td><td class="num" colspan="2">1.51</td><td class="num" colspan="2">1.50</td></tr>
+        <tr><td>SDPA</td><td class="num" colspan="2">1.05</td><td class="num" colspan="2">1.08</td></tr>
+        <tr><td>o_proj</td><td class="num" colspan="2">0.65</td><td class="num" colspan="2">0.61</td></tr>
+        <tr><td>gate and up matmuls</td><td class="num" colspan="2">3.61</td><td class="num" colspan="2">3.63</td></tr>
+        <tr><td>down_proj</td><td class="num" colspan="2">2.01</td><td class="num" colspan="2">1.99</td></tr>
+        <tr><td>Whole block, eager</td><td class="num">13.84</td><td class="num">–</td><td class="num">14.72</td><td class="num">–</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 7.</b> Time of each part of block 1 at P2 in ms, each part alone: 3 warm-up and 20 calls, <code>mx.eval</code> after each, median. Each value includes 0.16 to 0.17 ms of evaluation overhead. In eager mode the element-wise chains take about 6.6 ms of the 13.8 ms block (48 %). Compile removes about 4 ms per block, about 128 ms for 32 blocks. This is an upper estimate: the measured difference E − R at P2 is 80 to 110 ms per batch. The matmuls and the SDPA take 8.8 ms per block and do not change with compile. The autocast extra (R30) is in LayerScale and residual (+0.26 ms eager, +0.10 ms compiled) and in norm and cast (+0.22 ms, not fusable). Memory bandwidth: a cast of 256 M fp32 values to fp16 takes 3.14 ms, 514 GB/s.</p>
+  <p>R30 in one process (probe r30, ViT-H+/16 bf16-cast and bf16-autocast loaded together, 5 rounds): autocast / cast throughput is 0.917 [0.875–0.985] eager and 0.976 [0.959–1.038] compiled with R2. Compile removes about two thirds of the autocast cost. Per SwiGLU block, the autocast modes have 37 kernels against 33 in the cast modes (eager), and 17 against 15 (compiled with R2).</p>
+
+  <h3>2.4 Neural Accelerators and TF32</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Measure</th><th>Value</th><th>Probe</th></tr></thead>
+      <tbody>
+        <tr><td>Versions that run the NAX kernels</td><td>Apple M5 Max, architecture <code>applegpu_g17s</code>; mlx 0.32.4 and mlx-metal 0.32.4; macOS 26.5.2; <code>libmlx.dylib</code> built for macOS 26.2 and later (minos 26.2)</td><td>nax-record</td></tr>
+        <tr><td>Switch to turn off the NAX kernels (Neural Accelerators off)</td><td><code>MLX_METAL_GPU_ARCH=applegpu_g16s</code>. The share of fp16 SDPA outputs that differ from the float64 result rounded once drops from 54.5 % to 0.21 % (bf16: 12.6 % to 0.023 %), equal to the controls</td><td>nax-record</td></tr>
+        <tr><td>Throughput, Neural Accelerators on / off</td><td>ViT-H+/16 bf16-cast at P2: 2.69 (2.85 and 2.53). ViT-S/16 bf16-cast at P1: 1.81. SDPA alone 1.5 to 5.3 for 1,029 tokens and more; matmul 1.1 to 4.7</td><td>nax-ab, sdpa</td></tr>
+        <tr><td>TF32 on / TF32 off, throughput</td><td>ViT-S/16 fp32 at P1: 1.70 (1.717 and 1.689). ViT-H+/16 fp32 at P2: 2.02 (2.00 and 2.04)</td><td>tf32</td></tr>
+        <tr><td>TF32 on, parity against the fp32 thresholds</td><td>ViT-S/16: <span class="pass">12 of 12</span>, worst frame 0.999975. ViT-H+/16: <span class="fail">8 of 12</span>; the 4 failures are 224 px configurations, worst patch 1st percentile 0.996115 (iss-conference, 304 × 224). All 12 pass the fp16 thresholds</td><td>tf32</td></tr>
+        <tr><td>TF32 without the NAX kernels</td><td>With the NAX kernels off, TF32 on gives exact fp32 results (frame 1 − 1.2e-11) at the throughput of TF32 off. TF32 runs only on the NAX kernels</td><td>nax-ab</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 8.</b> The Neural Accelerators and TF32 on this Mac. The NAX matmul kernel and the NAX attention kernel build their matrix operation with <code>relaxed_precision = true</code> (<code>steel/gemm/nax.h</code> and <code>steel/attn/nax.h</code> of the installed package). No environment variable turns it off. The TF32 probe error: 7.75e-4 on, 5.1e-7 off.</p>
+
+  <h3>2.5 Attention at high input resolution, and the batch size</h3>
+  <p>Figure 3 shows the share of the attention scores (SDPA) in the FLOPs of one image. The share grows with the token count T, because the SDPA FLOPs grow as T², and the other FLOPs as T. It falls with the embedding dimension. The benchmark matrix stops at 512 px, where the share is 4.8 % (ViT-7B/16) to 30.6 % (ViT-S/16).</p>
+  <figure>
+    <div class="fig"><svg viewBox="0 0 960 440" role="img" aria-label="Share of the attention scores (SDPA) in the FLOPs of one image, against the input resolution, for the six model sizes. The share grows with the token count and falls with the embedding dimension." font-family="-apple-system, Helvetica Neue, Arial, sans-serif">
+<rect width="960" height="440" fill="#ffffff"/>
+<rect x="90" y="50" width="241.2" height="330" fill="#f5f8f7"/>
+<text x="210.6" y="66" font-size="11.5" fill="#4a5655" text-anchor="middle">benchmark matrix: 224 to 512 px</text>
+<text x="20" y="28" font-size="13" font-weight="600" fill="#111414">SDPA share of the FLOPs of one image (flops.image_flops)</text>
+<line x1="90" y1="380" x2="760" y2="380" stroke="#d6dedd" stroke-width="1"/>
+<text x="80" y="384" font-size="11.5" fill="#4a5655" text-anchor="end">0 %</text>
+<line x1="90" y1="332.9" x2="760" y2="332.9" stroke="#d6dedd" stroke-width="1"/>
+<text x="80" y="336.9" font-size="11.5" fill="#4a5655" text-anchor="end">10 %</text>
+<line x1="90" y1="285.7" x2="760" y2="285.7" stroke="#d6dedd" stroke-width="1"/>
+<text x="80" y="289.7" font-size="11.5" fill="#4a5655" text-anchor="end">20 %</text>
+<line x1="90" y1="238.6" x2="760" y2="238.6" stroke="#d6dedd" stroke-width="1"/>
+<text x="80" y="242.6" font-size="11.5" fill="#4a5655" text-anchor="end">30 %</text>
+<line x1="90" y1="191.4" x2="760" y2="191.4" stroke="#d6dedd" stroke-width="1"/>
+<text x="80" y="195.4" font-size="11.5" fill="#4a5655" text-anchor="end">40 %</text>
+<line x1="90" y1="144.3" x2="760" y2="144.3" stroke="#d6dedd" stroke-width="1"/>
+<text x="80" y="148.3" font-size="11.5" fill="#4a5655" text-anchor="end">50 %</text>
+<line x1="90" y1="97.1" x2="760" y2="97.1" stroke="#d6dedd" stroke-width="1"/>
+<text x="80" y="101.1" font-size="11.5" fill="#4a5655" text-anchor="end">60 %</text>
+<line x1="90" y1="50" x2="760" y2="50" stroke="#d6dedd" stroke-width="1"/>
+<text x="80" y="54" font-size="11.5" fill="#4a5655" text-anchor="end">70 %</text>
+<line x1="90" y1="380" x2="90" y2="385" stroke="#111414" stroke-width="1"/>
+<text x="90" y="400" font-size="11.5" fill="#4a5655" text-anchor="middle">224</text>
+<line x1="170.4" y1="380" x2="170.4" y2="385" stroke="#111414" stroke-width="1"/>
+<text x="170.4" y="400" font-size="11.5" fill="#4a5655" text-anchor="middle">320</text>
+<line x1="277.6" y1="380" x2="277.6" y2="385" stroke="#111414" stroke-width="1"/>
+<text x="277.6" y="400" font-size="11.5" fill="#4a5655" text-anchor="middle">448</text>
+<line x1="331.2" y1="380" x2="331.2" y2="385" stroke="#111414" stroke-width="1"/>
+<text x="331.2" y="400" font-size="11.5" fill="#4a5655" text-anchor="middle">512</text>
+<line x1="438.4" y1="380" x2="438.4" y2="385" stroke="#111414" stroke-width="1"/>
+<text x="438.4" y="400" font-size="11.5" fill="#4a5655" text-anchor="middle">640</text>
+<line x1="545.6" y1="380" x2="545.6" y2="385" stroke="#111414" stroke-width="1"/>
+<text x="545.6" y="400" font-size="11.5" fill="#4a5655" text-anchor="middle">768</text>
+<line x1="652.8" y1="380" x2="652.8" y2="385" stroke="#111414" stroke-width="1"/>
+<text x="652.8" y="400" font-size="11.5" fill="#4a5655" text-anchor="middle">896</text>
+<line x1="760" y1="380" x2="760" y2="385" stroke="#111414" stroke-width="1"/>
+<text x="760" y="400" font-size="11.5" fill="#4a5655" text-anchor="middle">1024</text>
+<line x1="90" y1="380" x2="760" y2="380" stroke="#111414" stroke-width="1"/>
+<text x="425" y="420" font-size="11.5" fill="#4a5655" text-anchor="middle">input resolution (px, square); tokens T = 5 + (side / 16)²: 201, 405, 789, 1,029, 1,605, 2,309, 3,141, 4,101</text>
+<polyline points="90,342.8 170.4,310.2 277.6,261.2 331.2,235.7 438.4,188.1 545.6,145.7 652.8,109.9 760,79.7" fill="none" stroke="#057379" stroke-width="2"/>
+<circle cx="90" cy="342.8" r="2.8" fill="#057379"/>
+<circle cx="170.4" cy="310.2" r="2.8" fill="#057379"/>
+<circle cx="277.6" cy="261.2" r="2.8" fill="#057379"/>
+<circle cx="331.2" cy="235.7" r="2.8" fill="#057379"/>
+<circle cx="438.4" cy="188.1" r="2.8" fill="#057379"/>
+<circle cx="545.6" cy="145.7" r="2.8" fill="#057379"/>
+<circle cx="652.8" cy="109.9" r="2.8" fill="#057379"/>
+<circle cx="760" cy="79.7" r="2.8" fill="#057379"/>
+<text x="772" y="83.7" font-size="12" fill="#057379" font-weight="600">ViT-S/16  63.7 %</text>
+<polyline points="90,351.2 170.4,325.8 277.6,284.3 331.2,262.6 438.4,219.2 545.6,178.7 652.8,142.9 760,111.8" fill="none" stroke="#2e8b8f" stroke-width="2" stroke-dasharray="6 4"/>
+<circle cx="90" cy="351.2" r="2.8" fill="#2e8b8f"/>
+<circle cx="170.4" cy="325.8" r="2.8" fill="#2e8b8f"/>
+<circle cx="277.6" cy="284.3" r="2.8" fill="#2e8b8f"/>
+<circle cx="331.2" cy="262.6" r="2.8" fill="#2e8b8f"/>
+<circle cx="438.4" cy="219.2" r="2.8" fill="#2e8b8f"/>
+<circle cx="545.6" cy="178.7" r="2.8" fill="#2e8b8f"/>
+<circle cx="652.8" cy="142.9" r="2.8" fill="#2e8b8f"/>
+<circle cx="760" cy="111.8" r="2.8" fill="#2e8b8f"/>
+<text x="772" y="115.8" font-size="12" fill="#2e8b8f" font-weight="600">ViT-S+/16  56.9 %</text>
+<polyline points="90,360.2 170.4,342.3 277.6,311.6 331.2,294.2 438.4,258.8 545.6,223.5 652.8,189.5 760,158.9" fill="none" stroke="#6a3d9a" stroke-width="2"/>
+<circle cx="90" cy="360.2" r="2.8" fill="#6a3d9a"/>
+<circle cx="170.4" cy="342.3" r="2.8" fill="#6a3d9a"/>
+<circle cx="277.6" cy="311.6" r="2.8" fill="#6a3d9a"/>
+<circle cx="331.2" cy="294.2" r="2.8" fill="#6a3d9a"/>
+<circle cx="438.4" cy="258.8" r="2.8" fill="#6a3d9a"/>
+<circle cx="545.6" cy="223.5" r="2.8" fill="#6a3d9a"/>
+<circle cx="652.8" cy="189.5" r="2.8" fill="#6a3d9a"/>
+<circle cx="760" cy="158.9" r="2.8" fill="#6a3d9a"/>
+<text x="772" y="162.9" font-size="12" fill="#6a3d9a" font-weight="600">ViT-B/16  46.9 %</text>
+<polyline points="90,364.9 170.4,350.8 277.6,326.3 331.2,312.6 438.4,282.4 545.6,251.3 652.8,220.7 760,191.4" fill="none" stroke="#b26b00" stroke-width="2"/>
+<circle cx="90" cy="364.9" r="2.8" fill="#b26b00"/>
+<circle cx="170.4" cy="350.8" r="2.8" fill="#b26b00"/>
+<circle cx="277.6" cy="326.3" r="2.8" fill="#b26b00"/>
+<circle cx="331.2" cy="312.6" r="2.8" fill="#b26b00"/>
+<circle cx="438.4" cy="282.4" r="2.8" fill="#b26b00"/>
+<circle cx="545.6" cy="251.3" r="2.8" fill="#b26b00"/>
+<circle cx="652.8" cy="220.7" r="2.8" fill="#b26b00"/>
+<circle cx="760" cy="191.4" r="2.8" fill="#b26b00"/>
+<text x="772" y="195.4" font-size="12" fill="#b26b00" font-weight="600">ViT-L/16  40.0 %</text>
+<polyline points="90,371 170.4,362.1 277.6,346.5 331.2,337.1 438.4,316.4 545.6,293.3 652.8,269.2 760,245.2" fill="none" stroke="#b3261e" stroke-width="2"/>
+<circle cx="90" cy="371" r="2.8" fill="#b3261e"/>
+<circle cx="170.4" cy="362.1" r="2.8" fill="#b3261e"/>
+<circle cx="277.6" cy="346.5" r="2.8" fill="#b3261e"/>
+<circle cx="331.2" cy="337.1" r="2.8" fill="#b3261e"/>
+<circle cx="438.4" cy="316.4" r="2.8" fill="#b3261e"/>
+<circle cx="545.6" cy="293.3" r="2.8" fill="#b3261e"/>
+<circle cx="652.8" cy="269.2" r="2.8" fill="#b3261e"/>
+<circle cx="760" cy="245.2" r="2.8" fill="#b3261e"/>
+<text x="772" y="249.2" font-size="12" fill="#b3261e" font-weight="600">ViT-H+/16  28.6 %</text>
+<polyline points="90,375.3 170.4,371 277.6,362.6 331.2,357.4 438.4,345.6 545.6,332.4 652.8,317.3 760,301.3" fill="none" stroke="#111414" stroke-width="2"/>
+<circle cx="90" cy="375.3" r="2.8" fill="#111414"/>
+<circle cx="170.4" cy="371" r="2.8" fill="#111414"/>
+<circle cx="277.6" cy="362.6" r="2.8" fill="#111414"/>
+<circle cx="331.2" cy="357.4" r="2.8" fill="#111414"/>
+<circle cx="438.4" cy="345.6" r="2.8" fill="#111414"/>
+<circle cx="545.6" cy="332.4" r="2.8" fill="#111414"/>
+<circle cx="652.8" cy="317.3" r="2.8" fill="#111414"/>
+<circle cx="760" cy="301.3" r="2.8" fill="#111414"/>
+<text x="772" y="305.3" font-size="12" fill="#111414" font-weight="600">ViT-7B/16  16.7 %</text>
+</svg></div>
+    <figcaption><b>Figure 3.</b> SDPA share of the FLOPs of one image, computed with <code>flops.image_flops</code> for square inputs. The count is the patch embedding plus all blocks. The probe sdpa found no T² buffer: the extra memory of the SDPA kernel was at most 0.012 MB in all 139 cells, also where an fp32 score matrix would need 54.4 GB. In fp16, the SDPA rate at the head shape of ViT-H+/16 (batch size 8) rises from 41.9 TFLOP/s at T = 1,029 to about 57 TFLOP/s at T = 4,101 and more, which is the matmul rate. bf16 is slower at large T: 35 TFLOP/s at T = 9,221 against 57 in fp16. fp32 reaches 7 to 10 TFLOP/s.</figcaption>
+  </figure>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Model size, dtype mode</th><th>Batch size</th><th>512 px</th><th>768 px</th><th>1024 px</th><th>Time ratio 768 / 1024 (against 512)</th><th>FLOP ratio 768 / 1024</th></tr></thead>
+      <tbody>
+        <tr><td>ViT-S/16, fp32</td><td class="num">1</td><td class="num">8.0 ms</td><td class="num">20.3 ms</td><td class="num">46.5 ms</td><td class="num">2.54 / 5.82</td><td class="num">3.10 / 7.62</td></tr>
+        <tr><td>ViT-S/16, fp32</td><td class="num">8</td><td class="num">50.5 ms</td><td class="num">156.8 ms</td><td class="num">408.3 ms</td><td class="num">3.10 / 8.08</td><td class="num">3.10 / 7.62</td></tr>
+        <tr><td>ViT-S/16, bf16-cast</td><td class="num">1</td><td class="num">4.3 ms</td><td class="num">9.5 ms</td><td class="num">19.1 ms</td><td class="num">2.23 / 4.49</td><td class="num">3.10 / 7.62</td></tr>
+        <tr><td>ViT-S/16, bf16-cast</td><td class="num">8</td><td class="num">27.4 ms</td><td class="num">77.4 ms</td><td class="num">169.2 ms</td><td class="num">2.82 / 6.18</td><td class="num">3.10 / 7.62</td></tr>
+        <tr><td>ViT-H+/16, bf16-cast</td><td class="num">1</td><td class="num">68.7 ms</td><td class="num">166.1 ms</td><td class="num">333.3 ms</td><td class="num">2.42 / 4.85</td><td class="num">2.50 / 5.07</td></tr>
+        <tr><td>ViT-H+/16, bf16-cast</td><td class="num">8</td><td class="num">541.9 ms</td><td class="num">1485.8 ms</td><td class="num">3009.7 ms</td><td class="num">2.74 / 5.55</td><td class="num">2.50 / 5.07</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 9.</b> Median batch time at high input resolution (probe highres, eager, 3 warm-up and 10 timed batches; 6 for ViT-H+/16 at 1024 px and batch size 8). The time grows at 0.6 to 1.1 times the FLOP ratio. At batch size 1 the time grows less than the FLOPs, because a small batch does not fill the GPU. At batch size 8, ViT-H+/16 grows a little faster than the FLOPs (5.55 against 5.07), as the slower bf16 SDPA at large T predicts. MLX peak of ViT-H+/16 at 1024 px and batch size 8: 4.79 GB. ViT-H+/16 bf16-cast at 512 px gives the same throughput at batch sizes 1 and 8: 14.6 and 14.8 img/s. The largest token of ViT-H+/16 in bf16-autocast stays at about 52,800 (52,312 at 512 px, 52,236 at 768 px, 52,772 at 1024 px), below the fp16 maximum 65,504. So fp16-autocast is predicted to stay valid at high input resolution. No reference output exists above 512 px: this probe checks only that the output is finite.</p>
+
+  <h3>2.6 Quantized weights</h3>
+  <p>All quantized models in this section quantize the <code>nn.Linear</code> modules of the blocks (q, k, v, o, up, gate, down) with <code>nn.quantize</code>, affine format, group size 64, unless a row says otherwise. The patch embedding keeps the matmul dtype. The scales have the matmul dtype.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Model size</th><th>Dtype mode</th><th>Bits</th><th>Pass</th><th>Against the reference: frame / patch mean / patch 1st percentile</th><th>Against the unquantized output: patch 1st percentile</th><th>Weight bytes</th></tr></thead>
+      <tbody>
+        <tr><td>ViT-S/16</td><td>fp16-autocast</td><td class="num">8</td><td class="pass">12 / 12</td><td class="num">0.999392 / 0.999818 / 0.999441</td><td class="num">0.999440</td><td class="num">23.3 MB</td></tr>
+        <tr><td>ViT-S/16</td><td>fp16-autocast</td><td class="num">4</td><td class="fail">0 / 12</td><td class="num">0.861780 / 0.940549 / 0.903443</td><td class="num">0.903631</td><td class="num">12.7 MB</td></tr>
+        <tr><td>ViT-S/16</td><td>bf16-autocast</td><td class="num">8</td><td class="pass">12 / 12</td><td class="num">0.998484 / 0.999458 / 0.998767</td><td class="num">0.998820</td><td class="num">23.3 MB</td></tr>
+        <tr><td>ViT-S/16</td><td>bf16-autocast</td><td class="num">4</td><td class="fail">0 / 12</td><td class="num">0.863331 / 0.940645 / 0.903103</td><td class="num">0.903360</td><td class="num">12.7 MB</td></tr>
+        <tr><td>ViT-S+/16</td><td>fp16-autocast</td><td class="num">8</td><td class="pass">12 / 12</td><td class="num">0.999693 / 0.999836 / 0.999647</td><td class="num">0.999554</td><td class="num">30.9 MB</td></tr>
+        <tr><td>ViT-S+/16</td><td>fp16-autocast</td><td class="num">4</td><td class="fail">0 / 12</td><td class="num">0.833981 / 0.838367 / 0.663392</td><td class="num">0.663881</td><td class="num">16.7 MB</td></tr>
+        <tr><td>ViT-S+/16</td><td>bf16-autocast</td><td class="num">8</td><td class="pass">12 / 12</td><td class="num">0.999267 / 0.998950 / 0.997484</td><td class="num">0.994950</td><td class="num">30.9 MB</td></tr>
+        <tr><td>ViT-S+/16</td><td>bf16-autocast</td><td class="num">4</td><td class="fail">0 / 12</td><td class="num">0.827931 / 0.836650 / 0.643617</td><td class="num">0.644829</td><td class="num">16.7 MB</td></tr>
+        <tr><td>ViT-H+/16</td><td>fp16-autocast</td><td class="num">8</td><td class="pass">12 / 12</td><td class="num">0.999954 / 0.999790 / 0.998918</td><td class="num">0.998775</td><td class="num">895 MB</td></tr>
+        <tr><td>ViT-H+/16</td><td>fp16-autocast</td><td class="num">4</td><td class="fail">0 / 12</td><td class="num">0.987205 / 0.961082 / 0.757351</td><td class="num">0.752912</td><td class="num">476 MB</td></tr>
+        <tr><td>ViT-H+/16</td><td>bf16-autocast</td><td class="num">8</td><td class="pass">12 / 12</td><td class="num">0.999877 / 0.998980 / 0.983976</td><td class="num">0.995660</td><td class="num">895 MB</td></tr>
+        <tr><td>ViT-H+/16</td><td>bf16-autocast</td><td class="num">4</td><td class="fail">0 / 12</td><td class="num">0.987078 / 0.960276 / 0.749771</td><td class="num">0.759336</td><td class="num">476 MB</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 10.</b> Parity of quantized block weights (probe Q1). Worst value over 12 configurations. "Pass" counts the configurations that pass <code>THRESHOLDS[mode]</code>, the threshold set of the dtype mode. 8 bits pass in 72 of 72 rows. The smallest margins are the ViT-S/16 frame values: bf16-autocast 0.998484 against 0.998 (76 % of the threshold budget used) and fp16-autocast 0.999392 against 0.999 (61 % used). The ViT-H+/16 bf16-autocast patch 1st percentile, 0.983976 against 0.96, uses 40 % of its budget. 4 bits fail in 72 of 72 rows. Unquantized weights: ViT-S/16 43.3 MB, ViT-S+/16 57.4 MB, ViT-H+/16 1,682 MB. All outputs are finite. ADR 0003 has no row for quantized weights. Probe Q4b adds ViT-7B/16 in bf16-autocast at 224 px: 8 bits pass 3 of 3 (worst patch 1st percentile 0.983754), 4 bits pass 0 of 3 (0.943733).</p>
+  <figure>
+    <div class="fig"><svg viewBox="0 0 960 470" role="img" aria-label="ViT-H+/16: the worst patch 1st percentile over 12 configurations against the weight bytes, for nine quantization formats and the unquantized model, in fp16-autocast and bf16-autocast. All 8-bit formats are near the unquantized model. All 4-bit formats are far below both thresholds." font-family="-apple-system, Helvetica Neue, Arial, sans-serif">
+<rect width="960" height="470" fill="#ffffff"/>
+<text x="20" y="28" font-size="13" font-weight="600" fill="#111414">ViT-H+/16: worst patch 1st percentile (12 configurations) against the weight bytes</text>
+<line x1="90" y1="400" x2="900" y2="400" stroke="#d6dedd" stroke-width="1"/>
+<text x="80" y="404" font-size="11.5" fill="#4a5655" text-anchor="end">0.65</text>
+<line x1="90" y1="350" x2="900" y2="350" stroke="#d6dedd" stroke-width="1"/>
+<text x="80" y="354" font-size="11.5" fill="#4a5655" text-anchor="end">0.70</text>
+<line x1="90" y1="300" x2="900" y2="300" stroke="#d6dedd" stroke-width="1"/>
+<text x="80" y="304" font-size="11.5" fill="#4a5655" text-anchor="end">0.75</text>
+<line x1="90" y1="250" x2="900" y2="250" stroke="#d6dedd" stroke-width="1"/>
+<text x="80" y="254" font-size="11.5" fill="#4a5655" text-anchor="end">0.80</text>
+<line x1="90" y1="200" x2="900" y2="200" stroke="#d6dedd" stroke-width="1"/>
+<text x="80" y="204" font-size="11.5" fill="#4a5655" text-anchor="end">0.85</text>
+<line x1="90" y1="150" x2="900" y2="150" stroke="#d6dedd" stroke-width="1"/>
+<text x="80" y="154" font-size="11.5" fill="#4a5655" text-anchor="end">0.90</text>
+<line x1="90" y1="100" x2="900" y2="100" stroke="#d6dedd" stroke-width="1"/>
+<text x="80" y="104" font-size="11.5" fill="#4a5655" text-anchor="end">0.95</text>
+<line x1="90" y1="50" x2="900" y2="50" stroke="#d6dedd" stroke-width="1"/>
+<text x="80" y="54" font-size="11.5" fill="#4a5655" text-anchor="end">1.00</text>
+<line x1="90" y1="400" x2="90" y2="405" stroke="#111414" stroke-width="1"/>
+<text x="90" y="420" font-size="11.5" fill="#4a5655" text-anchor="middle">400</text>
+<line x1="205.7" y1="400" x2="205.7" y2="405" stroke="#111414" stroke-width="1"/>
+<text x="205.7" y="420" font-size="11.5" fill="#4a5655" text-anchor="middle">600</text>
+<line x1="321.4" y1="400" x2="321.4" y2="405" stroke="#111414" stroke-width="1"/>
+<text x="321.4" y="420" font-size="11.5" fill="#4a5655" text-anchor="middle">800</text>
+<line x1="437.1" y1="400" x2="437.1" y2="405" stroke="#111414" stroke-width="1"/>
+<text x="437.1" y="420" font-size="11.5" fill="#4a5655" text-anchor="middle">1000</text>
+<line x1="552.9" y1="400" x2="552.9" y2="405" stroke="#111414" stroke-width="1"/>
+<text x="552.9" y="420" font-size="11.5" fill="#4a5655" text-anchor="middle">1200</text>
+<line x1="668.6" y1="400" x2="668.6" y2="405" stroke="#111414" stroke-width="1"/>
+<text x="668.6" y="420" font-size="11.5" fill="#4a5655" text-anchor="middle">1400</text>
+<line x1="784.3" y1="400" x2="784.3" y2="405" stroke="#111414" stroke-width="1"/>
+<text x="784.3" y="420" font-size="11.5" fill="#4a5655" text-anchor="middle">1600</text>
+<line x1="900" y1="400" x2="900" y2="405" stroke="#111414" stroke-width="1"/>
+<text x="900" y="420" font-size="11.5" fill="#4a5655" text-anchor="middle">1800</text>
+<line x1="90" y1="400" x2="900" y2="400" stroke="#111414" stroke-width="1"/>
+<text x="495" y="440" font-size="11.5" fill="#4a5655" text-anchor="middle">weight bytes of the model (MB)</text>
+<line x1="90" y1="60" x2="900" y2="60" stroke="#057379" stroke-width="1.4" stroke-dasharray="6 4"/>
+<line x1="90" y1="90" x2="900" y2="90" stroke="#b26b00" stroke-width="1.4" stroke-dasharray="6 4"/>
+<text x="96" y="55" font-size="11.5" fill="#057379">fp16 threshold 0.99</text>
+<text x="96" y="105" font-size="11.5" fill="#b26b00">bf16 threshold 0.96</text>
+<circle cx="407.1" cy="51.9" r="4.5" fill="#057379" stroke="#057379" stroke-width="1.5"/>
+<rect x="403.1" y="63.2" width="8" height="8" fill="#ffffff" stroke="#b26b00" stroke-width="1.8"/>
+<circle cx="376.4" cy="51.1" r="4.5" fill="#057379" stroke="#057379" stroke-width="1.5"/>
+<rect x="372.4" y="62" width="8" height="8" fill="#ffffff" stroke="#b26b00" stroke-width="1.8"/>
+<circle cx="361.4" cy="56.9" r="4.5" fill="#057379" stroke="#057379" stroke-width="1.5"/>
+<rect x="357.4" y="62.3" width="8" height="8" fill="#ffffff" stroke="#b26b00" stroke-width="1.8"/>
+<circle cx="361.4" cy="125.2" r="4.5" fill="#057379" stroke="#057379" stroke-width="1.5"/>
+<rect x="357.4" y="80" width="8" height="8" fill="#ffffff" stroke="#b26b00" stroke-width="1.8"/>
+<circle cx="255.5" cy="76.1" r="4.5" fill="#057379" stroke="#057379" stroke-width="1.5"/>
+<rect x="251.5" y="86" width="8" height="8" fill="#ffffff" stroke="#b26b00" stroke-width="1.8"/>
+<circle cx="164.1" cy="237.3" r="4.5" fill="#057379" stroke="#057379" stroke-width="1.5"/>
+<rect x="160.1" y="272.9" width="8" height="8" fill="#ffffff" stroke="#b26b00" stroke-width="1.8"/>
+<circle cx="134" cy="292.6" r="4.5" fill="#057379" stroke="#057379" stroke-width="1.5"/>
+<rect x="130" y="296.2" width="8" height="8" fill="#ffffff" stroke="#b26b00" stroke-width="1.8"/>
+<circle cx="134" cy="143.2" r="4.5" fill="#057379" stroke="#057379" stroke-width="1.5"/>
+<rect x="130" y="161.1" width="8" height="8" fill="#ffffff" stroke="#b26b00" stroke-width="1.8"/>
+<circle cx="118.9" cy="260.6" r="4.5" fill="#057379" stroke="#057379" stroke-width="1.5"/>
+<rect x="114.9" y="247.2" width="8" height="8" fill="#ffffff" stroke="#b26b00" stroke-width="1.8"/>
+<circle cx="118.9" cy="357.7" r="4.5" fill="#057379" stroke="#057379" stroke-width="1.5"/>
+<rect x="114.9" y="367" width="8" height="8" fill="#ffffff" stroke="#b26b00" stroke-width="1.8"/>
+<circle cx="831.7" cy="50.3" r="4.5" fill="#057379" stroke="#057379" stroke-width="1.5"/>
+<rect x="827.7" y="60.1" width="8" height="8" fill="#ffffff" stroke="#b26b00" stroke-width="1.8"/>
+<text x="141.5" y="390" font-size="11.5" fill="#111414" text-anchor="middle">4 bits: 450 to 528 MB</text>
+<text x="255.5" y="115" font-size="11.5" fill="#111414" text-anchor="middle">6 bits</text>
+<text x="383.9" y="145" font-size="11.5" fill="#111414" text-anchor="middle">8 bits: 869 to 948 MB</text>
+<text x="831.7" y="105" font-size="11.5" fill="#111414" text-anchor="middle">unquantized</text>
+<text x="831.7" y="120" font-size="11.5" fill="#111414" text-anchor="middle">1,682 MB</text>
+<circle cx="300" cy="454" r="4.5" fill="#057379"/><text x="312" y="458" font-size="11.5" fill="#111414">fp16-autocast (fp16 scales)</text>
+<rect x="516" y="450" width="8" height="8" fill="#ffffff" stroke="#b26b00" stroke-width="1.8"/><text x="532" y="458" font-size="11.5" fill="#111414">bf16-autocast (bf16 scales)</text>
+</svg></div>
+    <figcaption><b>Figure 4.</b> ViT-H+/16: worst patch 1st percentile over 12 configurations against the weight bytes, for nine formats (probes Q1 and Q6) and the unquantized model (<code>results/parity-mlx.md</code>). Pass counts: affine 8 bits with group size 32, 64 or 128 pass 12 of 12 in both modes. mxfp8 passes 4 of 12 in fp16-autocast and 12 of 12 in bf16-autocast. affine 6 bits passes 8 of 12 and 12 of 12. All 4-bit formats pass 0 of 12; the best one, nvfp4, reaches 0.906819. Group size 32 is not better than 64 at 8 bits.</figcaption>
+  </figure>
+  <p>Probe Q5 (ViT-H+/16 bf16-autocast, 4 configurations) quantized one module group at a time to 4 bits. Each group alone fails: q, k, v and o (patch 1st percentile 0.872570), gate and up (0.839137), down (0.938255). The patch embedding alone at 4 bits gives 0.570053, worse than all blocks at 4 bits (0.749771). Mixed rows also fail: all blocks at 4 bits with <code>down_proj</code> at 8 bits (0.816823), or with blocks 0 and 31 at 8 bits (0.780506).</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Measure</th><th>8 bits</th><th>4 bits</th><th>Probe</th></tr></thead>
+      <tbody>
+        <tr><td>Time of one quantized matmul / dense matmul, M = 1,608 tokens</td><td colspan="2">0.93 to 1.29</td><td>Q2</td></tr>
+        <tr><td>Same, M = 8,232 tokens</td><td colspan="2">1.07 to 1.64 (affine 8 bits, group size 64: 1.10 to 1.18)</td><td>Q2</td></tr>
+        <tr><td>Same, M = 201 tokens</td><td colspan="2">0.57 to 0.65 for fp16 1280 → 1280 only (the dense kernel reaches 2 TFLOP/s there); other shapes 0.93 to 1.20</td><td>Q2</td></tr>
+        <tr><td>fp32 scales with a bf16 input</td><td colspan="2">1.23 to 5.95 times the dense time; the output is promoted to fp32</td><td>Q2</td></tr>
+        <tr><td>ViT-H+/16 fp16-autocast, P2: quantized / unquantized throughput</td><td class="num">0.880 [0.827–0.890]</td><td class="num">0.906 [0.823–0.912]</td><td>Q3</td></tr>
+        <tr><td>ViT-H+/16 fp16-autocast, 224 px, batch size 1</td><td class="num">0.840 [0.839–0.882]</td><td class="num">0.900 [0.888–0.937]</td><td>Q3</td></tr>
+        <tr><td>ViT-H+/16 bf16-autocast, P2</td><td class="num">0.888 [0.869–0.916]</td><td class="num">0.928 [0.916–0.934]</td><td>Q3</td></tr>
+        <tr><td>ViT-H+/16 bf16-autocast, 224 px, batch size 1</td><td class="num">0.878 [0.852–0.896]</td><td class="num">0.905 [0.880–0.951]</td><td>Q3</td></tr>
+        <tr><td>ViT-S/16 fp16-autocast, 224 px, batch size 8 / 1</td><td class="num">1.001 / 0.912</td><td class="num">0.971 / 0.912</td><td>Q8</td></tr>
+        <tr><td>ViT-7B/16 bf16-autocast, 224 px, batch size 1 (unquantized 92.9 ms)</td><td class="num">111.7 ms</td><td class="num">122.9 ms</td><td>Q4b, not interleaved</td></tr>
+        <tr><td><code>QQLinear</code> (quantized inputs too), (1608, 1280) → 5120 in bf16</td><td colspan="2">nvfp4 3.31 ms, mxfp8 6.11 ms, against <code>QuantizedLinear</code> 0.66 and 0.69 ms and the bf16 Linear 0.57 ms</td><td>Q7</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 11.</b> Throughput of quantized weights. Above 1 in a time ratio means slower; below 1 in a throughput ratio means slower. On this Mac the quantized matmul does not win at the token counts of DINOv3. Quantized ViT-H+/16 is 7 to 16 % slower than the unquantized model. Quantization saves memory, not time.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Model size, path</th><th>Bits</th><th>Memory check need</th><th>Load peak</th><th>Load time</th><th>Result</th></tr></thead>
+      <tbody>
+        <tr><td>ViT-H+/16, L2: quantize in the loader</td><td class="num">4</td><td class="num">4.57 GB</td><td class="num">0.52 GB</td><td class="num">0.29 s</td><td>bit for bit equal to L1; strict load passes</td></tr>
+        <tr><td>ViT-H+/16, L1: load, then <code>nn.quantize</code></td><td class="num">4</td><td class="num">6.02 GB</td><td class="num">1.80 GB</td><td class="num">0.32 s</td><td>–</td></tr>
+        <tr><td>ViT-H+/16, L2</td><td class="num">8</td><td class="num">5.07 GB</td><td class="num">0.94 GB</td><td class="num">0.30 s</td><td>bit for bit equal to L1; strict load passes</td></tr>
+        <tr><td>ViT-H+/16, L1</td><td class="num">8</td><td class="num">6.02 GB</td><td class="num">2.12 GB</td><td class="num">0.33 s</td><td>–</td></tr>
+        <tr><td>ViT-7B/16, L2</td><td class="num">4</td><td class="num">8.54 GB</td><td class="num">3.98 GB</td><td class="num">1.84 s</td><td>0 of 3 pass</td></tr>
+        <tr><td>ViT-7B/16, L2</td><td class="num">8</td><td class="num">12.57 GB</td><td class="num">7.33 GB</td><td class="num">1.19 s</td><td>3 of 3 pass</td></tr>
+        <tr><td>ViT-7B/16, unquantized bf16 (<code>load_mlx_backbone</code>)</td><td class="num">16</td><td class="num">20.12 GB</td><td class="num">13.54 GB</td><td class="num">1.47 s</td><td>3 of 3 pass</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 12.</b> Loads of quantized weights (probes Q4a and Q4b, bf16-autocast, warm file cache). Path L2 reads one fp32 tensor, casts it to the matmul dtype, quantizes it and evaluates the three arrays, then reads the next tensor. Its load peak is 1.03 to 1.09 times the quantized bytes (ViT-7B/16 8 bits 7.33 / 7.14 GB; ViT-H+/16 0.52 / 0.476 and 0.94 / 0.895 GB). The fp32 weights of ViT-7B/16 never load as a whole (ADR 0008 holds).</p>
+
+  <h3>2.7 Preprocessing and the fp16 output</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Measure</th><th>Value</th></tr></thead>
+      <tbody>
+        <tr><td>CPU preprocessing (torch, fp64, as in <code>preprocess.py</code>)</td><td>0.6 to 1.1 ms for the test images; 1.7 ms (to 224 px) and 2.0 ms (to 512 px) for a 1080 × 1920 frame. JPEG decode: 1.6 to 3.0 ms</td></tr>
+        <tr><td>MLX path (i): <code>nn.Upsample(linear, antialias=True)</code></td><td>Largest difference to the stored pixels 7.2e-7 to 1.3e-4; 12 of 12 pass the fp32 thresholds (ViT-S/16); 1.40 ms per 1080p frame to 224 px, 2.02 ms to 512 px</td></tr>
+        <tr><td>MLX path (ii): separable resize with the torch weights (fp64 NumPy weights, fp32 matmuls on the GPU)</td><td>Largest difference 7.2e-7 to 9.5e-7; 12 of 12 pass, parity 1 − 1e-10 or better; 0.65 ms per 1080p frame to 224 px, 1.03 ms to 512 px (batch of 8 uint8 frames, host to device included)</td></tr>
+        <tr><td>fp16 output, ViT-H+/16 fp16-autocast at P2</td><td>Device time 575.6 ms against 581.0 ms (fp32 output); host bytes 21.0 against 42.0 MB; extra parity loss at most 2.3e-8</td></tr>
+        <tr><td>fp16 output, ViT-S/16 fp32 at P1</td><td>Device time 9.36 against 9.27 ms; extra parity loss 2.1e-8 to 3.0e-8; still passes the fp32 thresholds (frame 0.99999998)</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 13.</b> Preprocessing (probe preprocess) and output dtype (probe fp16-output). The CPU path costs 1.7 ms per 1080p frame. That is more than one image of the compiled P1 forward pass (about 0.5 ms per image at 2,000 img/s). So at P1 the CPU preprocessing can limit the throughput. The fp16 output saves no measurable time: the copy of all tokens is below 0.2 % of the batch time.</p>
+
+  <h3>2.8 Estimate of the speedup at P1 and P2</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Priority configuration</th><th>Dtype</th><th><code>mlx</code>, img/s</th><th>Baseline row (ADR 0004), img/s</th><th>Speedup</th><th>Kind</th></tr></thead>
+      <tbody>
+        <tr><td>P1</td><td>fp32</td><td class="num">951 (R, battery power)</td><td class="num">642.33 (fp32 + compile, Step 3)</td><td class="num">1.48</td><td>Estimate across sessions, not paired</td></tr>
+        <tr><td>P1</td><td>fp16</td><td class="num">1668 to 1674 (A, fp16-cast)</td><td class="num">1991 to 2071 (fp16-cast + compile, same process)</td><td class="num fail">0.808, 0.838 (median 0.823); R about 0.87 to 0.90</td><td>Paired, AC power, 2 rounds</td></tr>
+        <tr><td>P1</td><td>bf16</td><td class="num">1497 to 1646 (A, bf16-cast)</td><td class="num">1967 to 2017 (bf16-cast + compile, same process)</td><td class="num fail">0.816, 0.761 (median 0.788); R about 0.83 to 0.84</td><td>Paired, AC power, 2 rounds</td></tr>
+        <tr><td>P2</td><td>fp32</td><td class="num">4.24 (3.91 × 1.084)</td><td class="num">3.79 (fp32 + compile)</td><td class="num">1.12</td><td>Estimate across sessions, not paired</td></tr>
+        <tr><td>P2</td><td>fp16</td><td class="num">12.41 (fp16-cast: 10.10 × 1.229)</td><td class="num">12.20 (fp16-cast + compile)</td><td class="num">1.02</td><td>Estimate across sessions, not paired</td></tr>
+        <tr><td>P2</td><td>bf16</td><td class="num">12.77 (bf16-cast: 10.15 × 1.258)</td><td class="num">12.03 (bf16-cast + compile)</td><td class="num">1.06</td><td>Estimate across sessions, not paired</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 14.</b> Speedup at P1 and P2. P1 fp16 and bf16: the probe p1-compile-pairs ran the four arms (torch-mps eager, <code>torch.compile</code>, <code>mlx</code> eager, <code>mlx</code> compiled in form A) in one process, in a rotated order, on AC power; the speedup is the paired ratio of each round. The R form was not in this probe. With the R / A gain of Table 5 at batch size 8 (1.05 to 1.09), R stays near 0.83 to 0.90, below 1. In the same probe <code>torch.compile</code> ran at 1967 to 2071 img/s, 6 to 11 % above the Step 3 compile rows (1860.04 and 1848.41); <code>mlx</code> eager is 0.62 to 0.67 times <code>torch.compile</code> and 1.28 to 1.34 times torch-mps eager. The other rows are estimates across sessions: P1 fp32 takes the R throughput of the battery-power session against a Step 3 compile row of another day, and P2 takes the Step 5 build throughput of <code>mlx</code> eager times the change ratio R / E of this session. Section 2 says that absolute values do not compare across sessions, so these estimates are not comparable values; P2 has no paired <code>torch.compile</code> run yet. For the autocast modes the P2 estimate is 12.05 (fp16) and 12.07 (bf16) img/s against 11.15 and 11.12: 1.08 and 1.09. Both sides take the fastest valid dtype mode of each dtype. The spread between runs is about 20 % (F2), larger than the P2 margins in fp16 and bf16.</p>
+
+  <h3>2.9 The seven probes on AC power</h3>
+  <p>These probes ran on AC power after the power adapter was connected, one heavy job at a time, each after the wait loop and a memory check.</p>
+  <ul>
+    <li><b>p1-compile-pairs.</b> Table 14. At P1, compiled <code>mlx</code> is about 0.8 times <code>torch.compile</code> in fp16 and bf16. The cross-session estimate of the battery-power session (1.11 and 1.13) does not hold. So the mission rule "speedup above 1" fails at P1 in fp16 and bf16 with the current forward pass (R49).</li>
+    <li><b>torch-compile-offp</b> (torch-mps bf16-cast, compile / eager throughput): ViT-S/16 224 px batch size 1: 340.2 / 198.8 = 1.71; ViT-S/16 224 px batch size 32: 1973.8 / 1173.4 = 1.68; ViT-B/16 448 px batch size 8: 152.5 / 109.5 = 1.39; ViT-H+/16 224 px batch size 32: 81.0 / 59.6 = 1.36. The first compiled call took 4.0 to 9.4 s. So <code>torch.compile</code> gains 36 to 71 % outside P1 and P2 too. A compiled <code>mlx</code> row against an eager torch-mps row overstates the speedup by the same factor (D9).</li>
+    <li><b>vit7b-calibration</b> (bf16-cast, median of 3 batches): torch-mps load 8.2 s, 224 px batch size 1 77.6 ms, 512 px batch size 8 5.60 s, lifetime maximum of the process footprint 18.7 GB. <code>mlx</code>: load 1.7 s, 224 px batch size 1 86.2 ms, 512 px batch size 8 4.86 s, MLX peak 15.1 GB. <code>mlx</code> / torch-mps throughput: 0.90 at 224 px batch size 1 and 1.15 at 512 px batch size 8. The FLOP-ratio estimate of Section 5.1 (ViT-H+/16 torch-mps time × 7.92 or 7.63) gives 0.20 s and 5.96 s: 2.3 to 2.6 times too high at 224 px batch size 1, but only 1.07 (torch-mps) to 1.23 (<code>mlx</code>) times too high at 512 px batch size 8.</li>
+    <li><b>batch-knee</b> (<code>mlx</code> eager, bf16-cast, img/s): ViT-S/16 224 px: batch size 1 416, 8 1018, 32 1077 (best), 64 1012, 128 990, 256 981. ViT-H+/16 512 px: batch size 1 9.7, 2 10.0, 4 9.3, 8 9.9, 16 10.3: flat within 10 %.</li>
+    <li><b>long-phase and paired-noise.</b> Section 2, limits. ViT-S/16 bf16-cast 448 px batch size 8, 6 + 6 runs in alternation: torch-mps eager 301.6 to 306.6 img/s, <code>mlx</code> 301.6 to 310.7 img/s, ratio about 1.00.</li>
+    <li><b>memory-limit</b> (<code>mlx</code> ViT-H+/16 bf16-cast 512 px batch size 32, two runs each): MLX limit 6.0 GB 11.92 to 11.94 img/s, MLX limit 10.4 GB 12.04 to 12.06 img/s (+1 %). The MLX peak is 4.8 GB in both cases.</li>
+  </ul>
+</section>
+
+<section id="decisions">
+  <h2>3 Decisions</h2>
+  <p>Twenty-three decisions have real options. Each subsection gives the question, the options with their trade-offs, the evidence and one recommendation. D1 to D6 are about the compiled forward pass. D7 to D11 are about the measurement. D12 and D13 are about the inputs and the outputs. D14 to D18 are about quantized weights. D19 is about the Neural Accelerators. D20 to D23 complete the measurement: the denominator of a speedup outside P1 and P2, the pass rule of a speedup, the key of a quantized row and the time budget. Section 5 lists the chosen options.</p>
+
+  <h3>3.1 D1: The compiled forward pass</h3>
+  <p>Question: which part of <code>src/dinov3_apple/mlx_model.py</code> does Step 6 compile, how does the compiled function get the weights, and who holds it?</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Option</th><th>What changes</th><th>For</th><th>Against</th></tr></thead>
+      <tbody>
+        <tr><td class="rec">A. The whole forward pass, one trace for each input shape, weights as inputs</td><td>A function in <code>src</code>, for example <code>compile_backbone(model)</code>, returns <code>mx.compile(forward, inputs=model.state)</code>. It is built after the last weight change (load, <code>nn.quantize</code>). The caller holds it</td><td>All fusions of the element-wise chains. The graph build drops from 0.26 to 0.11 ms (12 blocks) and from 0.77 to 0.32 ms (32 blocks). <code>inputs=model.state</code> follows a weight change for 0.010 to 0.026 ms per call. The same pattern serves the compiled training step of Step 8a</td><td>A second path next to the eager forward pass. The hidden states and the token range stay eager. A function stored on the model keeps the weights alive until <code>gc.collect()</code></td></tr>
+        <tr><td>B. Compiled element-wise helpers only</td><td>Small compiled functions for the RoPE rotation, LayerScale and the residual add, the activation, as <code>mlx.nn</code> does for <code>nn.gelu</code> and <code>nn.silu</code></td><td>The same fused kernels as A (172 for 12 blocks in fp32, 485 for 32 blocks in bf16-cast). No stale-weight hazard. Every path gets the fusions</td><td>The Python graph build stays: 0.24 ms (12 blocks) and 0.66 ms (32 blocks) per call. That is about 9 % of a ViT-S/16 call at batch size 1 (about 2.7 ms at 367 img/s), and 0.13 ms (about 5 %) more than option A. More functions to keep</td></tr>
+        <tr><td>C. The whole forward pass with <code>shapeless=True</code></td><td>One trace for all batch sizes and input resolutions</td><td>No retrace</td><td>Does not work: "Slice cannot infer output shapes" at the first call, a reshape error in <code>patchify</code> at a new shape. The retrace it saves costs only 2 to 6 ms</td></tr>
+        <tr><td>D. One compiled function for each block</td><td><code>mx.compile</code> on each <code>Block</code></td><td>Small traces. Fits a later per-block gradient checkpoint</td><td>No extra fusion: every fused kernel lies inside one block. The Python loop over the blocks stays. L traces</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 15.</b> Trade-offs of D1.</p>
+  <p>Evidence: Tables 5 and 6, Figure 2 and Section 2.2. The <code>mx.compile</code> docstring of mlx 0.32.4: a change of the number of dimensions or of a dtype gives a new trace, also with <code>shapeless</code>. <code>nn.silu</code> and <code>nn.gelu</code> are already compiled with <code>shapeless=True</code> (<code>mlx/nn/layers/activations.py</code>), so the eager forward pass already fuses the activation itself.</p>
+  <div class="box">
+    <p><b>Recommendation: Option A.</b> Compile the whole forward pass for each input shape with <code>inputs=model.state</code>. Build it in <code>src</code> after the last weight change. The caller holds it, never the model. Do not use <code>shapeless</code>. A part test changes one weight after the compile and expects the new output. A second test checks that <code>del</code> of the model and of the function frees the weights.</p>
+  </div>
+
+  <h3>3.2 D2: The form of the RoPE rotation and the RoPE table cache</h3>
+  <p>Question: how does the RoPE rotation run, so that <code>mx.compile</code> can fuse it, without a change of the tables of ADR 0006? Today <code>apply_rope</code> computes x · cos + rotate_half(x) · sin, and <code>rotate_half</code> joins two slices with <code>mx.concatenate</code>.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Option</th><th>What changes</th><th>For</th><th>Against</th></tr></thead>
+      <tbody>
+        <tr><td>R1. Keep <code>apply_rope</code></td><td>Compile fuses only the multiply-add part</td><td>No code change</td><td>Slice and concatenate do not fuse: 4 kernels for each of q and k under compile (7 in eager in the half modes). 1.33 ms per block at P2</td></tr>
+        <tr><td class="rec">R2. Concat-free rotation</td><td>Reshape x to (B, h, T, 2, hd / 2). out = x · cos2 + x[..., ::-1, :] · sin2, in fp32, then cast back. cos2 is the cos table as (T, 2, hd / 2). sin2 is the sin table with a negative first half (the sign of rotate_half moves into the table). The dict cache keeps this layout</td><td>One fused kernel for each of q and k. 0.74 ms per block at P2. Bit for bit equal to <code>apply_rope</code>: on the CPU stream in 9 of 9 cases (fp32, fp16, bf16; head dimension 64 and 128; grids 14 × 14, 32 × 32, 14 × 25), and on the GPU in 360 of 360 parity rows and at P2. The tables of <code>rope_tables</code> do not change</td><td>A changed <code>apply_rope</code> and a second table layout. The fused kernel reads a view with a negative stride; a new MLX version can change that</td></tr>
+        <tr><td>R3. <code>mx.fast.rope</code> with the two-call workaround of Step 4</td><td>One call for the y half and one for the x half, plus gathers and a join</td><td>A built-in kernel</td><td>More kernels than R2. It computes cos and sin with <code>metal::fast</code> functions, not the Hugging Face tables of ADR 0006 (Tables 6 and 7 of <code>specs/04-mlx-port/explore.html</code>)</td></tr>
+        <tr><td>R4. A custom kernel with <code>mx.fast.metal_kernel</code></td><td>One hand-written Metal kernel</td><td>Full control</td><td>A non-goal of <code>mission.md</code> unless a profile shows the need. R2 gives one kernel without it</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 16.</b> Trade-offs of D2.</p>
+  <p>The RoPE table cache of plan action A3 exists since Step 4: <code>MlxBackbone._rope_cache</code>, a dict keyed by (grid_h, grid_w), filled by <code>MlxBackbone.rope</code>. One pair of tables is about 0.53 MB at 512 px with head dimension 64. The retrace probe confirms one entry for each patch grid.</p>
+  <div class="box">
+    <p><b>Recommendation: R2</b>, in the eager forward pass too, so that eager and compiled share one form. Keep the dict cache; it stores cos2 and the signed sin2. Add a part test: R2 is bit for bit equal to the old form in the half modes, and a second call at the same grid reuses the cached tables. With this test, plan action A3 is done.</p>
+  </div>
+
+  <h3>3.3 D3: The casts of the autocast modes (R30)</h3>
+  <p>Question: how far does Step 6 go to remove the extra cost of the autocast modes against the cast modes?</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Option</th><th>What changes</th><th>For</th><th>Against</th></tr></thead>
+      <tbody>
+        <tr><td class="rec">a. Compile only</td><td>Compile fuses the promotion of the half branch output with the fp32 LayerScale multiply and the residual add. The cast after each layer norm stays</td><td>No change of the numerics or of the meaning of the autocast mode. Measured: autocast / cast goes from 0.917 to 0.976</td><td>The 2 casts after the layer norms stay, because <code>mx.fast.layer_norm</code> is a fusion barrier: about 2.4 % rest</td></tr>
+        <tr><td>b. Round the residual stream before the norm</td><td>Normalize a half copy of the stream</td><td>Removes the last 2 casts</td><td>Changes the numerics and the definition of the autocast mode (the layer norms stay in fp32). The bf16-autocast margin is already small: ViT-S+/16 patch mean at 97.3 % of the budget (ADR 0007)</td></tr>
+        <tr><td>c. A custom fused layer-norm-and-cast kernel</td><td><code>mx.fast.metal_kernel</code> that writes the half output</td><td>No numeric change</td><td>A non-goal of <code>mission.md</code>. The norm-and-cast part is 0.46 ms of a 14.7 ms block; the cast alone is less</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 17.</b> Trade-offs of D3. Evidence: probe r30 and Table 7.</p>
+  <div class="box">
+    <p><b>Recommendation: Option a.</b> Accept the 2 remaining casts per block. Report autocast / cast again after compile, in the paired rounds of D7.</p>
+  </div>
+
+  <h3>3.4 D4: Which forward pass the parity tests run</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Option</th><th>What changes</th><th>For</th><th>Against</th></tr></thead>
+      <tbody>
+        <tr><td>a. Eager only, plus one test compiled against eager</td><td><code>run_mlx</code> stays eager</td><td>No change of the parity tests</td><td>The tests do not run the forward pass that the benchmark and the Step 7 API run</td></tr>
+        <tr><td class="rec">b. <code>run_mlx</code> runs the compiled forward pass; one test asserts compiled equal to eager</td><td>The parity tests use the compiled forward pass. The hidden states and the token range stay eager. A part test compares compiled and eager on the three small models in the five dtype modes</td><td>The tests check what users run. The equality test keeps the eager diagnostics valid. Extra cost: one trace of 1.5 to 6 ms for each new shape and one Metal compile for each process</td><td>On the CPU stream (<code>DINOV3_MLX_DEVICE=cpu</code>), compiled and eager differ by about 2e-6, so a CPU-stream test needs a tolerance</td></tr>
+        <tr><td>c. Both forward passes in every parity row</td><td>Each parity configuration runs eager and compiled</td><td>Full coverage</td><td>Twice the forward passes, for little more information when the equality test passes</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 18.</b> Trade-offs of D4. Evidence: 360 of 360 parity rows and all P1 and P2 cells are bit for bit equal on the GPU (Section 2.2). The slow session took 65.4 s and 70.0 s in its two parts (Step 5, warm file cache).</p>
+  <div class="box">
+    <p><b>Recommendation: Option b.</b> The equality test asserts bit equality (largest difference 0) on the GPU. On the CPU stream it uses a tolerance that the plan sets from the measured 2.0e-6.</p>
+  </div>
+
+  <h3>3.5 D5: fp32 with TF32 on (F8, ADR 0005)</h3>
+  <p>Question: does Step 6 add an <code>mlx</code> dtype mode with TF32 on? TF32 doubles the fp32 throughput of ViT-H+/16 (Table 8). ADR 0005 keeps the fp32 dtype mode at TF32 off.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Option</th><th>What changes</th><th>For</th><th>Against</th></tr></thead>
+      <tbody>
+        <tr><td class="rec">a. No TF32 mode</td><td>ADR 0005 stays. The fp32 rows run with <code>MLX_ENABLE_TF32=0</code></td><td>No new name, no new threshold, no new test session</td><td>The fp32 rows stay slow, and the Neural Accelerators stay unused in fp32</td></tr>
+        <tr><td>b. A mode fp32-tf32 with the fp32 thresholds</td><td><code>MLX_DTYPE_MODES</code> gets fp32-tf32; <code>THRESHOLDS["fp32-tf32"]</code> is the fp32 set; each worker sets <code>MLX_ENABLE_TF32=1</code> in its own subprocess; its parity tests run in their own pytest session</td><td>No change of ADR 0003. 1.70 times the throughput at P1, 2.02 times at P2</td><td>ViT-H+/16 fails the fp32 set in 4 of 12 configurations (worst patch 1st percentile 0.996115). The research condition for b (1.3 times and 12 of 12 for both model sizes) fails. A sixth dtype mode name. TF32 is process-wide and read once</td></tr>
+        <tr><td>c. A mode fp32-tf32 with its own, looser thresholds</td><td>For example the fp16 set: TF32 keeps 10 mantissa bits</td><td>All 12 configurations of ViT-S/16 and ViT-H+/16 pass the fp16 set. The fp32 rows use the Neural Accelerators</td><td>Changes ADR 0003 and the success measures of <code>mission.md</code>. Only the user can decide that. Other model sizes are not measured</td></tr>
+        <tr><td>d. TF32 on in the fp32 mode itself</td><td>Reverse ADR 0005</td><td>Fastest fp32 rows</td><td>One name for two precisions. <code>mlx</code> fp32 and torch-mps fp32 would compare at different precision. ADR 0005 rejected this</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 19.</b> Trade-offs of D5. Evidence: probe tf32 (Table 8), F8 of <code>specs/04-mlx-port/verify.html</code>, ADR 0005.</p>
+  <div class="box">
+    <p><b>Recommendation: Option a</b> for the speedup table. The fp32 row keeps exact fp32 arithmetic. Option c needs a decision of the user (Section 6, question 2). If the user picks c, the rows of fp32-tf32 run in their own processes and their own pytest session, and an ADR records the thresholds.</p>
+  </div>
+
+  <h3>3.6 D6: Fused projections (q, k, v and gate, up)</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Option</th><th>What changes</th><th>For</th><th>Against</th></tr></thead>
+      <tbody>
+        <tr><td class="rec">a. Separate projections</td><td>No change</td><td>The key map, the <code>nn.quantize</code> groups and the Step 8 LoRA targets (<code>q_proj</code>, <code>v_proj</code>) stay simple</td><td>7 matmul kernels per SwiGLU block, 6 per MLP block</td></tr>
+        <tr><td>b. Fuse at load</td><td>Join the weights along the output axis at load (zeros for the missing <code>k_proj</code> bias), then split the output</td><td>4 larger matmuls per block. Measured: 7 to 8 % at batch size 1 in eager mode, bit for bit equal</td><td>Measured: only 0 to 2 % with the compiled forward pass (ViT-S/16 1.004, ViT-H+/16 1.017). Changes the module names of Step 8 LoRA and of <code>nn.quantize</code></td></tr>
+        <tr><td>c. Fuse only in the compiled inference path</td><td>A fused copy of the weights for inference</td><td>Training keeps the names</td><td>Two copies of the projection weights in memory, or a second load path</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 20.</b> Trade-offs of D6. Evidence: probe fuse-proj, 224 px, batch size 1, 5 rounds of 50 batches.</p>
+  <div class="box">
+    <p><b>Recommendation: Option a.</b> The research set a condition to reopen the question: 10 % or more at batch size 1. The probe measured 0 to 2 % with compile.</p>
+  </div>
+
+  <h3>3.7 D7: The measurement protocol and the benchmark rows</h3>
+  <p>Question: how does Step 6 show the gain of each change, and how does it measure the speedup table, when the spread between runs (about 20 %, F2) is as large as the gains?</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Option</th><th>What changes</th><th>For</th><th>Against</th></tr></thead>
+      <tbody>
+        <tr><td>a. The Step 5 protocol</td><td>One run of 3 rounds at P1 and P2, <code>mlx</code> and torch-mps workers in alternation</td><td>Exists</td><td>F2: the sign of a small paired ratio changed between two runs</td></tr>
+        <tr><td>b. The full matrix after each change</td><td>Each change gets a full row set</td><td>The gain for every configuration</td><td>About 78 min (225 configurations) plus up to 82 min (36 ViT-7B/16 configurations) for each change (estimate, Section 5.1). Across runs, the noise is as large as the gain</td></tr>
+        <tr><td>c. A sentinel set after each change</td><td>7 configurations in 3 dtype modes, two <code>mlx</code> workers for each configuration, 3 rounds</td><td>Covers more model sizes than P1 and P2</td><td>About 42 min for each change (estimate). Separate processes carry the drift between processes</td></tr>
+        <tr><td class="rec">d. Change ratios in one process, the full matrix once, paired speedup runs</td><td>For each change: a change ratio at P1 and P2, both forms in one process, rotated order, 5 rounds (1 to 4 min). At the end: the full compiled matrix, one row for each configuration. The speedup at P1 and P2: <code>mlx</code> and torch-mps workers in alternation, 5 rounds, rotated order, two runs at different times, with the spread between the runs</td><td>The lowest noise for each change: same process, same weights, same power state. Gains of 5 % are visible (Table 5). F2 gets two runs and a spread</td><td>Change ratios only at P1 and P2. No eager row outside P1 and P2. Outside P1 and P2, the protocol alone gives no paired denominator: each speedup would divide by a Step 3 row of another day and another power state, often one run. That departs from the consequence of ADR 0004 (paired runs for each speedup). D20 decides the denominator</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 21.</b> Trade-offs of D7. Evidence: Section 2.2 (the first call at P2 runs 35 to 40 % faster than the timed batches, so the speed of the Mac changes within the first second); F2 of <code>specs/05-all-sizes/verify.html</code>; on AC power the probes long-phase (drift below 2 % over 90 s) and paired-noise (spread inside one arm 1.6 to 3.0 %) show that the noise inside one session is small, and the spread between runs on different days (about 20 %) is the large term.</p>
+  <div class="box">
+    <p><b>Recommendation: Option d.</b> Also:</p>
+    <ul>
+      <li><code>BenchConfig.compile</code> (already part of the key) means <code>mx.compile</code> on <code>mlx</code> rows. The full matrix has compiled <code>mlx</code> rows only.</li>
+      <li>Each result line adds <code>compile_trace_s</code> (the compiled call before <code>mx.eval</code>) next to <code>first_call_s</code>, the architecture of <code>mx.device_info()</code>, the mlx-metal version, the value of <code>MLX_DISABLE_COMPILE</code> and the MLX cache after the timed batches.</li>
+      <li>The machine-state check stops a run on battery power, as today. All runs need AC power.</li>
+      <li>The rule that decides "speedup above 1" when the two runs disagree: D21. The denominator outside P1 and P2: D20.</li>
+      <li>The <code>mlx</code> side of each speedup uses the rule of ADR 0004 too: the fastest valid dtype mode of the dtype, with the median of its runs.</li>
+      <li>The plan stage decides which driver runs the full <code>mlx</code> matrix. <code>scripts/benchmark.py</code> has the matrix, the rounds and the deferred lines; <code>scripts/bench_mlx_port.py</code> has the paired runs and the F5 and F6 fixes; both use <code>run_worker_subprocess</code>.</li>
+    </ul>
+  </div>
+
+  <h3>3.8 D8: The memory need and the MLX limit of a benchmark worker</h3>
+  <p>Question: what memory need does the check of an <code>mlx</code> benchmark worker use, and which MLX limit holds during the timed batches? Today <code>required_bench_bytes</code> counts 4 bytes per weight in the autocast modes and a full score matrix B · heads · T² in the attention term. The worker sets <code>mx.set_memory_limit</code> to the load need (6.02 GB at P2 in Step 5).</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Option</th><th>What changes</th><th>For</th><th>Against</th></tr></thead>
+      <tbody>
+        <tr><td>a. Keep the current need</td><td>No change</td><td>No code change</td><td>Too high on <code>mlx</code>: ViT-H+/16 autocast at P2 needs 10.23 GB instead of 8.22 GB. ViT-7B/16 autocast at 512 px and batch size 32 needs 52.46 GB and always skips</td></tr>
+        <tr><td>b. Bytes per weight of the backend, score term kept</td><td>The weights use <code>bytes_per_weight(backend, dtype_mode)</code> (exists since Step 5)</td><td>Fixes the ADR 0007 consequence. ViT-7B/16 autocast, 512 px, batch size 32: 36.35 GB</td><td>The score term stays, but the SDPA kernel of <code>mlx</code> does not allocate it</td></tr>
+        <tr><td class="rec">c. Bytes per weight of the backend, no score term on <code>mlx</code></td><td>As b. The <code>mlx</code> need drops the term 2 · B · heads · T² · a. torch-mps keeps it</td><td>Measured: the SDPA kernel needs at most 0.012 MB extra in 139 cells. ViT-H+/16 autocast at P2: 6.86 GB. ViT-7B/16 autocast, 512 px, batch size 32: 27.67 GB. Larger batch sizes fit for D10</td><td>A backend branch in the need. The rule depends on the SDPA kernel of this MLX version</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 22.</b> Trade-offs of D8. Our computation with <code>required_bench_bytes</code> and the formula of option c. The free memory on 2026-11-07 was 22.8 to 46.0 GB. The compiled forward pass lowers the MLX peak (P2: 2.99 to 2.63 GB in bf16-cast), so the need keeps a margin. The MLX peak is not the peak memory of <code>GLOSSARY.md</code> (the process footprint): Step 5 measured a P2 peak memory of 3.44 to 3.45 GB for <code>mlx</code> (ADR 0007). The need compares with the peak memory.</p>
+  <div class="box">
+    <p><b>Recommendation: Option c.</b> Before the timed batches, the worker raises the MLX limit to this need, as the P2 probes did. The probe memory-limit answers the open question: at ViT-H+/16 bf16-cast 512 px batch size 32, the limit at the benchmark need (10.4 GB) gives 12.04 to 12.06 img/s against 11.92 to 11.94 img/s at the load need (6.0 GB), +1 %, with the same MLX peak of 4.8 GB. So the raised limit costs nothing and gains a little. A quantized row uses the quantized bytes in this need (D22).</p>
+  </div>
+
+  <h3>3.9 D9: The baseline rows that Step 6 adds</h3>
+  <p>Question: the speedup table must cover all configurations. The ViT-7B/16 baseline (B4) is deferred since Step 3, and only P1 and P2 have compile rows (ADR 0004). What does Step 6 add on the torch-mps side? The ViT-7B/16 fp32 cells (9 configurations) cannot have a row on either backend: ADR 0008 and the run rule refuse the fp32 weights of the whole model. They stay empty with that reason in every option. In this page, "the speedup table covers all configurations" means: each configuration of the benchmark matrix has a speedup or an empty cell with a stated reason, and <code>verify.html</code> explains each empty cell as the mission rule requires.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Option</th><th>What changes</th><th>For</th><th>Against</th></tr></thead>
+      <tbody>
+        <tr><td>a. No new baseline rows</td><td>B4 stays deferred. The ViT-7B/16 rows of the speedup table stay empty, with the reason</td><td>No torch-mps run with 20 to 28 GB</td><td>The speedup table does not cover all configurations, so the end condition of Step 6 fails for ViT-7B/16</td></tr>
+        <tr><td class="rec">b. Run B4</td><td>18 configurations of ViT-7B/16 on torch-mps in fp16-cast and bf16-cast (the autocast modes need fp32 weights). Compile rows stay at P1 and P2</td><td>All 6 model sizes get a speedup in fp16 and bf16. The 24 torch-mps parity rows of ViT-7B/16 in these modes pass (Step 5)</td><td>Need 20.15 to 28.23 GB for each worker. About 40 min (estimate). A configuration that does not fit gives a skip line</td></tr>
+        <tr><td>c. b, plus compile rows outside P1 and P2</td><td><code>torch.compile</code> rows at more configurations</td><td>A fair baseline: the <code>mlx</code> rows are compiled everywhere. Measured outside P1 and P2: <code>torch.compile</code> gains 36 to 71 % (1.36 to 1.71, probe torch-compile-offp). Without these rows, a compiled <code>mlx</code> row against an eager torch-mps row overstates the speedup by that factor</td><td>Changes the scope of ADR 0004 (a decision of the user). About 70 min for the torch-mps compile arm of five model sizes in the three baseline modes, in place of about 56 min eager (first compiled call 4 to 9.4 s for each worker). Many speedups can fall below 1, as at P1 (Table 14). The first compiled call of ViT-7B/16 is not measured</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 23.</b> Trade-offs of D9. At P1 and P2, the Step 3 compile rows were 9.5 to 126.7 % faster than the eager median (<code>results/baseline-torch-mps.md</code>, Section 5). Outside P1 and P2 the gain is 36 to 71 % in 4 of 4 measured configurations (Section 2.9).</p>
+  <div class="box">
+    <p><b>Recommendation: Option c</b>, a decision of the user (questions 3 and 4). The condition that this page set for option c (compile gains above 10 % outside P1 and P2) holds: 36 to 71 %. Option b alone compares compiled <code>mlx</code> with eager torch outside P1 and P2, a bias of 36 to 71 % in favour of <code>mlx</code>; ADR 0004 adds compile rows so that a speedup does not count a gain that <code>torch.compile</code> gives too. If the user keeps option b, the speedup table marks each row that compares with eager torch and states the bias. The ViT-7B/16 fp32 cells stay empty in all options (ADR 0008).</p>
+  </div>
+
+  <h3>3.10 D10: The best batch size</h3>
+  <p>Question: how does Step 6 find the best batch size for each model size and input resolution?</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Option</th><th>What changes</th><th>For</th><th>Against</th></tr></thead>
+      <tbody>
+        <tr><td>a. The best of the matrix</td><td>For each model size, input resolution and dtype mode: the batch size (1, 8 or 32) with the highest median throughput in the full matrix</td><td>No extra runs. Covers every model size and input resolution</td><td>Only three points. The best value can lie between them</td></tr>
+        <tr><td>b. A sweep everywhere</td><td>More batch sizes for every model size and input resolution</td><td>The full curve</td><td>Several hours of extra runs; most curves are flat (ViT-H+/16 at 512 px: 14.6 img/s at batch size 1, 14.8 at batch size 8)</td></tr>
+        <tr><td class="rec">c. a, plus a sweep at two production configurations</td><td>ViT-S/16 at 224 px: batch sizes 1, 8, 32, 64, 128, 256. ViT-H+/16 at 512 px: 1, 2, 4, 8, 16. Compiled, one dtype mode</td><td>The curve where the batch size matters (ViT-S/16: 596 img/s at batch size 1 against 2098 at 8, form R) and the data for the explainer. The probe batch-knee measured it: ViT-S/16 at 224 px is best at batch size 32 (1077 img/s, eager bf16-cast), not 8; ViT-H+/16 at 512 px is flat within 10 % from batch size 1 to 16</td><td>About 5 min more (the batch-knee probe estimate)</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 24.</b> Trade-offs of D10. Evidence: Tables 5 and 9; the probe batch-knee (Section 2.9): ViT-S/16 224 px eager bf16-cast 416, 1018, 1077, 1012, 990 and 981 img/s at batch sizes 1, 8, 32, 64, 128 and 256; ViT-H+/16 512 px 9.7 to 10.3 img/s at batch sizes 1 to 16. On torch-mps, ViT-S/16 fp16-cast at 224 px gives 129.8 img/s at batch size 1 and 1275.3 img/s at batch size 32 (eager).</p>
+  <div class="box">
+    <p><b>Recommendation: Option c.</b> The best batch size is the one with the highest median throughput. The probe batch-knee shows that the best point of these two configurations lies on a matrix point (batch size 32) or on a flat curve, so option a alone gives a good best batch size; the sweep adds the curve for the explainer and checks this with the compiled forward pass. The table also gives the throughput and the latency of each batch size, so a user can trade throughput against latency.</p>
+  </div>
+
+  <h3>3.11 D11: Input resolutions above 512 px</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Option</th><th>What changes</th><th>For</th><th>Against</th></tr></thead>
+      <tbody>
+        <tr><td class="rec">a. Explainer data only</td><td>Runs at 768 and 1024 px for the explainer, report only, no speedup rows</td><td>Shows the attention cost where it grows (SDPA share up to 63.7 %, Figure 3). About 3 min</td><td>No parity at these sizes: no reference output above 512 px</td></tr>
+        <tr><td>b. 768 and 1024 px in the benchmark matrix</td><td>Both backends get rows at these input resolutions</td><td>Speedups at high input resolution</td><td>New torch-mps baseline runs and new reference outputs. Not in Table 11 of the plan</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 25.</b> Trade-offs of D11. Evidence: probe highres (Table 9) and probe sdpa (Figure 3).</p>
+  <div class="box">
+    <p><b>Recommendation: Option a.</b> The explainer uses the 768 and 1024 px runs and states that they have no parity check.</p>
+  </div>
+
+  <h3>3.12 D12: Preprocessing in MLX</h3>
+  <p>Question: how does the preprocessing (resize with antialiasing, divide by 255, normalize) move to MLX? Today <code>preprocess.py</code> runs in torch with fp64, and it imports torch.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Option</th><th>What changes</th><th>For</th><th>Against</th></tr></thead>
+      <tbody>
+        <tr><td>a. Keep the CPU path</td><td>No change</td><td>Matches the stored pixels by definition</td><td>1.7 ms per 1080p frame on the CPU, more than one image of the compiled P1 forward pass (about 0.5 ms). Needs torch</td></tr>
+        <tr><td>b. <code>nn.Upsample(linear, antialias=True)</code></td><td>The MLX layer does the resize</td><td>Built in. 12 of 12 configurations pass the fp32 thresholds</td><td>Up to 1.3e-4 from the stored pixels. 1.40 ms per 1080p frame</td></tr>
+        <tr><td class="rec">c. Separable resize with the torch weights</td><td>Two matmuls on the GPU, one for the rows and one for the columns, with weight matrices that NumPy computes in fp64 with the antialias rule of torch, once for each pair of input size and input resolution</td><td>Up to 9.5e-7 from the stored pixels (fp32 rounding). 0.65 ms per 1080p frame. uint8 frames go to the GPU: a quarter of the fp32 bytes. No torch</td><td>Own code for the weights. The probe used dense weight matrices; a gather form (<code>mx.take</code>) has the same math</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 26.</b> Trade-offs of D12. Evidence: probe preprocess (Table 13).</p>
+  <div class="box">
+    <p><b>Recommendation: Option c.</b> A part test compares it with <code>preprocess</code> on the test images at the 4 input resolutions (largest difference below 1e-6). A separate benchmark row measures it (1080p frames to 224 and 512 px, batch size 8). The benchmark matrix keeps the stored pixels, so the backbone throughput stays comparable with Step 3. The JPEG decode stays on the CPU.</p>
+  </div>
+
+  <h3>3.13 D13: Patch embeddings in fp16</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Option</th><th>What changes</th><th>For</th><th>Against</th></tr></thead>
+      <tbody>
+        <tr><td>A. fp32 output always</td><td>No change</td><td>One output dtype</td><td>Twice the host bytes: 42.0 MB for a P2 batch</td></tr>
+        <tr><td class="rec">B. fp16 patch embeddings in the four half dtype modes</td><td>The output cast gives fp16 patch embeddings in fp16-cast, bf16-cast, fp16-autocast and bf16-autocast. The fp32 mode returns fp32. The frame embedding stays fp32</td><td>Half the host bytes. The extra parity loss is at most 3e-8. In the Step 5 record no value after the final layer norm is above 18, far below the fp16 maximum. NumPy has no bf16, so fp16 is also the host type of the bf16 modes</td><td>Two output dtypes. No time gain</td></tr>
+        <tr><td>C. fp16 output in all modes</td><td>Also the fp32 mode</td><td>One rule. ViT-S/16 fp32 still passes the fp32 thresholds</td><td>A user who picks fp32 gets less than fp32</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 27.</b> Trade-offs of D13. Evidence: probe fp16-output (Table 13); Table 3 caption of <code>specs/05-all-sizes/explore.html</code> (largest value after the final layer norm).</p>
+  <div class="box">
+    <p><b>Recommendation: Option B,</b> with a parameter for an fp32 output. A parity test runs the fp16 output against <code>THRESHOLDS[mode]</code>.</p>
+  </div>
+
+  <h3>3.14 D14: Quantization format, bits and group size</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Option</th><th>What changes</th><th>For</th><th>Against</th></tr></thead>
+      <tbody>
+        <tr><td class="rec">A. affine, group size 64 (the MLX default)</td><td><code>nn.quantize(model, group_size=64, bits=8 or 4, mode="affine")</code>: one scale and one offset for each group of 64 weights, in the dtype of the source weight</td><td>Kernels for fp32, fp16 and bf16 inputs, also NAX kernels. 8 bits: 12 of 12 in both modes (Figure 4). 1.0625 bytes per weight at 8 bits, 0.5625 at 4 bits: ViT-7B/16 7.14 GB and 3.79 GB against 13.43 GB in bf16</td><td>4 bits fail in every row. The scale has the matmul dtype; bf16 scales lose more than fp16 scales</td></tr>
+        <tr><td>B. affine, group size 32 for 4 bits</td><td>Smaller groups</td><td>Lower weight error on 8 of 9 test tensors</td><td>11 % more memory. 4 bits still fail (patch 1st percentile 0.812661 and 0.773148)</td></tr>
+        <tr><td>C. MX and NV float formats (mxfp8, nvfp4, mxfp4)</td><td>Fixed group sizes, 1-byte scales, no offset</td><td>The only formats with quantized inputs (<code>QQLinear</code>). nvfp4 is the best 4-bit format</td><td>mxfp8 passes only 4 of 12 in fp16-autocast. nvfp4 reaches 0.906819, still far below. <code>QQLinear</code> is 5 to 9 times slower than <code>QuantizedLinear</code></td></tr>
+        <tr><td>D. Add 6 bits or mixed 4 and 8 bits</td><td>A middle point</td><td>affine 6 bits: 686 MB for ViT-H+/16</td><td>6 bits pass only 8 of 12 in fp16-autocast. Mixed 4-bit rows fail (probe Q5). <code>docs/plan.html</code> names 8 and 4 bits only</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 28.</b> Trade-offs of D14. Evidence: probes Q1, Q5, Q6 and Q7; the <code>mx.quantize</code> docstring and the kernel names of <code>mlx.metallib</code> in mlx 0.32.4.</p>
+  <div class="box">
+    <p><b>Recommendation: Option A</b>, 8 bits and 4 bits, group size 64. No other format gives a clear parity gain.</p>
+  </div>
+
+  <h3>3.15 D15: The dtype modes of quantized weights</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Option</th><th>What changes</th><th>For</th><th>Against</th></tr></thead>
+      <tbody>
+        <tr><td>A. fp16-autocast only</td><td>fp16 matmuls with fp16 scales, fp32 residual stream</td><td>Lowest 8-bit loss: patch 1st percentile 0.998775 against the unquantized output. The mode of the reference fine-tuning setup (plan Table 12). No fp16 overflow (ADR 0007)</td><td>Not the official dtype mode of DINOv3</td></tr>
+        <tr><td>B. bf16-autocast only</td><td>bf16 matmuls with bf16 scales</td><td>The official dtype mode, and the mode of the ViT-7B/16 rows</td><td>bf16 scales lose more: 0.995660 against the unquantized output</td></tr>
+        <tr><td class="rec">C. Both autocast modes</td><td>A and B</td><td>Covers the production mode and the official mode. Each quantized row joins the unquantized <code>mlx</code> row of the same dtype mode, and the baseline row of fp16 or bf16</td><td>Twice the rows and the time</td></tr>
+        <tr><td>D. All four half modes</td><td>Also fp16-cast and bf16-cast</td><td>The cast modes are a little faster</td><td>fp16-cast overflows for ViT-L/16 and ViT-H+/16. Four times the rows</td></tr>
+        <tr><td>E. The fp32 dtype mode</td><td>Quantize the fp32 source, fp32 scales</td><td>No rounding of the inputs</td><td>The slowest path; fp32 scales with half inputs cost up to 6 times the dense time (Q2)</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 29.</b> Trade-offs of D15. Evidence: probes Q1, Q2 and Q6.</p>
+  <div class="box">
+    <p><b>Recommendation: Option C.</b> If the user wants fewer rows, keep fp16-autocast (Option A). A test checks that the scales have the matmul dtype: <code>load_weights(strict=True)</code> checks the shapes, not the dtypes.</p>
+  </div>
+
+  <h3>3.16 D16: Which modules get quantized weights</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Option</th><th>What changes</th><th>For</th><th>Against</th></tr></thead>
+      <tbody>
+        <tr><td>A. All <code>nn.Linear</code> modules, also the patch embedding</td><td><code>nn.quantize</code> without a predicate</td><td>One call</td><td>The patch embedding is the most sensitive part: alone at 4 bits it gives a patch 1st percentile of 0.570053. It holds only 0.05 % (ViT-7B/16) to 1.37 % (ViT-S/16) of the weights. It is the path of the Step 4 F1 fault</td></tr>
+        <tr><td class="rec">B. The <code>nn.Linear</code> modules of the blocks only</td><td>A predicate: <code>nn.Linear</code> and a path that starts with <code>layer.</code></td><td>98.3 % (ViT-S/16) to 99.9 % (ViT-7B/16) of the weights. The first matmul stays in the matmul dtype</td><td>The first and the last block get quantized too</td></tr>
+        <tr><td>C. B without the first and the last block</td><td>Blocks 0 and L − 1 keep half weights</td><td>Common practice</td><td>Measured: fails at 4 bits (0.771719 for ViT-H+/16)</td></tr>
+        <tr><td>D. Mixed bits</td><td><code>down_proj</code>, or blocks 0 and L − 1, at 8 bits in a 4-bit model</td><td>A small growth: ViT-H+/16 581 MB or 502 MB against 476 MB</td><td>Measured: still fails (0.816823 and 0.780506)</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 30.</b> Trade-offs of D16. Evidence: probe Q5 and the safetensors headers.</p>
+  <div class="box">
+    <p><b>Recommendation: Option B.</b> Write the predicate as a function that can return a dict of parameters, so that a later mixed row is a small change.</p>
+  </div>
+
+  <h3>3.17 D17: How to load and quantize, also ViT-7B/16</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Option</th><th>What changes</th><th>For</th><th>Against</th></tr></thead>
+      <tbody>
+        <tr><td>L1. Load in the matmul dtype, then <code>nn.quantize</code></td><td><code>load_mlx_backbone</code> as today, then <code>nn.quantize</code></td><td>Three lines and the public API</td><td>ViT-7B/16 first needs its bf16 load: need 20.1 GB, load peak 13.5 GB. ViT-H+/16: load peak 1.80 GB (4 bits) and 2.12 GB (8 bits)</td></tr>
+        <tr><td class="rec">L2. Quantize in the loader, one tensor at a time</td><td>The skeleton model gets <code>nn.quantize</code> before the load and stays lazy. The loader reads one fp32 tensor, casts it, calls <code>mx.quantize</code> and evaluates the three arrays. <code>load_weights(strict=True)</code> checks names and shapes</td><td>Measured load peak: ViT-H+/16 0.52 GB (4 bits) and 0.94 GB (8 bits); ViT-7B/16 3.98 and 7.33 GB. Memory check of ViT-7B/16: 8.54 and 12.57 GB against 20.12 GB. Bit for bit equal to L1. The pattern of D5 of Step 5 and ADR 0008</td><td>More loader code. <code>linear_parameter_names</code>, the load-peak target and the lower bound (F1) must learn <code>QuantizedLinear</code>. The skeleton must stay lazy: <code>QuantizedLinear.__init__</code> builds a full-size random fp32 weight</td></tr>
+        <tr><td>L3. Quantize once and keep a quantized file</td><td>A safetensors file in a cache folder outside the repo, with bits, group size, mode, source checksum and mlx version</td><td>Reads 3.8 or 7.1 GB in place of 26.9 GB for ViT-7B/16</td><td>A converted file again (D2 of Step 4 chose the key map at load time). Small gain: the warm bf16 load of ViT-7B/16 takes 1.47 s</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 31.</b> Trade-offs of D17. Evidence: probes Q4a and Q4b (Table 12).</p>
+  <div class="box">
+    <p><b>Recommendation: L2.</b> Before the first quantized load (F1): the memory check, the load-peak target and the lower bound use the quantized bytes, and the backbone slot checks them as it checks the other loads. L1 stays as a check in a test: L2 equal to L1 bit for bit on a small model. A guard keeps the skeleton lazy (R50): the skeleton of ViT-7B/16 holds lazy random fp32 weights of the whole model (about 27 GB), and one <code>mx.eval</code> on it before the quantized tensors replace them can make them real, against ADR 0008. The plan picks the guard, for example a skeleton with zero-size placeholder weights, or a check after the load that the MLX active memory stays below a bound from the quantized bytes. A part test on a small model in the style of <code>NO_FP32_WEIGHTS</code> evaluates the skeleton before the load and expects a stop.</p>
+  </div>
+
+  <h3>3.18 D18: Parity thresholds for quantized weights</h3>
+  <p>Question: which rule decides if a quantized row is valid? ADR 0003 has no thresholds for quantized weights. Table 9 of <code>docs/plan.html</code> says "test_quantized: report only". <b>Only the user can set thresholds</b> (Section 6, question 1).</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Option</th><th>What changes</th><th>For</th><th>Against</th></tr></thead>
+      <tbody>
+        <tr><td>A. Report only, with a fault bound</td><td>Each quantized row records the parity against the reference output and against the unquantized output of the same dtype mode, and "passes the set of its dtype mode: yes or no". A loose bound catches only faults such as the Step 4 F1 cast (frame cosine 0.716)</td><td>Follows plan Table 9. No change of ADR 0003. The user decides after the numbers exist</td><td>No guard against a slow loss of quantized parity, only against faults. The speedup table needs a rule for valid quantized rows anyway</td></tr>
+        <tr><td>B. The threshold set of the dtype mode</td><td>A quantized row is valid only if it passes <code>THRESHOLDS[mode]</code></td><td>No new numbers. With the probe values: all 8-bit rows valid (72 of 72), no 4-bit row valid (0 of 72)</td><td>Applies ADR 0003 to a new kind of row. The 8-bit margins are small: the ViT-S/16 frame uses 76 % of the bf16 budget (0.998484 against 0.998) and 61 % of the fp16 budget (0.999392 against 0.999)</td></tr>
+        <tr><td>C. Own thresholds for quantized weights</td><td>For example a set for 8 bits and a set for 4 bits</td><td>4-bit rows can count</td><td>A 4-bit set would have to accept a patch 1st percentile of about 0.64 (ViT-S+/16). Changes ADR 0003 and <code>mission.md</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 32.</b> Trade-offs of D18. Evidence: Table 10, probe Q4b.</p>
+  <div class="box">
+    <p><b>Proposal for the user: A in the tests, B in the speedup table.</b> The test <code>test_quantized</code> stays report only, with a fault bound (the plan sets its value from the probe values with a wide margin). In the speedup table, a quantized row is valid if it passes the set of its dtype mode. So the 8-bit rows count and the 4-bit rows show as not valid, with their values. An ADR records the user's choice.</p>
+  </div>
+
+  <h3>3.19 D19: The record of the Neural Accelerators</h3>
+  <p>Question: how does Step 6 record the MLX and macOS versions that enable the Neural Accelerators, and how does a later MLX version show a change (F3)?</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Option</th><th>What changes</th><th>For</th><th>Against</th></tr></thead>
+      <tbody>
+        <tr><td>a. A record only</td><td><code>verify.html</code> and <code>tech-stack.md</code> give the versions of Table 8</td><td>Small</td><td>Nothing shows when a new MLX version stops or changes the NAX kernels</td></tr>
+        <tr><td class="rec">b. a, plus fields and a report-only test</td><td>Each result line records the architecture of <code>mx.device_info()</code> and the mlx-metal version. A report-only test measures the SDPA fingerprint of probe nax-record (the share of half outputs that differ from float64 rounded once)</td><td>A version change that turns the NAX kernels off or changes <code>relaxed_precision</code> shows in the next default session. Answers the F3 question of Step 5</td><td>One more test. The matmul fingerprint cannot tell a NAX kernel from another kernel (below 0.2 % both ways), so the test sees only the SDPA kernel</td></tr>
+        <tr><td>c. b, plus rows with the Neural Accelerators off in each benchmark run</td><td><code>MLX_METAL_GPU_ARCH=applegpu_g16s</code> rows at P1 and P2</td><td>The gain of the Neural Accelerators in every run</td><td>More rows for a value that changes only with the MLX version</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 33.</b> Trade-offs of D19. Evidence: probes nax-record and nax-ab (Table 8).</p>
+  <div class="box">
+    <p><b>Recommendation: Option b.</b> The Verify stage runs one pair with the Neural Accelerators off at P1 and P2 for the explainer.</p>
+  </div>
+
+  <h3>3.20 D20: The denominator of a speedup outside P1 and P2</h3>
+  <p>Question: what does the speedup of each configuration outside P1 and P2 divide by? D7 gives paired runs only at P1 and P2. ADR 0004, a fixed point of Section 1, says: "Step 6 measures each speedup again with torch-mps and <code>mlx</code> runs in alternation in one session, and reports the median of the paired ratios". Finding F1 of <code>specs/03-baseline/verify.html</code> says that a stored B1 value alone is not a safe denominator. Section 2 says that absolute values do not compare across sessions, and the spread between runs is about 20 % (F2).</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Option</th><th>What changes</th><th>For</th><th>Against</th></tr></thead>
+      <tbody>
+        <tr><td class="rec">a. Paired runs for every configuration</td><td>The full matrix of order step 6 runs as pairs: for each configuration, a torch-mps worker in the baseline mode of each dtype (ADR 0004) and the <code>mlx</code> workers, in alternation and in a rotated order, one round in one session</td><td>Follows ADR 0004. Each speedup has a denominator of the same session and power state. The noise inside one session is small on AC power (1.6 to 3.0 %, probe paired-noise)</td><td>About 56 min (eager) or about 70 min (compile rows, D9 option c) more machine time for each round, plus 35 min for ViT-7B/16 (B4, already in order step 8). One round gives one ratio for each configuration; the median of several ratios needs more rounds</td></tr>
+        <tr><td>b. A sentinel subset in pairs, the stored rows elsewhere</td><td>About 7 configurations in 3 dtypes run as pairs, two runs. The other rows divide by the Step 3 rows, with an uncertainty from the sentinel ratios and from F2</td><td>About 45 min for each run (scaled from the sentinel estimate of 42 min), about 1.5 h for two runs</td><td>Most speedups stay unpaired. Departs from the consequence of ADR 0004: only the user can change it</td></tr>
+        <tr><td>c. The stored Step 3 rows</td><td>Each speedup outside P1 and P2 divides the Step 6 <code>mlx</code> row by the Step 3 B1 row, with the spread of F2 stated</td><td>No extra time</td><td>Cross-day values: the Step 3 P1 compile rows were 6 to 11 % below the same arm in the AC probe of 2026-11-07, and the Step 5 runs differed by about 20 %. Departs from ADR 0004 (a decision of the user)</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 34.</b> Trade-offs of D20. Times from <code>bench.py</code> time budget and the measured times of Step 3 (Section 5.1).</p>
+  <div class="box">
+    <p><b>Recommendation: Option a</b>, one round for each configuration. It follows ADR 0004, so it needs no change of that ADR. If the user wants a shorter run, option b or c needs a change of the ADR 0004 consequence by the user (Section 6, question 7).</p>
+  </div>
+
+  <h3>3.21 D21: The pass rule of "speedup above 1"</h3>
+  <p>Question: which value decides "speedup above 1" for the mission rule, when two runs at different times give different medians? F2 and R33: the P2 fp16 estimate (1.02) lies inside a spread between runs of about 20 %, and its sign can change. The verifier needs this rule as a numbered acceptance criterion.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Option</th><th>What changes</th><th>For</th><th>Against</th></tr></thead>
+      <tbody>
+        <tr><td>a. Pooled median</td><td>The median of all paired ratios of both runs (10 at P1 and P2) above 1</td><td>Simple; uses all data</td><td>One run can hide the other: a pass when the two runs disagree in sign</td></tr>
+        <tr><td class="rec">b. Pooled median and both run medians</td><td>Above 1 only if the pooled median and the median of each run are above 1. If the two runs disagree in sign, the result is "not above 1", and <code>verify.html</code> explains why. Report both run medians and the spread between runs</td><td>A pass holds in both runs. F2 is visible. Outside P1 and P2 (one round, D20 option a) the rule is the paired ratio above 1, and a ratio inside 1 ± 0.03 (the noise of probe paired-noise) is marked "inside the noise"</td><td>A true speedup of 1 to 3 % can show as "not above 1"</td></tr>
+        <tr><td>c. Lower end of the range</td><td>The smallest paired ratio above 1</td><td>Strictest</td><td>One noisy round decides; with 10 ratios the smallest is often below the true value</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 35.</b> Trade-offs of D21. Evidence: F2 of <code>specs/05-all-sizes/verify.html</code>, Table 14, probe paired-noise.</p>
+  <div class="box">
+    <p><b>Recommendation: Option b.</b> The plan writes it as a numbered acceptance criterion.</p>
+  </div>
+
+  <h3>3.22 D22: The key of a quantized row</h3>
+  <p>Question: how does a quantized row show in the results? <code>BenchConfig</code> has the fields run, model_size, dtype_mode, side, batch_size, compile and repeat. <code>WEIGHT_BYTES</code> and <code>bytes_per_weight</code> are keyed only by the dtype mode. If a quantized row reuses the name of its dtype mode, the ADR 0004 rule "the fastest valid dtype mode" on the <code>mlx</code> side mixes quantized and unquantized rows.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Option</th><th>What changes</th><th>For</th><th>Against</th></tr></thead>
+      <tbody>
+        <tr><td class="rec">a. A bits field</td><td><code>BenchConfig</code> gets <code>bits</code> (none for unquantized weights, 8 or 4), part of its key. <code>bytes_per_weight</code> and <code>required_bench_bytes</code> get a bits input and use the quantized bytes</td><td>The dtype mode keeps one meaning. <code>MLX_DTYPE_MODES</code>, <code>THRESHOLDS</code> and the D18 rule stay. Old result lines read as unquantized</td><td>A new field in the key and in every result reader</td></tr>
+        <tr><td>b. New dtype mode names</td><td>For example <code>bf16-autocast-q8</code></td><td>No new key field</td><td>One name for two things: the matmul dtype and the weight format. <code>MLX_DTYPE_MODES</code>, <code>THRESHOLDS</code> and the D18 rule change</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 36.</b> Trade-offs of D22. Evidence: <code>src/dinov3_apple/bench.py</code>.</p>
+  <div class="box">
+    <p><b>Recommendation: Option a.</b> The ADR 0004 selection on the <code>mlx</code> side takes only unquantized rows. Each quantized row gets its own speedup row next to the unquantized row of the same dtype mode. The memory check and the MLX limit of a quantized worker use the quantized bytes (D8).</p>
+  </div>
+
+  <h3>3.23 D23: The time budget</h3>
+  <p>Question: does Step 6 run the full scope, or a reduced scope with named cuts? Section 5.1 gives the machine time.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Option</th><th>What changes</th><th>For</th><th>Against</th></tr></thead>
+      <tbody>
+        <tr><td class="rec">a. Full scope</td><td>All rows of Table 40</td><td>The speedup table covers all configurations. About 6.3 h of heavy jobs, or about 7.4 h with the torch-mps arm of D20 option a and D9 option c. The long runs go in the background, one at a time</td><td>The longest machine time of all steps so far</td></tr>
+        <tr><td>b. Reduced scope, cuts that leave no speedup cell empty</td><td>Quantized ViT-7B/16 rows without batch size 32 (about −52 min) and without 448 px (about −27 min); paired runs at P1 and P2 with 3 rounds in place of 5 (about −33 min)</td><td>About 1.5 to 2 h less</td><td>Fewer quantized rows of ViT-7B/16. Fewer paired ratios for D21</td></tr>
+        <tr><td>c. b, plus no batch size 32 for ViT-7B/16 in the matrix</td><td>Also about −45 min (<code>mlx</code>) and −25 min (torch-mps)</td><td>About 2.7 h less</td><td>Leaves 6 cells of the speedup table empty (3 input resolutions × fp16 and bf16): the end condition fails for them unless the user accepts it</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 37.</b> Trade-offs of D23. Times from the time model of Section 5.1.</p>
+  <div class="box">
+    <p><b>Recommendation: Option a.</b> If the time must be shorter, option b keeps the end condition. Option c needs the user's yes because it leaves configurations of the speedup table empty.</p>
+  </div>
+</section>
+
+<section id="risks">
+  <h2>4 Risks</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>No.</th><th>Risk</th><th>Effect</th><th>Action</th><th>Decision</th></tr></thead>
+      <tbody>
+        <tr><td>R32</td><td>Battery power and thermal drift</td><td>On battery power the batch time drifted by 18 % in 40 s. On AC power the drift is below 2 % over 90 s and the spread inside one arm is 1.6 to 3.0 %. The spread between runs on different days stays about 20 % (F2)</td><td>All runs on AC power (the machine-state check stops otherwise). Paired rounds, rotated order, the spread between runs</td><td>D7, D20</td></tr>
+        <tr><td>R33</td><td>The P2 speedup in fp16 and bf16 is near 1</td><td>Estimates 1.02 and 1.06 across sessions, not paired, against a spread between runs of about 20 %. The sign can change. At P1 the paired values are already below 1 (R49)</td><td>Paired runs, two runs at different times, the pass rule of D21. If the speedup is not above 1, <code>verify.html</code> explains why (<code>mission.md</code>)</td><td>D7, D21</td></tr>
+        <tr><td>R34</td><td>Quantized rows are slower</td><td>Quantized ViT-H+/16 is 7 to 16 % slower than unquantized. Its speedup can fall below 1</td><td><code>verify.html</code> explains: quantization saves memory, not time, on this Mac (Table 11). Section 6, question 5</td><td>D14, D15</td></tr>
+        <tr><td>R35</td><td>Stale weights in a compiled forward pass</td><td>A closure or <code>mx.compile(model)</code> keeps the weights of the first trace. <code>nn.quantize</code> after the compile gives old outputs without an error</td><td><code>inputs=model.state</code>; compile after the last weight change; a part test that changes one weight</td><td>D1</td></tr>
+        <tr><td>R36</td><td>A reference cycle holds the weights</td><td>A compiled function stored on the model keeps the weights until <code>gc.collect()</code>. A script that loads two model sizes in a row can hold both, against the run rule</td><td>The caller holds the function. Scripts and the Step 7 API never store it on the model</td><td>D1</td></tr>
+        <tr><td>R37</td><td>CPU stream differs</td><td>Compiled and eager differ by about 2e-6 on the CPU stream</td><td>A tolerance for CPU-stream tests (Step 7 CI)</td><td>D4</td></tr>
+        <tr><td>R38</td><td>The first call grows</td><td>The trace and the Metal compile of a fresh process add 0.17 to 0.64 s in the half modes and about 1.15 s in fp32 at P2</td><td>The field <code>compile_trace_s</code> next to <code>first_call_s</code></td><td>D7</td></tr>
+        <tr><td>R39</td><td>The MLX buffer cache grows with new shapes</td><td>Up to 4.9 GB for ViT-H+/16 over five shapes; the active memory stays at 1.7 to 1.85 GB</td><td>Record the cache in each line. The Step 7 API decides on <code>mx.clear_cache()</code> or a cache limit</td><td>D7</td></tr>
+        <tr><td>R40</td><td>Light GPU jobs of other agents (F14)</td><td>They overlap timing runs</td><td>The wait loop also before light GPU work, with a lock (order step 1). Probe and benchmark processes carry names that the wait loop knows</td><td>Order step 1</td></tr>
+        <tr><td>R41</td><td>An MLX version change</td><td>New fusion rules, NAX kernels or <code>relaxed_precision</code> settings change the results</td><td>Keep mlx 0.32.4 in Step 6. Record the versions in each line. The report-only test of D19</td><td>D19</td></tr>
+        <tr><td>R42</td><td><code>MLX_DISABLE_COMPILE=1</code> in the environment</td><td>Turns off <code>mx.compile</code> and the compiled <code>nn.gelu</code> and <code>nn.silu</code> without an error</td><td>Each result line records the variable</td><td>D7</td></tr>
+        <tr><td>R43</td><td>The RoPE cache is part of <code>model.state</code></td><td>The first call at a new grid can trace twice</td><td>A test counts the traces at a new grid</td><td>D2</td></tr>
+        <tr><td>R44</td><td>The B4 runs of ViT-7B/16 need 20.15 to 28.23 GB</td><td>The free memory was 22.8 to 46.0 GB on 2026-11-07. A worker can skip</td><td>The memory check records the skip. Run B4 when no other session runs</td><td>D9</td></tr>
+        <tr><td>R45</td><td>bf16 SDPA is slower at large T</td><td>35 against 57 TFLOP/s at T = 9,221. bf16 rows at high input resolution lose more</td><td>The explainer states it</td><td>D11</td></tr>
+        <tr><td>R46</td><td>A wrong scale dtype</td><td><code>load_weights(strict=True)</code> does not check dtypes. fp32 scales with half inputs cost up to 6 times the time</td><td>A test of the scale dtype</td><td>D15, D17</td></tr>
+        <tr><td>R47</td><td>ViT-7B/16: time estimates and speed at small batches</td><td>The FLOP-ratio estimates were 2.3 to 2.6 times too high at 224 px batch size 1, but only 1.07 to 1.23 times too high at 512 px batch size 8, where most of the time goes. At 224 px batch size 1, <code>mlx</code> is slower than torch-mps eager (86.2 against 77.6 ms, 0.90); at 512 px batch size 8 it is faster (1.15). So a ViT-7B/16 speedup at small batches can fall below 1</td><td>Section 5.1 scales the ViT-7B/16 times from the calibration values (F15). The compiled forward pass and the B4 pairs measure the speedup; <code>verify.html</code> explains a speedup below 1</td><td>D9, Section 5.1</td></tr>
+        <tr><td>R48</td><td>The concat-free RoPE reads a negative-stride view</td><td>A new MLX version can add a copy kernel or change the result</td><td>The part test of D2 asserts bit equality in the half modes</td><td>D2</td></tr>
+        <tr><td>R49</td><td>The P1 speedup in fp16 and bf16 is below 1</td><td>Paired on AC power: compiled <code>mlx</code> (form A) is 0.79 to 0.82 times <code>torch.compile</code>; with the concat-free RoPE about 0.83 to 0.90. The mission rule needs a speedup above 1 or a reason in <code>verify.html</code></td><td>Section 6, question 8: the user decides between more speed work in Step 6 (a profile of the P1 forward pass) and a reason in <code>verify.html</code></td><td>D1, D2, D21</td></tr>
+        <tr><td>R50</td><td>The lazy skeleton of the quantized loader gets evaluated</td><td>The L2 skeleton of ViT-7B/16 holds lazy random fp32 weights of the whole model (about 27 GB). One <code>mx.eval</code> on it before the quantization makes them real: against ADR 0008, on a Mac that crashed from out-of-memory before</td><td>A guard and a part test (D17)</td><td>D17</td></tr>
+        <tr><td>R51</td><td>An unpaired denominator outside P1 and P2</td><td>A speedup that divides by a Step 3 row of another day carries the spread between runs (about 20 %) and departs from ADR 0004</td><td>Paired runs for every configuration (D20 option a), or the user changes the ADR 0004 consequence</td><td>D20</td></tr>
+        <tr><td>R52</td><td>Compiled <code>mlx</code> against eager torch outside P1 and P2</td><td><code>torch.compile</code> gains 36 to 71 % there. Without compile rows the speedup is too high by that factor</td><td>Compile rows outside P1 and P2 (D9 option c, the user's decision), or a mark and the stated bias on each such row</td><td>D9</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 38.</b> Risks of Step 6. R32 to R52 are new; R1 to R31 are in the explore pages of Steps 4 and 5. The owner of each action is the agent.</p>
+</section>
+
+<section id="recommendation">
+  <h2>5 Recommendation</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>No.</th><th>Decision</th><th>Recommended option</th><th>Main reason</th></tr></thead>
+      <tbody>
+        <tr><td>D1</td><td>The compiled forward pass</td><td class="rec">A: the whole forward pass, one trace for each input shape, <code>inputs=model.state</code>, held by the caller</td><td>18 to 35 % more throughput in the half modes, bit for bit equal output. At P1 it is still below <code>torch.compile</code> (R49)</td></tr>
+        <tr><td>D2</td><td>RoPE form and table cache</td><td class="rec">R2: concat-free rotation in eager and compiled; the dict cache keeps cos2 and the signed sin2</td><td>One fused kernel for each of q and k, the ADR 0006 tables bit for bit</td></tr>
+        <tr><td>D3</td><td>Autocast casts (R30)</td><td class="rec">a: compile only</td><td>Autocast / cast from 0.917 to 0.976 without a numeric change</td></tr>
+        <tr><td>D4</td><td>Parity tests</td><td class="rec">b: compiled forward pass in the parity tests, one equality test against eager</td><td>The tests check what users run; 360 of 360 rows bit for bit equal</td></tr>
+        <tr><td>D5</td><td>TF32</td><td class="rec">a: no TF32 mode (option c only by the user)</td><td>ViT-H+/16 fails the fp32 set with TF32 in 4 of 12 configurations</td></tr>
+        <tr><td>D6</td><td>Fused projections</td><td class="rec">a: separate projections</td><td>0 to 2 % with compile; LoRA and quantization keep their names</td></tr>
+        <tr><td>D7</td><td>Measurement protocol</td><td class="rec">d: change ratios in one process for each change; the full compiled matrix once; paired speedup runs at P1 and P2, 5 rounds, two runs</td><td>Low noise for each change; F2 gets a spread; D21 sets the pass rule</td></tr>
+        <tr><td>D8</td><td>Memory need and limit</td><td class="rec">c: backend bytes per weight, no score term on <code>mlx</code>; limit = need during the timed batches</td><td>No T² buffer in the MLX SDPA; ViT-7B/16 at batch size 32 fits; the raised limit gains 1 % (probe memory-limit)</td></tr>
+        <tr><td>D9</td><td>Baseline rows</td><td class="rec">c: run B4 and add <code>torch.compile</code> rows outside P1 and P2 (user to confirm both); the ViT-7B/16 fp32 cells stay empty (ADR 0008)</td><td>All six model sizes in fp16 and bf16; no 36 to 71 % bias in favour of <code>mlx</code></td></tr>
+        <tr><td>D10</td><td>Best batch size</td><td class="rec">c: the best of the matrix, plus a sweep at ViT-S/16 224 px and ViT-H+/16 512 px</td><td>Covers every model size; the curve where it matters (ViT-S/16 224 px best at batch size 32)</td></tr>
+        <tr><td>D11</td><td>Above 512 px</td><td class="rec">a: explainer data only</td><td>No reference output above 512 px</td></tr>
+        <tr><td>D12</td><td>Preprocessing</td><td class="rec">c: separable resize with the torch weights</td><td>Matches the stored pixels to 9.5e-7; 0.65 ms per 1080p frame; no torch</td></tr>
+        <tr><td>D13</td><td>fp16 output</td><td class="rec">B: fp16 patch embeddings in the four half dtype modes</td><td>Half the host bytes for at most 3e-8 of parity</td></tr>
+        <tr><td>D14</td><td>Quantization format</td><td class="rec">A: affine, 8 and 4 bits, group size 64</td><td>No format beats it</td></tr>
+        <tr><td>D15</td><td>Quantized dtype modes</td><td class="rec">C: fp16-autocast and bf16-autocast</td><td>Production mode and official mode</td></tr>
+        <tr><td>D16</td><td>Quantized modules</td><td class="rec">B: the block <code>nn.Linear</code> modules only</td><td>The patch embedding is the most sensitive part</td></tr>
+        <tr><td>D17</td><td>Quantized load</td><td class="rec">L2: quantize in the loader, one tensor at a time, with a guard that keeps the skeleton lazy</td><td>ViT-7B/16 load peak 3.98 to 7.33 GB against 13.54 GB</td></tr>
+        <tr><td>D18</td><td>Quantized thresholds</td><td class="rec">The user decides. Proposal: report only in the tests, the set of the dtype mode in the speedup table</td><td>ADR 0003 changes only by the user</td></tr>
+        <tr><td>D19</td><td>Neural Accelerators record</td><td class="rec">b: version fields and a report-only SDPA fingerprint test</td><td>A version change shows at once</td></tr>
+        <tr><td>D20</td><td>Denominator outside P1 and P2</td><td class="rec">a: paired runs for every configuration, one round</td><td>Follows ADR 0004; no cross-day denominator</td></tr>
+        <tr><td>D21</td><td>Pass rule of a speedup</td><td class="rec">b: pooled median and both run medians above 1</td><td>A pass holds in both runs; F2 visible</td></tr>
+        <tr><td>D22</td><td>Key of a quantized row</td><td class="rec">a: a bits field in <code>BenchConfig</code> and its key</td><td>The dtype mode keeps one meaning; ADR 0004 selection stays on unquantized rows</td></tr>
+        <tr><td>D23</td><td>Time budget</td><td class="rec">a: full scope</td><td>The speedup table covers all configurations</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 39.</b> The recommended options. The user picked all of them on 2026-11-07.</p>
+
+  <h3>5.1 Order of the work and its time</h3>
+  <p>All times are machine times of heavy jobs. Most rows scale from measured times (F15); the column "Basis" marks the planned values. The ViT-7B/16 rows scale the FLOP-ratio estimate with the factors of the probe vit7b-calibration: measured / estimated batch time 0.43 (<code>mlx</code>) and 0.38 (torch-mps) at 224 px batch size 1, 0.81 and 0.94 at 512 px batch size 8, interpolated on the log of the estimated batch time, with the time budget of <code>bench.py</code> (warm-up at least 3 batches and 2 s; timed batches at least 10 s and 30 batches, stop at 60 s once 10 batches are done). The coding time is not estimated. Each heavy job runs alone, after the wait loop and a memory check.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Step</th><th>Work</th><th>Decisions and items</th><th>Estimated time</th><th>Basis</th></tr></thead>
+      <tbody>
+        <tr><td>1</td><td>Run rules and drivers, no weights: the wait loop before light GPU work, with a lock (F14); F6 in <code>scripts/benchmark.py</code>; rename <code>load_peak_bytes</code> to <code>load_footprint_peak_bytes</code> (F17); the new line fields (D7, D19); the <code>mlx</code> need (D8); the test of V1; the default of V2</td><td>F14, F6, F17, V1, V2, D7, D8, D19</td><td class="num">about 0.5 min for each default session</td><td>Default session 25 to 31 s (Step 5, path D4-Y)</td></tr>
+        <tr><td>2</td><td>Compiled forward pass with the concat-free RoPE; parity tests on the compiled forward pass; change ratios at P1 and P2</td><td>D1 to D4</td><td class="num">about 8 min</td><td>Slow session 65.4 s + 70.0 s; P2 probe 33 to 63 s for each dtype mode; P1 under 1 min</td></tr>
+        <tr><td>3</td><td>Quantized loader (L2), load-peak bounds, parity rows of ViT-H+/16 and ViT-7B/16 at 8 and 4 bits in two modes</td><td>D14 to D18, F1</td><td class="num">about 5 min</td><td>Probes Q1 and Q4: seconds for each load; ViT-7B/16 load 1.2 to 1.8 s</td></tr>
+        <tr><td>4</td><td>Preprocessing in MLX, fp16 output; their part tests and the preprocessing row</td><td>D12, D13</td><td class="num">about 2 min</td><td>Probes preprocess and fp16-output</td></tr>
+        <tr><td>5</td><td>Report-only NAX test; version record</td><td>D19, F3</td><td class="num">under 1 min</td><td>Probe nax-record: under 1 s for each process</td></tr>
+        <tr><td>6</td><td>Full compiled <code>mlx</code> matrix: 225 configurations of five model sizes, then 36 of ViT-7B/16. With D20 option a, in alternation with the torch-mps arm (baseline mode of each dtype; compile rows with D9 option c)</td><td>A1, D7, D9, D10, D20</td><td class="num">about 78 min + 62 min; torch-mps arm about 56 min (eager) or 70 min (compile)</td><td>Time model with the time budget of <code>bench.py</code>, calibrated on B1 (model 90 min, measured 89.0 min); ViT-7B/16 scaled with the vit7b-calibration factors; compile arm plus a first compiled call of 4 to 9.4 s for each worker (probe torch-compile-offp)</td></tr>
+        <tr><td>7</td><td>Quantized rows: ViT-H+/16 and ViT-7B/16, 8 and 4 bits, fp16-autocast and bf16-autocast, 9 configurations each</td><td>A7, A8, D15</td><td class="num">about 24 min + 70 min</td><td>As step 6, times 1.1 for the slower quantized matmul</td></tr>
+        <tr><td>8</td><td>ViT-7B/16 baseline on torch-mps (B4), after the yes of the user; paired with the ViT-7B/16 <code>mlx</code> rows by D20</td><td>D9, D20</td><td class="num">about 35 min</td><td>Same time model with the vit7b-calibration factors; 18 workers. Compile rows (D9 option c) add the first compiled call, not measured for ViT-7B/16</td></tr>
+        <tr><td>9</td><td>Paired speedup runs at P1 and P2: 5 rounds, 5 dtype modes, <code>mlx</code> against the baseline mode; two runs at different times</td><td>D7, F2</td><td class="num">about 82 min</td><td>P2 1,042 s for 30 workers (Step 5); P1 177 s for 12 workers (Step 4); 50 workers each, two runs</td></tr>
+        <tr><td>10</td><td>Batch-size sweep, compiled</td><td>D10</td><td class="num">about 5 min</td><td>Planned value: the planned time of batch-knee. Its AC-power run is part of the 11.3 min of six probes and has no own time</td></tr>
+        <tr><td>11</td><td>Learn stage data: 768 and 1024 px; a pair with the Neural Accelerators off at P1 and P2</td><td>D11, D19, L</td><td class="num">about 4 min</td><td>Probes highres (67 s for the largest worker) and nax-ab</td></tr>
+        <tr class="group"><td></td><td>Sum of the heavy jobs</td><td></td><td class="num">about 6.3 h; about 7.4 h with the torch-mps arm of D20 and D9 option c</td><td>Steps 1 to 5 about 17 min, step 6 140 min (+ 70 min torch-mps arm), step 7 94 min, step 8 35 min, step 9 82 min, steps 10 and 11 9 min. D23 lists cuts</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 40.</b> Order of the work. The seven machine-state probes that were order step 0 ran on AC power on 2026-11-07 (Section 2.9), so step 0 is gone. Steps 1 to 5 change code and use light or short jobs. Steps 6 to 9 are long benchmark runs; they can run in the background, one at a time. Each change of steps 2 to 4 gets a change ratio at P1 and P2 before the next change, so <code>verify.html</code> shows the gain of each change.</p>
+
+  <h3>5.2 Learn and Close</h3>
+  <ul>
+    <li><b>Explainers.</b> The Learn stage must cover every function that Step 6 adds to <code>src/</code>. A proposal: <code>docs/learn/06-1-compiled-forward-pass.html</code> (trace, fused kernels, the concat-free RoPE, R30), <code>06-2-attention-and-batch-size.html</code> (Figure 3, Table 9, the SDPA rate, the batch-size sweep: the topic of plan Step 6), <code>06-3-quantized-weights.html</code> (affine format, scales, the loader, why quantization saves memory but not time on this Mac) and <code>06-4-preprocessing.html</code> (the separable resize).</li>
+    <li><b>ADR candidates.</b> The compiled forward pass as the path of the parity tests and the API (D1, D4); the rule for quantized rows (D18, the user's choice); a TF32 mode, only if the user picks D5 option c.</li>
+    <li><b>Steering files.</b> <code>tech-stack.md</code> gets the record of the Neural Accelerators (D19). <code>GLOSSARY.md</code> gets the terms of Section 7.</li>
+  </ul>
+</section>
+
+<section id="questions">
+  <h2>6 Questions for the user</h2>
+  <ol>
+    <li><b>Parity thresholds for quantized weights (D18).</b> Only you can set them. Which rule decides if a quantized row is valid? (A) report only, with a fault bound; (B) the threshold set of the dtype mode: with the probe values, all 8-bit rows pass (72 of 72) and no 4-bit row passes (0 of 72); (C) own thresholds for quantized weights, for example a 4-bit set. The proposal: A in the tests, B in the speedup table.</li>
+    <li><b>TF32 (D5).</b> TF32 doubles the fp32 throughput of ViT-H+/16, but ViT-H+/16 fails the fp32 set in 4 of 12 configurations. Do you want a separate dtype mode fp32-tf32 with its own thresholds, for example the fp16 set (option c, a change of ADR 0003)? The recommendation is no TF32 mode (option a).</li>
+    <li><b>ViT-7B/16 baseline (B4, D9).</b> You deferred B4 in Step 3. May Step 6 run it: 18 configurations on torch-mps in fp16-cast and bf16-cast, a need of 20.15 to 28.23 GB for each worker, about 35 min?</li>
+    <li><b>Compile rows outside P1 and P2 (D9).</b> Outside P1 and P2, <code>torch.compile</code> gains 36 to 71 % on torch-mps (4 of 4 measured configurations). Pick one: (b) eager torch-mps rows outside P1 and P2, and each such speedup is marked with a bias of up to 36 to 71 % in favour of <code>mlx</code>; or (c) <code>torch.compile</code> rows there too, about 70 min of torch-mps time in place of about 56 min, a widening of ADR 0004, and many speedups can fall below 1. The recommendation is c.</li>
+    <li><b>Quantized rows and the mission rule.</b> Quantized weights save memory but are 7 to 16 % slower on this Mac, so their speedup can fall below 1. Do you accept an explanation in <code>verify.html</code> for these rows, or do you want the quantized rows outside the mission rule "speedup above 1"?</li>
+    <li><b>The decisions.</b> Do you pick an option for D1 to D23, or do you ask the agent to decide, as in Step 5?</li>
+    <li><b>The denominator outside P1 and P2 (D20).</b> ADR 0004 asks for paired runs for each speedup. The recommendation (option a) follows it: paired torch-mps rows for every configuration, about 56 to 70 min more for each round. Do you accept this time, or do you want to change the ADR 0004 consequence and use a paired sentinel subset (option b, about 1.5 h) or the stored Step 3 rows (option c) with a stated uncertainty?</li>
+    <li><b>The P1 speedup is below 1 (R49).</b> Paired on AC power, compiled <code>mlx</code> is about 0.8 times <code>torch.compile</code> at P1 in fp16 and bf16 (about 0.83 to 0.90 with the concat-free RoPE). <code>mission.md</code> needs a speedup above 1 or a reason in <code>verify.html</code>. Do you want Step 6 to spend more work on the P1 forward pass (a profile of the compiled forward pass at P1), or do you accept a reason in <code>verify.html</code>?</li>
+  </ol>
+  <h3>6.1 Answers of the user</h3>
+  <p>On 2026-11-07 the user answered "Take all recommendations". Table 41 gives the option that applies to each question. Questions 5 and 8 had no recommendation in this page. For them, the agent applies the option that keeps <code>mission.md</code> and the ADRs unchanged.</p>
+  <table>
+    <thead><tr><th>No.</th><th>Question</th><th>Option that applies</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td>Quantized thresholds (D18)</td><td>The proposal: A (report only, with a fault bound) in the tests; B (the threshold set of the dtype mode) in the speedup table. ADR 0003 does not change.</td></tr>
+      <tr><td>2</td><td>TF32 (D5)</td><td>Option a: no TF32 mode. ADR 0005 does not change.</td></tr>
+      <tr><td>3</td><td>ViT-7B/16 baseline (B4, D9)</td><td>Yes: Step 6 runs B4, 18 configurations on torch-mps in fp16-cast and bf16-cast, under the run rules.</td></tr>
+      <tr><td>4</td><td>Compile rows outside P1 and P2 (D9)</td><td>Option c: <code>torch.compile</code> rows outside P1 and P2 too. An ADR records the widening of ADR 0004.</td></tr>
+      <tr><td>5</td><td>Quantized rows and the mission rule</td><td>The quantized rows stay inside the mission rule. If a quantized speedup is not above 1, <code>verify.html</code> explains why. <code>mission.md</code> does not change.</td></tr>
+      <tr><td>6</td><td>The decisions D1 to D23</td><td>The recommended option of Table 39 for each decision.</td></tr>
+      <tr><td>7</td><td>The denominator outside P1 and P2 (D20)</td><td>Option a: paired torch-mps rows for every configuration. ADR 0004 does not change.</td></tr>
+      <tr><td>8</td><td>The P1 speedup below 1 (R49)</td><td>One profile of the compiled forward pass at P1, with a time limit, in the build. If the speedup at P1 stays below 1 after the changes of D1 to D4, <code>verify.html</code> explains why with the profile.</td></tr>
+    </tbody>
+  </table>
+  <p class="caption"><b>Table 41.</b> The answers of the user of 2026-11-07, and the option that applies to each question of Section 6.</p>
+</section>
+
+<section id="terms">
+  <h2>7 New terms</h2>
+  <p>Terms for <code>GLOSSARY.md</code>. The Close stage adds the terms of the chosen options.</p>
+  <ul>
+    <li><b>Eager forward pass</b>: the forward pass of the MLX backbone without <code>mx.compile</code>. Each call builds the graph again.</li>
+    <li><b>Compiled forward pass</b>: the forward pass of the MLX backbone wrapped by <code>mx.compile</code>, with the weights as inputs (<code>inputs=model.state</code>). It has one trace for each input shape and dtype.</li>
+    <li><b>Trace</b>: the record of the operations of one call of a compiled function for one set of input shapes and dtypes. <code>mx.compile</code> makes it at the first call and replays it at later calls.</li>
+    <li><b>Fused kernel</b>: one GPU kernel that <code>mx.compile</code> makes from a chain of element-wise operations.</li>
+    <li><b>Fusion barrier</b>: an operation that <code>mx.compile</code> does not fuse with its neighbours, for example <code>mx.fast.layer_norm</code>, a matmul, slice and concatenate.</li>
+    <li><b>Concat-free rotation</b>: the RoPE rotation x · cos2 + reversed(x) · sin2 on a (…, 2, head_dim / 2) view, with the sign of <code>rotate_half</code> in the sin table. It gives one fused kernel.</li>
+    <li><b>Change ratio</b>: the throughput after a change divided by the throughput before it, both forms in one process, in alternation and in a rotated order. The median over the rounds.</li>
+    <li><b>NAX kernel</b>: an MLX Metal kernel that uses the Neural Accelerators. Its name contains "nax", for example <code>steel_attention_nax</code>.</li>
+    <li><b>Neural Accelerators on / off</b>: the state with and without the NAX kernels. <code>MLX_METAL_GPU_ARCH=applegpu_g16s</code> turns the NAX kernels off. The page does not use "NAX" alone.</li>
+    <li><b>Relaxed precision</b>: the option of the NAX matrix operation that lets the hardware compute with less precision. MLX 0.32.4 turns it on in the NAX matmul and attention kernels.</li>
+    <li><b>Quantized weights</b>: the weights of an <code>nn.Linear</code> module stored as 8-bit or 4-bit integers, with one scale and one offset for each group of weights (affine format). The scales and offsets have the matmul dtype.</li>
+    <li><b>Group size</b>: the number of weights of one row that share one scale and one offset.</li>
+    <li><b>Preprocessing</b>: the steps from an RGB image to the normalized fp32 pixels: resize (bilinear, antialiased), divide by 255, normalize with the ImageNet mean and standard deviation.</li>
+    <li><b>Separable resize</b>: a resize as two matmuls with fixed weight matrices, one for the rows and one for the columns.</li>
+    <li><b>Best batch size</b>: the batch size with the highest median throughput for one model size, input resolution and dtype mode.</li>
+    <li><b>Speedup table</b>: the table with the speedup of each configuration of the benchmark matrix.</li>
+    <li><b>MLX peak</b>: <code>mx.get_peak_memory()</code> after <code>mx.reset_peak_memory()</code>: the largest MLX allocation during one measured phase of one form. It is not the peak memory (the lifetime maximum of the process footprint).</li>
+    <li><b>Spread between runs</b>: (largest run median − smallest run median) / smallest run median, over two or more runs of the same configuration at different times.</li>
+    <li><b>Load footprint peak</b>: the lifetime maximum of the process footprint after a model load (the result field of F17). It differs from the load peak.</li>
+    <li><b>Fault bound</b>: a loose parity bound that catches only faults, for example a wrong input cast. Not a threshold (only if the user picks D18 option A).</li>
+  </ul>
+</section>
+
+<section id="sources">
+  <h2>8 Sources</h2>
+  <ul>
+    <li><code>docs/plan.html</code>: Step 6 in Section 6, Table 9 (parity tests), Table 11 (benchmark matrix), the benchmark procedure and Table 12 (the reference fine-tuning setup). <code>mission.md</code>, <code>roadmap.md</code>, <code>tech-stack.md</code>, <code>GLOSSARY.md</code> and <code>CLAUDE.md</code> (run rules).</li>
+    <li>ADRs in <code>docs/adr/</code>: 0003 (thresholds), 0004 (baseline row), 0005 (TF32 off), 0006 (RoPE tables), 0007 (<code>mlx</code> autocast weights), 0008 (ViT-7B/16 fp32 weights).</li>
+    <li>Earlier specs: <code>specs/03-baseline/verify.html</code> (B4); <code>specs/04-mlx-port/explore.html</code> (Tables 6 and 7) and <code>verify.html</code> (F1, F5, F6, F8, Section 5.2); <code>specs/05-all-sizes/explore.html</code> (structure, R30, Table 3) and <code>verify.html</code> (Tables 6 to 8, F1 to F3, F14, F15, F17, Section 12: V1, V2).</li>
+    <li>Results: <code>results/baseline-torch-mps.md</code> and <code>.jsonl</code>, <code>results/bench-mlx-port.jsonl</code>, <code>results/bench-all-sizes.jsonl</code>, <code>results/parity-mlx.md</code>.</li>
+    <li>Code of this repo: <code>src/dinov3_apple/mlx_model.py</code> (<code>apply_rope</code>, <code>rotate_half</code>, <code>MlxBackbone.rope</code>, <code>run_mlx</code>), <code>mlx_weights.py</code>, <code>bench.py</code> (<code>BenchConfig</code>, <code>required_bench_bytes</code>, <code>bytes_per_weight</code>, <code>run_worker_subprocess</code>), <code>flops.py</code> (<code>image_flops</code>), <code>preprocess.py</code>, <code>parity.py</code>; <code>scripts/benchmark.py</code>, <code>scripts/bench_mlx_port.py</code>; <code>tests/conftest.py</code>.</li>
+    <li>MLX 0.32.4, <a href="https://github.com/ml-explore/mlx">github.com/ml-explore/mlx</a>. Docs: <a href="https://ml-explore.github.io/mlx/build/html/usage/compile.html">Compilation</a>, <a href="https://ml-explore.github.io/mlx/build/html/python/_autosummary/mlx.core.compile.html">mlx.core.compile</a>, <a href="https://ml-explore.github.io/mlx/build/html/python/_autosummary/mlx.core.quantize.html">mlx.core.quantize</a>, <a href="https://ml-explore.github.io/mlx/build/html/python/_autosummary/mlx.core.fast.scaled_dot_product_attention.html">mlx.core.fast.scaled_dot_product_attention</a>. Files of the installed package: <code>mlx/nn/layers/activations.py</code>, <code>linear.py</code>, <code>quantized.py</code>, <code>normalization.py</code>, <code>base.py</code>; <code>steel/gemm/nax.h</code>, <code>steel/attn/nax.h</code>; the kernel names of <code>mlx.metallib</code>; the strings of <code>libmlx.dylib</code>.</li>
+    <li>Probes on 2026-11-07, outside the repo: CPU probes of the research agents (graph exports, graph build time, stale trace, reference cycle, <code>shapeless</code>, RoPE forms, weight error of the quantization formats, safetensors header sizes) and 24 GPU probe runs on battery power plus 7 on AC power (Table 4, Section 2.9). Our computations: Figure 3 from <code>flops.image_flops</code>; the needs of Table 22 from <code>required_bench_bytes</code>; the times of Table 40 from the measured times of Steps 3 to 5.</li>
+    <li>Siméoni et al., DINOv3, <a href="https://arxiv.org/abs/2508.10104">arXiv 2508.10104</a>.</li>
+  </ul>
+</section>
+</main>
+</body>
+</html>
