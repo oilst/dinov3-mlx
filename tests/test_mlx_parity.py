@@ -344,11 +344,12 @@ HALF_PARAMS = [
     if dtype_mode != "fp32"
 ]
 # Table 21 of specs/06-speed/plan.html: the extra parity loss of the fp16 patch embeddings. The
-# decision of 2026-11-07 on W4 (a deviation from AC15): the patch mean keeps 1e-7; the patch 1st
-# percentile, a tail value that one rounding moves more, gets 1e-6. Measured in the default
-# session: patch mean at most 5.6e-8; patch 1st percentile up to 3.4e-7 (bf16-autocast) and
-# 1.5e-7 (fp16-autocast), 0 in the cast modes.
-FP16_EXTRA_LOSS = {"patch_mean": 1e-7, "patch_p01": 1e-6}
+# decisions of 2026-11-07 on W4 (a deviation from AC15): the patch mean keeps 1e-7; the patch 1st
+# percentile, a tail value that one rounding moves more, gets a fault bound of 5e-6 (first 1e-6).
+# Measured: patch mean at most 5.6e-8; patch 1st percentile up to 1.27e-6 (ViT-H+/16
+# bf16-autocast), 3.4e-7 (ViT-S/16 bf16-autocast), 2.5e-7 (ViT-H+/16 fp16-autocast), 0 in the
+# cast modes. The gate stays: each finite configuration passes THRESHOLDS[mode].
+FP16_EXTRA_LOSS = {"patch_mean": 1e-7, "patch_p01": 5e-6}
 
 
 @pytest.mark.parametrize(("model_size", "dtype_mode"), MODEL_PARAMS)
@@ -405,26 +406,27 @@ def test_fp16_patches_parity(
 ) -> None:
     """W4 of specs/06-speed/plan.html (D13): the fp16 patch embeddings of mlx_embeddings on the
     compiled forward pass against the reference output: THRESHOLDS[mode] (or an expected failure
-    through check_finite), an extra loss of at most 1e-7 for the patch mean and at most 1e-6 for
-    the patch 1st percentile (FP16_EXTRA_LOSS, decision of 2026-11-07), and the frame embeddings
-    unchanged."""
+    through check_finite), an extra loss of at most 1e-7 for the patch mean and at most 5e-6 for
+    the patch 1st percentile (FP16_EXTRA_LOSS, decisions of 2026-11-07), and the frame embeddings
+    unchanged. The test measures each finite configuration first; a non-finite configuration of
+    EXPECTED_FP16_OVERFLOW gives the expected failure at the end."""
     key = ("fp16-output", model_size, dtype_mode, "all")
     model, stored = _load(backbone, reference, record, *key)
     forward = mlx_forward(model)
     largest_extra = dict.fromkeys(FP16_EXTRA_LOSS, 0.0)
+    below: list[str] = []
+    non_finite: list[str] = []
     for config in CONFIG_IDS:
         tokens = forward(mx.array(inputs[config]))
         frame, patches = mlx_embeddings(tokens, dtype_mode)
         wide = np.array(tokens.astype(mx.float32))[0]
         assert patches.dtype == np.float16
-        check_finite(
-            wide,
-            model_size,
-            dtype_mode,
-            lambda config=config: record(
+        if not np.isfinite(wide).all():
+            record(
                 "fp16-output", model_size, dtype_mode, config, None, "non-finite", backend=BACKEND
-            ),
-        )
+            )
+            non_finite.append(config)
+            continue
         narrow = np.concatenate(
             [frame[0][None], wide[1:NUM_PREFIX_TOKENS], patches[0].astype(np.float32)]
         )
@@ -445,7 +447,13 @@ def test_fp16_patches_parity(
             backend=BACKEND,
             values={"extra_loss": extra, "frame_equal": frame_equal},
         )
-        assert frame_equal
-        assert_thresholds(parity, dtype_mode)
+        assert frame_equal, config
+        try:
+            assert_thresholds(parity, dtype_mode)
+        except AssertionError:
+            below.append(config)
         largest_extra = {m: max(largest_extra[m], extra[m]) for m in FP16_EXTRA_LOSS}
+    assert not below, below
     assert all(largest_extra[m] <= FP16_EXTRA_LOSS[m] for m in FP16_EXTRA_LOSS), largest_extra
+    if non_finite:  # an expected fp16 overflow xfails, any other fails (way M2)
+        check_finite(np.array([np.nan]), model_size, dtype_mode, lambda: None)

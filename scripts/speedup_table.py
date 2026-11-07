@@ -182,14 +182,11 @@ def changes_section(lines: list[dict]) -> list[list[object]]:
                     equal,
                 ]
             )
-    # C3 and C5: one subprocess for each configuration and round.
+    # C3 and C5: one subprocess for each configuration and round. A change ratio measures the
+    # speed, so a 4-bit row that fails THRESHOLDS[mode] still gives its ratio.
     groups: dict[tuple, dict[tuple, float]] = defaultdict(dict)
     for line in lines:
-        if (
-            line.get("change") in ("C3", "C5")
-            and line.get("status") == "done"
-            and line.get("valid")
-        ):
+        if line.get("change") in ("C3", "C5") and line.get("status") == "done":
             output = PRIORITY_OUTPUT[line["priority"]]
             key = (line["change"], line["priority"], line["dtype_mode"].split("-")[0])
             if line["change"] == "C5":
