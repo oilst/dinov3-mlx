@@ -392,3 +392,16 @@ Table 1. The configuration with the largest finite token value.
 | ViT-7B/16 | bf16-autocast | iss-conference/304x224 | 13,471.9 | 40 | R2 | 20.6 % | – | 208.0 | 584.0 | 1,256.0 |
 
 Table 2. The token range of each configuration. The branch outputs are before LayerScale.
+
+## 3 fp32 from the stored hidden states
+
+| Model size | Dtype mode | Reference file | Blocks | Largest token value | Block | Token | Share of 65,504 | Largest value after the last block |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| ViT-S/16 | fp32 | full model | 12 | 1,708.2 | 11 | R1 | 2.6 % | 1,475.0 |
+| ViT-S+/16 | fp32 | full model | 12 | 5,262.1 | 11 | R3 | 8.0 % | 4,328.8 |
+| ViT-B/16 | fp32 | full model | 12 | 14,926.0 | 11 | R1 | 22.8 % | 14,697.4 |
+| ViT-L/16 | fp32 | full model | 24 | 157,130.4 | 23 | R2 | 239.9 % | 154,824.0 |
+| ViT-H+/16 | fp32 | full model | 32 | 131,447.7 | 30 | R2 | 200.7 % | 131,166.1 |
+| ViT-7B/16 | fp32 | streamed | 40 | 13,537.4 | 40 | R2 | 20.7 % | 13,537.4 |
+
+Table 3. The fp32 token range of iss-kibo-lab/224x224 from the L + 1 stored hidden states of each reference file on torch-cpu, not from mlx. "full model": the reference of Step 2. "streamed": the streamed reference, with the fp32 weights of one block at a time. ViT-7B/16 has no fp32 run on mlx (run rule of CLAUDE.md), so this is its only fp32 token range.

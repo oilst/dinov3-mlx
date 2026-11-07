@@ -34,8 +34,8 @@ Each row covers 12 configurations: 3 test images × 4 input resolutions.
 | ViT-H+/16 | fp16-autocast | 12 | 0 | 0.999999 | 0.999985 | 0.999781 | 0.998451 | pass |
 | ViT-H+/16 | bf16-autocast | 12 | 0 | 0.999946 | 0.999430 | 0.991417 | 0.923758 | pass |
 | ViT-7B/16 | fp32 | 0 | 0 | – | – | – | – | skipped: ViT-7B/16 torch-mps fp32: ViT-7B/16 runs with fp16, bf16 or quantized weights only (CLAUDE.md run rules) |
-| ViT-7B/16 | fp16-cast | 0 | 0 | – | – | – | – | skipped: reference-vit7b16.safetensors is missing. |
-| ViT-7B/16 | bf16-cast | 0 | 0 | – | – | – | – | skipped: reference-vit7b16.safetensors is missing. |
+| ViT-7B/16 | fp16-cast | 12 | 0 | 0.999991 | 0.999987 | 0.999832 | 0.998926 | pass |
+| ViT-7B/16 | bf16-cast | 12 | 0 | 0.999760 | 0.999069 | 0.982423 | 0.916651 | pass |
 | ViT-7B/16 | fp16-autocast | 0 | 0 | – | – | – | – | skipped: ViT-7B/16 torch-mps fp16-autocast: ViT-7B/16 runs with fp16, bf16 or quantized weights only (CLAUDE.md run rules) |
 | ViT-7B/16 | bf16-autocast | 0 | 0 | – | – | – | – | skipped: ViT-7B/16 torch-mps bf16-autocast: ViT-7B/16 runs with fp16, bf16 or quantized weights only (CLAUDE.md run rules) |
 

@@ -795,7 +795,7 @@ figcaption { font-size: 0.88rem; color: var(--muted); max-width: 52rem; }
         <li>Record the largest absolute token value in each block, to see the fp16 overflow risk.</li>
         <li>Run the parity tests for each model size in fp32, fp16 and bf16.</li>
       </ol>
-      <p>ViT-7B/16 runs in fp16 and bf16 only. Its fp32 run gives only the reference output. The step ends when all model sizes pass the parity tests, or <code>verify.html</code> explains each failure. The explainer covers SwiGLU, the scaling of the model family and the numeric range of the tokens.</p>
+      <p>The parity runs of ViT-7B/16 use fp16 and bf16 only. Its fp32 reference output comes from the streamed reference on <code>torch-cpu</code>: the fp32 weights of one block are in memory at a time, and the fp32 weights of the whole model never load (ADR 0008). The step ends when all model sizes pass the parity tests, or <code>verify.html</code> explains each failure. The explainer covers SwiGLU, the scaling of the model family and the numeric range of the tokens.</p>
     </div>
 
     <div class="sub" id="step-6">

@@ -5,18 +5,27 @@ Test W7 writes one line of kind "token-range" for each model size, dtype mode an
 to tests/fixtures/generated/parity/mlx.jsonl. For each configuration the last line counts. The
 values are report only. A non-finite value is a result: it shows the first block that overflows.
 
+Section 3 of the table gives the fp32 token range of the hidden-states configuration from the
+stored hidden states of each reference file. ViT-7B/16 has no fp32 run on mlx (run rule), so its
+fp32 values come from its streamed reference file (Table 7 of specs/05-all-sizes/plan.html).
+
 Usage:
     uv run python scripts/token_range_table.py
 """
 
 import argparse
+import json
 import math
+from collections.abc import Mapping
 from datetime import date
 from pathlib import Path
 
+import numpy as np
 from parity_table import latest_lines, parity_log, table_order
+from safetensors import safe_open
 
-from dinov3_apple.stored import configurations
+from dinov3_apple.hub import MODEL_IDS
+from dinov3_apple.stored import HIDDEN_STATES_CONFIG, configurations, reference_path
 
 REPO_ROOT = Path(__file__).parents[1]
 RESULTS = REPO_ROOT / "results" / "token-range-mlx.md"
@@ -121,15 +130,74 @@ def summary_rows(lines: list[dict]) -> list[str]:
     return rows
 
 
-def write_table(lines: list[dict]) -> str:
+def stored_range(hidden: np.ndarray) -> dict:
+    """Return the token range of stored fp32 hidden states.
+
+    Args:
+        hidden: The L + 1 hidden states of one configuration, shape (L + 1, 1 + 4 + N, D).
+
+    Returns:
+        The largest absolute value over all states, its block and token, the largest absolute
+        value after the last block, and the number of blocks L.
+    """
+    largest = np.abs(hidden).max(axis=2)  # (L + 1, tokens)
+    block = int(largest.max(axis=1).argmax())
+    return {
+        "largest": float(largest[block].max()),
+        "block": block,
+        "token": token_name(int(largest[block].argmax())),
+        "last": float(largest[-1].max()),
+        "blocks": hidden.shape[0] - 1,
+    }
+
+
+def stored_rows(stored: Mapping[str, tuple[np.ndarray, bool]]) -> list[str]:
+    """Return one Markdown table row for each model size with a reference file.
+
+    Args:
+        stored: The stored hidden states of each model size and true for a streamed reference
+            file.
+    """
+    rows = []
+    for model_size in sorted(stored, key=list(MODEL_IDS).index):
+        hidden, streamed = stored[model_size]
+        r = stored_range(hidden)
+        rows.append(
+            f"| {model_size} | fp32 | {'streamed' if streamed else 'full model'} | {r['blocks']} | "
+            f"{_number(r['largest'])} | {r['block']} | {r['token']} | {_share(r['largest'])} | "
+            f"{_number(r['last'])} |"
+        )
+    return rows
+
+
+def read_stored() -> dict[str, tuple[np.ndarray, bool]]:
+    """Return the stored hidden states of each model size with a reference file, and true for a
+    streamed reference file. The read takes the hidden states only, not the tokens."""
+    stored = {}
+    for model_size in MODEL_IDS:
+        path = reference_path(model_size)
+        if not path.exists():
+            continue
+        with safe_open(path, "np") as tensors:
+            metadata = json.loads(tensors.metadata()["reference"])
+            hidden = tensors.get_tensor(f"{HIDDEN_STATES_CONFIG}/hidden_states")
+        stored[model_size] = (hidden, bool(metadata.get("streamed", False)))
+    return stored
+
+
+def write_table(
+    lines: list[dict], stored: Mapping[str, tuple[np.ndarray, bool]] | None = None
+) -> str:
     """Return the Markdown text of results/token-range-mlx.md.
 
     Args:
         lines: The JSON lines of the mlx tests. Only the lines of kind "token-range" count.
+        stored: The stored hidden states of each model size with a reference file (read_stored),
+            or None for no Section 3.
 
     Returns:
-        The text with a summary for each model size and dtype mode and a row for each
-        configuration.
+        The text with a summary for each model size and dtype mode, a row for each configuration
+        and, with stored, the fp32 token range of the reference files.
     """
     lines = [line for line in lines if line["kind"] == "token-range" and line.get("values")]
     versions = sorted({line["mlx"] for line in lines if "mlx" in line})
@@ -176,15 +244,38 @@ def write_table(lines: list[dict]) -> str:
                 "LayerScale."
             ),
             "",
+            *(_stored_section(stored) if stored else []),
         ]
     )
+
+
+def _stored_section(stored: Mapping[str, tuple[np.ndarray, bool]]) -> list[str]:
+    return [
+        "## 3 fp32 from the stored hidden states",
+        "",
+        (
+            "| Model size | Dtype mode | Reference file | Blocks | Largest token value | Block | "
+            "Token | Share of 65,504 | Largest value after the last block |"
+        ),
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        *stored_rows(stored),
+        "",
+        (
+            f"Table 3. The fp32 token range of {HIDDEN_STATES_CONFIG} from the L + 1 stored hidden "
+            'states of each reference file on torch-cpu, not from mlx. "full model": the '
+            'reference of Step 2. "streamed": the streamed reference, with the fp32 weights of '
+            "one block at a time. ViT-7B/16 has no fp32 run on mlx (run rule of CLAUDE.md), so "
+            "this is its only fp32 token range."
+        ),
+        "",
+    ]
 
 
 def main() -> None:
     """Write results/token-range-mlx.md."""
     argparse.ArgumentParser(description=__doc__).parse_args()
     RESULTS.parent.mkdir(parents=True, exist_ok=True)
-    RESULTS.write_text(write_table(latest_lines(parity_log("mlx"))))
+    RESULTS.write_text(write_table(latest_lines(parity_log("mlx")), read_stored()))
     print(f"wrote {RESULTS}")
 
 

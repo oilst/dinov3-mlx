@@ -1049,15 +1049,16 @@ def run_torch_streamed(
     <table>
       <thead><tr><th>Question</th><th>Asked</th><th>The user's own answer</th><th>Date</th></tr></thead>
       <tbody>
-        <tr><td>May the streamed fp32 reference of ViT-7B/16 run, with the fp32 weights of one block in memory at a time? (D4)</td><td>by the agent, at the start of the build, as a separate question. Put to the user again in the hand-over of 2026-11-07.</td><td>none yet (Close stage, 2026-11-07)</td><td>&ndash;</td></tr>
+        <tr><td>May the streamed fp32 reference of ViT-7B/16 run, with the fp32 weights of one block in memory at a time? (D4)</td><td>by the agent, at the start of the build, as a separate question. Put to the user again in the hand-over of 2026-11-07.</td><td>"Yes, run it": the user's own answer in chat, to the question "May the streamed fp32 reference of ViT-7B/16 run, one block of fp32 weights at a time?" after the Close stage. Path D4-Y applies.</td><td>2026-11-07</td></tr>
       </tbody>
     </table>
   </div>
-  <p class="caption"><b>Table 20.</b> The record of the run-rule question. Only the user's own answer counts. Until a yes, path D4-N applies.</p>
+  <p class="caption"><b>Table 20.</b> The record of the run-rule question. Only the user's own answer counts. The user said yes on 2026-11-07, so path D4-Y applies from then on.</p>
   <ul>
     <li>Approval of this plan: the agent approved it on behalf of the user. The approval does not cover the run-rule question of D4.</li>
     <li>Files of this stage: the plan stage edited only this file. The build adds the terms of Section 3.12 to <code>GLOSSARY.md</code> as its second action. The Close stage edits Tables 3 and 9 of <code>docs/plan.html</code> (Section 5.3 of <code>explore.html</code> gave these edits to the plan stage).</li>
     <li>ADR 0007 for the <code>mlx</code> autocast modes with half-precision weights: the agent writes it in the Close stage.</li>
+    <li>Path D4-Y, after Verify (Table 21 of <code>verify.html</code>). AC21: done. <code>docs/learn/05-2-model-scaling.html</code> covers <code>run_torch_streamed</code>, <code>ShardIndex</code>, <code>OuterParts</code>, <code>required_streamed_bytes</code> and <code>streamed_label</code>; <code>docs/learn/05-3-numeric-range.html</code> and <code>docs/learn/05-1-swiglu.html</code> give the ViT-7B/16 results against the streamed reference. AC22: done. <code>docs/adr/0008-vit-7b-fp32-weights-of-one-block-at-a-time.md</code> records the reading of the run rule; <code>docs/plan.html</code> has the new Step 5 text; <code>roadmap.md</code> has the Step 5 status of path D4-Y; <code>GLOSSARY.md</code> already had "Shard", "Outer parts" and "Streamed reference".</li>
     <li>ADR 0003: if ViT-7B/16 in bf16 fails the bf16 set on <code>torch-mps</code> or on <code>mlx</code> (possible only on path D4-Y), ADR 0003 says that the ADR changes. The user decides then.</li>
     <li>A bf16 configuration of <code>mlx</code> below a threshold that <code>torch-mps</code> passes: the build runs the R23 diagnostic, records both values in <code>verify.html</code> and asks the user.</li>
     <li>The host copy of bf16 output in the benchmark uses <code>mx.view</code> as uint16. If the view fails on a strided array, the build casts to fp32 on the device inside the timed batch and records <code>output_transfer</code> "cast-fp32".</li>

@@ -6,11 +6,14 @@ same weights through the key map, from the state dict with the spelling model.la
 with the mask token. So each part test also tests the key map.
 """
 
+import json
 import math
+from pathlib import Path
 
 import mlx.core as mx
 import numpy as np
 import torch
+from safetensors.torch import save_file
 from transformers import DINOv3ViTConfig, DINOv3ViTModel
 
 from dinov3_apple.mlx_model import MLX_DTYPE_MODES, MlxBackbone, MlxConfig, linear_parameter_names
@@ -123,3 +126,33 @@ def small_mlx_model(hf_model: DINOv3ViTModel, dtype_mode: str = "fp32") -> MlxBa
 def small_pixels(shape: tuple[int, ...], seed: int = 1) -> np.ndarray:
     """Return normal fp32 pixels of one shape."""
     return np.random.default_rng(seed).standard_normal(shape).astype(np.float32)
+
+
+def save_small_model(hf_model: DINOv3ViTModel, folder: Path, files: int) -> None:
+    """Save the weights of a small model as one file, or as two files and an index, with the key
+    spelling of the Hub files (layer.{i}.…) and its config.json.
+
+    Args:
+        hf_model: A model from small_hf_model.
+        folder: The new folder. It must not exist.
+        files: 1 for model.safetensors, 2 for two files and model.safetensors.index.json. The
+            split runs through block 0, as the files of ViT-7B/16 split 5 blocks.
+    """
+    folder.mkdir()
+    state = {
+        name.removeprefix("model."): tensor.detach().contiguous()
+        for name, tensor in hf_model.state_dict().items()
+    }
+    hf_model.config.to_json_file(folder / "config.json")
+    if files == 1:
+        save_file(state, folder / "model.safetensors", metadata={"format": "pt"})
+        return
+    names = list(state)
+    split = next(i for i, name in enumerate(names) if name.startswith("layer.0.mlp"))
+    weight_map = {}
+    for part, chunk in enumerate((names[:split], names[split:]), start=1):
+        file = f"model-0000{part}-of-00002.safetensors"
+        save_file({n: state[n] for n in chunk}, folder / file, metadata={"format": "pt"})
+        weight_map |= dict.fromkeys(chunk, file)
+    index = {"metadata": {"total_size": 0}, "weight_map": weight_map}
+    (folder / "model.safetensors.index.json").write_text(json.dumps(index))

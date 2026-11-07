@@ -57,7 +57,7 @@ a { color: var(--accent); }
     <li><a href="#sdpa">The SDPA kernel in half precision</a></li>
     <li><a href="#load">The load: one tensor at a time</a></li>
     <li><a href="#peak">The load peak: lower bound, measured value, target</a></li>
-    <li><a href="#runrule">The run rule as code</a></li>
+    <li><a href="#runrule">The run rule as code and the streamed reference</a></li>
     <li><a href="#bench">The paired ratios at P2</a></li>
     <li><a href="#ac">The acceptance criteria of this part</a></li>
     <li><a href="#code">The code of this page</a></li>
@@ -73,17 +73,19 @@ a { color: var(--accent); }
     <li><b>The scaling of the model family.</b> What changes in the tensors from ViT-S/16 to ViT-7B/16, and why ViT-7B/16 needs no special code (Section 2).</li>
     <li><b>The dtype modes.</b> Each dtype mode is a pair of dtypes: the matmul dtype and the stream dtype. The casts in <code>Embeddings</code> and <code>Block</code> give each part its dtype (Sections 3 to 5).</li>
     <li><b>The load and the run rule.</b> The loader casts and evaluates one tensor at a time. A guard refuses every load of ViT-7B/16 with fp32 weights, on both backends (Sections 6 to 8).</li>
+    <li><b>The streamed reference (path D4-Y).</b> The user said yes to a streamed fp32 reference of ViT-7B/16. It holds the fp32 weights of one block at a time on <code>torch-cpu</code> and gives the reference output of ViT-7B/16 (Sections 8.1 to 8.9).</li>
   </ul>
   <p>Section 9 gives the paired ratios of the small benchmark at the priority configuration P2 in each dtype mode.</p>
-  <p>The result in four numbers:</p>
+  <p>The result in five numbers:</p>
   <ul>
     <li>The key map covers all six model sizes: 0 unknown names, 0 missing names and 0 shape differences (acceptance criterion AC12).</li>
     <li>ViT-7B/16 in bf16-cast loads with a load peak of 13,532.7 MB. The Step 4 loader would hold about 40.3 GB (an estimate).</li>
-    <li>No load of ViT-7B/16 with fp32 weights happened (AC15).</li>
+    <li>No load of ViT-7B/16 with the fp32 weights of the whole model happened (AC15). The streamed reference of ViT-7B/16 had a peak of 1.75 GB against 26.86 GB of fp32 weights. On the five other model sizes, the streamed path gives the stored reference files exactly: largest difference 0.0.</li>
+    <li>Against the streamed reference, all 48 <code>mlx</code> parity rows of ViT-7B/16 pass (AC6, path D4-Y), and all 24 <code>torch-mps</code> parity rows pass (plan Table 7).</li>
     <li>At P2, the paired ratio of the cast modes is about 1, and its sign changes from one run to the next. In fp32 and in the autocast modes, <code>mlx</code> is ahead in both runs: 1.094 to 1.159.</li>
   </ul>
-  <p>The values come from <a href="../../specs/05-all-sizes/verify.html"><code>specs/05-all-sizes/verify.html</code></a> (the build of commit <code>7c30a3e</code>, the re-run of the Verify stage and the two fix sessions), <code>results/bench-all-sizes.jsonl</code>, the <code>config.json</code> files and the safetensors headers of the six model sizes, <code>explore.html</code> and <code>plan.html</code>. The agent that wrote this page loaded no model and ran no test, no benchmark and no GPU work. It computed some sums and ratios from these values. The text marks each of them as "our computation".</p>
-  <p>The code quotes give the line numbers of the working tree on 2026-11-07: commit <code>01cc631</code> plus the uncommitted fixes of Sections 9 and 10 of <code>verify.html</code>. The fixes changed two files of <code>src/</code>. They changed the module docstring of <code>mlx_weights.py</code> (finding F4; one line more, so each later line of this file moved down by 1), and they added the two functions <code>bytes_per_weight</code> and <code>run_worker_subprocess</code> to <code>bench.py</code>. Section 11 lists every name of this page.</p>
+  <p>The values come from <a href="../../specs/05-all-sizes/verify.html"><code>specs/05-all-sizes/verify.html</code></a> (the build of commit <code>7c30a3e</code>, the re-run of the Verify stage, the two fix sessions and, in its Section 12, the Verify stage of path D4-Y), <code>results/bench-all-sizes.jsonl</code>, <code>results/token-range-mlx.md</code>, the lines of <code>tests/fixtures/generated/reference/runs.jsonl</code> (not in git), the <code>config.json</code> files and the safetensors headers of the six model sizes, <code>explore.html</code> and <code>plan.html</code>. The agent that wrote this page loaded no model and ran no test, no benchmark and no GPU work. It computed some sums and ratios from these values. The text marks each of them as "our computation".</p>
+  <p>The code quotes give the line numbers of the working tree on 2026-11-07: commit <code>ad93caf</code> plus the uncommitted changes of path D4-Y. Commit <code>ad93caf</code> holds the fixes of Sections 9 and 10 of <code>verify.html</code>. The fixes changed two files of <code>src/</code>. They changed the module docstring of <code>mlx_weights.py</code> (finding F4; one line more, so each later line of this file moved down by 1), and they added the two functions <code>bytes_per_weight</code> and <code>run_worker_subprocess</code> to <code>bench.py</code>. Path D4-Y changed one file of <code>src/</code>, <code>reference.py</code>, and two scripts, <code>scripts/make_reference.py</code> and <code>scripts/token_range_table.py</code>. So <code>load_torch_backbone</code> moved from lines 112 to 137 to lines 148 to 173. Section 11 lists every name of this page.</p>
 </section>
 
 <section id="scaling">
@@ -309,7 +311,7 @@ DTYPE_BYTES = {"fp32": 4, "fp16": 2, "bf16": 2}
   <ul>
     <li><b>The need of the memory check.</b> An autocast mode on <code>mlx</code> has the need of the cast mode: 6.02 GB for ViT-H+/16, against 8.03 GB in fp32 (Table 6).</li>
     <li><b>The run rule.</b> ViT-7B/16 loads on <code>mlx</code> in fp16-autocast and bf16-autocast: 2 bytes for each weight. On torch, the run rule refuses both modes: 4 bytes for each weight (Section 8). The official precision of DINOv3 is bf16 autocast with RoPE in fp32 (finding 5 of <code>explore.html</code>). In this repo, only <code>mlx</code> runs ViT-7B/16 in this precision.</li>
-    <li><b>The peak memory at P2.</b> The <code>mlx</code> worker of ViT-H+/16 needs 3.44 GB in fp16-autocast and in fp16-cast. The <code>torch-mps</code> worker needs 5.00 GB in fp16-autocast and 4.31 GB in fp16-cast (Table 11).</li>
+    <li><b>The peak memory at P2.</b> The <code>mlx</code> worker of ViT-H+/16 needs 3.44 GB in fp16-autocast and in fp16-cast. The <code>torch-mps</code> worker needs 5.00 GB in fp16-autocast and 4.31 GB in fp16-cast (Table 13).</li>
     <li><b>The load peak.</b> ViT-H+/16 in an autocast mode: 1,701.3 MB; in a cast mode: 1,700.8 MB. The 0.5 MB are the 254,720 values of the stream parameters, which stay in fp32 (our computation: 2 more bytes for each value).</li>
   </ul>
   <p>The Close stage records this choice in ADR 0007 (Section 9 of <code>plan.html</code>).</p>
@@ -748,7 +750,7 @@ def linear_parameter_names(model: nn.Module) -> frozenset[str]:
       </tbody>
     </table>
   </div>
-  <p class="caption"><b>Table 6.</b> The need of the memory check for each model size on <code>mlx</code>, from Table 5 of <code>plan.html</code>. The tests T8 and T10 check the exact values: ViT-S/16 4,103,663,411 bytes in fp32 and 4,051,831,706 bytes in each half mode; ViT-7B/16 20,118,484,173 bytes in each half mode. <code>load_mlx_backbone</code> sets <code>mx.set_memory_limit</code> to the need. For ViT-7B/16 in fp32 the check would ask 36.24 GB. This check can pass on this Mac (up to 46.0 GB free memory in the log, <code>explore.html</code>), so only the run rule stops the load. The largest fp32 tensor is the <code>down_proj</code> weight of block 0; Section 7 uses it.</p>
+  <p class="caption"><b>Table 6.</b> The need of the memory check for each model size on <code>mlx</code>, from Table 5 of <code>plan.html</code>. The tests T8 and T10 check the exact values: ViT-S/16 4,103,663,411 bytes in fp32 and 4,051,831,706 bytes in each half mode; ViT-7B/16 20,118,484,173 bytes in each half mode. <code>load_mlx_backbone</code> sets <code>mx.set_memory_limit</code> to the need. For ViT-7B/16 in fp32 the check would ask 36.24 GB. This check can pass on this Mac (up to 46.0 GB free memory in the log, <code>explore.html</code>), so only the run rule stops the load. The streamed reference of Section 8 runs on <code>torch-cpu</code>, not on <code>mlx</code>; its need is 4.82 GB. The largest fp32 tensor is the <code>down_proj</code> weight of block 0; Section 7 uses it.</p>
 
   <h3>6.5 <code>LoadReport</code> and <code>record_load_peak</code></h3>
   <pre><code># src/dinov3_apple/mlx_weights.py, lines 61 to 76 (working tree)
@@ -872,7 +874,7 @@ def record_load_peak(label: str, peak_bytes: int, cache_bytes: int) -> None:
 </section>
 
 <section id="runrule">
-  <h2>8 The run rule as code</h2>
+  <h2>8 The run rule as code and the streamed reference</h2>
   <p>CLAUDE.md says: run ViT-7B/16 in fp16, bf16 or with quantized weights; in fp32 its weights alone need about 27 GB. Before Step 5, only the memory check stopped such a load. The memory check of a full fp32 load asks 36.2 to 36.6 GB, and it can pass on this Mac (finding 8 of <code>explore.html</code>). So Step 5 writes the run rule as code, in <code>memory.py</code>, and both loaders call it first:</p>
   <pre><code># src/dinov3_apple/memory.py, lines 23 to 25, 32 and 33, and 36 to 51
 # CLAUDE.md, run rules: ViT-7B/16 runs in fp16, bf16 or with quantized weights. In fp32 its
@@ -899,7 +901,7 @@ def check_run_rule(model_size: str, bytes_per_weight: int, label: str) -> None:
             "(CLAUDE.md run rules)"
         )
 
-# src/dinov3_apple/reference.py, lines 132 to 137 (load_torch_backbone)
+# src/dinov3_apple/reference.py, lines 168 to 173 (load_torch_backbone)
     dtype = DTYPE_MODES[dtype_mode].weights
     label = f"{model_size} torch-{device} {dtype_mode}"
     check_run_rule(model_size, dtype.itemsize, label)
@@ -910,7 +912,7 @@ def check_run_rule(model_size: str, bytes_per_weight: int, label: str) -> None:
     <li><b>Line 25: <code>NO_FP32_WEIGHTS</code>.</b> The set names the model sizes of the rule. A new model size with the same rule needs one name, not a new branch.</li>
     <li><b>Line 32: <code>RunRuleError</code>.</b> A <code>RuntimeError</code>, not a <code>MemoryError</code>. A refusal by the run rule is not a lack of memory. The backbone slot of the tests catches it and skips with its text. The text of a skip says why, for example: "ViT-7B/16 mlx fp32: ViT-7B/16 runs with fp16, bf16 or quantized weights only (CLAUDE.md run rules)".</li>
     <li><b>Line 47.</b> The rule reads bytes, not a dtype mode. So one function serves both backends: <code>mlx</code> gives the bytes of its matmul dtype, torch the bytes of its weight dtype. The rule refuses 4 or more bytes for each weight. fp16 and bf16 weights have 2 bytes, and quantized weights have fewer, so the rule lets them pass.</li>
-    <li><b>Line 134 of <code>reference.py</code>.</b> The guard in <code>load_torch_backbone</code> comes before the memory check and before <code>from_pretrained</code>. On torch, the autocast modes keep fp32 weights, so the guard refuses ViT-7B/16 in fp32, fp16-autocast and bf16-autocast, on <code>torch-cpu</code> and on <code>torch-mps</code>.</li>
+    <li><b>Line 170 of <code>reference.py</code>.</b> The guard in <code>load_torch_backbone</code> comes before the memory check and before <code>from_pretrained</code>. On torch, the autocast modes keep fp32 weights, so the guard refuses ViT-7B/16 in fp32, fp16-autocast and bf16-autocast, on <code>torch-cpu</code> and on <code>torch-mps</code>.</li>
     <li><b>No torch, no mlx.</b> <code>memory.py</code> imports neither, so both loaders and the scripts can use the rule (AC18).</li>
   </ul>
   <div class="table-wrap">
@@ -922,10 +924,11 @@ def check_run_rule(model_size: str, bytes_per_weight: int, label: str) -> None:
         <tr><td>bf16-cast</td><td class="num">2</td><td>loads</td><td class="num">2</td><td>loads</td></tr>
         <tr><td>fp16-autocast</td><td class="num">2</td><td>loads</td><td class="num">4</td><td>refused</td></tr>
         <tr><td>bf16-autocast</td><td class="num">2</td><td>loads</td><td class="num">4</td><td>refused</td></tr>
+        <tr><td>fp32, streamed reference (path D4-Y)</td><td class="num">–</td><td>no streamed path</td><td class="num">4, one block at a time</td><td><code>torch-cpu</code> only: runs through <code>run_torch_streamed</code>, never through the loader</td></tr>
       </tbody>
     </table>
   </div>
-  <p class="caption"><b>Table 8.</b> The run rule for ViT-7B/16 on each backend, from <code>bytes_per_weight</code> and <code>check_run_rule</code>. The other five model sizes are never refused. Test T13 checks all 60 triples (6 model sizes × 5 dtype modes × 2 backends): 1 refusal on <code>mlx</code>, 3 on <code>torch-mps</code>; the other 56 pass the rule. Tests T7, T11, T12 and T15 check the order: the guard comes before every file read and the memory check, in <code>load_mlx_backbone</code>, <code>load_torch_backbone</code>, <code>scripts/make_reference.py</code> and the backbone slot.</p>
+  <p class="caption"><b>Table 8.</b> The run rule for ViT-7B/16 on each backend, from <code>bytes_per_weight</code> and <code>check_run_rule</code>. The other five model sizes are never refused. Test T13 checks all 60 triples (6 model sizes × 5 dtype modes × 2 backends): 1 refusal on <code>mlx</code>, 3 on <code>torch-mps</code>; the other 56 pass the rule. Tests T7, T11, T12 and T15 check the order: the guard comes before every file read and the memory check, in <code>load_mlx_backbone</code>, <code>load_torch_backbone</code>, <code>scripts/make_reference.py</code> and the backbone slot. The last row is path D4-Y (Section 8.1). <code>run_torch_streamed</code> does not call <code>check_run_rule</code>: it never loads the whole model, and the user said yes to its reading of the rule on 2026-11-07. The five loader rows do not change.</p>
   <p>The tests reach the rule through one helper, so they never repeat it:</p>
   <pre><code># tests/parity_checks.py, lines 91 to 99 (run_rule_skip)
     try:
@@ -939,14 +942,407 @@ def check_run_rule(model_size: str, bytes_per_weight: int, label: str) -> None:
     return None</code></pre>
   <p>Before the fix of F20, two places computed the bytes for each weight of each backend: <code>scripts/cross_check.py</code> and this helper. Now both call <code>bytes_per_weight</code> of <code>bench.py</code> (Section 3.1). The fixes of F10 and F11 moved the guard to the front of <code>scripts/cross_check.py</code> and <code>scripts/make_reference.py</code> too: a refused run reads no free memory and no <code>runs.jsonl</code> first, and the driver log records the refusal.</p>
 
-  <h3>8.1 Path D4-N: what the guard leaves out</h3>
-  <p>A streamed fp32 reference of ViT-7B/16 would hold the fp32 weights of one block at a time (D4 Option A of <code>explore.html</code>). The plan lets it run only after the user's own explicit yes. The user did not answer, so path D4-N applies (Section 6.1 of <code>verify.html</code>):</p>
+  <h3>8.1 Path D4-Y: the user's yes and the reading of the run rule</h3>
+  <p>D4 asked the user one separate question: "May the streamed fp32 reference of ViT-7B/16 run, with the fp32 weights of one block in memory at a time?" The plan approval was not the answer, and an approval by the agent did not count. Step 5 closed on path D4-N in commit <code>ad93caf</code>: ViT-7B/16 had no reference file, and its 48 <code>mlx</code> parity rows skipped. On 2026-11-07 the user answered "Yes, run it" (Table 20 of <code>plan.html</code>). So path D4-Y applies now. A build session wrote the streamed reference, and a separate Verify agent checked it (Section 12 of <code>verify.html</code>).</p>
+  <p>Path D4-Y reads the run rule as a limit on the fp32 weights in memory. The rule refuses the fp32 weights of the whole model: 26.86 GB. It permits the fp32 weights of one block and of the outer parts: 0.68 GB at most. Two comments in the code record this reading:</p>
+  <pre><code># src/dinov3_apple/reference.py, lines 455 to 458 (run_torch_streamed)
+    # Run rule of CLAUDE.md: ViT-7B/16 never loads with fp32 weights. This path reads the rule as
+    # a limit on the fp32 weights in memory: one block and the parts outside the blocks, never
+    # the whole model. The user said yes to this reading on 2026-11-07 (Table 20 of
+    # specs/05-all-sizes/plan.html). The guards of load_torch_backbone and load_mlx_backbone stay.
+
+# scripts/make_reference.py, lines 81 to 85
+# The reading of the run rule of CLAUDE.md for the streamed path, in each of its runs.jsonl lines.
+STREAMED_RUN_RULE = (
+    "streamed: the fp32 weights of one block at a time, never the whole model "
+    "(the user's yes of 2026-11-07, Table 20 of specs/05-all-sizes/plan.html)"
+)</code></pre>
   <ul>
-    <li><code>run_torch_streamed</code>, <code>ShardIndex</code> and <code>OuterParts</code> of plan Table 1 do not exist in <code>src/</code>. The plan says: the build does not write them before the yes.</li>
-    <li>No reference file of ViT-7B/16 exists. The 48 <code>mlx</code> parity rows of ViT-7B/16 in the four half modes skip with "reference-vit7b16.safetensors is missing." The 12 fp32 rows skip before that, with the <code>RunRuleError</code> text.</li>
-    <li>The batch consistency of ViT-7B/16 needs no reference file. It runs and passes on <code>mlx</code> in the four half modes: the batch output equals the single runs (largest difference 0.0, AC7).</li>
-    <li>As a diagnostic, the cross-check compares <code>mlx</code> with <code>torch-mps</code>, both in bf16-cast, on the 12 configurations. Smallest values: frame embedding 0.999925, patch mean 0.999505, patch 1st percentile 0.995725 (Table 9 of <code>verify.html</code>). These values are report only; for comparison, the bf16 thresholds of ADR 0003 are 0.998 / 0.995 / 0.96.</li>
-    <li>The logs show 0 loads of ViT-7B/16 with fp32 weights (AC15). The first <code>mlx</code> load of ViT-7B/16 came after the load-peak test H2 and after the gate of job 5 (AC19).</li>
+    <li><b>The guards do not change.</b> <code>load_torch_backbone</code> and <code>load_mlx_backbone</code> still raise <code>RunRuleError</code> for ViT-7B/16 with fp32 weights (Table 8). <code>scripts/make_reference.py ViT-7B/16</code> without <code>--streamed</code> still writes one skip line with the <code>RunRuleError</code> text and starts no subprocess (probe y7 of <code>verify.html</code>).</li>
+    <li><b>The streamed path is a separate path.</b> <code>run_torch_streamed</code> never calls <code>load_torch_backbone</code> or <code>DINOv3ViTModel.from_pretrained</code>. It reads <code>config.json</code> and then the tensors of one part at a time.</li>
+    <li><b>The reading holds for the resident memory.</b> It does not hold for the address space (finding V4 of <code>verify.html</code>). <code>ShardIndex.read</code> maps the whole shard of a tensor, about 5 GB. The tensors of the outer parts keep the maps of their shards open for the whole run. The Close stage records the reading in an ADR: one block of fp32 weights resident in memory; mapped files are not loads.</li>
+  </ul>
+
+  <h3>8.2 The data flow of the streamed reference</h3>
+  <p>A full-model run loads all 40 blocks and then pushes one configuration through all of them. The streamed reference changes the order of the two loops. It loads one block and pushes all 12 configurations through it. Then it frees the block and loads the next one. Figure 5 shows the 13 actions.</p>
+  <figure>
+    <div class="fig"><svg viewBox="0 0 960 440" role="img" aria-labelledby="fig5-title" font-family="-apple-system, Helvetica Neue, Arial, sans-serif">
+      <title id="fig5-title">The data flow of run_torch_streamed for ViT-7B/16: the outer parts first, then one block at a time, then the final layer norm</title>
+      <defs><marker id="arrow5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#4a5655"/></marker></defs>
+      <rect width="960" height="440" fill="#ffffff"/>
+      <g font-size="10.5" fill="#111414" text-anchor="middle">
+        <text x="20" y="18" text-anchor="start" font-size="13" font-weight="600">run_torch_streamed(model_size, pixels, hidden_config) for ViT-7B/16: the actions in order</text>
+        <text x="20" y="38" text-anchor="start" font-size="11" font-weight="600" fill="#4a5655">A. Once, before the first block</text>
+
+        <rect x="20" y="46" width="170" height="74" rx="5" fill="#f5f8f7" stroke="#4a5655"/>
+        <text x="105" y="64" font-size="11" font-weight="600">1 ShardIndex(folder)</text><text x="105" y="80">the shard of each key</text><text x="105" y="95">nbytes from the headers</text><text x="105" y="110">6 shards, 40 blocks</text>
+        <rect x="207" y="46" width="170" height="74" rx="5" fill="#fbe9e6" stroke="#b03a2e" stroke-width="1.5"/>
+        <text x="292" y="64" font-size="11" font-weight="600">2 memory check</text><text x="292" y="80">1.2 × (0.671 + 0.013 GB)</text><text x="292" y="95">+ 4 GB = 4.82 GB</text><text x="292" y="110">before any tensor read</text>
+        <rect x="394" y="46" width="170" height="74" rx="5" fill="#e6f2f2" stroke="#057379"/>
+        <text x="479" y="64" font-size="11" font-weight="600">3 OuterParts</text><text x="479" y="80">from_shards: attn "sdpa"</text><text x="479" y="95">meta device, assign=True</text><text x="479" y="110">outer parts: 12.7 MB</text>
+        <rect x="581" y="46" width="170" height="74" rx="5" fill="#e6f2f2" stroke="#057379"/>
+        <text x="666" y="64" font-size="11" font-weight="600">4 embeddings(pixels)</text><text x="666" y="80">for each of the</text><text x="666" y="95">12 configurations</text><text x="666" y="110">states: CLS, 4 R, patches</text>
+        <rect x="768" y="46" width="170" height="74" rx="5" fill="#e6f2f2" stroke="#057379"/>
+        <text x="853" y="64" font-size="11" font-weight="600">5 RoPE tables, fp32</text><text x="853" y="80">rope_embeddings(pixels)</text><text x="853" y="95">one pair for each</text><text x="853" y="110">configuration</text>
+
+        <rect x="20" y="160" width="918" height="134" rx="6" fill="none" stroke="#057379" stroke-dasharray="6 4"/>
+        <text x="926" y="176" text-anchor="end" font-size="11" font-weight="600" fill="#057379">B. For block = 0 to 39: the fp32 weights of one block in memory</text>
+        <rect x="32" y="184" width="164" height="74" rx="5" fill="#f5f8f7" stroke="#4a5655"/>
+        <text x="114" y="202" font-size="11" font-weight="600">6 shards.block(b)</text><text x="114" y="218">17 tensors, read by key</text><text x="114" y="233">blocks 7, 14, 22, 29, 37</text><text x="114" y="248">span two shards</text>
+        <rect x="213" y="184" width="164" height="74" rx="5" fill="#e6f2f2" stroke="#057379"/>
+        <text x="295" y="202" font-size="11" font-weight="600">7 DINOv3ViTLayer</text><text x="295" y="218">(config) on the</text><text x="295" y="233">meta device:</text><text x="295" y="248">shapes, no data</text>
+        <rect x="394" y="184" width="164" height="74" rx="5" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="476" y="202" font-size="11" font-weight="600">8 load_state_dict</text><text x="476" y="218">(tensors, assign=True)</text><text x="476" y="233">_check_materialized</text><text x="476" y="248">0.67 GB in fp32</text>
+        <rect x="575" y="184" width="164" height="74" rx="5" fill="#e6f2f2" stroke="#057379"/>
+        <text x="657" y="202" font-size="11" font-weight="600">9 layer(state, rope)</text><text x="657" y="218">each configuration</text><text x="657" y="233">at batch size 1</text><text x="657" y="248">keep 1 hidden state</text>
+        <rect x="756" y="184" width="170" height="74" rx="5" fill="#fbf1de" stroke="#e0a336" stroke-width="1.5"/>
+        <text x="841" y="202" font-size="11" font-weight="600">10 del layer</text><text x="841" y="218">the block is freed</text><text x="841" y="233">before the next read</text><text x="841" y="248">log: block b of 40</text>
+        <text x="476" y="288" fill="#4a5655">next block: 40 times in all</text>
+
+        <text x="20" y="320" text-anchor="start" font-size="11" font-weight="600" fill="#4a5655">C. After the last block</text>
+        <rect x="20" y="328" width="280" height="62" rx="5" fill="#e6f2f2" stroke="#057379"/>
+        <text x="160" y="346" font-size="11" font-weight="600">11 outer.norm(state)</text><text x="160" y="362">tokens of 12 configurations</text><text x="160" y="377">(1 + 4 + N, D) in fp32</text>
+        <rect x="340" y="328" width="280" height="62" rx="5" fill="#f5f8f7" stroke="#4a5655"/>
+        <text x="480" y="346" font-size="11" font-weight="600">12 hidden states</text><text x="480" y="362">iss-kibo-lab/224x224</text><text x="480" y="377">(41, 201, 4096) in fp32</text>
+        <rect x="660" y="328" width="278" height="62" rx="5" fill="#f5f8f7" stroke="#4a5655"/>
+        <text x="799" y="346" font-size="11" font-weight="600">13 _save_reference</text><text x="799" y="362">reference-vit7b16.safetensors</text><text x="799" y="377">248,958,088 bytes, "streamed": true</text>
+
+        <text x="20" y="424" text-anchor="start" font-size="11" fill="#4a5655">Red: the memory check. Teal: the classes of the Hugging Face backbone, as in a full-model run. Amber: the release of the block. Grey: files and outputs.</text>
+        <text x="20" y="410" text-anchor="start" font-size="11" fill="#4a5655">In memory at one time: the outer parts, one block, and the states of the 12 configurations. Actions 12 and 13 are in scripts/make_reference.py.</text>
+      </g>
+      <g stroke="#4a5655" stroke-width="1.5" fill="none">
+        <path d="M190,83 H203" marker-end="url(#arrow5)"/>
+        <path d="M377,83 H390" marker-end="url(#arrow5)"/>
+        <path d="M564,83 H577" marker-end="url(#arrow5)"/>
+        <path d="M751,83 H764" marker-end="url(#arrow5)"/>
+        <path d="M853,120 V140 H114 V180" marker-end="url(#arrow5)"/>
+        <path d="M196,221 H209" marker-end="url(#arrow5)"/>
+        <path d="M377,221 H390" marker-end="url(#arrow5)"/>
+        <path d="M558,221 H571" marker-end="url(#arrow5)"/>
+        <path d="M739,221 H752" marker-end="url(#arrow5)"/>
+        <path d="M841,258 V272 H114 V262" marker-end="url(#arrow5)"/>
+        <path d="M900,294 V310 H160 V324" marker-end="url(#arrow5)"/>
+        <path d="M300,359 H336" marker-end="url(#arrow5)"/>
+        <path d="M620,359 H656" marker-end="url(#arrow5)"/>
+      </g>
+    </svg></div>
+    <figcaption><b>Figure 5.</b> The data flow of <code>run_torch_streamed</code> for ViT-7B/16, from Table 7 of <code>plan.html</code> and the code of Sections 8.3 to 8.5. Part A runs once: it reads the headers, checks the free memory, builds the outer parts and computes the embeddings and the RoPE tables of all 12 configurations. Part B runs once for each of the 40 blocks: it reads the 17 tensors of the block by key, builds one <code>DINOv3ViTLayer</code> on the meta device, loads the tensors with <code>assign=True</code>, pushes each configuration through the block at batch size 1 and frees the block. Part C applies the final layer norm. The hidden states (41 states: before block 1 and after each block) are those of the hidden-states configuration. The block sizes and the shards come from the headers (Table 22 of <code>verify.html</code>).</figcaption>
+  </figure>
+
+  <h3>8.3 <code>ShardIndex</code>: the shard and the bytes of each key</h3>
+  <pre><code># src/dinov3_apple/reference.py, lines 126 to 131 (constants)
+STREAMED_ATTN_IMPLEMENTATION = "sdpa"
+...
+BLOCK_KEY = re.compile(r"(?:model\.)?layer\.(?P&lt;block&gt;\d+)\.(?P&lt;name&gt;.+)")
+# The bytes of one value of each safetensors dtype. All weights of the DINOv3 files are F32.
+SAFETENSORS_DTYPE_BYTES = {"F64": 8, "F32": 4, "F16": 2, "BF16": 2}
+
+# lines 243 to 263 (ShardIndex.__init__)
+        self.folder = folder
+        index = folder / "model.safetensors.index.json"
+        if index.exists():
+            weight_map = json.loads(index.read_text())["weight_map"]
+            self.files = {key: folder / name for key, name in weight_map.items()}
+        else:
+            single = folder / "model.safetensors"
+            with safe_open(single, "pt") as tensors:
+                self.files = dict.fromkeys(tensors.keys(), single)
+        self.nbytes: dict[str, int] = {}
+        for file in sorted(set(self.files.values())):
+            with safe_open(file, "pt") as tensors:
+                for key in tensors.keys():  # noqa: SIM118 (safe_open is not iterable)
+                    part = tensors.get_slice(key)
+                    size = SAFETENSORS_DTYPE_BYTES[part.get_dtype()]
+                    self.nbytes[key] = size * math.prod(part.get_shape())
+        self._blocks: dict[int, dict[str, str]] = defaultdict(dict)
+        for key in self.files:
+            if match := BLOCK_KEY.fullmatch(key):
+                self._blocks[int(match["block"])][match["name"]] = key
+        self.read_seconds = 0.0
+
+# lines 310 to 314 (streamed_weight_bytes)
+    def streamed_weight_bytes(self) -> int:
+        ...
+        largest = max(self.block_bytes(block) for block in self._blocks)
+        return largest + self.outer_bytes()
+
+# lines 329 to 343 (read and block)
+        start = time.perf_counter()
+        by_file: dict[Path, list[tuple[str, str]]] = defaultdict(list)
+        for name, key in keys.items():
+            by_file[self.files[key]].append((name, key))
+        tensors = {}
+        for file, pairs in by_file.items():
+            with safe_open(file, "pt") as handle:
+                for name, key in pairs:
+                    tensors[name] = handle.get_tensor(key)
+        self.read_seconds += time.perf_counter() - start
+        return tensors
+
+    def block(self, block: int) -> dict[str, torch.Tensor]:
+        """Read the tensors of one block, keyed by the parameter names of DINOv3ViTLayer."""
+        return self.read(self.block_keys(block))</code></pre>
+  <ul>
+    <li><b>Lines 245 to 251: an index or one file.</b> ViT-7B/16 has <code>model.safetensors.index.json</code> and six shards. The other five model sizes have one file, <code>model.safetensors</code>, and no index. <code>ShardIndex</code> handles both. The test <code>test_shard_index_finds_a_block_across_two_files</code> saves a small model once as two shards and once as one file. Both indexes give the same keys, the same bytes and the same tensors.</li>
+    <li><b>Lines 252 to 258: bytes from the headers.</b> <code>get_slice</code> gives the dtype and the shape of a tensor, not its data. <code>SAFETENSORS_DTYPE_BYTES</code> turns the dtype into bytes. So the need of the memory check comes before any tensor read (Section 8.5).</li>
+    <li><b>Lines 259 to 262: the keys of each block.</b> <code>BLOCK_KEY</code> takes the block index and the rest of the key. The rest is the parameter name in <code>DINOv3ViTLayer</code>, for example <code>norm1.weight</code>. The pattern accepts <code>layer.N.…</code> (the Hub files) and <code>model.layer.N.…</code> (a file that a transformers 5 model saves from its state dict). The test <code>test_shard_index_reads_the_spelling_of_a_transformers_model</code> checks the second spelling. A key without a match belongs to the outer parts: <code>outer_keys("embeddings")</code> and <code>outer_keys("norm")</code> strip the prefix. <code>num_blocks</code> counts the blocks. <code>block_keys</code> raises <code>KeyError</code> for a block that the files do not have.</li>
+    <li><b>Lines 310 to 314: the streamed weight bytes.</b> The largest block plus the outer parts. For ViT-7B/16 this is 671,285,248 + 12,730,368 = 684,015,616 bytes (the two values: Table 22 of <code>verify.html</code>; the sum: our computation). <code>outer_bytes</code> includes the mask token, which the run does not use.</li>
+    <li><b>Lines 329 to 339: one map for each shard and call.</b> <code>read</code> groups the keys by shard and opens each shard once. A block that spans two shards opens two. safetensors maps the file privately. The tensors of one call share the map, and the pages of a tensor enter memory at its first use. The map ends when the last tensor of the call is freed. So <code>read_seconds</code> measures the maps, not the disk reads: the reference run of ViT-7B/16 records <code>load_time_s</code> 0.33 s for a run time of 118.74 s (<code>runs.jsonl</code>).</li>
+  </ul>
+
+  <h3>8.4 <code>OuterParts</code> and <code>_check_materialized</code></h3>
+  <pre><code># src/dinov3_apple/reference.py, lines 346 to 350 (_check_materialized)
+def _check_materialized(module: nn.Module, name: str) -> None:
+    """Stop the run if a load with assign=True left a tensor on the meta device."""
+    tensors = [*module.parameters(), *module.buffers()]
+    if any(tensor.is_meta for tensor in tensors):
+        raise ValueError(f"{name}: a tensor stayed on the meta device after the load")
+
+# lines 380 to 392 (OuterParts.from_shards)
+        config = DINOv3ViTConfig.from_pretrained(
+            shards.folder, attn_implementation=STREAMED_ATTN_IMPLEMENTATION
+        )
+        with torch.device("meta"):
+            embeddings = DINOv3ViTEmbeddings(config)
+            norm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
+        embeddings.load_state_dict(shards.read(shards.outer_keys("embeddings")), assign=True)
+        norm.load_state_dict(shards.read(shards.outer_keys("norm")), assign=True)
+        _check_materialized(embeddings, "embeddings")
+        _check_materialized(norm, "norm")
+        # inv_freq comes from the config, as in from_pretrained; it is not in the files.
+        rope_embeddings = DINOv3ViTRopePositionEmbedding(config)
+        return cls(config, embeddings.eval(), rope_embeddings.eval(), norm.eval())</code></pre>
+  <ul>
+    <li><b><code>OuterParts</code></b> is a frozen dataclass with four fields: <code>config</code>, <code>embeddings</code>, <code>rope_embeddings</code> and <code>norm</code>. GLOSSARY.md names these parts the outer parts.</li>
+    <li><b>Lines 380 to 382: the attention must be explicit.</b> <code>STREAMED_ATTN_IMPLEMENTATION</code> is "sdpa": the value of the header field <code>attn_implementation</code> of the Step 2 reference files. A <code>DINOv3ViTLayer</code> built from a plain config uses the eager attention. The eager attention gives other bits. Mutation D3 of <code>verify.html</code> reads the config without <code>attn_implementation</code>; 7 tests go red.</li>
+    <li><b>Lines 383 to 387: meta device, then <code>assign=True</code>.</b> On the meta device a module gets the shapes of its tensors, but no memory and no random init. <code>load_state_dict(..., assign=True)</code> puts the read tensors into the module; it does not copy them into tensors of the module. The strict default of <code>load_state_dict</code> stops a missing or an extra key.</li>
+    <li><b>Lines 388 and 389: <code>_check_materialized</code>.</b> It stops the run if a parameter or a buffer stays on the meta device. Finding V1 of <code>verify.html</code>: no test reads a block with a missing tensor, so no test pins the strict load or this check (mutations S1 and S2 survive).</li>
+    <li><b>Lines 390 to 392: the RoPE tables.</b> <code>inv_freq</code> is not in the files; the module computes it from the config, as <code>from_pretrained</code> does. <code>eval()</code> turns off the RoPE-box jittering of training mode. Mutation D9 leaves the RoPE module in training mode; 7 tests go red.</li>
+  </ul>
+
+  <h3>8.5 <code>run_torch_streamed</code>, <code>streamed_label</code> and <code>required_streamed_bytes</code></h3>
+  <pre><code># src/dinov3_apple/reference.py, lines 419 to 425 and 453 to 485 (run_torch_streamed)
+@torch.inference_mode()
+def run_torch_streamed(
+    model_size: str,
+    pixels: Mapping[str, np.ndarray],
+    hidden_config: str | None,
+    shards: ShardIndex | None = None,
+) -> tuple[dict[str, np.ndarray], np.ndarray | None]:
+...
+    if hidden_config is not None and hidden_config not in pixels:
+        raise ValueError(f"hidden_config {hidden_config} is not a key of pixels")
+    # Run rule of CLAUDE.md: ... (Section 8.1)
+    shards = shards or ShardIndex(weights_dir(model_size))
+    check_free_memory(load_bytes(shards.streamed_weight_bytes()), streamed_label(model_size))
+    outer = OuterParts.from_shards(shards)
+    states, rope = {}, {}
+    for config, values in pixels.items():
+        tensor = torch.from_numpy(values)
+        states[config] = outer.embeddings(tensor)
+        rope[config] = outer.rope_embeddings(tensor)
+    hidden = [states[hidden_config][0].numpy().copy()] if hidden_config is not None else []
+    for block in range(outer.config.num_hidden_layers):
+        start = time.perf_counter()
+        with torch.device("meta"):
+            layer = DINOv3ViTLayer(outer.config)
+        layer.load_state_dict(shards.block(block), assign=True)
+        _check_materialized(layer, f"block {block}")
+        layer.eval()
+        for config, state in states.items():
+            states[config] = layer(state, position_embeddings=rope[config])
+        if hidden_config is not None:
+            hidden.append(states[hidden_config][0].numpy().copy())
+        del layer  # the fp32 weights of one block at a time
+        logger.info(
+            f"{model_size} streamed: block {block + 1} of {outer.config.num_hidden_layers} in "
+            f"{time.perf_counter() - start:.1f} s"
+        )
+    tokens = {config: outer.norm(state)[0].numpy() for config, state in states.items()}
+    return tokens, (np.stack(hidden) if hidden_config is not None else None)
+
+# lines 401 and 416 (streamed_label, required_streamed_bytes)
+    return f"{model_size} torch-cpu fp32, streamed: one block at a time"
+    return load_bytes(ShardIndex(weights_dir(model_size)).streamed_weight_bytes())</code></pre>
+  <ul>
+    <li><b>Lines 459 and 460: the memory check comes first.</b> <code>ShardIndex</code> reads the headers only. The need is <code>load_bytes</code> of the streamed weight bytes: 1.2 × 684,015,616 bytes + 4 GB = 4,820,818,739 bytes for ViT-7B/16 (Table 22 of <code>verify.html</code>). The test <code>test_streamed_checks_memory_before_any_tensor_read</code> records the order of the events: the check, then two reads for the outer parts, then one read for each block. Mutation D2 moves the check after the outer parts; the test goes red.</li>
+    <li><b>Lines 462 to 466: the outer parts of all configurations first.</b> The 12 configurations have different patch grids, so each configuration gets its own RoPE tables. Their states stay in memory for the whole run: 114 MB of tokens for ViT-7B/16 (Table 7 of <code>plan.html</code>).</li>
+    <li><b>Lines 467, 477 and 478: the hidden states.</b> The run keeps the state before block 1 and the state after each block of <code>hidden_config</code>: L + 1 = 41 states for ViT-7B/16, 135 MB (Table 7 of <code>plan.html</code>). Mutation D4b records the state before each block and none after the last block; 5 tests go red.</li>
+    <li><b>Lines 469 to 474: one block.</b> The same three actions as <code>OuterParts</code>: the meta device, <code>assign=True</code>, <code>_check_materialized</code>. The largest block of ViT-7B/16 holds 671,285,248 bytes in fp32.</li>
+    <li><b>Lines 475 and 476: batch size 1.</b> Each configuration passes the block alone, with the same <code>position_embeddings</code> that the full model gives to each layer.</li>
+    <li><b>Line 479: the release of the block.</b> <code>del layer</code> drops the last reference to the tensors of the block, so the map of its shard ends. The test <code>test_streamed_frees_each_block</code> tracks each layer, each read tensor and each parameter with weak references. At each new layer it finds no older layer, tensor or parameter alive; after the run it finds none. Mutation D1 keeps each layer in a list; the test goes red.</li>
+    <li><b>Lines 480 to 483: one log line for each block.</b> <code>make_reference.log</code> has 120 lines "streamed: block n of 40": three streamed runs of ViT-7B/16 (Section 12.5 of <code>verify.html</code>).</li>
+    <li><b>Line 484: the final layer norm.</b> <code>[0]</code> drops the batch dimension. The result has the shape of a full-model run: (1 + 4 + N, D) in fp32.</li>
+    <li><b><code>streamed_label</code></b> names the streamed run in the memory-check lines. The name differs from the name of a full fp32 load, "ViT-7B/16 torch-cpu fp32". So a search of the logs for full fp32 loads of ViT-7B/16 finds 0 lines, and a search can find the streamed lines separately: <code>memory-checks.log</code> has 2 streamed lines, "needs 4.8 GB" (AC15 of Table 21 of <code>verify.html</code>).</li>
+    <li><b><code>required_streamed_bytes</code></b> gives the same need from the headers, for the driver of <code>make_reference.py</code>. The driver checks the free memory before it starts the subprocess. The test <code>test_required_streamed_bytes_of_7b</code> pins 4,820,818,739 bytes.</li>
+  </ul>
+
+  <h3>8.6 Memory: one block against the whole model</h3>
+  <figure>
+    <div class="fig"><svg viewBox="0 0 960 356" role="img" aria-labelledby="fig6-title" font-family="-apple-system, Helvetica Neue, Arial, sans-serif">
+      <title id="fig6-title">Memory of the streamed reference of ViT-7B/16 on torch-cpu, in GB</title>
+      <rect width="960" height="356" fill="#ffffff"/>
+      <g font-size="12" fill="#111414">
+        <text x="20" y="22" font-size="13" font-weight="600">Streamed reference of ViT-7B/16 on torch-cpu in fp32: memory in GB (1 GB = 1e9 bytes)</text>
+        <line x1="424.4" x2="424.4" y1="40" y2="298" stroke="#e3e8e7"/>
+        <line x1="548.9" x2="548.9" y1="40" y2="298" stroke="#e3e8e7"/>
+        <line x1="673.3" x2="673.3" y1="40" y2="298" stroke="#e3e8e7"/>
+        <line x1="797.8" x2="797.8" y1="40" y2="298" stroke="#e3e8e7"/>
+        <g text-anchor="end">
+          <text x="290" y="62">largest block + outer parts, fp32</text>
+          <text x="290" y="98">peak of the reference run</text>
+          <text x="290" y="134">lifetime peak of a check run</text>
+          <text x="290" y="170">need of the memory check</text>
+          <text x="290" y="206">fp32 weights of the whole model</text>
+          <text x="290" y="242">need of a full fp32 load</text>
+        </g>
+        <rect x="300" y="48" width="8.5" height="22" fill="#057379"><title>largest block and outer parts: 0.68 GB (684,015,616 bytes)</title></rect>
+        <text x="314.5" y="63" font-weight="600">0.68</text>
+        <rect x="300" y="84" width="21.8" height="22" fill="#9fd3d1" stroke="#057379"><title>peak of the reference run: 1.75 GB (1,754,529,792 bytes)</title></rect>
+        <text x="327.8" y="99" font-weight="600">1.75</text>
+        <rect x="300" y="120" width="24.0" height="22" fill="#9fd3d1"><title>lifetime peak of the check run y3: 1.93 GB (1,932,460,032 bytes)</title></rect>
+        <text x="330" y="135">1.93</text>
+        <rect x="300" y="156" width="60.0" height="22" fill="#ffffff" stroke="#4a5655" stroke-width="1.5"><title>need: 4.82 GB (4,820,818,739 bytes)</title></rect>
+        <text x="366" y="171">4.82</text>
+        <rect x="300" y="192" width="334.3" height="22" fill="#c3cccb"><title>fp32 weights of the whole model: 26.86 GB, never in memory</title></rect>
+        <text x="640.3" y="207">26.86, never in memory</text>
+        <rect x="300" y="228" width="451.0" height="22" fill="#fbe9e6" stroke="#b03a2e" stroke-dasharray="5 3"><title>need of a full fp32 load: 36.24 GB, refused by the run rule</title></rect>
+        <text x="745" y="243" text-anchor="end">36.24, refused by the run rule</text>
+        <line x1="779.1" x2="779.1" y1="40" y2="298" stroke="#b03a2e" stroke-width="1.5" stroke-dasharray="6 4"/>
+        <text x="773" y="37" text-anchor="end" font-size="11" fill="#b03a2e">free memory before the reference run: 38.49 GB</text>
+        <text x="308" y="282" font-size="11" fill="#4a5655">The run rule refuses the full fp32 load before its memory check (Table 8).</text>
+        <line x1="300" x2="860" y1="298" y2="298" stroke="#4a5655"/>
+        <line x1="300" x2="300" y1="40" y2="298" stroke="#4a5655"/>
+        <g font-size="11" fill="#4a5655" text-anchor="middle">
+          <text x="300" y="314">0</text><text x="424.4" y="314">10</text><text x="548.9" y="314">20</text><text x="673.3" y="314">30</text><text x="797.8" y="314">40</text>
+        </g>
+        <text x="20" y="342" font-size="11" fill="#4a5655">Measured: the reference run of the build (08:18:14 UTC) and the check run y3 of verify.html. Bytes from the headers. Hover over a bar to see its value.</text>
+      </g>
+    </svg></div>
+    <figcaption><b>Figure 6.</b> The memory of the streamed reference of ViT-7B/16. The largest block and the outer parts hold 684,015,616 bytes in fp32; the largest block alone is 0.67 GB, 2.5 % of the 26.86 GB of fp32 weights (our computation). The reference run had 38.49 GB of free memory before it. Its peak (<code>ru_maxrss</code>, read right after <code>run_torch_streamed</code>) was 1,754,529,792 bytes: 36.4 % of the need of 4,820,818,739 bytes and 6.5 % of the fp32 weights of the whole model (our computation). The lifetime peak of the check run y3 (after the compare) was 1,932,460,032 bytes: 40.1 % of the need (Figure 3 of <code>verify.html</code>). The peak is larger than one block. It includes the 333 MB of the process before the run (<code>rss_before_load_bytes</code>), the resident pages of the mapped shards and the tokens and hidden states of all configurations. The need of a full fp32 load, 1.2 × 26.86 GB + 4 GB = 36.24 GB, would fit in the free memory; only the run rule stops that load. Source: <code>tests/fixtures/generated/reference/runs.jsonl</code> (not in git) and Table 22 of <code>verify.html</code>.</figcaption>
+  </figure>
+
+  <h3>8.7 The same arithmetic as the full model</h3>
+  <p>The forward pass of <code>DINOv3ViTModel</code> does four things: the embeddings, the RoPE tables, each layer with these tables, and the final layer norm. The streamed path calls the same four classes with the same fp32 weights, the same attention ("sdpa"), fp32 RoPE tables and batch size 1, in the same order for each configuration. Only the time when a weight enters memory changes. Each operation gets the same inputs, so it gives the same bits. The largest difference is 0.0, not a small number:</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Model size</th><th class="num">Tokens: largest difference (12 configurations)</th><th class="num">Hidden states: largest difference</th><th class="num">Need</th><th class="num">Peak at the end of the run</th><th class="num">Run time</th></tr></thead>
+      <tbody>
+        <tr><td>ViT-S/16</td><td class="num">0.0</td><td class="num">0.0</td><td class="num">4,009,951,437 B</td><td class="num">444,071,936 B</td><td class="num">0.51 s</td></tr>
+        <tr><td>ViT-S+/16</td><td class="num">0.0</td><td class="num">0.0</td><td class="num">4,012,789,965 B</td><td class="num">456,884,224 B</td><td class="num">0.60 s</td></tr>
+        <tr><td>ViT-B/16</td><td class="num">0.0</td><td class="num">0.0</td><td class="num">4,036,889,805 B</td><td class="num">555,991,040 B</td><td class="num">1.35 s</td></tr>
+        <tr><td>ViT-L/16</td><td class="num">0.0</td><td class="num">0.0</td><td class="num">4,064,285,901 B</td><td class="num">649,625,600 B</td><td class="num">4.58 s</td></tr>
+        <tr><td>ViT-H+/16</td><td class="num">0.0</td><td class="num">0.0</td><td class="num">4,130,713,600 B</td><td class="num">812,056,576 B</td><td class="num">9.90 s</td></tr>
+        <tr><td>ViT-7B/16 (against its own streamed file)</td><td class="num">0.0</td><td class="num">0.0</td><td class="num">4,820,818,739 B</td><td class="num">1,748,746,240 B</td><td class="num">72.41 s</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 9.</b> The check of the streamed path (R24 of <code>plan.html</code>): <code>make_reference.py --streamed --check</code>, run y3 of <code>verify.html</code> (Table 22 there). Each model size ran in its own subprocess, one after the other. Target: largest difference ≤ 1e-6 (<code>CHECK_TARGET</code>); expected 0.0. Each line has the status "checked", <code>passed</code> true and <code>stored_attn_implementation</code> "sdpa". The files of ViT-S/16 to ViT-H+/16 come from a full-model run of Step 2, so their check is independent of the streamed path. The ViT-7B/16 file comes from the streamed path itself, so its row shows only that the run repeats (finding V3). The build ran the same check at 08:17 UTC, before the ViT-7B/16 file existed: 0.0 for the five model sizes and a skip line for ViT-7B/16 (<code>runs.jsonl</code>). B = bytes.</p>
+  <p>The tests pin the same result on small models:</p>
+  <ul>
+    <li><b><code>test_streamed_equals_the_full_model</code></b> runs three small models: <code>vits16</code> (MLP), <code>vits16plus</code> (SwiGLU) and <code>vit7b16-shape</code> (the shape of ViT-7B/16, saved as two shards). For each, the tokens and the hidden states of the streamed path equal the output of <code>from_pretrained</code> with a largest difference of exactly 0.0.</li>
+    <li><b><code>test_outer_parts_match_the_full_model</code></b> compares the embeddings, the RoPE tables and the final layer norm of <code>OuterParts</code> with the full model: <code>torch.equal</code> for each.</li>
+    <li><b><code>test_reference_is_reproducible[ViT-7B/16]</code></b> now runs the streamed path on the hidden-states configuration only and compares with the stored file (≤ 1e-5). It passed in the slow session. The test <code>test_reproduced_tokens_of_7b_never_load_the_whole_model</code> replaces <code>load_torch_backbone</code>, <code>from_pretrained</code> and the backbone slot with functions that fail if called. The new fixture <code>backbone_slot</code> of <code>tests/conftest.py</code> gives the test the slot. <code>reproduced_tokens</code> calls its <code>free</code> method before the streamed run, so only one model is in memory.</li>
+  </ul>
+  <p>The independent evidence for ViT-7B/16 itself (finding V3): the check on five real model sizes (Table 9), the small model with the shape of ViT-7B/16 (0.0 against <code>from_pretrained</code>), and two backends in fp16-cast that agree with the streamed file to a frame embedding cosine of 0.99999 or more (Table 10).</p>
+
+  <h3>8.8 <code>scripts/make_reference.py</code>: <code>--streamed</code> and <code>--check</code></h3>
+  <pre><code># scripts/make_reference.py, lines 403 to 427 (run_streamed, shortened)
+    for model_size in model_sizes:
+        line = {"model_size": model_size, "time": _now(), "streamed": True}
+        line |= {"check": True} if check else {}
+        line["run_rule"] = STREAMED_RUN_RULE
+        if check and not reference_path(model_size).exists():
+            ...  # a skip line: "{file} is missing"
+        need = required_streamed_bytes(model_size)
+        line["need_bytes"] = need
+        try:
+            available = check_free_memory(need, f"{streamed_label(model_size)} (make_reference.py)")
+        except InsufficientMemoryError as error:
+            ...  # a skip line with the reason
+        line["available_before_bytes"] = available
+        command = [sys.executable, __file__, "--child", model_size, "--streamed"]
+        command += ["--check"] if check else []
+        result = subprocess.run(command, stdout=subprocess.PIPE, text=True, check=False)
+        ...
+        child = json.loads(result.stdout.strip().splitlines()[-1])
+
+# lines 279 to 289 (run_streamed_child)
+    if check:
+        stored, metadata = read_reference(model_size)
+        result = run | sizes | streamed_differences(stored, tokens, hidden)
+        result["stored_attn_implementation"] = metadata.get("attn_implementation")
+    else:
+        tensors = {f"{config}/tokens": np.ascontiguousarray(t) for config, t in tokens.items()}
+        tensors[HIDDEN_STATES_KEY] = np.ascontiguousarray(hidden)
+        metadata = reference_metadata(
+            model_size, len(hidden) - 1, STREAMED_ATTN_IMPLEMENTATION, run | {"streamed": True}
+        )
+        result = run | sizes | _save_reference(model_size, tensors, metadata)
+
+# lines 317 and 318 (load_ratio)
+        # A streamed run holds one block at a time: its peak says nothing about a full load.
+        if line.get("streamed") or line.get("status") != "done" or "measured_ratio" not in line:</code></pre>
+  <ul>
+    <li><b><code>main</code></b> has two new options. <code>--streamed</code> sends each model size to <code>run_streamed</code>, and <code>--check</code> compares instead of writing. <code>--check</code> without <code>--streamed</code> is an error. Without <code>--streamed</code>, <code>run_all</code> runs as before, and ViT-7B/16 gets the run-rule skip.</li>
+    <li><b><code>run_streamed</code></b> is the driver. It runs one model size at a time, each in its own subprocess, after the memory check with the streamed need. Each line in <code>runs.jsonl</code> has "streamed": true, <code>run_rule</code> (<code>STREAMED_RUN_RULE</code>), the need and the free memory before. With <code>--check</code> it adds the largest difference, <code>CHECK_TARGET</code> and the verdict. After the last model size it exits with an error if a difference is above <code>CHECK_TARGET</code> (1e-6). Mutation D6 uses the tokens only for the verdict; a test goes red.</li>
+    <li><b><code>run_streamed_child</code></b> runs inside the subprocess. It calls <code>run_torch_streamed</code> on all 12 configurations with the hidden-states configuration. <code>load_time_s</code> is <code>ShardIndex.read_seconds</code> (Section 8.3); <code>peak_memory_bytes</code> is <code>ru_maxrss</code> right after the run; <code>lifetime_peak_bytes</code> also covers the compare or the save. With <code>--check</code> it writes no file (mutation D8 writes one; a test goes red).</li>
+    <li><b><code>streamed_differences</code></b> compares in float64. It returns the number of configurations, the largest difference over all tokens and the largest difference over the hidden states. It raises <code>ValueError</code> if the configurations or a shape differ. <code>HIDDEN_STATES_KEY</code> is the key of the hidden states in a reference file.</li>
+    <li><b><code>reference_metadata</code> and <code>_save_reference</code></b> come out of <code>run_child</code>. So the full-model run and the streamed run write the same header fields. The streamed file adds "streamed": true, with <code>attn_implementation</code> "sdpa" and <code>num_blocks</code> 40. <code>_save_reference</code> writes a partial file and then renames it, so a stopped run leaves no half file under the final name. The ViT-7B/16 file has 248,958,088 bytes.</li>
+    <li><b><code>load_ratio</code></b> measures the load ratio of a full load from the earlier <code>runs.jsonl</code> lines. A streamed line has no <code>measured_ratio</code> and holds one block, so <code>load_ratio</code> skips it (mutation D7 uses it; a test goes red).</li>
+    <li><b>An open item (finding V2).</b> <code>make_reference.py --streamed</code> without a model size writes all six files again, also the five full-model files of Step 2. The tensors stay the same (Table 9), but the headers then say "streamed". Today only the ViT-7B/16 file has "streamed": true (Table 3 of <code>results/token-range-mlx.md</code>).</li>
+  </ul>
+
+  <h3>8.9 The parity and the fp32 token range of ViT-7B/16</h3>
+  <p>With the streamed reference file, the parity rows of ViT-7B/16 run. Table 10 gives the smallest value of each output in each dtype mode.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Backend</th><th>Dtype mode</th><th class="num">Thresholds: frame / patch mean / p01</th><th>Rows</th><th class="num">Smallest frame</th><th class="num">Smallest patch mean</th><th class="num">Smallest patch p01</th></tr></thead>
+      <tbody>
+        <tr><td><code>mlx</code></td><td>fp32</td><td class="num">0.9999 / 0.9999 / 0.9999</td><td>12 skipped: run rule</td><td class="num">–</td><td class="num">–</td><td class="num">–</td></tr>
+        <tr><td><code>mlx</code></td><td>fp16-cast</td><td class="num">0.999 / 0.999 / 0.99</td><td>12 of 12 pass</td><td class="num">0.999990</td><td class="num">0.999981</td><td class="num">0.999654</td></tr>
+        <tr><td><code>mlx</code></td><td>bf16-cast</td><td class="num">0.998 / 0.995 / 0.96</td><td>12 of 12 pass</td><td class="num">0.999739</td><td class="num">0.999119</td><td class="num">0.982649</td></tr>
+        <tr><td><code>mlx</code></td><td>fp16-autocast</td><td class="num">0.999 / 0.999 / 0.99</td><td>12 of 12 pass</td><td class="num">0.999990</td><td class="num">0.999986</td><td class="num">0.999762</td></tr>
+        <tr><td><code>mlx</code></td><td>bf16-autocast</td><td class="num">0.998 / 0.995 / 0.96</td><td>12 of 12 pass</td><td class="num">0.999898</td><td class="num">0.999229</td><td class="num">0.983737</td></tr>
+        <tr><td><code>torch-mps</code></td><td>fp32, fp16-autocast, bf16-autocast</td><td class="num">–</td><td>12 skipped each: run rule</td><td class="num">–</td><td class="num">–</td><td class="num">–</td></tr>
+        <tr><td><code>torch-mps</code></td><td>fp16-cast</td><td class="num">0.999 / 0.999 / 0.99</td><td>12 of 12 pass</td><td class="num">0.999991</td><td class="num">0.999987</td><td class="num">0.999832</td></tr>
+        <tr><td><code>torch-mps</code></td><td>bf16-cast</td><td class="num">0.998 / 0.995 / 0.96</td><td>12 of 12 pass</td><td class="num">0.999760</td><td class="num">0.999069</td><td class="num">0.982423</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 10.</b> The parity of ViT-7B/16 against the streamed reference file, from Table 23 of <code>verify.html</code> (run y4, <code>DINOV3_SLOW=1 uv run pytest -k 7B</code>: 128 passed, 59 skipped, 0 failed). Thresholds of ADR 0003. 48 of 48 <code>mlx</code> rows and 24 of 24 <code>torch-mps</code> rows pass. The largest share of the threshold budget is 43.9 % (<code>torch-mps</code> bf16-cast, patch p01). No bf16 row failed, so the R23 diagnostic did not start, and ADR 0003 does not change. The run rule still skips every mode with fp32 weights: fp32 on <code>mlx</code>; fp32 and both autocast modes on <code>torch-mps</code> (Table 8).</p>
+  <ul>
+    <li><b>W1 to W4 (report only).</b> W1: the prefix tokens are exact, and the smallest token cosine is 0.9999943 or more. W2: the smallest block cosine over the 40 blocks is 0.9999749 (bf16-cast, block 30) to 0.9999999. W3: 0.9999921 or more. W4: the smallest value over the 41 states is 0.969780 (bf16-cast, patch p01) (Table 24 of <code>verify.html</code>).</li>
+    <li><b>W6 and W7.</b> The batch output equals the single runs: largest difference 0.0 on <code>mlx</code>. W7 finds 0 non-finite values in 48 lines, so no pair joins <code>EXPECTED_FP16_OVERFLOW</code>.</li>
+    <li><b>The <code>mlx</code> load peaks</b> stay at 13,532.7 MB (cast modes) and 13,534.7 MB (autocast modes) against a target of 16,252.7 MB (Table 7).</li>
+  </ul>
+  <p>The streamed file also gives the first fp32 token range of ViT-7B/16. <code>scripts/token_range_table.py</code> reads the stored hidden states of each reference file and writes Section 3 of <code>results/token-range-mlx.md</code>:</p>
+  <pre><code># scripts/token_range_table.py, lines 143 to 151 (stored_range)
+    largest = np.abs(hidden).max(axis=2)  # (L + 1, tokens)
+    block = int(largest.max(axis=1).argmax())
+    return {
+        "largest": float(largest[block].max()),
+        "block": block,
+        "token": token_name(int(largest[block].argmax())),
+        "last": float(largest[-1].max()),
+        "blocks": hidden.shape[0] - 1,
+    }
+
+# lines 176 to 185 (read_stored)
+    stored = {}
+    for model_size in MODEL_IDS:
+        path = reference_path(model_size)
+        if not path.exists():
+            continue
+        with safe_open(path, "np") as tensors:
+            metadata = json.loads(tensors.metadata()["reference"])
+            hidden = tensors.get_tensor(f"{HIDDEN_STATES_CONFIG}/hidden_states")
+        stored[model_size] = (hidden, bool(metadata.get("streamed", False)))
+    return stored</code></pre>
+  <ul>
+    <li><b><code>stored_range</code></b> takes the largest absolute value of each token in each of the L + 1 states, then the state and the token with the largest value. Block 0 is the state before block 1.</li>
+    <li><b><code>read_stored</code></b> reads the hidden states and the flag "streamed" of each reference file, not the tokens. <code>stored_rows</code> writes one Markdown row for each model size, with "full model" or "streamed". <code>_stored_section</code> adds the heading, the rows and the caption. <code>write_table</code> takes the stored values as a new optional argument; without them it writes no Section 3. <code>main</code> passes <code>read_stored()</code>.</li>
+    <li><b>The result.</b> ViT-7B/16 in fp32 reaches 13,537.4 after block 40, on the register token R2: 20.7 % of the fp16 maximum 65,504. On <code>mlx</code>, the four half modes give 13,504.0 to 13,544.2 for the same configuration (Table 21 of <code>verify.html</code>). ViT-L/16 reaches 157,130.4 and ViT-H+/16 131,447.7 in fp32: 239.9 % and 200.7 % of 65,504 (<code>results/token-range-mlx.md</code>, Table 3). <a href="05-3-numeric-range.html">05-3</a> explains the token range.</li>
   </ul>
 </section>
 
@@ -961,8 +1357,8 @@ def check_run_rule(model_size: str, bytes_per_weight: int, label: str) -> None:
     <li>All 60 lines of both runs are "done", valid and finite. A bf16-cast output of <code>mlx</code> moves to the host as a view of uint16 ("view-uint16"); NumPy has no bf16.</li>
   </ul>
   <figure>
-    <div class="fig"><svg viewBox="0 0 960 400" role="img" aria-labelledby="fig5-title" font-family="-apple-system, Helvetica Neue, Arial, sans-serif">
-      <title id="fig5-title">Paired ratio of each round at P2, frame embedding, for the build and the re-run, in each dtype mode</title>
+    <div class="fig"><svg viewBox="0 0 960 400" role="img" aria-labelledby="fig7-title" font-family="-apple-system, Helvetica Neue, Arial, sans-serif">
+      <title id="fig7-title">Paired ratio of each round at P2, frame embedding, for the build and the re-run, in each dtype mode</title>
       <rect width="960" height="400" fill="#ffffff"/>
       <g stroke="#e3e8e7">
         <line x1="385.7" x2="385.7" y1="44" y2="332"/><line x1="471.4" x2="471.4" y1="44" y2="332"/>
@@ -1030,7 +1426,7 @@ def check_run_rule(model_size: str, bytes_per_weight: int, label: str) -> None:
         <text x="20" y="390" text-anchor="start">Black tick: the median of the three rounds. Left of the dashed line: torch-mps had the higher throughput in that round. Hover over a dot to see its value.</text>
       </g>
     </svg></div>
-    <figcaption><b>Figure 5.</b> The paired ratio of each round, frame embedding. Filled dots: the build. Open dots: the re-run, with the same code, versions, run order, power state and thermal state. In the cast modes the medians of the two runs lie on different sides of 1.00, and single rounds of the build also fall on both sides. In fp32 and in the autocast modes, the medians of both runs are above 1.00. Round 1 of fp32 is below 1.00 in both runs, because <code>torch-mps</code> ran fp32 faster in round 1 than in rounds 2 and 3. Data: Table 6 of <code>verify.html</code>.</figcaption>
+    <figcaption><b>Figure 7.</b> The paired ratio of each round, frame embedding. Filled dots: the build. Open dots: the re-run, with the same code, versions, run order, power state and thermal state. In the cast modes the medians of the two runs lie on different sides of 1.00, and single rounds of the build also fall on both sides. In fp32 and in the autocast modes, the medians of both runs are above 1.00. Round 1 of fp32 is below 1.00 in both runs, because <code>torch-mps</code> ran fp32 faster in round 1 than in rounds 2 and 3. Data: Table 6 of <code>verify.html</code>.</figcaption>
   </figure>
   <div class="table-wrap">
     <table>
@@ -1049,7 +1445,7 @@ def check_run_rule(model_size: str, bytes_per_weight: int, label: str) -> None:
       </tbody>
     </table>
   </div>
-  <p class="caption"><b>Table 9.</b> Throughput and paired ratio of the frame embedding at P2, from Table 6 of <code>verify.html</code>. Build: <code>results/bench-all-sizes.jsonl</code>; our computation from its 30 lines gives the same values. Re-run: a results file of the Verify stage outside the repo. The throughput columns give the median of the three rounds. The patch embeddings give the same medians within 0.001. This is a paired ratio, not a speedup: Step 6 measures the speedup against the baseline row of ADR 0004.</p>
+  <p class="caption"><b>Table 11.</b> Throughput and paired ratio of the frame embedding at P2, from Table 6 of <code>verify.html</code>. Build: <code>results/bench-all-sizes.jsonl</code>; our computation from its 30 lines gives the same values. Re-run: a results file of the Verify stage outside the repo. The throughput columns give the median of the three rounds. The patch embeddings give the same medians within 0.001. This is a paired ratio, not a speedup: Step 6 measures the speedup against the baseline row of ADR 0004.</p>
   <p class="warn"><b>What the data supports (finding F2 of <code>verify.html</code>).</b> In the cast modes, the median paired ratio is within about 4 % of 1, and its sign is not stable: 1.028 and 1.039 in the build, 0.968 and 0.973 in the re-run. Inside the build, fp16-cast round 1 gave 0.964 and bf16-cast round 2 gave 1.006. The spread between the two runs is about 20 % in throughput: more than the gap between the backends. So in the cast modes, <code>mlx</code> and <code>torch-mps</code> have about the same throughput at P2. This page does not say that <code>mlx</code> is faster in the cast modes. In fp32 (1.094 to 1.118) and in the autocast modes (1.096 to 1.159), <code>mlx</code> is ahead in both runs.</p>
   <p><b>Why the throughput moved between the runs.</b> Round 1 of the re-run matched the build within 5 %. Rounds 2 and 3 of the re-run were 16.9 to 28.1 % faster than the build, on both backends: <code>torch-mps</code> gained 21.5 to 28.1 %, <code>mlx</code> 16.9 to 20.3 %. The configuration fields, the versions, the power and the thermal state are the same in both runs. No recorded difference explains the change (Section 5 of <code>verify.html</code>). Step 6 takes more rounds or reports the spread between runs.</p>
   <div class="table-wrap">
@@ -1063,7 +1459,7 @@ def check_run_rule(model_size: str, bytes_per_weight: int, label: str) -> None:
       </tbody>
     </table>
   </div>
-  <p class="caption"><b>Table 10.</b> The cost of the autocast casts on <code>mlx</code> (risk R30): the throughput of an autocast mode divided by the throughput of the cast mode of the same half dtype, in the same round. From Table 7 of <code>verify.html</code>. On <code>mlx</code>, the autocast modes are about 3 to 5 % slower than the cast modes in both runs. Without <code>mx.compile</code>, each block runs the extra element-wise casts of Figure 2. On <code>torch-mps</code> the gap is larger: re-run medians 10.42 against 12.43 img/s in fp16.</p>
+  <p class="caption"><b>Table 12.</b> The cost of the autocast casts on <code>mlx</code> (risk R30): the throughput of an autocast mode divided by the throughput of the cast mode of the same half dtype, in the same round. From Table 7 of <code>verify.html</code>. On <code>mlx</code>, the autocast modes are about 3 to 5 % slower than the cast modes in both runs. Without <code>mx.compile</code>, each block runs the extra element-wise casts of Figure 2. On <code>torch-mps</code> the gap is larger: re-run medians 10.42 against 12.43 img/s in fp16.</p>
   <p>Why is <code>mlx</code> ahead in the autocast modes but not in the cast modes? One possible reason, not measured: <code>torch.autocast</code> casts the fp32 weights at each matmul, and <code>mlx</code> casts them once at the load (Section 3.1). The memory columns agree with this reading: the <code>torch-mps</code> autocast worker needs about 0.7 GB more than its cast worker, and the <code>mlx</code> workers need the same memory in both modes.</p>
   <div class="table-wrap">
     <table>
@@ -1077,7 +1473,7 @@ def check_run_rule(model_size: str, bytes_per_weight: int, label: str) -> None:
       </tbody>
     </table>
   </div>
-  <p class="caption"><b>Table 11.</b> Memory of the P2 workers, from Table 8 of <code>verify.html</code>. Peak memory: the median of the lifetime maximum of the process footprint. The load peak, the limit and the validity are the same in both runs; each load has a cache of 0 bytes. No <code>mlx</code> worker imported torch (15 of 15 lines in both runs).</p>
+  <p class="caption"><b>Table 13.</b> Memory of the P2 workers, from Table 8 of <code>verify.html</code>. Peak memory: the median of the lifetime maximum of the process footprint. The load peak, the limit and the validity are the same in both runs; each load has a cache of 0 bytes. No <code>mlx</code> worker imported torch (15 of 15 lines in both runs).</p>
 
   <h3>9.1 <code>run_worker_subprocess</code></h3>
   <p>Each worker of the benchmark runs in its own subprocess, as the run rules ask. The first fix session moved the runner of the workers into <code>bench.py</code>, so <code>scripts/bench_mlx_port.py</code>, <code>scripts/cross_check.py</code> and <code>scripts/benchmark.py</code> share one copy (finding F20):</p>
@@ -1116,17 +1512,21 @@ def check_run_rule(model_size: str, bytes_per_weight: int, label: str) -> None:
     <table>
       <thead><tr><th>No.</th><th>Criterion</th><th>Measured</th><th>Result</th></tr></thead>
       <tbody>
+        <tr><td>AC6 (path D4-Y)</td><td>ViT-7B/16 (D4)</td><td>The streamed path equals the five stored files: largest difference 0.0 for tokens and hidden states (Table 9). 48 of 48 <code>mlx</code> rows pass (Table 10). Plan Table 20: "Yes, run it", 2026-11-07</td><td>pass (path D4-Y)</td></tr>
+        <tr><td>Plan Table 7, <code>torch-mps</code> (path D4-Y)</td><td>ViT-7B/16 parity on <code>torch-mps</code></td><td>The 24 <code>torch-mps</code> rows of fp16-cast and bf16-cast pass (Table 10)</td><td>pass (path D4-Y)</td></tr>
         <tr><td>AC12</td><td>The key map is complete for all six model sizes</td><td>Table 3: 1 dropped, 0 unknown, 0 missing, 0 shape differences in each model size; active memory growth 2,448 to 8,048 bytes</td><td>pass</td></tr>
         <tr><td>AC13</td><td>Dtype modes</td><td>Five keys in the order of <code>THRESHOLDS</code>; every row of plan Table 3 in every dtype mode (T22, hooks of the numerics auditor); T24 and T25 green. The row "SDPA" does not hold on this Mac (F3, Section 5). The activation rounds once (T23, <a href="05-1-swiglu.html">05-1</a>)</td><td>partial (F3)</td></tr>
         <tr><td>AC14</td><td>Load of one tensor at a time</td><td>H2: 44,075,520 bytes ≤ 54,191,002 bytes, cache 0. T34: within the formula. ViT-7B/16: 13,532.7 MB (cast modes) and 13,534.7 MB (autocast modes) ≤ 16,252.7 MB. Every load: 80.8 % to 83.5 % of its target, cache 0. After the fix of F1 also above the lower bound (Table 7)</td><td>pass</td></tr>
-        <tr><td>AC15</td><td>Run-rule guards</td><td>T7, T11 to T15 green. Both loaders raise <code>RunRuleError</code> before every file read and the memory check. 0 loads of ViT-7B/16 with fp32 weights in <code>memory-checks.log</code> and <code>runs.jsonl</code></td><td>pass</td></tr>
-        <tr><td>AC17</td><td>Benchmark at P2 (report only)</td><td>30 lines "done" in each run, all valid and finite; Tables 9 to 11. The sign of the cast-mode ratio is not stable (F2)</td><td>pass (report only)</td></tr>
+        <tr><td>AC15</td><td>Run-rule guards</td><td>T7, T11 to T15 green. Both loaders raise <code>RunRuleError</code> before every file read and the memory check. 0 loads of ViT-7B/16 with fp32 weights in <code>memory-checks.log</code> and <code>runs.jsonl</code>. Path D4-Y: the guards are the same (probe y7); 0 loads of the whole model in fp32; 2 streamed lines "needs 4.8 GB"; <code>test_streamed_frees_each_block</code> green; peak 1.75 GB (Figure 6)</td><td>pass</td></tr>
+        <tr><td>AC17</td><td>Benchmark at P2 (report only)</td><td>30 lines "done" in each run, all valid and finite; Tables 11 to 13. The sign of the cast-mode ratio is not stable (F2)</td><td>pass (report only)</td></tr>
         <tr><td>AC18</td><td>The interfaces of Steps 2 to 4 stay the same</td><td><code>stored</code>, <code>mlx_model</code>, <code>mlx_weights</code>, <code>memory</code>, <code>bench</code>, <code>flops</code>, <code>parity</code>, <code>footprint</code> and <code>hub</code> import neither torch nor transformers; the torch-mps test ids are the same</td><td>pass</td></tr>
         <tr><td>AC19</td><td>Run rules</td><td>0 overlaps of heavy jobs in the build window; a memory check before each model load; limit = need in the 15 <code>mlx</code> benchmark lines; the first <code>mlx</code> load of ViT-7B/16 (04:24:59 UTC) after H2 and after the gate of job 5</td><td>pass</td></tr>
+        <tr><td>AC20</td><td>Tests and lint after path D4-Y</td><td>ruff clean. Default session: 717 passed, 4 skipped. Slow session (<code>-k 7B</code> and <code>-k "not 7B"</code>): 1,161 passed, 62 skipped, 40 xfailed, 0 failed; the 40 xfails are the pairs of <code>EXPECTED_FP16_OVERFLOW</code></td><td>pass</td></tr>
+        <tr><td>AC21</td><td>Explainers, on path D4-Y also <code>run_torch_streamed</code>, <code>ShardIndex</code> and <code>OuterParts</code></td><td>Sections 8.1 to 8.9 of this page cover <code>run_torch_streamed</code>, <code>ShardIndex</code>, <code>OuterParts</code>, <code>required_streamed_bytes</code>, <code>streamed_label</code>, the new functions of the two scripts, the fp32 token range of ViT-7B/16 and finding V3</td><td>done (Learn stage; no separate agent verified it)</td></tr>
       </tbody>
     </table>
   </div>
-  <p class="caption"><b>Table 12.</b> The acceptance criteria of plan Table 19 that the code of this page serves, from Table 3 and Sections 9 and 10 of <code>verify.html</code>. After the two fix sessions: default session 699 passed, 4 skipped; slow session 1,053 passed, 152 skipped, 40 xfailed, 0 failed.</p>
+  <p class="caption"><b>Table 14.</b> The acceptance criteria of plan Table 19 that the code of this page serves, from Table 3 and Sections 9 and 10 of <code>verify.html</code>, and for path D4-Y from Tables 20 and 21 of <code>verify.html</code>. The test counts of AC20 are those of path D4-Y. Before path D4-Y, after the two fix sessions, the counts were: default session 699 passed, 4 skipped; slow session 1,053 passed, 152 skipped, 40 xfailed, 0 failed.</p>
 </section>
 
 <section id="code">
@@ -1152,13 +1552,31 @@ def check_run_rule(model_size: str, bytes_per_weight: int, label: str) -> None:
         <tr><td><code>RunRuleError</code></td><td><code>memory.py</code></td><td class="num">32–33</td><td>new</td><td>8</td></tr>
         <tr><td><code>check_run_rule</code></td><td><code>memory.py</code></td><td class="num">36–51</td><td>new</td><td>8</td></tr>
         <tr><td><code>record_load_peak</code></td><td><code>memory.py</code></td><td class="num">111–124</td><td>new</td><td>6.5</td></tr>
-        <tr><td><code>load_torch_backbone</code> (the guard)</td><td><code>reference.py</code></td><td class="num">112–137; guard 134</td><td>changed: <code>check_run_rule</code> before the memory check</td><td>8</td></tr>
+        <tr><td><code>load_torch_backbone</code> (the guard)</td><td><code>reference.py</code></td><td class="num">148–173; guard 170</td><td>changed: <code>check_run_rule</code> before the memory check</td><td>8</td></tr>
         <tr><td><code>DTYPE_BYTES</code>, <code>bytes_per_weight</code></td><td><code>bench.py</code></td><td class="num">43–44; 229–250</td><td>new, fix of F20</td><td>3.1, 8</td></tr>
         <tr><td><code>run_worker_subprocess</code></td><td><code>bench.py</code></td><td class="num">414–454</td><td>new, fix of F20</td><td>9.1</td></tr>
+        <tr class="group"><td colspan="5">Path D4-Y: the streamed reference</td></tr>
+        <tr><td><code>STREAMED_ATTN_IMPLEMENTATION</code>, <code>BLOCK_KEY</code>, <code>SAFETENSORS_DTYPE_BYTES</code></td><td><code>reference.py</code></td><td class="num">126–131</td><td>new</td><td>8.3, 8.4</td></tr>
+        <tr><td><code>ShardIndex</code>: <code>__init__</code>, <code>num_blocks</code>, <code>block_keys</code>, <code>outer_keys</code>, <code>block_bytes</code>, <code>outer_bytes</code>, <code>streamed_weight_bytes</code>, <code>read</code>, <code>block</code></td><td><code>reference.py</code></td><td class="num">222–343</td><td>new</td><td>8.3</td></tr>
+        <tr><td><code>_check_materialized</code></td><td><code>reference.py</code></td><td class="num">346–350</td><td>new</td><td>8.4</td></tr>
+        <tr><td><code>OuterParts</code>, <code>OuterParts.from_shards</code></td><td><code>reference.py</code></td><td class="num">353–392</td><td>new</td><td>8.4</td></tr>
+        <tr><td><code>streamed_label</code></td><td><code>reference.py</code></td><td class="num">395–401</td><td>new</td><td>8.5</td></tr>
+        <tr><td><code>required_streamed_bytes</code></td><td><code>reference.py</code></td><td class="num">404–416</td><td>new</td><td>8.5</td></tr>
+        <tr><td><code>run_torch_streamed</code></td><td><code>reference.py</code></td><td class="num">419–485</td><td>new</td><td>8.2, 8.5, 8.7</td></tr>
+        <tr><td><code>HIDDEN_STATES_KEY</code>, <code>CHECK_TARGET</code>, <code>STREAMED_RUN_RULE</code></td><td><code>scripts/make_reference.py</code></td><td class="num">77–85</td><td>new</td><td>8.1, 8.8</td></tr>
+        <tr><td><code>reference_metadata</code>, <code>_save_reference</code></td><td><code>scripts/make_reference.py</code></td><td class="num">146–176; 179–185</td><td>new: out of <code>run_child</code></td><td>8.8</td></tr>
+        <tr><td><code>run_child</code></td><td><code>scripts/make_reference.py</code></td><td class="num">188–214</td><td>changed: uses <code>reference_metadata</code> and <code>_save_reference</code></td><td>8.8</td></tr>
+        <tr><td><code>streamed_differences</code></td><td><code>scripts/make_reference.py</code></td><td class="num">217–251</td><td>new</td><td>8.8</td></tr>
+        <tr><td><code>run_streamed_child</code></td><td><code>scripts/make_reference.py</code></td><td class="num">254–292</td><td>new</td><td>8.8</td></tr>
+        <tr><td><code>load_ratio</code></td><td><code>scripts/make_reference.py</code></td><td class="num">300–325</td><td>changed: ignores the streamed lines</td><td>8.8</td></tr>
+        <tr><td><code>run_streamed</code></td><td><code>scripts/make_reference.py</code></td><td class="num">385–447</td><td>new</td><td>8.8</td></tr>
+        <tr><td><code>main</code></td><td><code>scripts/make_reference.py</code></td><td class="num">450–496</td><td>changed: <code>--streamed</code>, <code>--check</code></td><td>8.8</td></tr>
+        <tr><td><code>stored_range</code>, <code>stored_rows</code>, <code>read_stored</code>, <code>_stored_section</code></td><td><code>scripts/token_range_table.py</code></td><td class="num">133–185; 252–271</td><td>new</td><td>8.9</td></tr>
+        <tr><td><code>write_table</code>, <code>main</code></td><td><code>scripts/token_range_table.py</code></td><td class="num">188–249; 274–279</td><td>changed: the optional argument <code>stored</code></td><td>8.9</td></tr>
       </tbody>
     </table>
   </div>
-  <p class="caption"><b>Table 13.</b> The code that this page explains, with the line numbers of the working tree on 2026-11-07 (commit <code>01cc631</code> plus the uncommitted fixes). All files are in <code>src/dinov3_apple/</code>. Table 1 of <code>plan.html</code> assigns these names to this page, except <code>bytes_per_weight</code> and <code>run_worker_subprocess</code>, which the fix of F20 added after the plan (Section 9.1 of <code>verify.html</code> asks an explainer to cover them). The test helpers <code>run_rule_skip</code>, <code>load_peak_target</code>, <code>load_peak_lower_bound</code> and <code>check_load_report</code> are in <code>tests/</code> (Sections 7 and 8). <code>run_torch_streamed</code>, <code>ShardIndex</code> and <code>OuterParts</code> belong to path D4-Y and do not exist (Section 8.1). SwiGLU, <code>MLP.activation</code>, <code>MLP.hidden</code> and <code>block_parameter_names</code> are on <a href="05-1-swiglu.html">05-1</a>; <code>TokenRange</code>, <code>run_mlx_token_range</code> and <code>run_mlx_hidden_states</code> on <a href="05-3-numeric-range.html">05-3</a>.</p>
+  <p class="caption"><b>Table 15.</b> The code that this page explains, with the line numbers of the working tree on 2026-11-07 (commit <code>ad93caf</code> plus the uncommitted changes of path D4-Y). A file without a folder is in <code>src/dinov3_apple/</code>. Table 1 of <code>plan.html</code> assigns these names to this page, except <code>bytes_per_weight</code> and <code>run_worker_subprocess</code>, which the fix of F20 added after the plan (Section 9.1 of <code>verify.html</code> asks an explainer to cover them). The test helpers <code>run_rule_skip</code>, <code>load_peak_target</code>, <code>load_peak_lower_bound</code> and <code>check_load_report</code> are in <code>tests/</code> (Sections 7 and 8). The rows of path D4-Y are the functions that path D4-Y added or changed in <code>src/</code> and in the two scripts (Table 1 of <code>plan.html</code> and Table 21 of <code>verify.html</code>). The test helpers of path D4-Y are in <code>tests/</code>: the fixture <code>backbone_slot</code> of <code>conftest.py</code>, <code>reproduced_tokens</code> of <code>test_reference.py</code> and <code>save_small_model</code>, which moved to <code>small_model.py</code> (Section 8.7). SwiGLU, <code>MLP.activation</code>, <code>MLP.hidden</code> and <code>block_parameter_names</code> are on <a href="05-1-swiglu.html">05-1</a>; <code>TokenRange</code>, <code>run_mlx_token_range</code> and <code>run_mlx_hidden_states</code> on <a href="05-3-numeric-range.html">05-3</a>.</p>
 </section>
 
 <section id="surprises">
@@ -1172,6 +1590,11 @@ def check_run_rule(model_size: str, bytes_per_weight: int, label: str) -> None:
     <li class="note"><b>The half SDPA kernel is not fp32 inside.</b> On this Mac, MLX runs a kernel that computes Q · K<sup>T</sup> and P · V with the hardware matrix operation and relaxed precision: about 11 bits at one internal step. 48 to 57 % of the fp16 outputs and 10.5 to 13.1 % of the bf16 outputs differ from the float64 result rounded once. No parity result changes.</li>
     <li class="note"><b>"At most one fp32 source tensor is alive" was not exact.</b> The loader references at most one fp32 source; MLX can release it after the next read. ViT-S/16 in bf16-cast measured 1,536 bytes above the exact bound: one fp32 bias. <code>mx.synchronize()</code> closes the gap but makes the load 8.2 to 17.7 % slower, so the code stays.</li>
     <li class="note"><b>A loader that evaluates nothing passed every load-peak check.</b> Before the fix of F1, the checks had only an upper bound. A load peak of about 0 bytes passed. Now the bytes of the mapped tensors are the lower bound. In bf16-cast, each measured load peak lies 0.6 to 2.0 percentage points of its target above it; in fp32, the load peak equals the lower bound within 0.8 MB.</li>
+    <li class="note"><b>Streaming changes no bit.</b> The streamed path loads the weights block by block and runs the 12 configurations block by block. Against the full-model reference files of five model sizes, its largest difference is exactly 0.0, for the tokens and for the hidden states (Table 9). The same classes, the same attention and batch size 1 give the same operations on the same inputs.</li>
+    <li class="note"><b>A block built alone uses the eager attention.</b> The full model of Step 2 used "sdpa". A <code>DINOv3ViTLayer</code> built from a plain config uses the eager attention, and the eager attention gives other bits: mutation D3 makes 7 tests red. So <code>OuterParts.from_shards</code> sets <code>attn_implementation</code> explicitly.</li>
+    <li class="note"><b>The "load" of a block takes almost no time.</b> safetensors maps the shards, and the pages of a tensor enter memory at its first use. So <code>load_time_s</code> of the ViT-7B/16 reference run is 0.33 s, in a run time of 118.74 s. The disk reads count as run time, and the resident pages count in the peak.</li>
+    <li class="note"><b>The peak is 2.6 times one block.</b> The largest block and the outer parts hold 0.68 GB in fp32; the peak was 1.75 GB (our computation of the ratio). The process before the run, the mapped pages and the states of the 12 configurations add the rest. It is still 6.5 % of the fp32 weights of the whole model.</li>
+    <li class="note"><b>The largest model has a small fp32 token range.</b> ViT-7B/16 reaches 13,537.4 in fp32: 20.7 % of the fp16 maximum. ViT-L/16 reaches 157,130.4 and ViT-H+/16 131,447.7: above the fp16 maximum (<code>results/token-range-mlx.md</code>, Table 3).</li>
     <li class="note"><b>Round 1 of fp32 favours <code>torch-mps</code> in both runs.</b> The fp32 paired ratio of round 1 is 0.908 (build) and 0.860 (re-run), because <code>torch-mps</code> ran fp32 faster in round 1 than in rounds 2 and 3. The median of three rounds hides this; one round alone would give the opposite answer.</li>
   </ol>
 </section>
@@ -1179,14 +1602,15 @@ def check_run_rule(model_size: str, bytes_per_weight: int, label: str) -> None:
 <section id="sources">
   <h2>13 Sources</h2>
   <ul>
-    <li>Repo files: <code>specs/05-all-sizes/explore.html</code> (Table 1, findings 5, 8 and 9, Tables 6, 7, 12 to 14, Figure 2), <code>specs/05-all-sizes/plan.html</code> (Tables 1 to 5, 7, 10, 12, 14, 16, 17 and 19, Sections 3.5, 3.8 and 9), <code>specs/05-all-sizes/verify.html</code> (Tables 3 to 10 and 13 to 18, findings F1 to F4, F10, F11, F17, F18 and F20, Section 6), <code>results/bench-all-sizes.jsonl</code>, <code>src/dinov3_apple/mlx_model.py</code>, <code>mlx_weights.py</code>, <code>memory.py</code>, <code>reference.py</code>, <code>bench.py</code>, <code>tests/parity_checks.py</code>, <code>tests/conftest.py</code>, <code>GLOSSARY.md</code>, and <code>tests/fixtures/generated/parity/memory-checks.log</code> (not in git).</li>
+    <li>Repo files: <code>specs/05-all-sizes/explore.html</code> (Table 1, findings 5, 8 and 9, Tables 6, 7, 12 to 14, Figure 2), <code>specs/05-all-sizes/plan.html</code> (Tables 1 to 5, 7, 10, 12, 14, 16, 17, 19 and 20, Sections 3.5, 3.8 and 9), <code>specs/05-all-sizes/verify.html</code> (Tables 3 to 10 and 13 to 18, findings F1 to F4, F10, F11, F17, F18 and F20, Section 6; Section 12 with Tables 20 to 26, Figure 3 and findings V1 to V6), <code>results/bench-all-sizes.jsonl</code>, <code>results/token-range-mlx.md</code>, <code>src/dinov3_apple/mlx_model.py</code>, <code>mlx_weights.py</code>, <code>memory.py</code>, <code>reference.py</code>, <code>bench.py</code>, <code>scripts/make_reference.py</code>, <code>scripts/token_range_table.py</code>, <code>tests/parity_checks.py</code>, <code>tests/conftest.py</code>, <code>tests/test_streamed_reference.py</code>, <code>tests/test_reference.py</code>, <code>GLOSSARY.md</code> ("Shard", "Outer parts", "Streamed reference"), and <code>tests/fixtures/generated/parity/memory-checks.log</code> and <code>tests/fixtures/generated/reference/runs.jsonl</code> (not in git).</li>
     <li>The <code>config.json</code> files and the safetensors headers of the six model sizes in the Hugging Face cache, read on 2026-11-07 without a tensor load.</li>
     <li>ADR 0003 (the parity thresholds), ADR 0004 (the baseline row), ADR 0005 (fp32 on <code>mlx</code> with TF32 off) in <code>docs/adr/</code>.</li>
     <li>Explainers: <a href="04-1-patch-embedding.html">04-1</a> (the key map and the Step 4 loader), <a href="04-2-rope.html">04-2</a> (RoPE), <a href="04-5-mlp.html">04-5</a> (<code>run_mlx</code> and the first speed result).</li>
     <li>MLX 0.32.4: <code>mx.load</code>, <code>mx.eval</code>, <code>mx.clear_cache</code>, <code>mx.get_peak_memory</code>, <code>mx.set_memory_limit</code>, <code>mx.fast.scaled_dot_product_attention</code>, MIT. Public: <a href="https://github.com/ml-explore/mlx">github.com/ml-explore/mlx</a>.</li>
-    <li>Hugging Face transformers 5.22.1: <code>models/dinov3_vit/modeling_dinov3_vit.py</code> (<code>DINOv3ViTModel</code>), Apache-2.0. Public: <a href="https://github.com/huggingface/transformers/blob/main/src/transformers/models/dinov3_vit/modeling_dinov3_vit.py">github.com/huggingface/transformers</a>.</li>
+    <li>PyTorch 2.15.0: <code>torch.device("meta")</code>, <code>nn.Module.load_state_dict(..., assign=True)</code>, <code>torch.inference_mode</code>, BSD-3-Clause. safetensors 0.8.0: <code>safe_open</code>, <code>get_slice</code>, <code>get_tensor</code>, Apache-2.0. Versions from <code>uv.lock</code>.</li>
+    <li>Hugging Face transformers 5.22.1: <code>models/dinov3_vit/modeling_dinov3_vit.py</code> (<code>DINOv3ViTModel</code>, <code>DINOv3ViTEmbeddings</code>, <code>DINOv3ViTLayer</code>, <code>DINOv3ViTRopePositionEmbedding</code>), Apache-2.0. Public: <a href="https://github.com/huggingface/transformers/blob/main/src/transformers/models/dinov3_vit/modeling_dinov3_vit.py">github.com/huggingface/transformers</a>.</li>
     <li>DINOv3 paper: Siméoni et al., arXiv 2508.10104 (August 2025).</li>
-    <li>Computations of the agent for this page: the weight bytes of Table 1, the 40.3 GB sum, the shares of the stream parameters, the shares of the need and the target in Figure 4, the scale 128<sup>−0.5</sup>, and the paired ratios of the build from its 30 JSON lines.</li>
+    <li>Computations of the agent for this page: the weight bytes of Table 1, the 40.3 GB sum, the shares of the stream parameters, the shares of the need and the target in Figure 4, the scale 128<sup>−0.5</sup>, the paired ratios of the build from its 30 JSON lines, the sum of the streamed weight bytes of ViT-7B/16, the shares in Figure 6 (2.5 %, 36.4 %, 6.5 %) and the ratio of the peak to one block (2.6).</li>
   </ul>
 </section>
 

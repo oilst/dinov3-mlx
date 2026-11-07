@@ -19,8 +19,7 @@ from fakes import VIT7B16_PARAMETER_COUNT, fail_if_called
 from mlx.utils import tree_flatten
 from parity_checks import load_peak_lower_bound, load_peak_target
 from safetensors import safe_open
-from safetensors.torch import save_file
-from small_model import small_hf_model
+from small_model import save_small_model, small_hf_model
 
 from dinov3_apple.bench import DTYPE_OF_MODE, bytes_per_weight
 from dinov3_apple.hub import MODEL_IDS, WeightsNotFoundError, weights_dir
@@ -394,30 +393,6 @@ def test_load_mlx_backbone_sets_memory_limit_to_need(monkeypatch: pytest.MonkeyP
     assert limits == [4_103_663_411, 4_051_831_706]
 
 
-def _save_small_model(hf_model: torch.nn.Module, folder: Path, files: int) -> None:
-    """Save the weights of a small model as one file, or as two files and an index, with the key
-    spelling of the Hub files (layer.{i}.…) and its config.json."""
-    folder.mkdir()
-    state = {
-        name.removeprefix("model."): tensor.detach().contiguous()
-        for name, tensor in hf_model.state_dict().items()
-    }
-    hf_model.config.to_json_file(folder / "config.json")
-    if files == 1:
-        save_file(state, folder / "model.safetensors", metadata={"format": "pt"})
-        return
-    names = list(state)
-    # The split runs through block 0, as the files of ViT-7B/16 split some blocks.
-    split = next(i for i, name in enumerate(names) if name.startswith("layer.0.mlp"))
-    weight_map = {}
-    for part, chunk in enumerate((names[:split], names[split:]), start=1):
-        file = f"model-0000{part}-of-00002.safetensors"
-        save_file({n: state[n] for n in chunk}, folder / file, metadata={"format": "pt"})
-        weight_map |= dict.fromkeys(chunk, file)
-    index = {"metadata": {"total_size": 0}, "weight_map": weight_map}
-    (folder / "model.safetensors.index.json").write_text(json.dumps(index))
-
-
 def test_load_mlx_backbone_reads_two_files(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, report: Callable[..., None]
 ) -> None:
@@ -429,8 +404,8 @@ def test_load_mlx_backbone_reads_two_files(
     specs/05-all-sizes/verify.html).
     """
     hf_model = small_hf_model(seed=3, name="vit7b16-shape")
-    _save_small_model(hf_model, tmp_path / "one", files=1)
-    _save_small_model(hf_model, tmp_path / "two", files=2)
+    save_small_model(hf_model, tmp_path / "one", files=1)
+    save_small_model(hf_model, tmp_path / "two", files=2)
     assert len(list((tmp_path / "two").glob("*.safetensors"))) == 2
     folders = {"one": tmp_path / "one", "two": tmp_path / "two"}
     # The lines of this small model must not reach memory-checks.log of the test session.

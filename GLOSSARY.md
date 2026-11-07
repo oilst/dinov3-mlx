@@ -108,6 +108,12 @@ The weights of one model size as MLX arrays, with the names and layouts of the M
 **Key map**:
 The map from a Hugging Face tensor name to the name of the MLX parameter (`map_key`). It drops the mask token and reshapes the patch embedding weight.
 
+**Shard**:
+One safetensors file of a model size whose weights are in more than one file. `model.safetensors.index.json` maps each tensor name to its shard.
+
+**Outer parts**:
+The parts of the backbone outside the blocks: the embeddings, the RoPE tables and the final layer norm (`OuterParts`).
+
 ## Outputs
 
 **Frame embedding**:

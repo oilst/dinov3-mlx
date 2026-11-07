@@ -2,7 +2,8 @@
 
 import math
 
-from token_range_table import write_table
+import numpy as np
+from token_range_table import stored_range, write_table
 
 
 def _line(model_size: str, dtype_mode: str, config: str, tokens: list[float]) -> dict:
@@ -50,3 +51,30 @@ def test_token_range_table() -> None:
     # The summary row of each model size and dtype mode.
     assert "| ViT-L/16 | fp32 | 98,256.0 | forest/224x224 | 2 | R3 | 150.0 % | 0 of 1 | – |" in text
     assert "| ViT-L/16 | fp16-cast | 900.0 | forest/224x224 | 1 | R2 | 1.4 % | 1 of 1 | 2 |" in text
+
+
+def test_token_range_table_from_the_stored_hidden_states() -> None:
+    """The fp32 token range of the hidden-states configuration from the reference files: the
+    largest absolute value, its block and token, and the value after the last block. ViT-7B/16
+    comes from its streamed reference file (Table 7 of specs/05-all-sizes/plan.html)."""
+    hidden = np.zeros((3, 6, 4), np.float32)
+    hidden[1, 2, 3] = -70_000.0  # after block 1, register token R2
+    hidden[2, 0, 0] = 500.0  # after block 2, the CLS token
+    assert stored_range(hidden) == {
+        "largest": 70_000.0,
+        "block": 1,
+        "token": "R2",
+        "last": 500.0,
+        "blocks": 2,
+    }
+    small = np.ones((3, 6, 4), np.float32)
+    text = write_table(
+        [_line("ViT-L/16", "fp32", "forest/224x224", [1.0, 2.0])],
+        stored={"ViT-7B/16": (hidden, True), "ViT-S/16": (small, False)},
+    )
+    rows = [row for row in text.splitlines() if row.startswith("| ViT-7B/16 | fp32 |")]
+    assert rows == ["| ViT-7B/16 | fp32 | streamed | 2 | 70,000.0 | 1 | R2 | 106.9 % | 500.0 |"]
+    assert "| ViT-S/16 | fp32 | full model | 2 | 1.0 | 0 | CLS | 0.0 % | 1.0 |" in text
+    assert text.index("| ViT-S/16 | fp32 | full model") < text.index("| ViT-7B/16 | fp32 |")
+    assert "## 3 fp32 from the stored hidden states" in text
+    assert "## 3" not in write_table([_line("ViT-L/16", "fp32", "forest/224x224", [1.0, 2.0])])

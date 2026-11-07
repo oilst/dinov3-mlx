@@ -44,7 +44,7 @@ a { color: var(--accent); }
 <main>
 <header>
   <h1>Numeric Range of the Tokens</h1>
-  <p>Explainer for roadmap Step 5. Date: 2026-11-07.</p>
+  <p>Explainer for roadmap Step 5. Date: 2026-11-07. Extended for path D4-Y on 2026-11-07: the fp32 values of ViT-7B/16 from its streamed reference.</p>
   <p class="steps">Step 5 explainers: <a href="05-1-swiglu.html">1 SwiGLU</a> · <a href="05-2-model-scaling.html">2 Model scaling, dtype modes and loading</a> · 3 Numeric range of the tokens (this page). Step 2: <a href="02-tokens-and-outputs.html">Tokens and outputs</a>.</p>
   <p class="steps">Previous: <a href="05-2-model-scaling.html">2 Model scaling, dtype modes and loading</a> · Next: none. This is the last explainer of Step 5.</p>
 </header>
@@ -71,14 +71,14 @@ a { color: var(--accent); }
 <section id="why">
   <h2>1 Why this explainer</h2>
   <p>The largest fp16 value is 65,504. A larger value becomes infinite (inf). Some register tokens of DINOv3 go above this value inside the backbone (<a href="02-tokens-and-outputs.html#registers">02, Section 5</a>). So the dtype mode decides if a model size gives a finite output. Step 5 records the <b>token range</b>: the largest absolute value in the token sequence before block 1 and after each block. It also records the largest value of three tensors inside each block: the attention branch output, the feed-forward hidden values and the feed-forward branch output. The record covers 6 model sizes, the 5 dtype modes and the 12 configurations of each model size, on <code>mlx</code>.</p>
-  <p>This page explains the code of the record, the code that turns an fp16 overflow into an expected failure, and the measured values. The values come from <code>results/token-range-mlx.md</code> (test W7, 2026-11-07, mlx 0.32.4), from <code>specs/05-all-sizes/verify.html</code> and from <code>explore.html</code>. The values after one block come from the token-range lines in <code>tests/fixtures/generated/parity/mlx.jsonl</code>, which git ignores; <code>results/token-range-mlx.md</code> is made from the same lines. The agent that wrote this page ran no test, no model and no GPU work.</p>
+  <p>This page explains the code of the record, the code that turns an fp16 overflow into an expected failure, and the measured values. The values come from <code>results/token-range-mlx.md</code> (test W7, 2026-11-07, mlx 0.32.4), from <code>specs/05-all-sizes/verify.html</code> and from <code>explore.html</code>. The values after one block come from the token-range lines in <code>tests/fixtures/generated/parity/mlx.jsonl</code>, which git ignores; <code>results/token-range-mlx.md</code> is made from the same lines. The fp32 values of ViT-7B/16 come from its streamed reference file on <code>torch-cpu</code> (path D4-Y, Section 8). The agent that wrote this page ran no test, no model and no GPU work. It read the stored reference files and the token-range lines with NumPy for Sections 8, 10 and 12.</p>
   <p>The result in five numbers:</p>
   <ul>
     <li>A register token of ViT-L/16 reaches 157,130 in fp32 (<code>iss-kibo-lab</code>, 224 × 224 px, after block 23). That is 239.9 % of the fp16 maximum. Over the 12 configurations the largest value is 158,433.</li>
     <li>ViT-H+/16 goes above 65,504 only when the short side of the input is 224 px: 116,642 to 149,750. At 448 and 512 px it stays at 52,206 to 59,863.</li>
     <li>The largest finite fp16 value is 59,776: 91.3 % of the fp16 maximum (ViT-H+/16, fp16-cast, <code>iss-conference</code> at 448 × 448 px).</li>
     <li>In fp16-autocast the largest fp16 tensor value is 52,128: 79.6 % of the fp16 maximum (the feed-forward branch output of ViT-L/16 in block 1).</li>
-    <li>ViT-7B/16 reaches only 13,582: 20.7 % of the fp16 maximum. No ViT-7B/16 pair joined the list of expected failures.</li>
+    <li>ViT-7B/16 reaches only 13,537.4 in fp32 (streamed reference, <code>iss-kibo-lab</code> at 224 × 224 px, after block 40) and at most 13,582 in the four half dtype modes: 20.7 % of the fp16 maximum. No ViT-7B/16 pair joined the list of expected failures.</li>
   </ul>
   <div class="table-wrap">
     <table>
@@ -91,10 +91,16 @@ a { color: var(--accent); }
         <tr><td class="name"><code>FP16_OVERFLOW</code></td><td><code>parity.py</code> 36–38</td><td>new</td><td>The xfail reason of an expected fp16 overflow.</td><td>T14</td></tr>
         <tr><td class="name"><code>EXPECTED_FP16_OVERFLOW</code></td><td><code>parity.py</code> 39–43</td><td>new</td><td>The (model size, dtype mode) pairs with evidence of an fp16 overflow.</td><td>T14</td></tr>
         <tr><td class="name"><code>check_finite</code></td><td><code>tests/parity_checks.py</code> 61–77</td><td>new</td><td>Records a non-finite output. Then it xfails a listed pair and fails any other pair.</td><td>T14, W5, W6, the <code>torch-mps</code> parity tests</td></tr>
+        <tr class="group"><td colspan="5">Path D4-Y: the fp32 token range of the stored hidden states (Section 8.1)</td></tr>
+        <tr><td class="name"><code>run_torch_streamed</code></td><td><code>reference.py</code> 420–485</td><td>new (path D4-Y)</td><td>The streamed reference: the fp32 weights of one block at a time. This page uses only its hidden states; <a href="05-2-model-scaling.html#runrule">05-2, Section 8</a> explains the streamed path.</td><td><code>tests/test_streamed_reference.py</code>, <code>test_reference_is_reproducible[ViT-7B/16]</code></td></tr>
+        <tr><td class="name"><code>read_stored</code></td><td><code>scripts/token_range_table.py</code> 173–185</td><td>new</td><td>Reads the hidden states and the <code>streamed</code> header field of each reference file. It reads no tokens.</td><td>no unit test; job y6 of <code>verify.html</code> made <code>results/token-range-mlx.md</code> (with Section 3) again byte-equal</td></tr>
+        <tr><td class="name"><code>stored_range</code></td><td><code>scripts/token_range_table.py</code> 133–151</td><td>new</td><td>The largest |value| over the L + 1 stored states, its block and token, and the value after the last block.</td><td><code>test_token_range_table_from_the_stored_hidden_states</code></td></tr>
+        <tr><td class="name"><code>stored_rows</code>, <code>_stored_section</code></td><td><code>scripts/token_range_table.py</code> 154–170, 252–271</td><td>new</td><td>One row for each model size with a reference file, "full model" or "streamed"; Section 3 of <code>results/token-range-mlx.md</code>.</td><td><code>test_token_range_table_from_the_stored_hidden_states</code></td></tr>
+        <tr><td class="name"><code>write_table</code>, <code>main</code></td><td><code>scripts/token_range_table.py</code> 188–249, 274–279</td><td>changed</td><td><code>write_table</code> has the optional argument <code>stored</code>: without it, the text has no Section 3. <code>main</code> passes <code>read_stored()</code>.</td><td><code>test_token_range_table</code>, <code>test_token_range_table_from_the_stored_hidden_states</code></td></tr>
       </tbody>
     </table>
   </div>
-  <p class="caption"><b>Table 1.</b> The Step 5 code of this page, from row 05-3 of Table 1 of <code>specs/05-all-sizes/plan.html</code>. The files in <code>src/dinov3_apple/</code> have the line numbers of commit <code>7c30a3e</code>; the fixes in the working tree after the Verify stage did not change them. <code>tests/parity_checks.py</code> has the line numbers of the working tree: the fixes added 3 lines above <code>check_finite</code> (lines 58–74 at <code>HEAD</code>). The test numbers are those of the plan.</p>
+  <p class="caption"><b>Table 1.</b> The Step 5 code of this page, from row 05-3 of Table 1 of <code>specs/05-all-sizes/plan.html</code>. The files in <code>src/dinov3_apple/</code> have the line numbers of commit <code>7c30a3e</code>; the fixes in the working tree after the Verify stage did not change them. <code>tests/parity_checks.py</code> has the line numbers of the working tree: the fixes added 3 lines above <code>check_finite</code> (lines 58–74 at <code>HEAD</code>). The test numbers are those of the plan. The rows of path D4-Y have the line numbers of the working tree on 2026-11-07, before the commit of path D4-Y. The rows of path D4-Y are not in plan Table 1: <code>run_torch_streamed</code> belongs to 05-2, and the <code>scripts/token_range_table.py</code> functions are new in the build of path D4-Y.</p>
 </section>
 
 <section id="dtypes">
@@ -492,14 +498,14 @@ def run_mlx_hidden_states(model: MlxBackbone, pixels: np.ndarray) -&gt; np.ndarr
         <tr><td class="name">ViT-B/16</td><td class="num">14,926.0</td><td class="num">22.8 %</td><td>iss-kibo-lab/224x224, block 11, R1</td><td>14,920.0; 0 of 12</td><td class="num">14,976.0</td><td class="num">14,922.3</td><td class="num">14,880.5</td></tr>
         <tr><td class="name">ViT-L/16</td><td class="num">158,433.0</td><td class="num over">241.9 %</td><td>forest/448x448, block 23, R2</td><td class="over">12 of 12 non-finite from block 1</td><td class="num">157,696.0</td><td class="num">158,383.3</td><td class="num">157,852.7</td></tr>
         <tr><td class="name">ViT-H+/16</td><td class="num">149,750.0</td><td class="num over">228.6 %</td><td>iss-conference/304x224, block 30, R2</td><td class="over">6 of 12 non-finite from block 23; the other 6 reach 59,776.0</td><td class="num">147,456.0</td><td class="num">149,664.6</td><td class="num">149,759.6</td></tr>
-        <tr><td class="name">ViT-7B/16</td><td class="num">–</td><td class="num">20.7 %</td><td>skipped: run rule</td><td>13,568.0; 0 of 12</td><td class="num">13,568.0</td><td class="num">13,573.7</td><td class="num">13,581.9</td></tr>
+        <tr><td class="name">ViT-7B/16</td><td class="num">13,537.4</td><td class="num">20.7 %</td><td>iss-kibo-lab/224x224 only, block 40, R2; streamed reference on <code>torch-cpu</code> (<code>mlx</code>: skipped, run rule)</td><td>13,568.0; 0 of 12</td><td class="num">13,568.0</td><td class="num">13,573.7</td><td class="num">13,581.9</td></tr>
       </tbody>
     </table>
   </div>
-  <p class="caption"><b>Table 3.</b> The largest finite token value of each model size and dtype mode, over the 12 configurations and all blocks, from Table 1 of <code>results/token-range-mlx.md</code>. "Where" gives the configuration, the block after which the value occurs and the token. The share of ViT-7B/16 uses its largest value, 13,581.9 in bf16-autocast (<code>forest/224x224</code>, block 40, R2). A non-finite configuration counts if one token value is inf or NaN.</p>
+  <p class="caption"><b>Table 3.</b> The largest finite token value of each model size and dtype mode, over the 12 configurations and all blocks, from Table 1 of <code>results/token-range-mlx.md</code>. "Where" gives the configuration, the block after which the value occurs and the token. ViT-7B/16 has no fp32 run on <code>mlx</code> (run rule). Its fp32 cell comes from the stored hidden states of its streamed reference file (Table 3 of <code>results/token-range-mlx.md</code>), so it covers one configuration only. Its share is 20.7 % for this value and for its largest half value, 13,581.9 in bf16-autocast (<code>forest/224x224</code>, block 40, R2). A non-finite configuration counts if one token value is inf or NaN.</p>
   <p>What the record shows:</p>
   <ul>
-    <li><b>A register token holds the largest value.</b> In every finite row of Table 3 the token is R1, R2 or R3. In ViT-7B/16, R2 holds the largest value after every block, in all four dtype modes.</li>
+    <li><b>A register token holds the largest value.</b> In every finite row of Table 3 the token is R1, R2 or R3. In ViT-7B/16, R2 holds the largest value after every block, in all four dtype modes and in the fp32 hidden states of the streamed reference.</li>
     <li><b>The dtype modes agree where the values are finite.</b> At the same configuration, the finite values of the dtype modes differ by less than 2 %. The fp16-cast cell of ViT-H+/16 is lower only because it covers the 448 and 512 px configurations. At these configurations, fp32 and fp16-cast differ by less than 0.4 %. The large values are a property of the weights, not of the dtype mode.</li>
     <li><b>The large values come from the feed-forward branch.</b> The attention branch output stays at or below 60.7 in the five students and reaches 209.4 in ViT-7B/16 (block 1). The feed-forward branch output reaches 52,128 in ViT-L/16 (block 1) and 12,506 in ViT-H+/16 (block 23). The feed-forward hidden values of ViT-S+/16 reach 7,272 (block 3).</li>
     <li><b>bf16 rounds the large values to its spacing.</b> In bf16-cast, the largest value of ViT-L/16 is 157,696.0 in 10 configurations and 156,672.0 in 2. The two values are one bf16 spacing (1,024) apart.</li>
@@ -714,8 +720,79 @@ def run_mlx_hidden_states(model: MlxBackbone, pixels: np.ndarray) -&gt; np.ndarr
 
 <section id="margins">
   <h2>8 ViT-7B/16 and the fp16 margins</h2>
-  <p>ViT-7B/16 has no fp32 run: the run rule forbids its fp32 weights. So its token range comes from the four half dtype modes. In each of the 48 lines (4 dtype modes × 12 configurations), the largest token value is between 13,248 and 13,582. The largest is 13,581.9 (bf16-autocast, <code>forest/224x224</code>, after block 40, R2): 20.7 % of 65,504. Its largest branch value is 1,296 (feed-forward branch output, bf16-cast, <code>iss-kibo-lab/512x512</code>, block 1). The teacher has much smaller register values than ViT-L/16 and ViT-H+/16. Its value also grows in a different way. For <code>iss-kibo-lab</code> at 224 × 224 px in bf16-autocast, block 1 lifts the largest value from 119 to 2,919. After that, R2 grows in every block, to 13,544 after block 40, without a later jump (<a href="02-tokens-and-outputs.html#registers">02, Figure 2</a>).</p>
-  <p>Risk R20 of <code>explore.html</code> asked for the margins of the tensors that a dtype mode keeps in fp16. Table 5 gives them.</p>
+  <p>ViT-7B/16 has no fp32 run on <code>mlx</code>: the run rule forbids a load of its fp32 weights. On 2026-11-07 the user said yes to path D4-Y: the streamed fp32 reference on <code>torch-cpu</code>, with the fp32 weights of one block in memory at a time (Table 20 of <code>plan.html</code>). Its file stores the hidden states of <code>iss-kibo-lab</code> at 224 × 224 px: the token sequence before block 1 and after each of the 40 blocks. They give the fp32 token range of ViT-7B/16. Before block 1 the largest value is 118.8, in a patch token. After block 1 it is 2,913.9, in R2. R2 then grows in each block, by a factor of 1.006 to 1.376, to <b>13,537.4 after block 40</b>: 20.7 % of 65,504. So the largest value is the value after the last block (Section 3 of <code>results/token-range-mlx.md</code>; row "Table 7, token range" of Table 21 of <code>verify.html</code>).</p>
+  <p>Table 5 compares this fp32 line with the token-range lines of the four half dtype modes on <code>mlx</code>, at the same configuration.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Dtype mode</th><th>Backend, source</th><th class="num">After block 40</th><th class="num">Share of 65,504</th><th class="num">Largest difference to fp32, 41 states</th><th>Token</th></tr></thead>
+      <tbody>
+        <tr><td>fp32</td><td><code>torch-cpu</code>, streamed reference</td><td class="num">13,537.4</td><td class="num">20.7 %</td><td class="num">–</td><td>R2 after each block</td></tr>
+        <tr><td>fp16-cast</td><td><code>mlx</code>, W7</td><td class="num">13,536.0</td><td class="num">20.7 %</td><td class="num">0.12 % (after block 34)</td><td>as fp32</td></tr>
+        <tr><td>bf16-cast</td><td><code>mlx</code>, W7</td><td class="num">13,504.0</td><td class="num">20.6 %</td><td class="num">0.78 % (after block 14)</td><td>as fp32</td></tr>
+        <tr><td>fp16-autocast</td><td><code>mlx</code>, W7</td><td class="num">13,536.1</td><td class="num">20.7 %</td><td class="num">0.022 % (before block 1)</td><td>as fp32</td></tr>
+        <tr><td>bf16-autocast</td><td><code>mlx</code>, W7</td><td class="num">13,544.2</td><td class="num">20.7 %</td><td class="num">0.19 % (after block 4)</td><td>as fp32</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 5.</b> The token range of ViT-7B/16 for <code>iss-kibo-lab/224x224</code>. "After block 40": from Table 2 and Table 3 of <code>results/token-range-mlx.md</code>. "Largest difference to fp32": the largest relative difference of the largest |value| over the 41 states (before block 1 and after each block), and the state where it occurs. "Token": the token of the largest value in each of the 41 states. The last two columns are our computation from the token-range lines in <code>tests/fixtures/generated/parity/mlx.jsonl</code> and the stored hidden states.</p>
+  <ul>
+    <li><b>The half dtype modes follow fp32.</b> The largest value of each state differs from fp32 by at most 0.78 % (bf16-cast), and the token is the same in all 41 states. So the ViT-7B/16 line in row (a) of Figure 2 of <a href="02-tokens-and-outputs.html#registers">02</a> (fp32) and its four half lines in row (b) have the same shape and differ by at most 0.78 %.</li>
+    <li><b>The fp16 margin of fp32 is the margin of the half dtype modes.</b> With fp32 arithmetic, the token sequence of ViT-7B/16 stays at 20.7 % of 65,504. It could grow by a factor of 4.8 before an fp16 tensor gives inf. The fp32 file does not store the three branch tensors. So their fp32 values stay unknown; their half values are in Table 6.</li>
+  </ul>
+  <h3>8.1 Where the fp32 values come from</h3>
+  <p><code>run_torch_streamed</code> keeps the token sequence of the hidden-states configuration before block 1 and after each block. <a href="05-2-model-scaling.html#runrule">05-2, Section 8</a> explains the rest of the streamed path.</p>
+  <pre><code># src/dinov3_apple/reference.py, lines 467 to 485 (the loop shortened)
+    hidden = [states[hidden_config][0].numpy().copy()] if hidden_config is not None else []
+    for block in range(outer.config.num_hidden_layers):
+        ...
+        for config, state in states.items():
+            states[config] = layer(state, position_embeddings=rope[config])
+        if hidden_config is not None:
+            hidden.append(states[hidden_config][0].numpy().copy())
+        del layer  # the fp32 weights of one block at a time
+        ...
+    tokens = {config: outer.norm(state)[0].numpy() for config, state in states.items()}
+    return tokens, (np.stack(hidden) if hidden_config is not None else None)</code></pre>
+  <ul>
+    <li><b>Lines 467 and 478.</b> <code>.numpy()</code> alone shares the memory of the torch tensor; <code>.copy()</code> gives each state its own array. The stack has the shape (L + 1, 1 + 4 + N, D): (41, 201, 4,096) for ViT-7B/16. This is the numbering of <code>TokenRange.tokens</code> (Section 3.1).</li>
+    <li><b>Line 484.</b> The final layer norm comes after the last block. The hidden states are before it. So the token range and the output values (Section 10) come from different tensors of the same file.</li>
+  </ul>
+  <pre><code># scripts/token_range_table.py, lines 133 to 151 and 173 to 185 (docstrings shortened)
+def stored_range(hidden: np.ndarray) -&gt; dict:
+    """Return the token range of stored fp32 hidden states. ..."""
+    largest = np.abs(hidden).max(axis=2)  # (L + 1, tokens)
+    block = int(largest.max(axis=1).argmax())
+    return {
+        "largest": float(largest[block].max()),
+        "block": block,
+        "token": token_name(int(largest[block].argmax())),
+        "last": float(largest[-1].max()),
+        "blocks": hidden.shape[0] - 1,
+    }
+
+
+def read_stored() -&gt; dict[str, tuple[np.ndarray, bool]]:
+    """Return the stored hidden states of each model size with a reference file, ..."""
+    stored = {}
+    for model_size in MODEL_IDS:
+        path = reference_path(model_size)
+        if not path.exists():
+            continue
+        with safe_open(path, "np") as tensors:
+            metadata = json.loads(tensors.metadata()["reference"])
+            hidden = tensors.get_tensor(f"{HIDDEN_STATES_CONFIG}/hidden_states")
+        stored[model_size] = (hidden, bool(metadata.get("streamed", False)))
+    return stored</code></pre>
+  <ul>
+    <li><b>Line 143, <code>largest</code>.</b> The largest |value| of each token in each state, as <code>magnitude</code> in <code>_token_values</code> (Section 3.2), but for all L + 1 states at once. The block index of the result is the state index: 0 is before block 1.</li>
+    <li><b>Line 148, <code>token_name</code>.</b> The same names as Table 2 of <code>results/token-range-mlx.md</code>: CLS, R1 to R4, "patch n".</li>
+    <li><b>Line 183.</b> The read takes one tensor of the file: the hidden states, 41 × 201 × 4,096 fp32 values for ViT-7B/16, about 135 MB (our computation). It reads no tokens and loads no model. So the read is not a heavy job of the run rules.</li>
+    <li><b>Line 184.</b> The header field <code>streamed</code> sets the column "Reference file": "streamed" for ViT-7B/16, "full model" for the five reference files of Step 2. A file without the field is a full-model file.</li>
+    <li><b><code>stored_rows</code> and <code>_stored_section</code>.</b> One Markdown row for each model size, in the order of <code>MODEL_IDS</code>, under the heading "3 fp32 from the stored hidden states". <code>write_table</code> adds the section only when <code>stored</code> is given, so the old test <code>test_token_range_table</code> gets the old text.</li>
+  </ul>
+  <h3>8.2 The fp16 margins of the half dtype modes</h3>
+  <p>In each of the 48 lines of the half dtype modes (4 dtype modes × 12 configurations), the largest token value of ViT-7B/16 is between 13,248 and 13,582. The largest is 13,581.9 (bf16-autocast, <code>forest/224x224</code>, after block 40, R2): 20.7 % of 65,504. Its largest branch value is 1,296 (feed-forward branch output, bf16-cast, <code>iss-kibo-lab/512x512</code>, block 1). The teacher has much smaller register values than ViT-L/16 and ViT-H+/16. Its value also grows in a different way. For <code>iss-kibo-lab</code> at 224 × 224 px in bf16-autocast, block 1 lifts the largest value from 119 to 2,919 (fp32: 118.8 to 2,913.9). After that, R2 grows in every block, to 13,544 after block 40 (fp32: 13,537.4), without a later jump (<a href="02-tokens-and-outputs.html#registers">02, Figure 2</a>).</p>
+  <p>Risk R20 of <code>explore.html</code> asked for the margins of the tensors that a dtype mode keeps in fp16. Table 6 gives them.</p>
   <div class="table-wrap">
     <table>
       <thead><tr><th>Dtype mode</th><th>Tensor in fp16</th><th class="num">Largest finite value</th><th>Model size, configuration, block</th><th class="num">Share of 65,504</th></tr></thead>
@@ -729,8 +806,8 @@ def run_mlx_hidden_states(model: MlxBackbone, pixels: np.ndarray) -&gt; np.ndarr
       </tbody>
     </table>
   </div>
-  <p class="caption"><b>Table 5.</b> The fp16 margins, from Table 2 of <code>results/token-range-mlx.md</code> and Section 4.2 of <code>verify.html</code> (R20). The two bold rows are the smallest margins of Step 5. All values outside the two pairs of <code>EXPECTED_FP16_OVERFLOW</code> are finite.</p>
-  <p>So no ViT-7B/16 pair joined <code>EXPECTED_FP16_OVERFLOW</code>: no value of ViT-7B/16 is non-finite or above 65,504.</p>
+  <p class="caption"><b>Table 6.</b> The fp16 margins, from Table 2 of <code>results/token-range-mlx.md</code> and Section 4.2 of <code>verify.html</code> (R20). The two bold rows are the smallest margins of Step 5. All values outside the two pairs of <code>EXPECTED_FP16_OVERFLOW</code> are finite.</p>
+  <p>So no ViT-7B/16 pair joined <code>EXPECTED_FP16_OVERFLOW</code>: no value of ViT-7B/16 is non-finite or above 65,504. The fp32 reference agrees: its largest token value is 13,537.4 (Table 5).</p>
 </section>
 
 <section id="expected">
@@ -777,22 +854,23 @@ def check_finite(
       <tbody>
         <tr><td>(ViT-L/16, fp16-cast)</td><td>12 of 12 non-finite; inf after block 1</td><td>12 of 12 non-finite: xfail</td><td>non-finite: xfail</td><td>the same 12 and the batch</td></tr>
         <tr><td>(ViT-H+/16, fp16-cast)</td><td>6 of 12 non-finite; inf after block 23</td><td>6 xfail; 6 pass (0.999999 / 0.999998 / 0.999993)</td><td>non-finite: xfail</td><td>the same 6 and the batch</td></tr>
-        <tr><td>(ViT-7B/16, fp16-cast)</td><td>0 of 12 non-finite; at most 13,568.0</td><td>skipped: reference file missing (path D4-N)</td><td>passes</td><td>batch passes</td></tr>
+        <tr><td>(ViT-7B/16, fp16-cast)</td><td>0 of 12 non-finite; at most 13,568.0</td><td>path D4-Y: 12 of 12 pass against the streamed reference (0.999990 / 0.999981 / 0.999654)</td><td>passes</td><td>12 of 12 pass; batch passes</td></tr>
         <tr><td>all other pairs</td><td>0 non-finite</td><td>no non-finite output</td><td>pass</td><td>no non-finite output</td></tr>
       </tbody>
     </table>
   </div>
-  <p class="caption"><b>Table 6.</b> The non-finite results of Step 5 (AC3, AC7, AC8 and AC16 of <code>verify.html</code>). The non-finite set of <code>mlx</code> equals the set of <code>torch-mps</code>: 18 of the 60 fp16-cast parity configurations and 2 batch rows. Section 6 of <code>results/parity-mlx.md</code> ends with "equal". Of the 29 batch rows, 27 pass and 2 are expected failures. The parity values of the 6 finite ViT-H+/16 configurations are frame, patch mean and patch 1st percentile.</p>
+  <p class="caption"><b>Table 7.</b> The non-finite results of Step 5 (AC3, AC7, AC8 and AC16 of <code>verify.html</code>). The non-finite set of <code>mlx</code> equals the set of <code>torch-mps</code>: 18 of the 72 fp16-cast parity configurations (60 on path D4-N) and 2 batch rows. Section 6 of <code>results/parity-mlx.md</code> ends with "equal". Of the 29 batch rows, 27 pass and 2 are expected failures. The parity values of the 6 finite ViT-H+/16 configurations and of ViT-7B/16 are the smallest frame, patch mean and patch 1st percentile. The ViT-7B/16 parity values come from Table 23 of <code>verify.html</code> (path D4-Y); on path D4-N these 12 rows skipped: reference file missing.</p>
   <p class="note">Finding F8 of <code>verify.html</code>: at first, T14 checked only three cases. With mutation M11, which added (ViT-B/16, fp16-cast) to the list, T14 stayed green. So the rule "a pair joins only with evidence" existed only as text. The fix: T14 now asserts the exact set <code>{("ViT-L/16", "fp16-cast"), ("ViT-H+/16", "fp16-cast")}</code>. A change of the list now needs a change of the test, with its evidence.</p>
 </section>
 
 <section id="finalnorm">
   <h2>10 After the final layer norm</h2>
-  <p>The large values stay inside the backbone. For ViT-S/16 to ViT-H+/16 in fp32 on <code>torch-cpu</code>, no output value after the final layer norm is above 18. The largest output values over the 12 configurations are 9.2 (ViT-S/16), 11.0 (ViT-S+/16), 17.9 (ViT-B/16), 15.7 (ViT-L/16) and 12.3 (ViT-H+/16) (Table 2 of <a href="02-tokens-and-outputs.html#registers">02</a>). Nobody measured the output values of ViT-7B/16.</p>
+  <p>The large values stay inside the backbone. For all six model sizes in fp32 on <code>torch-cpu</code>, no output value after the final layer norm is above 18. The largest output values over the 12 configurations are 9.2 (ViT-S/16), 11.0 (ViT-S+/16), 17.9 (ViT-B/16), 15.7 (ViT-L/16), 12.3 (ViT-H+/16) and 7.3 (ViT-7B/16) (Table 2 of <a href="02-tokens-and-outputs.html#registers">02</a>). The value of ViT-7B/16 comes from the tokens of its streamed reference file: 5.4 to 7.3 over the 12 configurations, the largest at <code>iss-kibo-lab/224x400</code>.</p>
   <ul>
     <li>The layer norm divides each token by its own standard deviation over the D channels. The large values sit in 3 to 14 channels of one register token. So the large channels set the standard deviation of that token, and the normalized values are small. For any token, a normalized value is at most √(D − 1) in size before the learned scale (our derivation).</li>
     <li>The frame embedding and the patch embeddings do not include the register tokens. But the attention of each block reads the register tokens. So an inf or a NaN in one register token reaches the outputs in the next block.</li>
-    <li>So fp16 is a risk only inside the backbone. For ViT-S/16 to ViT-H+/16 on the 12 configurations, a head after the backbone sees values below 18.</li>
+    <li>In ViT-S/16 to ViT-H+/16, the largest output value is in a register token. In ViT-7B/16 it is in a patch token: 7.3, against at most 4.8 in a register token and 0.73 in the CLS token (our read of the 12 configurations). So the patch embeddings of ViT-7B/16 hold its largest output values, and these stay at or below 7.3.</li>
+    <li>So fp16 is a risk only inside the backbone. For all six model sizes on the 12 configurations, a head after the backbone sees values below 18.</li>
   </ul>
 </section>
 
@@ -810,10 +888,15 @@ def check_finite(
         <tr><td>AC3, W5 in fp16-cast</td><td>Parity of the finite outputs; expected failures</td><td>xfail: ViT-L/16 12 of 12, ViT-H+/16 6; the 6 finite ViT-H+/16 configurations pass</td><td>Table 6 of the plan</td><td>pass</td></tr>
         <tr><td>AC8</td><td>The non-finite set of <code>mlx</code> against <code>torch-mps</code></td><td>18 parity configurations and 2 batch rows on both backends</td><td>equal</td><td>pass</td></tr>
         <tr><td>AC9, W4 <code>test_mlx_hidden_states</code></td><td><code>run_mlx_hidden_states</code> against the stored hidden states</td><td>fp32: each state passes, smallest patch 1st percentile 0.9999999991 (ViT-H+/16). fp16-cast: non-finite blocks ViT-L/16 24 of 24, ViT-H+/16 10 of 32 (report only)</td><td><code>THRESHOLDS["fp32"]</code></td><td>pass</td></tr>
+        <tr class="group"><td colspan="5">Path D4-Y</td></tr>
+        <tr><td>Plan Table 7, token range of ViT-7B/16 in fp32</td><td>From the hidden states of the streamed reference file</td><td>13,537.4 after block 40, R2, 20.7 % of 65,504; the same value after the last block. An independent read of the file gives the same values. Four half dtype modes on <code>mlx</code>: 13,504.0 to 13,544.2</td><td>report only</td><td>pass</td></tr>
+        <tr><td>R24, <code>make_reference.py --streamed --check</code></td><td>The streamed path against the five stored files</td><td>largest difference 0.0 for the tokens and the hidden states of each model size</td><td class="num">≤ 1e-6</td><td>pass</td></tr>
+        <tr><td><code>test_token_range_table_from_the_stored_hidden_states</code></td><td><code>stored_range</code> and the rows of Section 3</td><td>green in job y2 of <code>verify.html</code> (default session: 717 passed, 4 skipped, 0 failed)</td><td>exact</td><td>pass</td></tr>
+        <tr><td>W7 of ViT-7B/16</td><td>Token range in the four half dtype modes, against the streamed reference</td><td>12 lines "measured" in each mode, 0 non-finite values, largest 20.7 % of 65,504</td><td>report only</td><td>pass</td></tr>
       </tbody>
     </table>
   </div>
-  <p class="caption"><b>Table 7.</b> The Step 5 results for the code of this page, from Table 3 and Section 9 of <code>specs/05-all-sizes/verify.html</code>. The rows of F6 and F8 describe the fix session after the Verify stage. The 10 non-finite blocks of ViT-H+/16 are blocks 23 to 32.</p>
+  <p class="caption"><b>Table 8.</b> The Step 5 results for the code of this page, from Table 3 and Section 9 of <code>specs/05-all-sizes/verify.html</code>. The rows of path D4-Y come from Section 12 of <code>verify.html</code> (Tables 21, 22 and 24). The rows of F6 and F8 describe the fix session after the Verify stage. The 10 non-finite blocks of ViT-H+/16 are blocks 23 to 32.</p>
 </section>
 
 <section id="surprises">
@@ -823,8 +906,9 @@ def check_finite(
     <li class="note"><b>The overflow of ViT-H+/16 depends on the input resolution.</b> The same block 23 gives 116,368 to 149,432 with a 224 px short side and 38,304 to 48,818 at 448 and 512 px. The cause is a feed-forward branch output of about half the size. The record does not show why.</li>
     <li class="note"><b>|λ| reaches 62.</b> So a branch output that fits in fp16 can give a residual value far above 65,504. In block 1 of ViT-L/16 the residual value is three times the largest branch output. fp16-autocast works only because λ and the residual add stay in fp32.</li>
     <li class="note"><b>The finite fp16 values come close to the limit.</b> The fp16-autocast branch output of ViT-L/16 reaches 79.6 % of 65,504. The finite fp16-cast configuration <code>iss-conference/448x448</code> of ViT-H+/16 reaches 91.3 %.</li>
-    <li class="note"><b>The teacher has small register values.</b> ViT-7B/16 reaches 13,582: 20.7 % of the fp16 maximum, less than ViT-B/16 (22.8 %). After block 1, its value grows a little in each of the other 39 blocks. ViT-S/16, ViT-S+/16, ViT-B/16 and ViT-H+/16 have later jumps. ViT-L/16 jumps only in block 1.</li>
-    <li class="note"><b>No measured output value is above 18.</b> For ViT-S/16 to ViT-H+/16 in fp32 on <code>torch-cpu</code>, no output value after the final layer norm is above 18. The values of 150,000 inside the backbone do not reach the outputs. Nobody measured the output values of ViT-7B/16.</li>
+    <li class="note"><b>The teacher has small register values.</b> ViT-7B/16 reaches 13,537.4 in fp32 and 13,582 in the half dtype modes: 20.7 % of the fp16 maximum, less than ViT-B/16 (22.8 %). After block 1, its value grows a little in each of the other 39 blocks. ViT-S/16, ViT-S+/16, ViT-B/16 and ViT-H+/16 have later jumps. ViT-L/16 jumps only in block 1.</li>
+    <li class="note"><b>No measured output value is above 18.</b> For all six model sizes in fp32 on <code>torch-cpu</code>, no output value after the final layer norm is above 18. The values of 150,000 inside the backbone do not reach the outputs. ViT-7B/16 has the smallest: 7.3, from its streamed reference, in a patch token, not in a register token.</li>
+    <li class="note"><b>The patch tokens of ViT-7B/16 come close to its register value.</b> After block 40, its largest patch value is 7,600: 56 % of the value of R2, in the same channel, 1557. This channel holds −7,600 to −4,225 in every patch token: a feature-dimension outlier in all tokens, the second kind of Appendix A.2 of the DINOv3 paper (<a href="02-tokens-and-outputs.html#registers">02, Section 5</a>). In ViT-S/16 to ViT-H+/16 the largest patch value is 1.7 % (ViT-L/16) to 25.1 % (ViT-S/16) of the largest value (Table 2 of <a href="02-tokens-and-outputs.html#registers">02</a>). One block makes the difference: after block 39 the largest patch value of ViT-7B/16 is 3,867 (our read of the stored hidden states).</li>
     <li class="note"><b>The attention branch never makes the large values.</b> Its output stays at or below 60.7 in the students and 209.4 in ViT-7B/16. All large values come from the feed-forward branch.</li>
     <li class="note"><b>bf16 shows its spacing.</b> In bf16-cast, the largest value of ViT-L/16 is 157,696 or 156,672 in all 12 configurations: one bf16 spacing (1,024) apart.</li>
     <li class="note"><b>A test that could not fail.</b> At first, no test checked the branch values or <code>TokenRange.finite</code>. Three mutations stayed green (finding F6). The fix session added the checks.</li>
@@ -834,12 +918,13 @@ def check_finite(
 <section id="sources">
   <h2>13 Sources</h2>
   <ul>
-    <li>Repo code: <code>src/dinov3_apple/mlx_model.py</code> (commit <code>7c30a3e</code>), <code>src/dinov3_apple/parity.py</code>, <code>tests/parity_checks.py</code>, <code>tests/test_mlx_parity.py</code> (W4, W5, W6, W7, W8), <code>tests/test_mlx_parts.py</code> (T26), <code>tests/test_run_rules.py</code> (T14), <code>scripts/token_range_table.py</code>. Step 4 version: commit <code>ea82d58</code>.</li>
-    <li>Results: <code>results/token-range-mlx.md</code> (Tables 1 and 2), <code>results/parity-mlx.md</code> (Section 6), and the token-range lines in <code>tests/fixtures/generated/parity/mlx.jsonl</code> (not in git; the latest line of each configuration counts, as in <code>scripts/token_range_table.py</code>).</li>
-    <li>Spec: <code>specs/05-all-sizes/explore.html</code> (Table 3, Section 3.3 with Tables 9 and 10, Section 3.6, risks R20 and R28), <code>specs/05-all-sizes/plan.html</code> (Table 1, Table 3, Sections 3.6 and 3.7, Table 6), <code>specs/05-all-sizes/verify.html</code> (Table 3, Section 4.2, findings F3, F6 and F8, Section 9).</li>
-    <li>Earlier explainers: <a href="02-tokens-and-outputs.html">02</a> (Table 2, Figure 2, Section 6), <a href="04-4-layerscale.html">04-4</a>, <a href="04-5-mlp.html">04-5</a>.</li>
-    <li>DINOv3 paper: Siméoni et al., arXiv 2508.10104 (August 2025), Appendix A.1 (high-norm outliers and registers).</li>
-    <li>Computations of the agent for this page: the memory of all hidden states of ViT-7B/16 in Section 3.3 and the bound √(D − 1) in Section 10.</li>
+    <li>Repo code: <code>src/dinov3_apple/reference.py</code> (<code>run_torch_streamed</code>, working tree of path D4-Y), <code>src/dinov3_apple/mlx_model.py</code> (commit <code>7c30a3e</code>), <code>src/dinov3_apple/parity.py</code>, <code>tests/parity_checks.py</code>, <code>tests/test_mlx_parity.py</code> (W4, W5, W6, W7, W8), <code>tests/test_mlx_parts.py</code> (T26), <code>tests/test_run_rules.py</code> (T14), <code>scripts/token_range_table.py</code> (with <code>stored_range</code>, <code>stored_rows</code>, <code>read_stored</code> and <code>_stored_section</code> of path D4-Y), <code>tests/test_token_range_table.py</code>. Step 4 version: commit <code>ea82d58</code>.</li>
+    <li>Results: <code>results/token-range-mlx.md</code> (Tables 1, 2 and 3), <code>results/parity-mlx.md</code> (Section 6), and the token-range lines in <code>tests/fixtures/generated/parity/mlx.jsonl</code> (not in git; the latest line of each configuration counts, as in <code>scripts/token_range_table.py</code>).</li>
+    <li>Spec: <code>specs/05-all-sizes/explore.html</code> (Table 3, Section 3.3 with Tables 9 and 10, Section 3.6, risks R20 and R28), <code>specs/05-all-sizes/plan.html</code> (Table 1, Table 3, Sections 3.6 and 3.7, Table 6, Table 20), <code>specs/05-all-sizes/verify.html</code> (Table 3, Section 4.2, findings F3, F6 and F8, Section 9, Section 12 with Tables 20 to 24).</li>
+    <li>Earlier explainers: <a href="02-tokens-and-outputs.html">02</a> (Section 5, Table 2, Figure 2, Table 5, Section 6), <a href="05-2-model-scaling.html#runrule">05-2</a> (Section 8), <a href="04-4-layerscale.html">04-4</a>, <a href="04-5-mlp.html">04-5</a>.</li>
+    <li>DINOv3 paper: Siméoni et al., arXiv 2508.10104 (August 2025), Appendix A.1 (high-norm outliers and registers) and Appendix A.2 (feature-dimension outliers), as <a href="02-tokens-and-outputs.html#registers">02</a> summarizes them.</li>
+    <li>Streamed reference of ViT-7B/16: <code>tests/fixtures/generated/reference/reference-vit7b16.safetensors</code> (not in git; header field <code>streamed</code> true, <code>attn_implementation</code> "sdpa") and its line in <code>tests/fixtures/generated/reference/runs.jsonl</code> (status "done", 2026-11-07).</li>
+    <li>Computations of the agent for this page: the memory of all hidden states of ViT-7B/16 in Section 3.3 and Section 8.1, the bound √(D − 1) in Section 10, the last two columns of Table 5, and a NumPy read of the six reference files for Sections 8 and 10 and Section 12: the output values after the final layer norm (largest |value| over the 12 configurations, and its token), the largest patch value of ViT-7B/16 after blocks 39 and 40, its channel 1557 in all patch tokens, and the growth factors of R2. The read loads no model. It gives the published values of ViT-S/16 to ViT-H+/16 again (Table 2 of 02).</li>
   </ul>
 </section>
 

@@ -37,7 +37,7 @@ a { color: var(--accent); }
 <main>
 <header>
   <h1>Tokens and Outputs</h1>
-  <p>Explainer for roadmap step 2. Date: 2026-11-06. Figure 2 extended in Step 5 on 2026-11-07.</p>
+  <p>Explainer for roadmap step 2. Date: 2026-11-06. Figure 2 extended in Step 5 on 2026-11-07. ViT-7B/16 in Figure 2 (a) and Tables 2 and 5 from its streamed fp32 reference (Step 5, path D4-Y) on 2026-11-07.</p>
 </header>
 
 <nav>
@@ -60,7 +60,7 @@ a { color: var(--accent); }
   <h2>1 Why this explainer</h2>
   <p>Step 2 makes the reference output: the output of the Hugging Face backbone on <code>torch-cpu</code> in fp32. Each model size gets one reference file with 12 configurations: 3 test images at 4 input resolutions. Every later step compares its output with these files. So we must know exactly which tokens the backbone gives and which slices of them are the two outputs.</p>
   <p>This explainer shows the path from an image file to the frame embedding and the patch embeddings. It also shows a property of DINOv3 that the probe of <code>specs/02-reference/explore.html</code> found and that Step 2 measured for five model sizes: one register token holds very large values inside the backbone. These values decide where fp16 and bf16 can run.</p>
-  <p>The values in Sections 5 and 6 come from the stored reference files of ViT-S/16, ViT-S+/16, ViT-B/16, ViT-L/16 and ViT-H+/16. ViT-7B/16 has no reference file yet. Its memory check failed (36.5 GB needed, 23.2 GB available), and the user deferred it.</p>
+  <p>The values in Sections 5 and 6 come from the stored reference files of ViT-S/16, ViT-S+/16, ViT-B/16, ViT-L/16 and ViT-H+/16. In Step 2, ViT-7B/16 had no reference file: its memory check failed (36.5 GB needed, 23.2 GB available), and the user deferred it. Step 5 added a streamed fp32 reference of ViT-7B/16 on 2026-11-07: the fp32 weights of one block at a time, 4.82 GB need (path D4-Y, <a href="05-3-numeric-range.html#margins">05-3, Section 8</a>). Figure 2 (a) and Tables 2 and 5 use it.</p>
 </section>
 
 <section id="pixels">
@@ -168,12 +168,12 @@ def split_tokens(tokens: np.ndarray, height: int, width: int) -> tuple[np.ndarra
 <section id="registers">
   <h2>5 The large values of the register tokens</h2>
   <p>Figure 2 shows the largest absolute value in the token sequence after each block. Row (a) shows the fp32 reference of Step 2, for <code>iss-kibo-lab</code> at 224 × 224 px. In every model size, a register token holds the largest value of the sequence after every block. The CLS token and the patch tokens stay far lower.</p>
-  <p>Step 5 extended the figure with the token range of <code>mlx</code> (<a href="05-3-numeric-range.html">05-3</a>): ViT-7B/16 in row (a), the five dtype modes in row (b) and four input resolutions in row (c). Row (b) shows where fp16-cast gives inf. Row (c) shows that the input resolution decides the fp16 overflow of ViT-H+/16.</p>
+  <p>Step 5 extended the figure (<a href="05-3-numeric-range.html">05-3</a>): ViT-7B/16 in row (a), from its streamed fp32 reference on <code>torch-cpu</code>; the token range of <code>mlx</code> in the five dtype modes in row (b) and at four input resolutions in row (c). Row (b) shows where fp16-cast gives inf. Row (c) shows that the input resolution decides the fp16 overflow of ViT-H+/16.</p>
   <figure>
     <div class="fig"><svg viewBox="0 0 990 812" role="img" aria-labelledby="fig2-title" font-family="-apple-system, Helvetica Neue, Arial, sans-serif">
 <title id="fig2-title">Largest absolute token value before block 1 and after each block, log scale: (a) the fp32 reference, (b) the five dtype modes on mlx, (c) four input resolutions on mlx</title>
 <rect width="990" height="812" fill="#ffffff"/>
-<text x="20" y="22" font-size="13" font-weight="600" fill="#111414">(a) torch-cpu, fp32, iss-kibo-lab at 224 × 224 px (Step 2). ViT-7B/16: mlx, bf16-autocast (no fp32 run: run rule)</text>
+<text x="20" y="22" font-size="13" font-weight="600" fill="#111414">(a) torch-cpu, fp32, iss-kibo-lab at 224 × 224 px (Step 2). ViT-7B/16: streamed fp32 reference (Step 5)</text>
 <text x="70" y="204.0" text-anchor="end" font-size="11" fill="#4a5655">10</text>
 <text x="70" y="152.0" text-anchor="end" font-size="11" fill="#4a5655">1,000</text>
 <text x="70" y="100.0" text-anchor="end" font-size="11" fill="#4a5655">100,000</text>
@@ -579,51 +579,51 @@ def split_tokens(tokens: np.ndarray, height: int, width: int) -> tuple[np.ndarra
 <circle cx="818.0" cy="92.9" r="5" fill="#057379" fill-opacity="0"><title>ViT-H+/16, after block 32: 131,166</title></circle>
 <circle cx="809.8" cy="92.9" r="4" fill="#057379" stroke="#ffffff" stroke-width="2"/>
 <text x="809.8" y="83.9" text-anchor="end" font-size="11" font-weight="600" fill="#111414">131,448</text>
-<polyline points="838.0,172.0 841.3,135.9 844.6,132.3 847.9,130.3 851.2,129.0 854.5,128.1 857.8,127.4 861.1,126.8 864.4,126.5 867.7,126.2 871.0,126.0 874.3,125.8 877.6,125.6 880.9,125.5 884.2,125.4 887.5,125.3 890.8,125.2 894.1,125.2 897.4,125.1 900.7,125.0 904.0,124.9 907.3,124.8 910.6,124.8 913.9,124.7 917.2,124.6 920.5,124.4 923.8,124.3 927.1,124.1 930.4,123.9 933.7,123.7 937.0,123.5 940.3,123.1 943.6,122.7 946.9,122.3 950.2,121.8 953.5,121.4 956.8,120.9 960.1,120.3 963.4,119.8 966.7,119.2 970.0,118.6" fill="none" stroke="#057379" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="5 3"/>
-<circle cx="838.0" cy="172.0" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, mlx bf16-autocast, before block 1: 119</title></circle>
-<circle cx="841.3" cy="135.9" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, mlx bf16-autocast, after block 1: 2,919</title></circle>
-<circle cx="844.6" cy="132.3" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, mlx bf16-autocast, after block 2: 4,014</title></circle>
-<circle cx="847.9" cy="130.3" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, mlx bf16-autocast, after block 3: 4,793</title></circle>
-<circle cx="851.2" cy="129.0" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, mlx bf16-autocast, after block 4: 5,387</title></circle>
-<circle cx="854.5" cy="128.1" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, mlx bf16-autocast, after block 5: 5,844</title></circle>
-<circle cx="857.8" cy="127.4" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, mlx bf16-autocast, after block 6: 6,219</title></circle>
-<circle cx="861.1" cy="126.8" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, mlx bf16-autocast, after block 7: 6,526</title></circle>
-<circle cx="864.4" cy="126.5" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, mlx bf16-autocast, after block 8: 6,733</title></circle>
-<circle cx="867.7" cy="126.2" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, mlx bf16-autocast, after block 9: 6,906</title></circle>
-<circle cx="871.0" cy="126.0" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, mlx bf16-autocast, after block 10: 6,995</title></circle>
-<circle cx="874.3" cy="125.8" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, mlx bf16-autocast, after block 11: 7,133</title></circle>
-<circle cx="877.6" cy="125.6" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, mlx bf16-autocast, after block 12: 7,241</title></circle>
-<circle cx="880.9" cy="125.5" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, mlx bf16-autocast, after block 13: 7,323</title></circle>
-<circle cx="884.2" cy="125.4" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, mlx bf16-autocast, after block 14: 7,393</title></circle>
-<circle cx="887.5" cy="125.3" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, mlx bf16-autocast, after block 15: 7,455</title></circle>
-<circle cx="890.8" cy="125.2" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, mlx bf16-autocast, after block 16: 7,509</title></circle>
-<circle cx="894.1" cy="125.2" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, mlx bf16-autocast, after block 17: 7,553</title></circle>
-<circle cx="897.4" cy="125.1" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, mlx bf16-autocast, after block 18: 7,606</title></circle>
-<circle cx="900.7" cy="125.0" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, mlx bf16-autocast, after block 19: 7,653</title></circle>
-<circle cx="904.0" cy="124.9" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, mlx bf16-autocast, after block 20: 7,721</title></circle>
-<circle cx="907.3" cy="124.8" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, mlx bf16-autocast, after block 21: 7,772</title></circle>
-<circle cx="910.6" cy="124.8" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, mlx bf16-autocast, after block 22: 7,826</title></circle>
-<circle cx="913.9" cy="124.7" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, mlx bf16-autocast, after block 23: 7,899</title></circle>
-<circle cx="917.2" cy="124.6" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, mlx bf16-autocast, after block 24: 7,974</title></circle>
-<circle cx="920.5" cy="124.4" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, mlx bf16-autocast, after block 25: 8,069</title></circle>
-<circle cx="923.8" cy="124.3" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, mlx bf16-autocast, after block 26: 8,188</title></circle>
-<circle cx="927.1" cy="124.1" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, mlx bf16-autocast, after block 27: 8,306</title></circle>
-<circle cx="930.4" cy="123.9" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, mlx bf16-autocast, after block 28: 8,418</title></circle>
-<circle cx="933.7" cy="123.7" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, mlx bf16-autocast, after block 29: 8,582</title></circle>
-<circle cx="937.0" cy="123.5" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, mlx bf16-autocast, after block 30: 8,777</title></circle>
-<circle cx="940.3" cy="123.1" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, mlx bf16-autocast, after block 31: 9,070</title></circle>
-<circle cx="943.6" cy="122.7" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, mlx bf16-autocast, after block 32: 9,382</title></circle>
-<circle cx="946.9" cy="122.3" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, mlx bf16-autocast, after block 33: 9,734</title></circle>
-<circle cx="950.2" cy="121.8" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, mlx bf16-autocast, after block 34: 10,136</title></circle>
-<circle cx="953.5" cy="121.4" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, mlx bf16-autocast, after block 35: 10,575</title></circle>
-<circle cx="956.8" cy="120.9" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, mlx bf16-autocast, after block 36: 11,049</title></circle>
-<circle cx="960.1" cy="120.3" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, mlx bf16-autocast, after block 37: 11,612</title></circle>
-<circle cx="963.4" cy="119.8" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, mlx bf16-autocast, after block 38: 12,197</title></circle>
-<circle cx="966.7" cy="119.2" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, mlx bf16-autocast, after block 39: 12,860</title></circle>
-<circle cx="970.0" cy="118.6" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, mlx bf16-autocast, after block 40: 13,544</title></circle>
+<polyline points="838.0,172.1 841.3,135.9 844.6,132.3 847.9,130.3 851.2,129.0 854.5,128.1 857.8,127.4 861.1,126.8 864.4,126.5 867.7,126.2 871.0,126.0 874.3,125.8 877.6,125.7 880.9,125.5 884.2,125.4 887.5,125.3 890.8,125.2 894.1,125.2 897.4,125.1 900.7,125.0 904.0,124.9 907.3,124.9 910.6,124.8 913.9,124.7 917.2,124.6 920.5,124.4 923.8,124.3 927.1,124.1 930.4,124.0 933.7,123.7 937.0,123.5 940.3,123.1 943.6,122.7 946.9,122.3 950.2,121.9 953.5,121.4 956.8,120.9 960.1,120.3 963.4,119.8 966.7,119.2 970.0,118.6" fill="none" stroke="#057379" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="838.0" cy="172.1" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, before block 1: 119</title></circle>
+<circle cx="841.3" cy="135.9" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, after block 1: 2,914</title></circle>
+<circle cx="844.6" cy="132.3" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, after block 2: 4,008</title></circle>
+<circle cx="847.9" cy="130.3" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, after block 3: 4,786</title></circle>
+<circle cx="851.2" cy="129.0" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, after block 4: 5,377</title></circle>
+<circle cx="854.5" cy="128.1" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, after block 5: 5,836</title></circle>
+<circle cx="857.8" cy="127.4" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, after block 6: 6,212</title></circle>
+<circle cx="861.1" cy="126.8" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, after block 7: 6,518</title></circle>
+<circle cx="864.4" cy="126.5" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, after block 8: 6,726</title></circle>
+<circle cx="867.7" cy="126.2" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, after block 9: 6,899</title></circle>
+<circle cx="871.0" cy="126.0" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, after block 10: 6,989</title></circle>
+<circle cx="874.3" cy="125.8" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, after block 11: 7,126</title></circle>
+<circle cx="877.6" cy="125.7" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, after block 12: 7,234</title></circle>
+<circle cx="880.9" cy="125.5" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, after block 13: 7,316</title></circle>
+<circle cx="884.2" cy="125.4" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, after block 14: 7,385</title></circle>
+<circle cx="887.5" cy="125.3" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, after block 15: 7,448</title></circle>
+<circle cx="890.8" cy="125.2" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, after block 16: 7,502</title></circle>
+<circle cx="894.1" cy="125.2" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, after block 17: 7,545</title></circle>
+<circle cx="897.4" cy="125.1" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, after block 18: 7,599</title></circle>
+<circle cx="900.7" cy="125.0" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, after block 19: 7,647</title></circle>
+<circle cx="904.0" cy="124.9" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, after block 20: 7,714</title></circle>
+<circle cx="907.3" cy="124.9" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, after block 21: 7,766</title></circle>
+<circle cx="910.6" cy="124.8" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, after block 22: 7,819</title></circle>
+<circle cx="913.9" cy="124.7" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, after block 23: 7,891</title></circle>
+<circle cx="917.2" cy="124.6" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, after block 24: 7,967</title></circle>
+<circle cx="920.5" cy="124.4" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, after block 25: 8,062</title></circle>
+<circle cx="923.8" cy="124.3" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, after block 26: 8,181</title></circle>
+<circle cx="927.1" cy="124.1" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, after block 27: 8,298</title></circle>
+<circle cx="930.4" cy="124.0" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, after block 28: 8,410</title></circle>
+<circle cx="933.7" cy="123.7" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, after block 29: 8,573</title></circle>
+<circle cx="937.0" cy="123.5" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, after block 30: 8,769</title></circle>
+<circle cx="940.3" cy="123.1" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, after block 31: 9,062</title></circle>
+<circle cx="943.6" cy="122.7" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, after block 32: 9,376</title></circle>
+<circle cx="946.9" cy="122.3" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, after block 33: 9,729</title></circle>
+<circle cx="950.2" cy="121.9" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, after block 34: 10,132</title></circle>
+<circle cx="953.5" cy="121.4" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, after block 35: 10,570</title></circle>
+<circle cx="956.8" cy="120.9" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, after block 36: 11,044</title></circle>
+<circle cx="960.1" cy="120.3" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, after block 37: 11,605</title></circle>
+<circle cx="963.4" cy="119.8" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, after block 38: 12,191</title></circle>
+<circle cx="966.7" cy="119.2" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, after block 39: 12,854</title></circle>
+<circle cx="970.0" cy="118.6" r="5" fill="#057379" fill-opacity="0"><title>ViT-7B/16, after block 40: 13,537</title></circle>
 <circle cx="970.0" cy="118.6" r="4" fill="#057379" stroke="#ffffff" stroke-width="2"/>
-<text x="970.0" y="109.6" text-anchor="end" font-size="11" font-weight="600" fill="#111414">13,544</text>
-<text x="840" y="213.6" font-size="10" fill="#4a5655">dashed: mlx, bf16-autocast</text>
+<text x="970.0" y="109.6" text-anchor="end" font-size="11" font-weight="600" fill="#111414">13,537</text>
+<text x="840" y="213.6" font-size="10" fill="#4a5655">streamed reference</text>
 <line x1="78" x2="100" y1="304" y2="304" stroke="#9fd3d1" stroke-width="5"/>
 <text x="105" y="308" font-size="11" fill="#111414">fp32</text>
 <line x1="155" x2="177" y1="304" y2="304" stroke="#111414" stroke-width="1.3"/>
@@ -709,7 +709,7 @@ def split_tokens(tokens: np.ndarray, height: int, width: int) -> tuple[np.ndarra
 <text x="726" y="726" font-size="10.5" font-weight="600" fill="#8a5a14">512 × 512: 52,206</text>
 <text x="524" y="792" text-anchor="middle" font-size="11" fill="#4a5655">Block (0 = the token sequence before block 1)</text>
 </svg></div>
-    <figcaption><b>Figure 2.</b> Largest absolute value in the token sequence before block 1 and after each block, before the final layer norm. One column for each model size, one log scale for all panels. The red line is the largest fp16 value, 65,504. (a) <code>torch-cpu</code> in fp32 (Step 2); the label gives the largest value of each model size; hover over a block to see its value; Table 5 gives all values. ViT-7B/16 has no fp32 run (run rule), so its panel (dashed) shows <code>mlx</code> in bf16-autocast, the official inference precision. (b) <code>mlx</code> in the five dtype modes, <code>iss-kibo-lab</code> at 224 × 224 px. The lines agree where the values are finite. The fp16-cast line stops at the last finite block; the red cross marks the block after which the value is inf. (c) <code>mlx</code> in fp32 (ViT-7B/16: bf16-autocast), <code>iss-kibo-lab</code> at four input resolutions. With a 224 px short side, ViT-H+/16 goes above 65,504 after block 23; at 448 and 512 px it stays below. Hover over a line in (b) or (c) for its largest value. Sources of (b), (c) and the ViT-7B/16 panel: the token-range lines of Step 5 (test W7, 2026-11-07, mlx 0.32.4), summarized in <code>results/token-range-mlx.md</code>.</figcaption>
+    <figcaption><b>Figure 2.</b> Largest absolute value in the token sequence before block 1 and after each block, before the final layer norm. One column for each model size, one log scale for all panels. The red line is the largest fp16 value, 65,504. (a) <code>torch-cpu</code> in fp32 (Step 2); the label gives the largest value of each model size; hover over a block to see its value; Table 5 gives all values. ViT-7B/16 has no load of its fp32 weights (run rule). Its panel shows the streamed fp32 reference on <code>torch-cpu</code>, with the fp32 weights of one block at a time (Step 5, path D4-Y). <code>mlx</code> in bf16-autocast, which this panel showed before, differs from it by at most 0.19 % (<a href="05-3-numeric-range.html#margins">05-3, Table 5</a>). (b) <code>mlx</code> in the five dtype modes, <code>iss-kibo-lab</code> at 224 × 224 px. The lines agree where the values are finite. The fp16-cast line stops at the last finite block; the red cross marks the block after which the value is inf. (c) <code>mlx</code> in fp32 (ViT-7B/16: bf16-autocast), <code>iss-kibo-lab</code> at four input resolutions. With a 224 px short side, ViT-H+/16 goes above 65,504 after block 23; at 448 and 512 px it stays below. Hover over a line in (b) or (c) for its largest value. Sources of (b) and (c): the token-range lines of Step 5 (test W7, 2026-11-07, mlx 0.32.4), summarized in <code>results/token-range-mlx.md</code>. Source of the ViT-7B/16 panel in (a): the hidden states of its streamed reference file (Section 3 of <code>results/token-range-mlx.md</code>).</figcaption>
   </figure>
   <div class="table-wrap">
     <table>
@@ -720,11 +720,11 @@ def split_tokens(tokens: np.ndarray, height: int, width: int) -> tuple[np.ndarra
         <tr><td>ViT-B/16</td><td class="num">12</td><td class="num">7.5</td><td class="num">14,926</td><td class="num">11</td><td>R1</td><td class="num">22.8 %</td><td class="num">1,298</td><td class="num">17.9</td></tr>
         <tr><td>ViT-L/16</td><td class="num">24</td><td class="num">15.2</td><td class="num">157,130</td><td class="num">23</td><td>R2</td><td class="num">239.9 %</td><td class="num">2,649</td><td class="num">15.7</td></tr>
         <tr><td>ViT-H+/16</td><td class="num">32</td><td class="num">15.6</td><td class="num">131,448</td><td class="num">30</td><td>R2</td><td class="num">200.7 %</td><td class="num">10,834</td><td class="num">12.3</td></tr>
-        <tr><td>ViT-7B/16</td><td class="num">40</td><td colspan="7">No fp32 reference (run rule). On <code>mlx</code> in bf16-autocast: 119 before block 1, 13,544 after block 40, R2, 20.7 % (Figure 2; <a href="05-3-numeric-range.html#margins">05-3, Section 8</a>). Largest patch value and largest output value: not measured.</td></tr>
+        <tr><td>ViT-7B/16</td><td class="num">40</td><td class="num">118.8</td><td class="num">13,537</td><td class="num">40</td><td>R2</td><td class="num">20.7 %</td><td class="num">7,600</td><td class="num">7.3</td></tr>
       </tbody>
     </table>
   </div>
-  <p class="caption"><b>Table 2.</b> Register values of <code>iss-kibo-lab</code> at 224 × 224 px. "Largest value" and "Largest patch value" are the largest absolute values inside the backbone, before the final layer norm, over all blocks. "Token" is the register token that holds the largest value (R1 is sequence position 1). "Largest output value" is the largest absolute value after the final layer norm over all 12 configurations.</p>
+  <p class="caption"><b>Table 2.</b> Register values of <code>iss-kibo-lab</code> at 224 × 224 px. "Largest value" and "Largest patch value" are the largest absolute values inside the backbone, before the final layer norm, over all blocks. "Token" is the register token that holds the largest value (R1 is sequence position 1). "Largest output value" is the largest absolute value after the final layer norm over all 12 configurations. ViT-7B/16: from its streamed fp32 reference (Step 5, path D4-Y, <a href="05-3-numeric-range.html#margins">05-3, Section 8</a>); before block 1 its largest value is in a patch token, and its largest output value (<code>iss-kibo-lab/224x400</code>) is in a patch token too. The patch and output values of ViT-7B/16 are our NumPy read of its reference file.</p>
   <p>Five facts follow from the data:</p>
   <ul>
     <li><b>Few channels.</b> The large values sit in 3 to 14 channels of one register token. In the channel with the largest value, the patch tokens hold only 26 to 221 (median). The norm of that register token is 14 times (ViT-S/16) to 206 times (ViT-L/16) the median norm of a patch token.</li>
@@ -733,50 +733,58 @@ def split_tokens(tokens: np.ndarray, height: int, width: int) -> tuple[np.ndarra
     <li><b>ViT-H+/16 from block 23.</b> Its largest value goes from 3,703 after block 22 to 131,121 after block 23. At 448 px the same jump reaches about 59,900 (probe, <code>iss-conference</code>), below the fp16 maximum.</li>
     <li><b>The final layer norm removes them.</b> After the final layer norm, no output value is above 18. The register tokens are dropped anyway, but the other tokens saw the large values through the attention in every block.</li>
   </ul>
-  <p class="note">The DINOv3 paper (Appendix A.1) explains why the registers exist. Without them, a large ViT puts tokens with a very high norm into some patches of low-information regions, for example the sky. These tokens carry the internal communication between the patches and the CLS token. Darcet et al. (2024) added register tokens to take over this role, and DINOv3 uses 4 of them. Our data shows the result: the high norm is in one register token, not in the patch tokens. Appendix A.2 of the paper also describes feature-dimension outliers in all tokens and recommends the final layer norm for the outputs. Our largest values sit in one register token only, so they match the first kind.</p>
+  <p class="note">The DINOv3 paper (Appendix A.1) explains why the registers exist. Without them, a large ViT puts tokens with a very high norm into some patches of low-information regions, for example the sky. These tokens carry the internal communication between the patches and the CLS token. Darcet et al. (2024) added register tokens to take over this role, and DINOv3 uses 4 of them. Our data shows the result: the high norm is in one register token, not in the patch tokens. Appendix A.2 of the paper also describes feature-dimension outliers in all tokens and recommends the final layer norm for the outputs. Our largest values sit in one register token only, so they match the first kind. ViT-7B/16 also shows the second kind after its last block: channel 1557 holds −7,600 to −4,225 in every patch token, and the largest value of R2 is in the same channel (our read of the streamed reference file).</p>
   <details>
-    <summary>Table 5. All values of Figure 2, row (a), ViT-S/16 to ViT-H+/16</summary>
+    <summary>Table 5. All values of Figure 2, row (a), ViT-S/16 to ViT-7B/16</summary>
     <div class="table-wrap">
       <table>
-<thead><tr><th>Position in the backbone</th><th>ViT-S/16</th><th>ViT-S+/16</th><th>ViT-B/16</th><th>ViT-L/16</th><th>ViT-H+/16</th></tr></thead>
+<thead><tr><th>Position in the backbone</th><th>ViT-S/16</th><th>ViT-S+/16</th><th>ViT-B/16</th><th>ViT-L/16</th><th>ViT-H+/16</th><th>ViT-7B/16</th></tr></thead>
 <tbody>
-<tr><td>before block 1</td><td class="num">10.7</td><td class="num">6.9</td><td class="num">7.5</td><td class="num">15.2</td><td class="num">15.6</td></tr>
-<tr><td>after block 1</td><td class="num">47.5</td><td class="num">17.7</td><td class="num">29.9</td><td class="num">155,923</td><td class="num">73.4</td></tr>
-<tr><td>after block 2</td><td class="num">40.2</td><td class="num">46.4</td><td class="num">45.5</td><td class="num">155,895</td><td class="num">139</td></tr>
-<tr><td>after block 3</td><td class="num">252</td><td class="num">2,471</td><td class="num">9,606</td><td class="num">155,891</td><td class="num">265</td></tr>
-<tr><td>after block 4</td><td class="num">247</td><td class="num">2,460</td><td class="num">9,590</td><td class="num">155,890</td><td class="num">275</td></tr>
-<tr><td>after block 5</td><td class="num">300</td><td class="num">2,457</td><td class="num">9,588</td><td class="num">155,890</td><td class="num">243</td></tr>
-<tr><td>after block 6</td><td class="num">309</td><td class="num">4,800</td><td class="num">9,587</td><td class="num">155,890</td><td class="num">603</td></tr>
-<tr><td>after block 7</td><td class="num">968</td><td class="num">4,792</td><td class="num">9,587</td><td class="num">155,890</td><td class="num">612</td></tr>
-<tr><td>after block 8</td><td class="num">966</td><td class="num">4,776</td><td class="num">9,588</td><td class="num">155,889</td><td class="num">607</td></tr>
-<tr><td>after block 9</td><td class="num">987</td><td class="num">4,735</td><td class="num">9,589</td><td class="num">155,887</td><td class="num">605</td></tr>
-<tr><td>after block 10</td><td class="num">1,162</td><td class="num">4,727</td><td class="num">9,592</td><td class="num">155,876</td><td class="num">549</td></tr>
-<tr><td>after block 11</td><td class="num">1,708</td><td class="num">5,262</td><td class="num">14,926</td><td class="num">155,870</td><td class="num">524</td></tr>
-<tr><td>after block 12</td><td class="num">1,475</td><td class="num">4,329</td><td class="num">14,697</td><td class="num">155,857</td><td class="num">4,121</td></tr>
-<tr><td>after block 13</td><td></td><td></td><td></td><td class="num">155,834</td><td class="num">4,104</td></tr>
-<tr><td>after block 14</td><td></td><td></td><td></td><td class="num">155,809</td><td class="num">4,109</td></tr>
-<tr><td>after block 15</td><td></td><td></td><td></td><td class="num">155,812</td><td class="num">4,126</td></tr>
-<tr><td>after block 16</td><td></td><td></td><td></td><td class="num">155,784</td><td class="num">4,114</td></tr>
-<tr><td>after block 17</td><td></td><td></td><td></td><td class="num">155,828</td><td class="num">4,144</td></tr>
-<tr><td>after block 18</td><td></td><td></td><td></td><td class="num">155,803</td><td class="num">4,127</td></tr>
-<tr><td>after block 19</td><td></td><td></td><td></td><td class="num">155,848</td><td class="num">4,080</td></tr>
-<tr><td>after block 20</td><td></td><td></td><td></td><td class="num">155,943</td><td class="num">4,002</td></tr>
-<tr><td>after block 21</td><td></td><td></td><td></td><td class="num">156,063</td><td class="num">3,871</td></tr>
-<tr><td>after block 22</td><td></td><td></td><td></td><td class="num">156,204</td><td class="num">3,703</td></tr>
-<tr><td>after block 23</td><td></td><td></td><td></td><td class="num">157,130</td><td class="num">131,121</td></tr>
-<tr><td>after block 24</td><td></td><td></td><td></td><td class="num">154,824</td><td class="num">131,327</td></tr>
-<tr><td>after block 25</td><td></td><td></td><td></td><td></td><td class="num">131,317</td></tr>
-<tr><td>after block 26</td><td></td><td></td><td></td><td></td><td class="num">131,290</td></tr>
-<tr><td>after block 27</td><td></td><td></td><td></td><td></td><td class="num">131,337</td></tr>
-<tr><td>after block 28</td><td></td><td></td><td></td><td></td><td class="num">131,290</td></tr>
-<tr><td>after block 29</td><td></td><td></td><td></td><td></td><td class="num">131,360</td></tr>
-<tr><td>after block 30</td><td></td><td></td><td></td><td></td><td class="num">131,448</td></tr>
-<tr><td>after block 31</td><td></td><td></td><td></td><td></td><td class="num">131,259</td></tr>
-<tr><td>after block 32</td><td></td><td></td><td></td><td></td><td class="num">131,166</td></tr>
+<tr><td>before block 1</td><td class="num">10.7</td><td class="num">6.9</td><td class="num">7.5</td><td class="num">15.2</td><td class="num">15.6</td><td class="num">119</td></tr>
+<tr><td>after block 1</td><td class="num">47.5</td><td class="num">17.7</td><td class="num">29.9</td><td class="num">155,923</td><td class="num">73.4</td><td class="num">2,914</td></tr>
+<tr><td>after block 2</td><td class="num">40.2</td><td class="num">46.4</td><td class="num">45.5</td><td class="num">155,895</td><td class="num">139</td><td class="num">4,008</td></tr>
+<tr><td>after block 3</td><td class="num">252</td><td class="num">2,471</td><td class="num">9,606</td><td class="num">155,891</td><td class="num">265</td><td class="num">4,786</td></tr>
+<tr><td>after block 4</td><td class="num">247</td><td class="num">2,460</td><td class="num">9,590</td><td class="num">155,890</td><td class="num">275</td><td class="num">5,377</td></tr>
+<tr><td>after block 5</td><td class="num">300</td><td class="num">2,457</td><td class="num">9,588</td><td class="num">155,890</td><td class="num">243</td><td class="num">5,836</td></tr>
+<tr><td>after block 6</td><td class="num">309</td><td class="num">4,800</td><td class="num">9,587</td><td class="num">155,890</td><td class="num">603</td><td class="num">6,212</td></tr>
+<tr><td>after block 7</td><td class="num">968</td><td class="num">4,792</td><td class="num">9,587</td><td class="num">155,890</td><td class="num">612</td><td class="num">6,518</td></tr>
+<tr><td>after block 8</td><td class="num">966</td><td class="num">4,776</td><td class="num">9,588</td><td class="num">155,889</td><td class="num">607</td><td class="num">6,726</td></tr>
+<tr><td>after block 9</td><td class="num">987</td><td class="num">4,735</td><td class="num">9,589</td><td class="num">155,887</td><td class="num">605</td><td class="num">6,899</td></tr>
+<tr><td>after block 10</td><td class="num">1,162</td><td class="num">4,727</td><td class="num">9,592</td><td class="num">155,876</td><td class="num">549</td><td class="num">6,989</td></tr>
+<tr><td>after block 11</td><td class="num">1,708</td><td class="num">5,262</td><td class="num">14,926</td><td class="num">155,870</td><td class="num">524</td><td class="num">7,126</td></tr>
+<tr><td>after block 12</td><td class="num">1,475</td><td class="num">4,329</td><td class="num">14,697</td><td class="num">155,857</td><td class="num">4,121</td><td class="num">7,234</td></tr>
+<tr><td>after block 13</td><td></td><td></td><td></td><td class="num">155,834</td><td class="num">4,104</td><td class="num">7,316</td></tr>
+<tr><td>after block 14</td><td></td><td></td><td></td><td class="num">155,809</td><td class="num">4,109</td><td class="num">7,385</td></tr>
+<tr><td>after block 15</td><td></td><td></td><td></td><td class="num">155,812</td><td class="num">4,126</td><td class="num">7,448</td></tr>
+<tr><td>after block 16</td><td></td><td></td><td></td><td class="num">155,784</td><td class="num">4,114</td><td class="num">7,502</td></tr>
+<tr><td>after block 17</td><td></td><td></td><td></td><td class="num">155,828</td><td class="num">4,144</td><td class="num">7,545</td></tr>
+<tr><td>after block 18</td><td></td><td></td><td></td><td class="num">155,803</td><td class="num">4,127</td><td class="num">7,599</td></tr>
+<tr><td>after block 19</td><td></td><td></td><td></td><td class="num">155,848</td><td class="num">4,080</td><td class="num">7,647</td></tr>
+<tr><td>after block 20</td><td></td><td></td><td></td><td class="num">155,943</td><td class="num">4,002</td><td class="num">7,714</td></tr>
+<tr><td>after block 21</td><td></td><td></td><td></td><td class="num">156,063</td><td class="num">3,871</td><td class="num">7,766</td></tr>
+<tr><td>after block 22</td><td></td><td></td><td></td><td class="num">156,204</td><td class="num">3,703</td><td class="num">7,819</td></tr>
+<tr><td>after block 23</td><td></td><td></td><td></td><td class="num">157,130</td><td class="num">131,121</td><td class="num">7,891</td></tr>
+<tr><td>after block 24</td><td></td><td></td><td></td><td class="num">154,824</td><td class="num">131,327</td><td class="num">7,967</td></tr>
+<tr><td>after block 25</td><td></td><td></td><td></td><td></td><td class="num">131,317</td><td class="num">8,062</td></tr>
+<tr><td>after block 26</td><td></td><td></td><td></td><td></td><td class="num">131,290</td><td class="num">8,181</td></tr>
+<tr><td>after block 27</td><td></td><td></td><td></td><td></td><td class="num">131,337</td><td class="num">8,298</td></tr>
+<tr><td>after block 28</td><td></td><td></td><td></td><td></td><td class="num">131,290</td><td class="num">8,410</td></tr>
+<tr><td>after block 29</td><td></td><td></td><td></td><td></td><td class="num">131,360</td><td class="num">8,573</td></tr>
+<tr><td>after block 30</td><td></td><td></td><td></td><td></td><td class="num">131,448</td><td class="num">8,769</td></tr>
+<tr><td>after block 31</td><td></td><td></td><td></td><td></td><td class="num">131,259</td><td class="num">9,062</td></tr>
+<tr><td>after block 32</td><td></td><td></td><td></td><td></td><td class="num">131,166</td><td class="num">9,376</td></tr>
+<tr><td>after block 33</td><td></td><td></td><td></td><td></td><td></td><td class="num">9,729</td></tr>
+<tr><td>after block 34</td><td></td><td></td><td></td><td></td><td></td><td class="num">10,132</td></tr>
+<tr><td>after block 35</td><td></td><td></td><td></td><td></td><td></td><td class="num">10,570</td></tr>
+<tr><td>after block 36</td><td></td><td></td><td></td><td></td><td></td><td class="num">11,044</td></tr>
+<tr><td>after block 37</td><td></td><td></td><td></td><td></td><td></td><td class="num">11,605</td></tr>
+<tr><td>after block 38</td><td></td><td></td><td></td><td></td><td></td><td class="num">12,191</td></tr>
+<tr><td>after block 39</td><td></td><td></td><td></td><td></td><td></td><td class="num">12,854</td></tr>
+<tr><td>after block 40</td><td></td><td></td><td></td><td></td><td></td><td class="num">13,537</td></tr>
 </tbody>
       </table>
     </div>
-    <p class="caption"><b>Table 5.</b> Largest absolute value in the token sequence before block 1 and after each block, for <code>iss-kibo-lab</code> at 224 × 224 px, <code>torch-cpu</code>, fp32, from the hidden states of the reference files.</p>
+    <p class="caption"><b>Table 5.</b> Largest absolute value in the token sequence before block 1 and after each block, for <code>iss-kibo-lab</code> at 224 × 224 px, <code>torch-cpu</code>, fp32, from the hidden states of the reference files. ViT-7B/16: from its streamed reference file (Step 5).</p>
   </details>
 </section>
 
@@ -788,14 +796,14 @@ def split_tokens(tokens: np.ndarray, height: int, width: int) -> tuple[np.ndarra
       <thead><tr><th>Dtype mode</th><th>Weights and inputs</th><th>Autocast</th><th>Model sizes</th><th>Worst frame</th><th>Worst patch mean</th><th>Worst patch 1st percentile</th><th>Non-finite</th></tr></thead>
       <tbody>
         <tr><td>fp32</td><td>fp32</td><td>off</td><td>all except ViT-7B/16</td><td class="num">1.000000</td><td class="num">1.000000</td><td class="num">1.000000</td><td class="num">0</td></tr>
-        <tr><td>fp16-cast</td><td>fp16</td><td>off</td><td>all six</td><td class="num">0.999989</td><td class="num">0.999974</td><td class="num">0.999935</td><td class="num">18 of 60</td></tr>
+        <tr><td>fp16-cast</td><td>fp16</td><td>off</td><td>all six</td><td class="num">0.999989</td><td class="num">0.999974</td><td class="num">0.999832</td><td class="num">18 of 72</td></tr>
         <tr><td>bf16-cast</td><td>bf16</td><td>off</td><td>all six</td><td class="num">0.999411</td><td class="num">0.998206</td><td class="num">0.968878</td><td class="num">0</td></tr>
         <tr><td>fp16-autocast</td><td>fp32</td><td>fp16</td><td>all except ViT-7B/16</td><td class="num">0.999986</td><td class="num">0.999956</td><td class="num">0.999781</td><td class="num">0</td></tr>
         <tr><td>bf16-autocast</td><td>fp32</td><td>bf16</td><td>all except ViT-7B/16</td><td class="num">0.998365</td><td class="num">0.995177</td><td class="num">0.988774</td><td class="num">0</td></tr>
       </tbody>
     </table>
   </div>
-  <p class="caption"><b>Table 3.</b> The dtype modes and the worst parity of <code>torch-mps</code> over 5 model sizes × 12 configurations (ViT-7B/16 not yet run). The fp16-cast values cover only the 42 configurations with finite outputs. <code>results/parity-torch-mps.md</code> gives each model size.</p>
+  <p class="caption"><b>Table 3.</b> The dtype modes and the worst parity of <code>torch-mps</code> over 6 model sizes × 12 configurations (ViT-7B/16: fp16-cast and bf16-cast only, path D4-Y). The fp16-cast values cover only the 54 configurations with finite outputs. <code>results/parity-torch-mps.md</code> gives each model size.</p>
   <p><b>fp16.</b> The largest fp16 value is 65,504. A larger value becomes infinite, and the next layer norm or softmax gives NaN. In fp16-cast mode, ViT-L/16 gives NaN in all 12 configurations, because its register value is above the fp16 maximum from block 1 on. ViT-H+/16 gives NaN in the 6 configurations with a short side of 224 px, and finite outputs at 448 and 512 px. The tests record each case as an expected failure. fp16-autocast keeps the residual stream in fp32. All its configurations give finite outputs and pass.</p>
   <p><b>bf16.</b> bf16 has the range of fp32, so it does not overflow. But it has only 8 significant bits. Near 131,072 the spacing of bf16 values is 1,024. The parity tests found 5 bf16 configurations below the first proposal of thresholds (0.999, 0.999 and 0.99). A probe ran the same configurations on <code>torch-cpu</code> in bf16 and got the same values, for example frame 0.998498 on <code>torch-cpu</code> and 0.998365 on <code>torch-mps</code> (ViT-S+/16, bf16-autocast, <code>iss-kibo-lab</code> at 224 × 400 px). So the cause is bf16 arithmetic, not the backend.</p>
   <p>ViT-H+/16 at 224 px is sensitive to its input. In fp32, with only the stored pixels rounded to bf16, its patch 1st percentile is 0.9925 and its patch minimum 0.968 (<code>iss-conference</code>). At 448 px the same change gives 0.9999. In bf16-cast mode, the patch tokens move away from fp32 block by block after block 23, where the register value jumps: their 1st percentile goes from 0.994 to 0.953 at block 31. RoPE tables in fp32 and a final layer norm in fp32 did not fix this (patch 1st percentile 0.972 and 0.969).</p>

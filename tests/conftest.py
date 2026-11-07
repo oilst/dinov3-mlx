@@ -135,17 +135,27 @@ class _BackboneSlot:
 
 
 @pytest.fixture(scope="session")
-def backbone() -> Iterator[Callable[[str, str, str], Any]]:
+def backbone_slot() -> Iterator[_BackboneSlot]:
+    """Return the slot that holds at most one backbone. Its lines go to memory-checks.log.
+
+    A test that runs without the slot, for example the streamed reference of ViT-7B/16, calls
+    free first, so only one model is in memory.
+    """
+    MEMORY_LOG.parent.mkdir(parents=True, exist_ok=True)
+    slot = _BackboneSlot()
+    yield slot
+    slot.free()
+    logging.getLogger("dinov3_apple.memory").removeHandler(slot.handler)
+
+
+@pytest.fixture(scope="session")
+def backbone(backbone_slot: _BackboneSlot) -> Callable[[str, str, str], Any]:
     """Return a loader that keeps one model in memory and checks the free memory before a load.
 
     The device is "cpu" or "mps" for the Hugging Face backbone on torch, or "mlx" for the MLX
     backbone. With DINOV3_MLX_DEVICE=cpu the MLX backbone runs on the CPU stream (a diagnostic).
     """
-    MEMORY_LOG.parent.mkdir(parents=True, exist_ok=True)
-    slot = _BackboneSlot()
-    yield slot.get
-    slot.free()
-    logging.getLogger("dinov3_apple.memory").removeHandler(slot.handler)
+    return backbone_slot.get
 
 
 @pytest.fixture(scope="session")
