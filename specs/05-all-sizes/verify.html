@@ -1,0 +1,679 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Step 5 All sizes: Verify</title>
+<style>
+/* Spec page. White page, black text, no dark mode. */
+:root { --bg: #ffffff; --fg: #111414; --muted: #4a5655; --rule: #d6dedd; --panel: #f5f8f7; --accent: #057379; --pass: #1d7a3a; --fail: #b3261e; --partial: #8a5a00; --pending: #4a5655; color-scheme: light; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif; }
+main { max-width: 64rem; margin: 0 auto; padding: 40px 16px 64px; display: grid; gap: 1.75rem; }
+main > *, section > * { min-width: 0; }
+h1 { font-size: 1.9rem; line-height: 1.15; margin: 0; }
+h2 { font-size: 1.3rem; margin: 0; }
+h3 { font-size: 1.05rem; margin: 0; }
+section { display: grid; gap: 0.8rem; min-width: 0; }
+p, ul, ol { margin: 0; max-width: 48rem; }
+li + li { margin-top: 0.25rem; }
+code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.86em; }
+p code, li code, td code { overflow-wrap: anywhere; }
+pre { margin: 0; background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 0.8rem 1rem; overflow-x: auto; }
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 0.92rem; }
+th, td { text-align: left; vertical-align: top; padding: 0.45rem 0.7rem 0.45rem 0; border-bottom: 1px solid var(--rule); }
+th { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); border-bottom: 1.5px solid var(--fg); }
+td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.caption { font-size: 0.88rem; color: var(--muted); }
+.pass { color: var(--pass); font-weight: 600; }
+.fail { color: var(--fail); font-weight: 600; }
+.partial { color: var(--partial); font-weight: 600; }
+.pending { color: var(--pending); font-weight: 600; font-style: italic; }
+figure { margin: 0; display: grid; gap: 0.5rem; }
+.fig { overflow-x: auto; }
+.fig svg { display: block; width: 100%; height: auto; min-width: 600px; max-width: 760px; border: 1px solid var(--rule); border-radius: 6px; background: #ffffff; }
+a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+<header>
+  <h1>Step 5 All sizes: Verify</h1>
+  <p>Roadmap step 5. Status: Verify done on 2026-11-07 by separate agents. Date: 2026-11-07. Build commit: <code>7c30a3e</code> ("Step 5 build: all model sizes in fp32, fp16 and bf16 on mlx"). Run-rule path: D4-N (the user did not answer the D4 question).</p>
+</header>
+
+<section id="summary">
+  <h2>1 Summary</h2>
+  <p>This file checks the 22 acceptance criteria of <code>specs/05-all-sizes/plan.html</code> (Section 8, Table 19) against build commit <code>7c30a3e</code>. Separate agents did the Verify stage. They did not build the step. One agent, the re-runner, ran ruff, both test sessions, the ViT-7B/16 cross-check and the P2 benchmark again, one heavy job at a time. Five auditors read the code, the tests, the logs and the results, and ran light probes only. A second check by another agent tried to refute each finding. No agent changed a tracked file of the repo, and no agent committed.</p>
+  <p><b>Result:</b> <span id="result-line">19 rows pass, 1 row is partial (AC13, finding F3), 0 rows fail, 2 rows are not in the scope of Verify (AC21, AC22).</span> AC6 passes on path D4-N. AC17 is report only.</p>
+  <ul>
+    <li><b>Parity.</b> All measured W5 rows pass. The counts equal plan Table 18 on path D4-N (Table 4). In fp32, the five model sizes agree with the reference output to 1 &minus; 5.8e-10 or better. The smallest margin of all rows is ViT-S+/16 in bf16-autocast: patch mean 0.995136 against the threshold 0.995. This row uses 97.3 % of its threshold budget (Table 5).</li>
+    <li><b>Re-run.</b> The re-run reproduces the build. The three results tables, made again from the re-run lines, are byte-equal to the committed files. The 48 cosine values and the 12 largest absolute differences of the 12 ViT-7B/16 cross-check lines are bitwise equal to the build lines. Each load peak equals the build value. The slow session gives 1039 passed, 152 skipped, 40 xfailed and 0 failed.</li>
+    <li><b>Benchmark (report only).</b> The paired ratio of the cast modes is not stable. The build gives medians of 1.028 (fp16-cast) and 1.039 (bf16-cast). The re-run gives 0.968 and 0.973. So in the cast modes, mlx and torch-mps have about the same throughput at P2. In fp32 and in the autocast modes, mlx stays ahead in both runs: 1.094 to 1.159 (Section 5, F2).</li>
+    <li><b>Findings.</b> Section 7 gives 25 findings (27 finding ids of the agents): 2 medium and 23 low. F1 (medium): the load-peak checks have only an upper bound, so a loader that evaluates nothing stays green. F2 (medium): the sign of the cast-mode paired ratio changes between runs. F3 makes AC13 partial. The row "SDPA" of plan Table 3 says that the half SDPA kernel computes in fp32 inside. On this Mac, it does not. The second check refuted no finding. It corrected or sharpened details of 23 of the 27 agent findings (Table 12).</li>
+    <li><b>Open.</b> The D4 run-rule question stays open (Section 8). So the 48 half-mode parity rows of ViT-7B/16 stay skipped with the reason "reference file missing".</li>
+  </ul>
+</section>
+
+<section id="method">
+  <h2>2 Method</h2>
+  <p>The agents read <code>CLAUDE.md</code>, <code>GLOSSARY.md</code>, <code>explore.html</code> and <code>plan.html</code> of this folder, and the diff <code>git diff 9161cc2 7c30a3e</code> (29 files, +4,296 &minus;365 lines). They also read the hand-over note of the build. They treated each number of the note as a claim to check. HEAD was <code>7c30a3e</code> and the working tree was clean at the start and at the end. All times on this page are UTC. <code>memory-checks.log</code> writes local time (UTC + 1 h). Machine: Apple M5 Max, 64 GB, AC power, Low Power Mode off, no thermal warning. Versions: mlx 0.32.4, torch 2.15.0, transformers 5.22.1, macOS 26.5.2, Python 3.12.13, ruff 0.17.4.</p>
+  <p>Only the re-runner ran heavy jobs. Before each heavy job, it ran the wait loop in its own Bash call. The wait loop waits until no pytest, benchmark, <code>cross_check.py</code>, <code>make_reference.py</code> or <code>profile_block.py</code> process runs. Then the re-runner read the free memory with <code>available_memory_bytes</code>. Before the first job, it copied the git-ignored logs under <code>tests/fixtures/generated/</code> to a scratch snapshot. The benchmark wrote to a scratch results file (<code>--results</code>), so <code>results/bench-all-sizes.jsonl</code> did not change. No job loaded ViT-7B/16 with fp32 weights.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>No.</th><th>Job</th><th>Start to end (UTC)</th><th>Free memory before</th><th>Wall time</th><th>Disk reads</th><th>Result</th></tr></thead>
+      <tbody>
+        <tr><td>v1</td><td><code>uv run ruff format --check</code>, <code>uv run ruff check</code></td><td>04:56</td><td class="num">&ndash;</td><td class="num">&lt; 1 s</td><td class="num">&ndash;</td><td>79 files already formatted; all checks passed</td></tr>
+        <tr><td>v2</td><td><code>uv run pytest</code> (default session)</td><td>04:56:32 to 04:57:05</td><td class="num">34.46 GB</td><td class="num">33 s (pytest 28.27 s)</td><td class="num">not measured</td><td>685 passed, 4 skipped, 0 failed, 0 xfail</td></tr>
+        <tr><td>v3a</td><td><code>DINOV3_SLOW=1 uv run pytest -k "not 7B"</code> (slow session, part 1)</td><td>04:58:05 to 04:59:14</td><td class="num">34.47 GB</td><td class="num">69 s (pytest 64.48 s)</td><td class="num">1.85 GB</td><td>1047 selected: 1004 passed, 3 skipped, 40 xfailed, 0 failed, 6 warnings</td></tr>
+        <tr><td>v3b</td><td><code>DINOV3_SLOW=1 uv run pytest -k 7B</code> (slow session, part 2)</td><td>05:00:02 to 05:00:42</td><td class="num">36.56 GB</td><td class="num">40 s (pytest 34.32 s)</td><td class="num">14.43 GB</td><td>184 selected: 35 passed, 149 skipped, 0 failed</td></tr>
+        <tr><td>v4</td><td><code>cross_check.py --model-size ViT-7B/16 --dtype-mode bf16-cast --torch-device mps</code>, dry run at 05:01:18, then the run</td><td>05:01:30 to 05:01:47</td><td class="num">39.27 GB</td><td class="num">17 s</td><td class="num">3.36 GB</td><td>12 lines "measured", both backends finite</td></tr>
+        <tr><td>v5</td><td><code>bench_mlx_port.py --priority P2 --results &lt;scratch&gt;</code>, dry run at 05:02:09, then the run</td><td>05:02:22 to 05:19:44</td><td class="num">49.18 GB</td><td class="num">1,042 s</td><td class="num">4.45 GB</td><td>30 lines "done", all valid and finite</td></tr>
+        <tr><td>v6</td><td><code>write_table</code> of <code>parity_table.py</code> and <code>token_range_table.py</code>, to scratch</td><td>05:20</td><td class="num">&ndash;</td><td class="num">&lt; 1 s</td><td class="num">&ndash;</td><td>3 tables, byte-equal to the committed files</td></tr>
+        <tr><td>v7</td><td><code>pytest --collect-only -q</code>, default and slow, now and at <code>7c30a3e~1</code> (worktree)</td><td>05:21</td><td class="num">&ndash;</td><td class="num">&lt; 1 s each</td><td class="num">&ndash;</td><td>test ids (AC18)</td></tr>
+        <tr><td>v8</td><td>Check of the build logs against the run rules (AC19)</td><td>after v7</td><td class="num">&ndash;</td><td class="num">&ndash;</td><td class="num">&ndash;</td><td>0 violations in the build window</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 1.</b> Jobs of the re-runner, in order. Each job started after the previous job ended. Disk reads: the change of "Bytes (Read)" of all block-storage drivers (ioreg) over the job. Jobs v1, v6, v7 and v8 are light jobs. The build window of v8 is commit <code>9161cc2</code> (03:32:33) to commit <code>7c30a3e</code> (04:54:28).</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Agent</th><th>What it checked</th><th>How</th></tr></thead>
+      <tbody>
+        <tr><td>Re-runner</td><td>All measured values of AC1 to AC20; AC18 test ids; AC19 run rules of the build</td><td>Table 1. The only agent with heavy jobs.</td></tr>
+        <tr><td>Numerics auditor</td><td>Plan Table 3 (dtype of each part), the kernels, the activation, the key map, RoPE at head dimension 128, the token range</td><td>Hooks on the real code with the small models <code>vits16</code>, <code>vits16plus</code> and <code>vit7b16-shape</code> in the five dtype modes; probes on tiny arrays; safetensors headers only.</td></tr>
+        <tr><td>Test auditor</td><td>Each target of the tests against plan Tables 12 to 15; whether each test can fail</td><td>20 mutation probes in a scratch worktree: 11 went red, 9 survived (M2, M5, M5b, M6, M7, M9, M10, M11, M12). The survivors gave F1, F5, F6, F7, F8 and F9.</td></tr>
+        <tr><td>Run-rule auditor</td><td>The order of the guards, the loader, the worker environments, the session order, the logs</td><td>Probes with the small model, lazy <code>mx.load</code> (active memory growth 0 bytes), a hostile base environment for the workers.</td></tr>
+        <tr><td>Results auditor</td><td>The results files, the raw JSON lines, the stale lines, the margins, the benchmark lines</td><td>Tables made again in memory from the raw lines, cut at the end of build job 9 (04:47:20). No model load.</td></tr>
+        <tr><td>Standards auditor</td><td>The code rules of <code>CLAUDE.md</code>, the torch-free rule, local paths, GLOSSARY terms</td><td>Each module imported alone in a subprocess; a grep of the 29 committed files; an AST scan for type hints; the light test files one at a time; an interface probe with the small model.</td></tr>
+        <tr><td>Second check</td><td>Each finding</td><td>One agent for each finding tried to refute it, with its own probes. These agents refuted no finding (Table 12).</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 2.</b> The agents of the Verify stage. No auditor loaded gated weights or ran a benchmark.</p>
+  <p>Limits:</p>
+  <ul>
+    <li>The build is one commit, so the agents cannot check from git that each test was red first. The hand-over note records one test without a red run: <code>test_cross_check_compare_tokens</code>.</li>
+    <li>Light work of the auditors ran during the heavy jobs of the re-runner. Light pytest runs and probes overlapped v3a, v3b, v4 and rounds 1 and 3 of v5 (F14). One auditor started <code>test_mlx_environment.py</code> (small models, 2.3 s) without the wait loop during v3b. No auditor loaded gated weights. So the run rule held, but round 1 of v5 is not an isolated timing.</li>
+    <li>The cross-check and the test sessions appended lines to the git-ignored logs under <code>tests/fixtures/generated/</code>. Git does not track these files.</li>
+  </ul>
+</section>
+
+<section id="criteria">
+  <h2>3 Acceptance criteria</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>No.</th><th>Criterion</th><th>Target</th><th>Measured</th><th>Result</th></tr></thead>
+      <tbody>
+        <tr><td>AC1</td><td>Parity on mlx in fp32 (GPU, TF32 off)</td><td>ViT-S/16, ViT-S+/16, ViT-B/16, ViT-L/16, ViT-H+/16: 12 of 12 each, frame, patch mean and patch 1st percentile &ge; 0.9999. ViT-7B/16: 12 skipped with the <code>RunRuleError</code> text</td><td>Re-run (v2, v3a, v3b): 60 of 60 rows measured, each passes. Smallest of frame, patch mean and patch 1st percentile, as 1 &minus; x: ViT-S/16 3.1e-11, ViT-S+/16 5.8e-10, ViT-B/16 6.9e-11, ViT-L/16 1.8e-10, ViT-H+/16 3.8e-10. ViT-7B/16: 12 skipped, "ViT-7B/16 mlx fp32: ViT-7B/16 runs with fp16, bf16 or quantized weights only (CLAUDE.md run rules)". <code>results/parity-mlx.md</code>, made again from the re-run lines, is byte-equal to the committed file.</td><td class="pass">pass</td></tr>
+        <tr><td>AC2</td><td>Parity on mlx in fp16-autocast</td><td>five model sizes: 12 of 12 each &ge; 0.999 / 0.999 / 0.99</td><td>Re-run, frame / patch mean / patch 1st percentile: ViT-S/16 0.999997 / 0.999998 / 0.999995; ViT-S+/16 0.999986 / 0.999958 / 0.999904; ViT-B/16 0.999997 / 0.999998 / 0.999993; ViT-L/16 0.999998 / 0.999996 / 0.999966; ViT-H+/16 0.999999 / 0.999981 / 0.999679. 60 of 60 rows pass. Largest share of the threshold budget: 4.2 % (ViT-S+/16 patch mean).</td><td class="pass">pass</td></tr>
+        <tr><td>AC3</td><td>Parity on mlx in fp16-cast</td><td>ViT-S/16, ViT-S+/16, ViT-B/16: 12 of 12 &ge; 0.999 / 0.999 / 0.99. ViT-H+/16: each finite configuration passes (expected 6). Expected failures with <code>FP16_OVERFLOW</code>: ViT-L/16 12 of 12, ViT-H+/16 the 224 px short side (expected 6). No other non-finite output</td><td>Re-run: ViT-S/16 0.999995 / 0.999997 / 0.999986; ViT-S+/16 0.999973 / 0.999920 / 0.999808; ViT-B/16 0.999995 / 0.999997 / 0.999991 (12 of 12 each). ViT-H+/16: 6 finite configurations (448 and 512 px) pass with 0.999999 / 0.999998 / 0.999993. Non-finite and xfail: ViT-L/16 12 of 12; ViT-H+/16 iss-kibo-lab 224x224 and 224x400, forest 224x224 and 224x304, iss-conference 224x224 and 304x224. No other non-finite output.</td><td class="pass">pass</td></tr>
+        <tr><td>AC4</td><td>Parity on mlx in bf16-cast</td><td>five model sizes: 12 of 12 each &ge; 0.998 / 0.995 / 0.96</td><td>Re-run: ViT-S/16 0.999545 / 0.999779 / 0.999560; ViT-S+/16 0.998847 / 0.995816 / 0.990381; ViT-B/16 0.999711 / 0.999821 / 0.999478; ViT-L/16 0.999767 / 0.999558 / 0.996394; ViT-H+/16 0.999833 / 0.999061 / 0.986725. 60 of 60 rows pass. Smallest margin: ViT-S+/16 patch mean 0.995816 (iss-kibo-lab/224x400), 83.7 % of its budget (F23).</td><td class="pass">pass</td></tr>
+        <tr><td>AC5</td><td>Parity on mlx in bf16-autocast</td><td>five model sizes: 12 of 12 each &ge; 0.998 / 0.995 / 0.96</td><td>Re-run: ViT-S/16 0.999862 / 0.999924 / 0.999650; ViT-S+/16 0.998387 / 0.995136 / 0.988882; ViT-B/16 0.999873 / 0.999899 / 0.999528; ViT-L/16 0.999924 / 0.999791 / 0.997288; ViT-H+/16 0.999947 / 0.999279 / 0.985938. 60 of 60 rows pass. The smallest margin of all rows: ViT-S+/16 patch mean 0.995136, 97.3 % of its budget. torch-mps gives 0.995177 for the same row.</td><td class="pass">pass</td></tr>
+        <tr><td>AC6</td><td>ViT-7B/16 (D4)</td><td>Path D4-N: 48 parity rows skipped "reference file missing", with the reason in <code>verify.html</code>; the cross-check of 12 configurations in bf16-cast recorded (report only)</td><td>Re-run (v3b): 48 rows skipped (four half modes &times; 12), "reference-vit7b16.safetensors is missing." Section 6.1 gives the reason. Cross-check (v4): 12 lines "measured", both backends finite. The 48 cosine values and the 12 largest absolute differences are bitwise equal to the build lines (Table 9).</td><td class="pass">pass (path D4-N)</td></tr>
+        <tr><td>AC7</td><td>Batch consistency: a batch of 8 against 8 single runs</td><td>slow session: 29 rows; each &ge; <code>THRESHOLDS[mode]</code>, or an expected failure of plan Table 6</td><td>Re-run: 29 rows, 27 measured and passing, 2 non-finite and xfail (ViT-L/16 and ViT-H+/16 in fp16-cast). Smallest patch 1st percentile 0.999107 (ViT-L/16 bf16-cast); smallest frame 0.999864 (ViT-S/16 bf16-cast). ViT-H+/16 in its three finite half modes and ViT-7B/16 in the four half modes: largest difference 0.0 (the batch output equals the single runs). ViT-7B/16 fp32: skipped by the run rule.</td><td class="pass">pass</td></tr>
+        <tr><td>AC8</td><td>The non-finite set of mlx equals the set of torch-mps</td><td>fp16-cast parity: the same 18 of 60 configurations; batch: the same 2 rows; the ViT-7B/16 batch result recorded; the section ends with "equal"</td><td>Re-run: 18 parity configurations on both backends (ViT-L/16 12, ViT-H+/16 6) and 2 batch rows on both. The ViT-7B/16 batch passes on mlx in the four half modes and on torch-mps in fp16-cast and bf16-cast. Section 6 of <code>results/parity-mlx.md</code> ends with "equal". No regression test covers the batch rows (F9).</td><td class="pass">pass</td></tr>
+        <tr><td>AC9</td><td>Stored hidden states in fp32: each part alone, and the chain</td><td>five model sizes: embeddings (prefix rows exact, min token cosine &ge; 0.99999); 92 blocks &ge; 0.99999; final norm &ge; 0.99999; each of the L + 1 states &ge; <code>THRESHOLDS["fp32"]</code>. Half modes: recorded; prefix rows exact</td><td>fp32: embeddings prefix rows exact, 1 &minus; min token cosine &le; 1.41e-12; all 92 blocks pass, smallest 0.9999999987 (ViT-S+/16); final norm 1 &minus; min &le; 1.37e-14; chain: each state passes, smallest patch 1st percentile 0.9999999991 (ViT-H+/16). Half modes recorded (report only): smallest block ViT-S+/16 bf16-cast 0.9707 and bf16-autocast 0.9710; smallest chain state ViT-H+/16 bf16-autocast 0.9592 and bf16-cast 0.9642; fp16-cast non-finite blocks ViT-L/16 24 of 24, ViT-H+/16 10 of 32. The 10-digit values come from the build lines; the re-run table of these rows is byte-equal.</td><td class="pass">pass</td></tr>
+        <tr><td>AC10</td><td>Part tests of SwiGLU and of the ViT-7B/16 shape</td><td>each value within plan Table 13; the 11 parts of <code>vits16plus</code> within plan Table 13 and Step 4 Table 7</td><td>Re-run (v2): <code>vits16plus</code> ff_in 5.2e-6 (&le; 1e-5), activation 9.5e-7 (&le; 1e-5), ff_out 8.8e-6 (&le; 2e-5); the other 8 parts give the same values as <code>vits16</code>. SwiGLU 9.1e-6 (<code>vits16plus</code>) and 5.5e-6 (<code>vit7b16-shape</code>) (&le; 2e-5). SiLU 9.5e-7 (&le; 4e-6). Attention of <code>vit7b16-shape</code> 3.6e-6 (&le; 1e-5). Block &le; 5.1e-6 (&le; 3e-5). Small model tokens &le; 8.8e-6, hidden states &le; 7.4e-6 (&le; 5e-5). Every target in the tests equals the plan; no target is looser than in Step 4.</td><td class="pass">pass</td></tr>
+        <tr><td>AC11</td><td>RoPE tables at head dimension 128</td><td>six grids: largest difference &le; 1e-6; rows 0 to 4 exact; fp32</td><td>Re-run (v2): cos 1.19e-7, sin 5.96e-8 on each of the six grids; rows 0 to 4 exact; fp32. The numerics auditor got the same values against <code>DINOV3ViTRopePositionEmbedding</code> with embedding dimension 4096 and 32 heads.</td><td class="pass">pass</td></tr>
+        <tr><td>AC12</td><td>The key map is complete for all six model sizes</td><td>the values of plan Table 4; 1 dropped; 0 unknown; 0 missing; 0 shape differences; active memory grows by &lt; 16 MB</td><td>Re-run (v2), tensors / MLX parameters / matmul parameters: ViT-S/16 211 / 210 / 134; ViT-S+/16 235 / 234 / 158; ViT-B/16 211 / 210 / 134; ViT-L/16 415 / 414 / 266; ViT-H+/16 615 / 614 / 418; ViT-7B/16 687 / 686 / 442. Stream parameters (header read): 76, 76, 76, 148, 196, 244. Each size: 1 dropped (<code>embeddings.mask_token</code>), 0 missing, 0 extra, 0 shape differences, all tensors F32. Active memory growth 2,448 to 8,048 bytes.</td><td class="pass">pass</td></tr>
+        <tr><td>AC13</td><td>Dtype modes</td><td>five keys in the order of <code>THRESHOLDS</code>; each part as plan Table 3 in each mode; the activation rounds once (T23 targets)</td><td>T5, T22 to T25 green. Hooks on the real code (three small models, five modes): the dtype of every part matches every row of plan Table 3. T23 (re-run): GELU fp16 0.082 %, bf16 0 %; SwiGLU fp16 0.048 %, bf16 0 %; each &le; 1 unit in the last place; the GELU tail exact; the all-half path differs in 32 to 36 %. A numerics-auditor probe on 1,000,000 values from N(0, 3&sup2;) gives 0.117 % for GELU fp16 at x &ge; &minus;2.5. This is above the 0.1 % share of T23. So the T23 target holds only for its own input grid (100,001 values from &minus;8 to 8). The probe did not measure the size of these differences in units in the last place. The row "SDPA" of plan Table 3 says "scores, softmax and P &middot; V in fp32 inside the kernel". On this Mac the half kernel does not do this: 48 to 57 % (fp16) and 10.5 to 13.1 % (bf16) of its values differ from the float64 result rounded once (F3). No test checks the RoPE rotation row in the half modes; a probe shows that the rotation is fp32 today (F7).</td><td class="partial">partial (F3)</td></tr>
+        <tr><td>AC14</td><td>Load of one tensor at a time</td><td>ViT-S/16 bf16-cast: load peak &le; 54.2 MB, cache 0. T34 within the plan Table 5 formula. Every mlx load: one load-peak line, peak &le; the plan Table 5 target, cache 0. ViT-7B/16 in the four half modes &le; 16.25 GB. Memory limit = need</td><td>Re-run: H2 44,075,520 &le; 54,191,002 bytes, cache 0, need 4,051,831,706. T34 3,424,256 &le; 4,424,294 bytes, cache 0. 15 loads in v2, 25 in v3a, 4 in v3b, 1 in v4, 15 in v5: each has one load-peak line, each peak is at 80.8 % to 83.5 % of its target, cache 0 (Table 10). ViT-7B/16: 13,532.7 MB (cast) and 13,534.7 MB (autocast) &le; 16,252.7 MB. Limit = need: T10 green; 15 of 15 mlx benchmark lines. The checks have only an upper bound (F1, medium) and the slot fail path has no test (F5). Two fp32 sources can be alive for a short time (F4). The measured values hold.</td><td class="pass">pass</td></tr>
+        <tr><td>AC15</td><td>Run-rule guards</td><td>both loaders raise <code>RunRuleError</code> before the memory check; <code>make_reference.py</code> records a skip; 0 loads of ViT-7B/16 with fp32 weights in <code>memory-checks.log</code> and <code>runs.jsonl</code></td><td>T7, T11 to T15 green in the re-run. Probe: in both loaders the guard comes before every file read and the memory check; the small model with the label ViT-7B/16 fp32 raised <code>RunRuleError</code> at the guard. <code>memory-checks.log</code> (all dates): 0 ViT-7B/16 lines with fp32 weights; 6 fake T11 lines that are not loads (F12). <code>runs.jsonl</code>: one ViT-7B/16 line of 2026-11-06, "skipped", from before the Step 5 guard. Order notes outside the loaders: F10, F11.</td><td class="pass">pass</td></tr>
+        <tr><td>AC16</td><td>Token range recorded</td><td>348 lines with the status measured or non-finite, each with L + 1 token values and 3 &times; L branch values; <code>results/token-range-mlx.md</code> written; W8 &le; 1e-4; the token range and the hidden states agree exactly</td><td>Re-run: 348 lines (29 tests &times; 12): 330 measured, 18 non-finite (ViT-L/16 fp16-cast 12, ViT-H+/16 fp16-cast 6), each with L + 1 token values and 3 &times; L branch values; one skip line for ViT-7B/16 fp32. <code>results/token-range-mlx.md</code> made again is byte-equal. W8: ViT-S/16 8.3e-7, ViT-S+/16 2.4e-6, ViT-B/16 2.5e-6, ViT-L/16 3.0e-7, ViT-H+/16 1.3e-6. T26 exact; a probe shows <code>last_state</code> bitwise equal to the last hidden state in all five modes. The branch values and the status have no test that can fail (F6).</td><td class="pass">pass</td></tr>
+        <tr><td>AC17</td><td>Benchmark at P2 (report only)</td><td>30 lines "done" or "skipped"; median paired ratio of three rounds for each dtype mode and output; autocast / cast ratio of mlx; peak memory; validity</td><td>Re-run (v5): 30 lines "done", all valid and finite. Median paired ratio (frame), build / re-run: fp32 1.118 / 1.094; fp16-cast 1.028 / 0.968; bf16-cast 1.039 / 0.973; fp16-autocast 1.156 / 1.096; bf16-autocast 1.159 / 1.105. mlx autocast / cast: fp16 0.966 / 0.953; bf16 0.973 / 0.953. Section 5. The sign of the cast-mode ratio is not stable (F2).</td><td class="pass">pass (report only)</td></tr>
+        <tr><td>AC18</td><td>The interfaces of Steps 2 to 4 stay the same</td><td>old imports work; the same torch-mps test ids; the mlx ids of Step 4 change only as the caption of plan Table 8 says; no torch import in <code>stored</code>, <code>mlx_model</code>, <code>mlx_weights</code>, <code>memory</code></td><td>Re-run (v7): default session 349 ids at <code>7c30a3e~1</code>, 689 now; slow session 618 and 1231. torch-mps ids equal (130 and 390). 14 ids removed, exactly the changes of the plan Table 8 caption (12 block ids to one, the ViT-S/16 key-map id, the T25 rename). All non-mlx ids of the base are present. Import probe: <code>stored</code>, <code>mlx_model</code>, <code>mlx_weights</code>, <code>memory</code>, <code>bench</code>, <code>flops</code>, <code>parity</code>, <code>footprint</code> and <code>hub</code> import neither torch nor transformers. <code>test_mlx_modules_do_not_import_torch</code> passed in v2.</td><td class="pass">pass</td></tr>
+        <tr><td>AC19</td><td>Run rules</td><td>0 violations: a memory check before each model load; one heavy job at a time in the order of plan Table 10; MLX limit = need; MPS watermarks for the torch workers; ViT-7B/16 last in each session; no ViT-7B/16 load on mlx before H2 and before the gate of job 5</td><td>Build window (v8): 0 overlaps of jobs. 0 loads without a memory check: 156 groups with measured lines and 92 load-peak lines checked. 0 ViT-7B/16 loads with fp32 weights. The first ViT-7B/16 mlx load (04:24:59) came after H2 (job 1, 03:58) and after the end of job 5 (04:22:21). Limit = need in the 15 mlx benchmark lines; watermarks 0.8 and 0.6 in the 15 torch-mps lines and in the torch cross-check worker. The ViT-7B/16 ids start at id 1068 of 1231: the header-only key-map test <code>test_key_map_covers_file[ViT-7B/16]</code>. The first id that loads ViT-7B/16 is id 1069. No other model size comes after them. 6 fake T11 lines are not loads (F12). The convert test reads whole weight files but is not a model load (F13).</td><td class="pass">pass</td></tr>
+        <tr><td>AC20</td><td>Tests and lint</td><td>pytest 0 failures in the default and the slow session; xfail only for the pairs of <code>EXPECTED_FP16_OVERFLOW</code>; ruff clean</td><td>Re-run: <code>ruff format --check</code> 79 files already formatted; <code>ruff check</code> all checks passed. Default session: 685 passed, 4 skipped, 0 failed, 0 xfail. Slow session, both parts: 1039 passed, 152 skipped, 40 xfailed, 0 failed. The 40 xfails are 20 on mlx and 20 on torch-mps. All are for the two pairs of <code>EXPECTED_FP16_OVERFLOW</code>. The build ran 1230 of 1231 slow-session tests; the re-run ran all 1231 (F16). No test pins the list itself (F8).</td><td class="pass">pass</td></tr>
+        <tr><td>AC21</td><td>Explainers <code>05-1-swiglu.html</code>, <code>05-2-model-scaling.html</code>, <code>05-3-numeric-range.html</code></td><td>3 explainers; cover every function of plan Table 1; Figure 2 of <code>02-tokens-and-outputs.html</code> extended</td><td>Not in the scope of Verify (Learn stage). Section 8 gives inputs for the Learn stage.</td><td class="pending">not in scope of Verify</td></tr>
+        <tr><td>AC22</td><td>Steering files and ADRs</td><td>GLOSSARY terms of plan Section 3.12; Tables 3 and 9 of <code>docs/plan.html</code>; ADR 0007; <code>roadmap.md</code> status</td><td>Not in the scope of Verify (Close stage). The standards auditor found every term of plan Section 3.12 in <code>GLOSSARY.md</code>, with the text of the plan. F17 to F19 are inputs for the Close stage.</td><td class="pending">not in scope of Verify</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 3.</b> The 22 acceptance criteria of plan Table 19. "Re-run" marks a value that the re-runner measured on 2026-11-07. "1 &minus; x" gives a cosine as its distance to 1. "partial" means that the measured value meets one part of the target and misses another part. The share of the threshold budget is (1 &minus; value) / (1 &minus; threshold).</p>
+</section>
+
+<section id="parity">
+  <h2>4 Parity results</h2>
+  <h3>4.1 Counts of plan Table 18</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Model size</th><th>fp32</th><th>fp16-cast</th><th>bf16-cast</th><th>fp16-autocast</th><th>bf16-autocast</th></tr></thead>
+      <tbody>
+        <tr><td>ViT-S/16</td><td>12 of 12 pass</td><td>12 of 12 pass</td><td>12 of 12 pass</td><td>12 of 12 pass</td><td>12 of 12 pass</td></tr>
+        <tr><td>ViT-S+/16</td><td>12 of 12 pass</td><td>12 of 12 pass</td><td>12 of 12 pass</td><td>12 of 12 pass</td><td>12 of 12 pass</td></tr>
+        <tr><td>ViT-B/16</td><td>12 of 12 pass</td><td>12 of 12 pass</td><td>12 of 12 pass</td><td>12 of 12 pass</td><td>12 of 12 pass</td></tr>
+        <tr><td>ViT-L/16</td><td>12 of 12 pass</td><td>12 of 12 non-finite: expected failure</td><td>12 of 12 pass</td><td>12 of 12 pass</td><td>12 of 12 pass</td></tr>
+        <tr><td>ViT-H+/16</td><td>12 of 12 pass</td><td>6 pass (448 and 512 px), 6 non-finite: expected failure (224 px short side)</td><td>12 of 12 pass</td><td>12 of 12 pass</td><td>12 of 12 pass</td></tr>
+        <tr><td>ViT-7B/16</td><td>12 skipped: run rule</td><td>12 skipped: reference file missing</td><td>12 skipped: reference file missing</td><td>12 skipped: reference file missing</td><td>12 skipped: reference file missing</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 4.</b> W5 on mlx, from the latest lines of the re-run (360 keys, 04:58:16 to 05:00:32). Each cell equals plan Table 18 on path D4-N. No measured row is below its threshold, so the R23 diagnostic did not start. torch-mps gives the same counts for ViT-S/16 to ViT-H+/16. Its ViT-7B/16 rows skip by the run rule in fp32 and in both autocast modes, and with "reference file missing" in both cast modes.</p>
+
+  <h3>4.2 Smallest margins</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Model size</th><th>fp32 (1 &minus; x)</th><th>fp16-cast</th><th>bf16-cast</th><th>fp16-autocast</th><th>bf16-autocast</th></tr></thead>
+      <tbody>
+        <tr><td>ViT-S/16</td><td class="num">3.1e-11</td><td class="num">frame 0.999995 (0.5 %)</td><td class="num">frame 0.999545 (22.8 %)</td><td class="num">frame 0.999997 (0.3 %)</td><td class="num">frame 0.999862 (6.9 %)</td></tr>
+        <tr><td>ViT-S+/16</td><td class="num">5.8e-10</td><td class="num">mean 0.999920 (8.0 %)</td><td class="num"><b>mean 0.995816 (83.7 %)</b></td><td class="num">mean 0.999958 (4.2 %)</td><td class="num"><b>mean 0.995136 (97.3 %)</b></td></tr>
+        <tr><td>ViT-B/16</td><td class="num">6.9e-11</td><td class="num">frame 0.999995 (0.5 %)</td><td class="num">frame 0.999711 (14.5 %)</td><td class="num">frame 0.999997 (0.3 %)</td><td class="num">frame 0.999873 (6.3 %)</td></tr>
+        <tr><td>ViT-L/16</td><td class="num">1.8e-10</td><td>non-finite (expected)</td><td class="num">frame 0.999767 (11.6 %)</td><td class="num">mean 0.999996 (0.4 %)</td><td class="num">p01 0.997288 (6.8 %)</td></tr>
+        <tr><td>ViT-H+/16</td><td class="num">3.8e-10</td><td class="num">mean 0.999998 (0.2 %)</td><td class="num">p01 0.986725 (33.2 %)</td><td class="num">p01 0.999679 (3.2 %)</td><td class="num">p01 0.985938 (35.2 %)</td></tr>
+        <tr><td>ViT-7B/16</td><td>skipped</td><td>skipped</td><td>skipped</td><td>skipped</td><td>skipped</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 5.</b> For each model size and dtype mode: the output with the largest share of its threshold budget, its value and the share in brackets. "mean" is the patch mean, "p01" the patch 1st percentile. fp32: the smallest of the three outputs as 1 &minus; x; each share is below 0.001 %. Ranking by budget share over all rows: 1. ViT-S+/16 bf16-autocast patch mean, 97.3 % (iss-kibo-lab/224x400, margin 0.000136). 2. ViT-S+/16 bf16-cast patch mean, 83.7 % (iss-kibo-lab/224x400, margin 0.000816). 3. ViT-S+/16 bf16-autocast frame 0.998387, 80.6 % (margin 0.000387). 4. ViT-S+/16 bf16-cast frame 0.998847, 57.6 %. Then the two ViT-H+/16 p01 rows. All fp16 rows use 8 % or less. By absolute margin the order differs: 0.000136, then 0.000387, then 0.000816 (F23).</p>
+  <ul>
+    <li><b>ViT-S+/16 in bf16 (R23).</b> torch-mps has the same small margin: bf16-autocast patch mean 0.995177 and frame 0.998365. In bf16-cast, mlx gives a lower patch mean than torch-mps (0.995816 against 0.998481), but passes. On torch-mps, ViT-H+/16 bf16-cast p01 0.968878 uses 77.8 % of its budget.</li>
+    <li><b>mlx against torch-cpu in the same half mode.</b> On the three small models, the min token cosine to the fp32 output of the Hugging Face model is nearly the same on both backends. bf16-cast: 0.999981 against 0.999982 (<code>vits16</code>), 0.999977 against 0.999979 (<code>vits16plus</code> and <code>vit7b16-shape</code>). bf16-autocast: equal to 6 digits (0.999993 to 0.999994). fp16 modes: 1.000000 on both. In fp32 the small models agree with the Hugging Face model to 6.7e-6 or better.</li>
+    <li><b>Batch and non-finite set (AC7, AC8).</b> 27 batch rows pass, 2 are expected failures. The non-finite set of mlx equals the set of torch-mps: 18 parity configurations and 2 batch rows.</li>
+    <li><b>Token range (R20).</b> All values are finite outside the two listed pairs. In fp16-autocast, the feed-forward branch output of ViT-L/16 reaches 52,128 in block 1 (forest/448x448): 79.6 % of the fp16 maximum 65,504. The finite ViT-H+/16 fp16-cast configuration iss-conference/448x448 reaches 59,776 after block 31: 91.3 %. ViT-7B/16: largest token value 13,581.9 (bf16-autocast, forest/224x224, after block 40, register token R2): 20.7 %. Largest branch value 1,296 (ff_out). So no ViT-7B/16 pair joined <code>EXPECTED_FP16_OVERFLOW</code>.</li>
+  </ul>
+</section>
+
+<section id="benchmark">
+  <h2>5 Benchmark run again</h2>
+  <p>Command: <code>uv run python scripts/bench_mlx_port.py --priority P2 --results &lt;scratch&gt;/bench-all-sizes-rerun.jsonl</code>. ViT-H+/16, 512 &times; 512 px, batch size 8, five dtype modes, 3 rounds, 30 workers, one after the other. The run took 1,042 s (build: 1,179 s; plan estimate: 20 to 25 min). The run order, the configuration fields, the versions, the power state and the thermal state equal the build. Only <code>warm_up_batches</code> differs, in 5 lines (3 against 4).</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Dtype mode</th><th>Run</th><th>mlx, img/s (median)</th><th>torch-mps, img/s (median)</th><th>Paired ratio, rounds 1 / 2 / 3</th><th>Median paired ratio</th></tr></thead>
+      <tbody>
+        <tr><td>fp32</td><td>build</td><td class="num">3.91</td><td class="num">3.49</td><td class="num">0.908 / 1.138 / 1.118</td><td class="num"><b>1.118</b></td></tr>
+        <tr><td>fp32</td><td>re-run</td><td class="num">4.56</td><td class="num">4.26</td><td class="num">0.860 / 1.094 / 1.099</td><td class="num"><b>1.094</b></td></tr>
+        <tr><td>fp16-cast</td><td>build</td><td class="num">10.10</td><td class="num">9.83</td><td class="num">0.964 / 1.037 / 1.028</td><td class="num"><b>1.028</b></td></tr>
+        <tr><td>fp16-cast</td><td>re-run</td><td class="num">12.03</td><td class="num">12.43</td><td class="num">0.997 / 0.968 / 0.962</td><td class="num"><b>0.968</b></td></tr>
+        <tr><td>bf16-cast</td><td>build</td><td class="num">10.15</td><td class="num">9.77</td><td class="num">1.059 / 1.006 / 1.039</td><td class="num"><b>1.039</b></td></tr>
+        <tr><td>bf16-cast</td><td>re-run</td><td class="num">12.12</td><td class="num">12.45</td><td class="num">1.070 / 0.967 / 0.973</td><td class="num"><b>0.973</b></td></tr>
+        <tr><td>fp16-autocast</td><td>build</td><td class="num">9.76</td><td class="num">8.44</td><td class="num">1.187 / 1.144 / 1.156</td><td class="num"><b>1.156</b></td></tr>
+        <tr><td>fp16-autocast</td><td>re-run</td><td class="num">11.43</td><td class="num">10.42</td><td class="num">1.183 / 1.089 / 1.096</td><td class="num"><b>1.096</b></td></tr>
+        <tr><td>bf16-autocast</td><td>build</td><td class="num">9.86</td><td class="num">8.53</td><td class="num">1.191 / 1.146 / 1.159</td><td class="num"><b>1.159</b></td></tr>
+        <tr><td>bf16-autocast</td><td>re-run</td><td class="num">11.55</td><td class="num">10.45</td><td class="num">1.187 / 1.089 / 1.105</td><td class="num"><b>1.105</b></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 6.</b> Throughput and paired ratio of the frame embedding at P2. Build: committed <code>results/bench-all-sizes.jsonl</code>, 04:27:02 to 04:46:37. Re-run: 05:02:23 to 05:19:44. The patch embeddings give the same medians within 0.001 (re-run patch: 1.094, 0.969, 0.973, 1.096, 1.105). The table gives a paired ratio, not a speedup: Step 6 measures the speedup against the baseline row of ADR 0004.</p>
+  <figure>
+    <div class="fig">
+    <svg viewBox="0 0 720 384" role="img" aria-label="Paired ratio mlx / torch-mps of each round at P2, build and re-run, five dtype modes">
+      <style>
+        .ax { stroke: #111414; stroke-width: 1; }
+        .gr { stroke: #d6dedd; stroke-width: 1; }
+        .one { stroke: #111414; stroke-width: 1.2; stroke-dasharray: 4 3; }
+        .lb { font: 12px -apple-system, Helvetica, Arial, sans-serif; fill: #111414; }
+        .mt { font: 12px -apple-system, Helvetica, Arial, sans-serif; fill: #4a5655; }
+        .hd { font: 600 12px -apple-system, Helvetica, Arial, sans-serif; fill: #111414; }
+        .tt { font: 600 13px -apple-system, Helvetica, Arial, sans-serif; fill: #111414; }
+        .bd { fill: #057379; }
+        .vf { fill: #ffffff; stroke: #111414; stroke-width: 1.5; }
+        .mb { stroke: #057379; stroke-width: 2.5; }
+        .mv { stroke: #111414; stroke-width: 2.5; }
+      </style>
+      <text class="tt" x="10" y="20">P2, frame embedding: paired ratio mlx / torch-mps of each round</text>
+      <text class="mt" x="374" y="40" text-anchor="end">&#8592; torch-mps faster</text>
+      <text class="mt" x="387" y="40">mlx faster &#8594;</text>
+      <line class="gr" x1="183.2" y1="46" x2="183.2" y2="314"/><line class="gr" x1="248.9" y1="46" x2="248.9" y2="314"/><line class="gr" x1="314.7" y1="46" x2="314.7" y2="314"/><line class="gr" x1="446.3" y1="46" x2="446.3" y2="314"/><line class="gr" x1="512.1" y1="46" x2="512.1" y2="314"/><line class="gr" x1="577.9" y1="46" x2="577.9" y2="314"/><line class="gr" x1="643.7" y1="46" x2="643.7" y2="314"/>
+      <line class="one" x1="380.5" y1="46" x2="380.5" y2="314"/>
+
+      <text class="hd" x="10" y="73">fp32</text>
+      <text class="mt" x="164" y="64" text-anchor="end">build</text>
+      <text class="mt" x="164" y="82" text-anchor="end">re-run</text>
+      <rect class="bd" x="255" y="55.5" width="9" height="9"/><circle class="bd" cx="562.1" cy="60" r="4.5"/><circle class="bd" cx="535.8" cy="60" r="4.5"/>
+      <line class="mb" x1="535.8" y1="52" x2="535.8" y2="68"/>
+      <rect class="vf" x="191.8" y="73.5" width="9" height="9"/><circle class="vf" cx="504.2" cy="78" r="4.5"/><circle class="vf" cx="510.8" cy="78" r="4.5"/>
+      <line class="mv" x1="504.2" y1="70" x2="504.2" y2="86"/>
+
+      <text class="hd" x="10" y="129">fp16-cast</text>
+      <text class="mt" x="164" y="120" text-anchor="end">build</text>
+      <text class="mt" x="164" y="138" text-anchor="end">re-run</text>
+      <rect class="bd" x="328.7" y="111.5" width="9" height="9"/><circle class="bd" cx="429.2" cy="116" r="4.5"/><circle class="bd" cx="417.4" cy="116" r="4.5"/>
+      <line class="mb" x1="417.4" y1="108" x2="417.4" y2="124"/>
+      <rect class="vf" x="372.1" y="129.5" width="9" height="9"/><circle class="vf" cx="338.4" cy="134" r="4.5"/><circle class="vf" cx="330.5" cy="134" r="4.5"/>
+      <line class="mv" x1="338.4" y1="126" x2="338.4" y2="142"/>
+
+      <text class="hd" x="10" y="185">bf16-cast</text>
+      <text class="mt" x="164" y="176" text-anchor="end">build</text>
+      <text class="mt" x="164" y="194" text-anchor="end">re-run</text>
+      <rect class="bd" x="453.7" y="167.5" width="9" height="9"/><circle class="bd" cx="388.4" cy="172" r="4.5"/><circle class="bd" cx="431.8" cy="172" r="4.5"/>
+      <line class="mb" x1="431.8" y1="164" x2="431.8" y2="180"/>
+      <rect class="vf" x="468.1" y="185.5" width="9" height="9"/><circle class="vf" cx="337.1" cy="190" r="4.5"/><circle class="vf" cx="345.0" cy="190" r="4.5"/>
+      <line class="mv" x1="345.0" y1="182" x2="345.0" y2="198"/>
+
+      <text class="hd" x="10" y="241">fp16-autocast</text>
+      <text class="mt" x="164" y="232" text-anchor="end">build</text>
+      <text class="mt" x="164" y="250" text-anchor="end">re-run</text>
+      <rect class="bd" x="622.1" y="223.5" width="9" height="9"/><circle class="bd" cx="570.0" cy="228" r="4.5"/><circle class="bd" cx="585.8" cy="228" r="4.5"/>
+      <line class="mb" x1="585.8" y1="220" x2="585.8" y2="236"/>
+      <rect class="vf" x="616.8" y="241.5" width="9" height="9"/><circle class="vf" cx="497.6" cy="246" r="4.5"/><circle class="vf" cx="506.8" cy="246" r="4.5"/>
+      <line class="mv" x1="506.8" y1="238" x2="506.8" y2="254"/>
+
+      <text class="hd" x="10" y="297">bf16-autocast</text>
+      <text class="mt" x="164" y="288" text-anchor="end">build</text>
+      <text class="mt" x="164" y="306" text-anchor="end">re-run</text>
+      <rect class="bd" x="627.3" y="279.5" width="9" height="9"/><circle class="bd" cx="572.6" cy="284" r="4.5"/><circle class="bd" cx="589.7" cy="284" r="4.5"/>
+      <line class="mb" x1="589.7" y1="276" x2="589.7" y2="292"/>
+      <rect class="vf" x="622.1" y="297.5" width="9" height="9"/><circle class="vf" cx="497.6" cy="302" r="4.5"/><circle class="vf" cx="518.7" cy="302" r="4.5"/>
+      <line class="mv" x1="518.7" y1="294" x2="518.7" y2="310"/>
+
+      <line class="ax" x1="170" y1="314" x2="670" y2="314"/>
+      <line class="ax" x1="183.2" y1="314" x2="183.2" y2="319"/><line class="ax" x1="248.9" y1="314" x2="248.9" y2="319"/><line class="ax" x1="314.7" y1="314" x2="314.7" y2="319"/><line class="ax" x1="380.5" y1="314" x2="380.5" y2="319"/><line class="ax" x1="446.3" y1="314" x2="446.3" y2="319"/><line class="ax" x1="512.1" y1="314" x2="512.1" y2="319"/><line class="ax" x1="577.9" y1="314" x2="577.9" y2="319"/><line class="ax" x1="643.7" y1="314" x2="643.7" y2="319"/>
+      <text class="lb" x="183.2" y="333" text-anchor="middle">0.85</text><text class="lb" x="248.9" y="333" text-anchor="middle">0.90</text><text class="lb" x="314.7" y="333" text-anchor="middle">0.95</text><text class="lb" x="380.5" y="333" text-anchor="middle">1.00</text><text class="lb" x="446.3" y="333" text-anchor="middle">1.05</text><text class="lb" x="512.1" y="333" text-anchor="middle">1.10</text><text class="lb" x="577.9" y="333" text-anchor="middle">1.15</text><text class="lb" x="643.7" y="333" text-anchor="middle">1.20</text>
+      <text class="mt" x="420" y="350" text-anchor="middle">paired ratio = mlx throughput / torch-mps throughput in the same round</text>
+
+      <circle class="bd" cx="20" cy="372" r="4.5"/><text class="mt" x="30" y="376">build (committed file)</text>
+      <circle class="vf" cx="190" cy="372" r="4.5"/><text class="mt" x="200" y="376">re-run</text>
+      <rect x="265.5" y="367.5" width="9" height="9" fill="#4a5655"/><text class="mt" x="280" y="376">round 1</text>
+      <circle cx="350" cy="372" r="4.5" fill="#4a5655"/><text class="mt" x="360" y="376">rounds 2 and 3</text>
+      <line class="mv" x1="470" y1="364" x2="470" y2="380"/><text class="mt" x="478" y="376">median of the 3 rounds</text>
+    </svg>
+    </div>
+    <p class="caption"><b>Figure 1.</b> The paired ratio of each round, frame embedding, for the build (filled) and the re-run (open). The dashed line marks equal throughput. In the cast modes the medians of the two runs lie on different sides of 1.00. In fp32 and in the autocast modes, the medians of both runs stay above 1.00, but the re-run medians are 0.02 to 0.06 lower. Round 1 of fp32 is below 1.00 in both runs, because torch-mps ran fp32 faster in round 1 than in rounds 2 and 3.</p>
+  </figure>
+  <ul>
+    <li><b>Why the ratios move.</b> Round 1 of the re-run matched the build within 5 %. The largest gap is mlx fp32: 4.07 against 4.27 img/s. The other lines of round 1 are within 2.6 %. Rounds 2 and 3 were 16.9 to 28.1 % faster than the build on both backends. torch-mps gained 21.5 to 28.1 %, and mlx gained 16.9 to 20.3 %. For example, torch-mps fp16-cast in round 3 gave 12.60 against 9.83 img/s. The configuration fields, the versions, AC power, the 94 W adapter and the thermal state are the same in both runs. So no recorded difference explains the change. The light probes of other agents (F14) can only lower the throughput, but the re-run was faster.</li>
+    <li><b>The build alone shows the same.</b> The fp16-cast ratio of build round 1 is 0.964 and the bf16-cast ratio of build round 2 is 1.006. So the sign of the cast-mode ratio was already not stable inside the build.</li>
+    <li><b>Conclusion (F2).</b> In the cast modes, the median paired ratio is within about 4 % of 1, and its sign is not stable. The spread between two runs is about 20 % in throughput, more than the cast-mode gap. The explainer 05-2 and later text must not say that mlx beats torch-mps in the cast modes. In fp32 (1.094 to 1.118) and in the autocast modes (1.096 to 1.159), mlx is ahead in both runs.</li>
+  </ul>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Ratio of mlx</th><th>Run</th><th>Rounds 1 / 2 / 3, frame</th><th>Median, frame (patch)</th></tr></thead>
+      <tbody>
+        <tr><td>fp16-autocast / fp16-cast</td><td>build</td><td class="num">1.022 / 0.953 / 0.966</td><td class="num">0.966 (0.965)</td></tr>
+        <tr><td>fp16-autocast / fp16-cast</td><td>re-run</td><td class="num">0.997 / 0.953 / 0.943</td><td class="num">0.953 (0.952)</td></tr>
+        <tr><td>bf16-autocast / bf16-cast</td><td>build</td><td class="num">1.097 / 0.969 / 0.973</td><td class="num">0.973 (0.973)</td></tr>
+        <tr><td>bf16-autocast / bf16-cast</td><td>re-run</td><td class="num">1.056 / 0.953 / 0.953</td><td class="num">0.953 (0.953)</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 7.</b> The cost of the autocast casts on mlx (R30): mlx autocast throughput / mlx cast throughput in the same round. On mlx, the autocast modes are about 3 to 5 % slower than the cast modes in both runs. On torch-mps, the gap is larger (re-run medians 10.42 against 12.43 img/s in fp16).</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Dtype mode</th><th>mlx peak memory, build / re-run</th><th>mlx load peak, cache</th><th>mlx limit = need</th><th>torch-mps peak memory, build / re-run</th><th>Validity of image 0, mlx / torch-mps</th><th>Timed batches, torch-mps</th></tr></thead>
+      <tbody>
+        <tr><td>fp32</td><td class="num">5.51 / 5.51 GB</td><td class="num">3,363.2 MB, 0</td><td class="num">8,034,844,672</td><td class="num">6.08 / 6.05 GB</td><td>valid: 1.000000 / 1.000000 and 1.000000 / 1.000000</td><td>build 30, 26, 27; re-run 30, 30, 30</td></tr>
+        <tr><td>fp16-cast</td><td class="num">3.44 / 3.44 GB</td><td class="num">1,700.8 MB, 0</td><td class="num">6,017,422,336</td><td class="num">4.31 / 4.29 GB</td><td>valid: 0.999999 / 0.999996 and 0.999999 / 0.999995</td><td>30 each</td></tr>
+        <tr><td>bf16-cast</td><td class="num">3.45 / 3.45 GB</td><td class="num">1,700.8 MB, 0</td><td class="num">6,017,422,336</td><td class="num">4.31 / 4.29 GB</td><td>valid: 0.999915 / 0.999757 and 0.999916 / 0.999774</td><td>30 each</td></tr>
+        <tr><td>fp16-autocast</td><td class="num">3.44 / 3.44 GB</td><td class="num">1,701.3 MB, 0</td><td class="num">6,017,422,336</td><td class="num">5.00 / 4.98 GB</td><td>valid: 1.000000 / 0.999998 and 1.000000 / 0.999998</td><td>30 each</td></tr>
+        <tr><td>bf16-autocast</td><td class="num">3.44 / 3.44 GB</td><td class="num">1,701.3 MB, 0</td><td class="num">6,017,422,336</td><td class="num">5.00 / 4.98 GB</td><td>valid: 0.999972 / 0.999908 and 0.999971 / 0.999896</td><td>30 each</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 8.</b> Memory and validity of the P2 benchmark. Peak memory: the median of the lifetime maximum of the process footprint. Validity: min(frame, patch mean) / patch 1st percentile of image 0 against the reference file, with <code>THRESHOLDS[mode]</code>. The load peak, the limit and the validity are equal in both runs. mlx gives 30 timed batches in each line of both runs. Output transfer: "view-uint16" for mlx bf16-cast only. No mlx worker imported torch (15 of 15 lines in both runs). All torch-mps lines carry the MPS watermarks 0.8 and 0.6. The results auditor recomputed each throughput of the build from the per-batch files: 0 mismatches.</p>
+</section>
+
+<section id="vit7b">
+  <h2>6 ViT-7B/16: cross-check and load peaks</h2>
+  <h3>6.1 Why the 48 parity rows skip (AC6)</h3>
+  <p>D4 asks the user one question: may the streamed fp32 reference of ViT-7B/16 run, with the fp32 weights of one block in memory at a time? The user did not answer. Only the user's own answer counts (plan Table 20). So path D4-N applies. On path D4-N, no job computes the reference output of ViT-7B/16. The run rule refuses a full fp32 load: the weights alone need about 27 GB, and the memory check would ask 36.24 GB. The streamed reference waits for the yes. So the reference file <code>reference-vit7b16.safetensors</code> does not exist. Each W5 test of ViT-7B/16 in the four half modes skips with "reference-vit7b16.safetensors is missing." The fp32 rows skip before that, with the <code>RunRuleError</code> text. As a diagnostic, the cross-check compares mlx with torch-mps, both in bf16-cast.</p>
+  <h3>6.2 Cross-check in bf16-cast</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Configuration</th><th>Frame</th><th>Patch mean</th><th>Patch 1st percentile</th><th>Patch minimum</th><th>Largest absolute difference</th></tr></thead>
+      <tbody>
+        <tr><td>iss-kibo-lab/224x224</td><td class="num">0.999944</td><td class="num">0.999852</td><td class="num">0.999108</td><td class="num">0.994850</td><td class="num">0.0874</td></tr>
+        <tr><td>iss-kibo-lab/448x448</td><td class="num">0.999937</td><td class="num">0.999932</td><td class="num">0.999603</td><td class="num">0.994370</td><td class="num">0.1094</td></tr>
+        <tr><td>iss-kibo-lab/512x512</td><td class="num">0.999951</td><td class="num">0.999956</td><td class="num">0.999854</td><td class="num">0.998708</td><td class="num">0.25</td></tr>
+        <tr><td>iss-kibo-lab/224x400</td><td class="num">0.999925</td><td class="num">0.999882</td><td class="num">0.999250</td><td class="num">0.992311</td><td class="num">0.625</td></tr>
+        <tr><td>forest/224x224</td><td class="num">0.999945</td><td class="num">0.999936</td><td class="num">0.999578</td><td class="num">0.999247</td><td class="num">0.0938</td></tr>
+        <tr><td>forest/448x448</td><td class="num">0.999953</td><td class="num">0.999969</td><td class="num">0.999919</td><td class="num">0.999722</td><td class="num">0.0625</td></tr>
+        <tr><td>forest/512x512</td><td class="num">0.999945</td><td class="num">0.999970</td><td class="num">0.999924</td><td class="num">0.999725</td><td class="num">0.0938</td></tr>
+        <tr><td>forest/224x304</td><td class="num">0.999954</td><td class="num">0.999954</td><td class="num">0.999849</td><td class="num">0.999634</td><td class="num">0.0625</td></tr>
+        <tr><td>iss-conference/224x224</td><td class="num">0.999938</td><td class="num">0.999830</td><td class="num">0.998893</td><td class="num">0.997460</td><td class="num">0.0625</td></tr>
+        <tr><td>iss-conference/448x448</td><td class="num">0.999944</td><td class="num">0.999918</td><td class="num">0.999665</td><td class="num">0.993909</td><td class="num">0.3125</td></tr>
+        <tr><td>iss-conference/512x512</td><td class="num">0.999942</td><td class="num">0.999941</td><td class="num">0.999758</td><td class="num">0.999072</td><td class="num">0.125</td></tr>
+        <tr><td>iss-conference/304x224</td><td class="num">0.999945</td><td class="num">0.999505</td><td class="num">0.995725</td><td class="num">0.942227</td><td class="num">0.4375</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 9.</b> The 12 cross-check lines of the re-run (v4): mlx against torch-mps, both in bf16-cast, without the reference output. Report only. All 12 are "measured", and both backends give finite tokens. Smallest values: frame 0.999925 (iss-kibo-lab/224x400); patch mean 0.999505, patch 1st percentile 0.995725 and patch minimum 0.942227 (all iss-conference/304x224). The 48 cosine values and the 12 largest absolute differences are bitwise equal to the build lines. The new torch token file is bitwise equal to the build file. For comparison only (not a threshold): the bf16 thresholds of ADR 0003 are 0.998 / 0.995 / 0.96.</p>
+  <p>mlx load in v4: memory check "needs 20.1 GB, 38.7 GB available, ok"; need 20,118,484,173 bytes; load peak 13,532,676,096 bytes (13,532.7 MB) against the target 16,252.7 MB; cache 0 bytes; process footprint after the load 13.96 GB. Lifetime maximum of the process footprint: 16.50 GB for the mlx worker and 18.06 GB for the torch-mps worker (build 18.08 GB). The run-rule auditor computed the exact bound "all casts so far plus one fp32 source tensor" from the headers. For ViT-7B/16 in bf16-cast it is 13,532,676,096 bytes, equal to the measured load peak.</p>
+  <h3>6.3 Load peaks of all model sizes</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Model size</th><th>fp32: measured / target</th><th>fp16-cast, bf16-cast</th><th>fp16-autocast, bf16-autocast</th><th>Share of the target</th></tr></thead>
+      <tbody>
+        <tr><td>ViT-S/16</td><td class="num">86.4 / 106.0 MB</td><td class="num">44.1 / 54.2 MB</td><td class="num">44.1 / 54.2 MB</td><td class="num">81.4 to 81.5 %</td></tr>
+        <tr><td>ViT-S+/16</td><td class="num">114.8 / 140.1 MB</td><td class="num">58.3 / 71.2 MB</td><td class="num">58.3 / 71.2 MB</td><td class="num">81.9 %</td></tr>
+        <tr><td>ViT-B/16</td><td class="num">342.6 / 420.6 MB</td><td class="num">173.7 / 215.0 MB</td><td class="num">173.8 / 215.0 MB</td><td class="num">80.8 to 81.5 %</td></tr>
+        <tr><td>ViT-L/16</td><td class="num">1,212.5 / 1,471.8 MB</td><td class="num">620.9 / 744.3 MB</td><td class="num">621.2 / 744.3 MB</td><td class="num">82.4 to 83.5 %</td></tr>
+        <tr><td>ViT-H+/16</td><td class="num">3,363.2 / 4,061.1 MB</td><td class="num">1,700.8 / 2,043.6 MB</td><td class="num">1,701.3 / 2,043.6 MB</td><td class="num">82.8 to 83.3 %</td></tr>
+        <tr><td>ViT-7B/16</td><td>refused by the run rule</td><td class="num">13,532.7 / 16,252.7 MB</td><td class="num">13,534.7 / 16,252.7 MB</td><td class="num">83.3 %</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 10.</b> Load peak of each mlx load against its target of plan Table 5. ViT-S/16, ViT-S+/16 and ViT-B/16: default session v2 (15 lines) and slow session v3a. ViT-L/16 and ViT-H+/16: v3a. ViT-7B/16: v3b and v4. ViT-H+/16 also in the 15 mlx workers of v5. Cache 0 bytes after each load. Each value equals the build value. The range over all loads is 80.8 % to 83.5 % of the target (F24). <code>load_peak_target</code>, computed from the headers, equals plan Table 5 for all 29 pairs of model size and dtype mode. <code>memory-checks.log</code> has 136 load-peak lines; each is at or below its target with cache 0.</p>
+</section>
+
+<section id="findings">
+  <h2>7 Findings</h2>
+  <p>The Verify agents did not change code. Each finding gives the place, the evidence, the impact, a suggested fix and the severity. The user decides. The text uses the corrected claim of the second check where it gave one. Table 11 gives an overview. The original ids of the agents are in brackets.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>No.</th><th>Agent id</th><th>Severity</th><th>Criterion</th><th>Title</th></tr></thead>
+      <tbody>
+        <tr><td><a href="#f1">F1</a></td><td>F-T1</td><td>medium</td><td>AC14</td><td>Load-peak checks have only an upper bound</td></tr>
+        <tr><td><a href="#f2">F2</a></td><td>F-RR1</td><td>medium</td><td>AC17</td><td>The sign of the cast-mode paired ratio changes between runs</td></tr>
+        <tr><td><a href="#f3">F3</a></td><td>N1</td><td>low</td><td>AC13</td><td>The half SDPA kernel does not compute in fp32 inside</td></tr>
+        <tr><td><a href="#f4">F4</a></td><td>RR1</td><td>low</td><td>AC14 (D5)</td><td>Two fp32 source tensors can be alive for a short time</td></tr>
+        <tr><td><a href="#f5">F5</a></td><td>F-T3</td><td>low</td><td>AC14</td><td>The fail path of the backbone slot has no test</td></tr>
+        <tr><td><a href="#f6">F6</a></td><td>F-T2</td><td>low</td><td>AC16</td><td>No test checks the branch values or <code>TokenRange.finite</code></td></tr>
+        <tr><td><a href="#f7">F7</a></td><td>F-T4</td><td>low</td><td>AC13</td><td>No test checks the RoPE rotation in the half modes</td></tr>
+        <tr><td><a href="#f8">F8</a></td><td>F-T5</td><td>low</td><td>AC20</td><td>No test pins <code>EXPECTED_FP16_OVERFLOW</code></td></tr>
+        <tr><td><a href="#f9">F9</a></td><td>F-T6</td><td>low</td><td>AC8</td><td>T31 does not cover the batch rows</td></tr>
+        <tr><td><a href="#f10">F10</a></td><td>RR2</td><td>low</td><td>AC15, AC19</td><td><code>cross_check.py</code>: steps before the guard</td></tr>
+        <tr><td><a href="#f11">F11</a></td><td>RR3</td><td>low</td><td>AC15</td><td><code>make_reference.py</code>: <code>load_ratio()</code> before the guard</td></tr>
+        <tr><td><a href="#f12">F12</a></td><td>F-RR4, RR4</td><td>low</td><td>AC15, AC19</td><td>Fake memory-check lines in <code>memory-checks.log</code></td></tr>
+        <tr><td><a href="#f13">F13</a></td><td>F-RR6</td><td>low</td><td>AC19</td><td>The convert test reads weight files without a memory check</td></tr>
+        <tr><td><a href="#f14">F14</a></td><td>F-RR5</td><td>low</td><td>AC19</td><td>Light jobs of other agents during the heavy jobs of the re-run</td></tr>
+        <tr><td><a href="#f15">F15</a></td><td>F-RR2</td><td>low</td><td>AC19 (R26)</td><td>Slow-session times are warm-cache times; the estimates are too high</td></tr>
+        <tr><td><a href="#f16">F16</a></td><td>F-RR3, R3</td><td>low</td><td>AC20</td><td>The build slow session ran 1230 of 1231 tests</td></tr>
+        <tr><td><a href="#f17">F17</a></td><td>CR1</td><td>low</td><td>words</td><td>"Load peak" has two meanings</td></tr>
+        <tr><td><a href="#f18">F18</a></td><td>CR3</td><td>low</td><td>words</td><td>"Load report" has no GLOSSARY entry</td></tr>
+        <tr><td><a href="#f19">F19</a></td><td>CR4</td><td>low</td><td>words</td><td><code>bench_mlx_port.py</code> uses "variant"</td></tr>
+        <tr><td><a href="#f20">F20</a></td><td>CR2</td><td>low</td><td>code rules</td><td><code>cross_check.py</code> copies the worker runner and the bytes rule</td></tr>
+        <tr><td><a href="#f21">F21</a></td><td>CR5</td><td>low</td><td>code rules</td><td>The build copies test constants and helpers</td></tr>
+        <tr><td><a href="#f22">F22</a></td><td>CR6</td><td>low (cosmetic)</td><td>code rules</td><td>Three places write the sort key</td></tr>
+        <tr><td><a href="#f23">F23</a></td><td>R1</td><td>low</td><td>AC4</td><td>Hand-over note: a small margin is missing from the open points</td></tr>
+        <tr><td><a href="#f24">F24</a></td><td>R2</td><td>low</td><td>AC14</td><td>Hand-over note: the load-peak share range is too narrow</td></tr>
+        <tr><td><a href="#f25">F25</a></td><td>R4</td><td>low</td><td>AC15</td><td>Hand-over note: "0 ViT-7B/16 lines" is not true for the file</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 11.</b> The 25 findings. F12 and F16 each join two agent findings about the same fact.</p>
+
+  <ol>
+    <li id="f1"><b>F1 [F-T1] (medium): the load-peak checks have only an upper bound. A load that evaluates nothing passes.</b>
+      <ul>
+        <li>Place: T34 (<code>tests/test_mlx_weights.py:457</code>), H2 (<code>tests/test_mlx_weights.py:560</code>) and the backbone slot (<code>tests/conftest.py:123</code>) check only that <code>peak_bytes</code> is at most the target.</li>
+        <li>Evidence: mutation M2 deletes <code>mx.eval(array)</code> at <code>src/dinov3_apple/mlx_weights.py:238</code>. Then <code>LoadReport.peak_bytes</code> falls to about 0: &minus;456 bytes in T34 and +252 bytes in a standalone probe. T34 stays green. The parameters stay lazy. On the small model <code>vit7b16-shape</code> in bf16-cast, the first forward pass then peaks at 18,876,928 bytes against 9,783,808 bytes for the unchanged loader. The extra 9,093,120 bytes are exactly the fp32 plus bf16 weight bytes. So the load peak moves out of the measured window. Positive controls M1, M3 and M4 go red.</li>
+        <li>Impact: AC14 and the D5 claim depend on a load report that a non-evaluating loader cannot spoil. With such a regression, ViT-7B/16 in bf16 gets back the full fp32-plus-half peak of the Step 4 loader. This peak comes at its first forward pass. The plan estimates about 40.3 GB (plan Table 5 caption, from Figure 2 of <code>explore.html</code>; not measured here). That is the out-of-memory risk of <code>CLAUDE.md</code>, and T34, H2 and the slot all stay green. The measured AC14 values of this build hold: the measured peaks equal the exact one-fp32 bound from the headers (Section 6.2).</li>
+        <li>Suggested fix: add a lower bound to all three checks. Use <code>peak_bytes &gt; 0</code>, or the bytes of the mapped tensors (without the dropped mask token) times a margin, or the active-memory growth of the load. Do not use <code>parameter_count</code> &times; the matmul bytes: the current loader fails that bound in fp32 by the bytes of the mask token (6,062,080 against 6,063,104 bytes on the small model).</li>
+      </ul>
+    </li>
+    <li id="f2"><b>F2 [F-RR1] (medium): the sign of the cast-mode paired ratio at P2 changes between runs.</b>
+      <ul>
+        <li>Place: <code>results/bench-all-sizes.jsonl</code> and the re-run file; Section 5.</li>
+        <li>Evidence: the build medians (frame) are above 1 in all five dtype modes: 1.118, 1.028, 1.039, 1.156 and 1.159. The build gives these numbers but no text that says mlx is faster. The re-run (same code, versions, run order, power and thermal state) gives 1.094, 0.968, 0.973, 1.096 and 1.105. R30 is 0.953 and 0.953 in the re-run, against 0.966 and 0.973 in the build. Round 1 of the re-run matched the build within 5 %. Rounds 2 and 3 were 16.9 to 28.1 % faster than the build on both backends; torch-mps gained more in every mode. The build data alone also shows the effect: fp16-cast round 1 was 0.964 and bf16-cast round 2 was 1.006.</li>
+        <li>Impact: AC17 is report only and still passes. But the run-to-run spread (about 20 % in throughput) is larger than the cast-mode gap. The data does not support the statement "mlx beats torch-mps in the cast modes".</li>
+        <li>Suggested fix: report both runs (done in Section 5). Say that the cast-mode ratio is within about 4 % of 1 and that its sign is not stable. The explainer 05-2 must follow this. Step 6 should take more rounds or report the spread between runs.</li>
+      </ul>
+    </li>
+    <li id="f3"><b>F3 [N1] (low): the row "SDPA" of plan Table 3 says that the half SDPA kernel computes in fp32 inside. On this Mac, it does not. AC13 is partial.</b>
+      <ul>
+        <li>Place: <code>specs/05-all-sizes/plan.html:129</code> (Table 3, row SDPA) says "half inputs; scores, softmax and P &middot; V in fp32 inside the kernel". <code>explore.html:85</code> and <code>:329</code> (Table 7) make the same claim. The call is at <code>src/dinov3_apple/mlx_model.py:304</code>. Its dtype flow is correct: half q, k and v in, half output.</li>
+        <li>Evidence: Apple M5 Max (<code>applegpu_g17s</code>), mlx 0.32.4, <code>MLX_ENABLE_TF32=0</code>. For half inputs, head dimension 64 or 128 and more than 8 tokens, MLX runs the kernel <code>steel_attention_nax.h</code>. It computes Q &middot; K<sup>T</sup> and P &middot; V with the hardware matrix operation, and MLX turns on its option <code>relaxed_precision</code> (<code>steel/attn/nax.h:401-408</code>). The header of this operation says that the option lets the hardware compute with less precision to run faster. Measured share of the half outputs that differ from the float64 result rounded once: fp16 48 to 57 %, against 0.1 to 0.34 % for the fp32 kernel rounded to fp16; bf16 10.5 to 13.1 %, against 0.016 to 0.046 %. The extra internal RMS error is about 3.8e-5 to 4.0e-5 at 201 tokens in both dtypes, which matches an 11-bit rounding at one internal step. Controls: head dimension 80 runs the kernel without NAX and rounds once (0.22 %); 5 tokens run the vector kernel (0.00 %). <code>MLX_ENABLE_TF32</code> does not change the half output.</li>
+        <li>Impact: the claim is true only for <code>steel_attention.h</code>, on which explore Table 7 based it. No test checks it: T22 checks only the dtypes, and <code>test_mlx_sdpa_float64</code> checks only fp32. No result changes: on the three small models the mlx half modes match torch-cpu in the same mode (Section 4.2), and all W5 rows pass. In fp16 the extra error is about 1.6 times the output rounding; in bf16 about 0.2 times. An analysis of the small bf16 margins (R23) or of the fp16 overflow must not assume an fp32 P &middot; V.</li>
+        <li>Suggested fix: record the row "SDPA" as measured: half inputs and half output; on this Mac about 11 bits of internal precision, no fp32 P &middot; V. Correct the text in the Learn explainer. At Close, correct the row "SDPA" of Table 3 of <code>specs/05-all-sizes/plan.html</code> and of explore Table 7, or record the measured behaviour in an ADR. Optional: a report-only test that compares the half SDPA output with the fp32 kernel output rounded once.</li>
+      </ul>
+    </li>
+    <li id="f4"><b>F4 [RR1] (low): two fp32 source tensors can be alive for a short time during the load.</b>
+      <ul>
+        <li>Place: <code>src/dinov3_apple/mlx_weights.py:236-240</code>; the docstring at lines 5 and 6 and plan D5 say "at most one fp32 source tensor is alive".</li>
+        <li>Evidence: the loader references at most one fp32 source at a time. But MLX releases the buffer of source i asynchronously after <code>mx.eval</code> returns. In a probe with 40 sources of 1 MiB, the dropped source was still active before the next evaluation in 39 of 40 iterations; <code>mx.synchronize()</code> released it. With <code>mx.synchronize()</code> after each evaluation, the excess was 0.00 MiB in 3 of 3 repeats; without it, 0.50 MiB in 3 of 3. Real loads show it too: 3 of 10 recorded ViT-S/16 bf16-cast loads (H2) measure 44,077,056 bytes. That is the exact one-fp32 bound of 44,075,520 bytes plus the 1,536-byte fp32 patch-embedding bias. Both values print as 44.08 MB.</li>
+        <li>Impact: the excess is at most one fp32 source tensor, up to 134.2 MB for ViT-7B/16. This is far below the 4 GB reserve, so it is no run-rule risk. The plan Table 5 target leaves room for it, so H2, T34 and the slot cannot detect it. The D5 statement and the planned explainer claim too much.</li>
+        <li>Suggested fix: in the docstring and the explainer, say that the loader references at most one fp32 source and that MLX can release it after the next read. Optional: call <code>mx.synchronize()</code> after each evaluation, or let the tests assert the exact bound from the headers.</li>
+      </ul>
+    </li>
+    <li id="f5"><b>F5 [F-T3] (low): the fail path of the backbone slot has no test. H2 pins <code>load_peak_target</code> for one pair only.</b>
+      <ul>
+        <li>Place: <code>check_load_report</code> of the backbone slot, <code>tests/conftest.py:117-127</code>, branch at line 123.</li>
+        <li>Evidence: for 28 of the 29 mlx loads of the slow session, this branch is the only automated check of the AC14 target. <code>memory-checks.log</code> only records the values; no test reads it. No test calls the slot with a load report above the target or with a cache above 0. Mutation M9 (<code>if False:</code>) leaves <code>test_run_rules.py</code>, <code>test_mlx_weights.py</code>, <code>test_mlx_parts.py</code> and <code>test_mlx_environment.py</code> green. Mutation M12 (target &times; 3) leaves <code>test_run_rules.py</code> green. H2 pins the target only for (ViT-S/16, bf16-cast), where the matmul dtype equals the stream dtype. So a change of the target from the matmul dtype to the stream dtype passes all tests; it alters only the fp16-autocast and bf16-autocast targets.</li>
+        <li>Impact: the measured AC14 values hold. But a change that disables or weakens this branch passes every test. Then the automated load-peak gate of jobs 2, 5 and 7 (plan Table 10) becomes silent. Job 6 (<code>cross_check.py</code>) does not use the slot; its gate is a manual read of the load report.</li>
+        <li>Suggested fix: add a unit test without weights. It replaces <code>load_mlx_backbone</code> with a fake model whose peak is above the target, then with a cache above 0, and asserts <code>pytest.fail.Exception</code> from <code>backbone(...)</code>. Pin <code>load_peak_target</code> for one autocast pair with a replaced <code>parameter_count</code> and <code>largest_tensor_bytes</code>.</li>
+      </ul>
+    </li>
+    <li id="f6"><b>F6 [F-T2] (low): no test checks the token-range branch values or <code>TokenRange.finite</code>, and the W7 line count cannot fail.</b>
+      <ul>
+        <li>Place: T26 (<code>tests/test_mlx_parts.py:614-631</code>) checks only the shape of attention, ff_hidden and ff_out (lines 624 and 625). <code>TokenRange.finite</code> (<code>src/dinov3_apple/mlx_model.py:535</code>) sets the W7 status, and no test asserts it. W7 asserts <code>lines == len(CONFIG_IDS) == 12</code> (<code>tests/test_mlx_parity.py:287</code>), but <code>lines</code> counts the loop steps.</li>
+        <li>Evidence: M5 (attention and ff_out swapped), M5b (branch values after LayerScale) and M6 (<code>finite</code> always True) all stay green. A probe on <code>vits16</code> and <code>vits16plus</code> in all five modes keeps the T26 assertions green with the real values, with the swap and with all branch values set to zero. The swap is not a no-op: <code>vits16plus</code> in fp16-autocast gives attention [2.80, 2.67] and ff_out [4.59, 4.02]. The current code is correct: separately computed branch maxima equal <code>run_mlx_token_range</code> in all 10 probe runs, and <code>finite</code> returns False with an injected inf.</li>
+        <li>Impact: plan Section 3.7 lets a pair join <code>EXPECTED_FP16_OVERFLOW</code> on the evidence of a token-range line. The R20 margins (Section 4.2) are branch values. These values and the 330 / 18 status counts of AC16 can be wrong while every test stays green. The gap is in the plan's T26 row, not a departure of the build.</li>
+        <li>Suggested fix: in T26, compare the branch values with the maxima of <code>Block.attention_branch</code>, <code>Block.ff_hidden</code> and <code>mlp.down_proj</code> computed separately. Assert <code>TokenRange.finite</code> on an injected inf. In W7, assert the content of each line (L + 1 token values, 3 &times; L branch values), not the loop count.</li>
+      </ul>
+    </li>
+    <li id="f7"><b>F7 [F-T4] (low): no test checks the row "RoPE tables and rotation" of plan Table 3 in the half modes.</b>
+      <ul>
+        <li>Place: T22 (<code>tests/test_mlx_parts.py:515-516</code>) checks only that <code>model.rope</code> gives fp32 tables. <code>apply_rope</code> (<code>src/dinov3_apple/mlx_model.py:187-202</code>) rotates in fp32 today.</li>
+        <li>Evidence: mutation M10 (rotation in the half dtype) leaves all 82 tests of <code>tests/test_mlx_parts.py</code> green. The mutation is not a no-op: on a 14 &times; 19 grid it changes 34.6 % of the fp16 values and 33.8 % of the bf16 values. With the unchanged code, <code>apply_rope</code> equals the fp32 result rounded once, exactly. The Hugging Face code casts the RoPE tables to the input dtype, so torch-mps rotates in half in cast mode.</li>
+        <li>Impact: a regression to the torch-mps way passes, and AC13 has no check of this row. T22 does what the plan's T22 row asks, so the gap is in the plan's test design. No agent measured the effect on the W5 thresholds.</li>
+        <li>Suggested fix: add a T23-like case: <code>apply_rope</code> on half q and k against the fp32 rotation rounded once. Expect equal values, and show that a half rotation misses.</li>
+      </ul>
+    </li>
+    <li id="f8"><b>F8 [F-T5] (low): no test pins <code>EXPECTED_FP16_OVERFLOW</code> to the two pairs of plan Table 6, so the AC20 xfail rule checks against itself.</b>
+      <ul>
+        <li>Place: <code>src/dinov3_apple/parity.py:41-43</code>; T14 (<code>tests/test_run_rules.py:95-115</code>).</li>
+        <li>Evidence: T14 checks that ViT-L/16 xfails and that ViT-S/16 and ViT-7B/16 fail. Mutation M11 adds (ViT-B/16, fp16-cast): T14, <code>test_parity_table.py</code> and <code>test_token_range_table.py</code> stay green. The removal of (ViT-H+/16, fp16-cast) also stays green in the light tests; only the slow session with weights would catch it. Control: adding (ViT-S/16, fp16-cast) turns T14 red.</li>
+        <li>Impact: the rule "a pair joins only with the evidence of W7" exists only as text. A silent extension turns a non-finite result into an xfail on both backends. Today the list equals plan Table 6, so the list hides no result. The plan's T14 row asks only for the three cases.</li>
+        <li>Suggested fix: in T14, assert <code>EXPECTED_FP16_OVERFLOW == {("ViT-L/16", "fp16-cast"), ("ViT-H+/16", "fp16-cast")}</code>. A change of the list then needs a test change with its evidence.</li>
+      </ul>
+    </li>
+    <li id="f9"><b>F9 [F-T6] (low): T31 does not cover the batch rows of the AC8 comparison.</b>
+      <ul>
+        <li>Place: T31 (<code>tests/test_parity_table.py:87-103</code>) feeds only lines of kind "parity" to the section "Non-finite configurations". <code>NON_FINITE_KINDS</code> is at <code>scripts/parity_table.py:30</code>.</li>
+        <li>Evidence: mutation M7 (<code>NON_FINITE_KINDS = ["parity"]</code>) keeps all 5 tests green. With the mutant, a batch-only difference (an mlx batch line without a torch-mps line) gives "equal" instead of "differences: &hellip; mlx only".</li>
+        <li>Impact: the committed Section 6 of <code>results/parity-mlx.md</code> lists the 18 parity rows and the 2 batch rows and ends with "equal". So AC8 holds today, but it has no regression test for the batch rows.</li>
+        <li>Suggested fix: add a batch line (kind "batch", configuration "batch-8-224x224") to the hand-made lines of T31. Assert its row, and assert a difference when only one backend has it.</li>
+      </ul>
+    </li>
+    <li id="f10"><b>F10 [RR2] (low): <code>cross_check.py</code> runs some steps before its run-rule guard.</b>
+      <ul>
+        <li>Place: <code>scripts/cross_check.py</code>. The real run checks the run rule first: <code>run()</code> calls <code>worker_plan</code> (:270), which calls <code>check_run_rule</code> (:100) before <code>parameter_count</code>, any memory check and any worker.</li>
+        <li>Evidence: <code>dry_run()</code> calls <code>available_memory_bytes()</code> (:110), a <code>vm_stat</code> read, before <code>worker_plan()</code> (:113). In <code>main()</code>, <code>CROSS_DIR.mkdir</code> (:317) and the <code>FileHandler</code> of <code>driver.log</code> (:318-325) come before the guard, so a refused run leaves an empty <code>driver.log</code> without a refusal line. The workers read files that are not weights before the guard of their loader: <code>read_inputs()</code> (:151, :183) and the stored torch tokens (:180). The refusal test (<code>tests/test_cross_check.py:53</code>) replaces only <code>parameter_count</code>.</li>
+        <li>Impact: no memory risk. Both loaders still run <code>check_run_rule</code> before every file read and the memory check, and the workers start only after the driver guard. AC15 and AC19 hold. It is an order inconsistency against the guard-first rule of plan Figure 1.</li>
+        <li>Suggested fix: call <code>worker_plan()</code> before <code>available_memory_bytes()</code> in <code>dry_run()</code>. In the refusal test, also make <code>available_memory_bytes</code> fail. Optional: write the refusal to <code>driver.log</code>.</li>
+      </ul>
+    </li>
+    <li id="f11"><b>F11 [RR3] (low): <code>make_reference.run_all</code> calls <code>load_ratio()</code> before the first run-rule guard.</b>
+      <ul>
+        <li>Place: <code>scripts/make_reference.py:213</code> (<code>ratio = load_ratio()</code>) before the guard at line 217.</li>
+        <li>Evidence: <code>load_ratio()</code> reads the git-ignored <code>runs.jsonl</code> and calls <code>parameter_count</code> once for each "done" line without <code>fp32_weight_bytes</code>. Today that is 10 calls, which read only the safetensors headers of ViT-S/16 to ViT-H+/16, never ViT-7B/16 and never tensor data. T12 replaces <code>load_ratio</code>, so it does not see this order.</li>
+        <li>Impact: not a plan deviation and not an AC15 failure. The plan asks only that <code>check_run_rule</code> is the first statement of each loop pass (plan line 94), and the code does this. Side effect: if the weights of a smaller model size in <code>runs.jsonl</code> are missing, <code>WeightsNotFoundError</code> stops <code>make_reference.py ViT-7B/16</code> before it writes the skip line. No fp32 load of ViT-7B/16 happens in any case.</li>
+        <li>Suggested fix: check the run rule of all requested model sizes before <code>load_ratio()</code>, or record that the plan accepts this order.</li>
+      </ul>
+    </li>
+    <li id="f12"><b>F12 [F-RR4, RR4] (low): <code>memory-checks.log</code> keeps six fake ViT-7B/16 lines from T11, and <code>test_memory.py</code> adds two fake lines in each full session.</b>
+      <ul>
+        <li>Place: <code>tests/fixtures/generated/parity/memory-checks.log</code> lines 663 to 668 (git-ignored); T11 in <code>tests/test_run_rules.py</code>; <code>tests/test_memory.py</code>.</li>
+        <li>Evidence: each of the six lines says "ViT-7B/16 torch-cpu (or torch-mps) bf16-cast: needs 20.1 GB, 0.0 GB available, does not fit". T11 sets the free memory to 0. Four lines (03:51:54 and 03:52:09) lie outside every logged job: they come from green-stage pytest runs without a log. Two lines (03:58:14) lie inside job 1, so the handler fix came after job 1. The handler detach at <code>tests/test_run_rules.py:40</code> works: v2, v3a and v3b wrote no fake T11 line. In v2 the slot had attached its handler before T11 ran. <code>test_memory.py</code> is unchanged since Step 2 and has no detach. It writes the pair "too large" and "one byte" when the slot has attached the file handler before it runs. This is true for every full session in the log. v2 and v3a each wrote the <code>test_memory.py</code> pair (log lines 954-955 and 1000-1001).</li>
+        <li>Impact: no line marks these lines as fake. A count of ViT-7B/16 lines for AC15 or AC19 must leave out lines 663 to 668. No load happened.</li>
+        <li>Suggested fix: name the six lines as test artefacts (done in Table 3). Optional: apply the same handler detach in <code>test_memory.py</code>.</li>
+      </ul>
+    </li>
+    <li id="f13"><b>F13 [F-RR6] (low): the convert test reads whole weight files without a memory check.</b>
+      <ul>
+        <li>Place: <code>test_converted_weights_match_hub</code>, <code>tests/test_convert_meta_checkpoint.py:92-103</code>. It is Step 1 code (commit <code>8bf56d6</code>); the Step 5 build does not change it.</li>
+        <li>Evidence: it reads every tensor of the converted file and of the Hub file for ViT-S/16 and ViT-H+/16: about 6.9 GB (2 &times; 3.36 GB and 2 &times; 0.086 GB). The other four sizes skip: they have no converted file. The ViT-H+/16 case is the slowest test of the default session (9.54 s) and of slow part 1 (11.38 s). <code>memory-checks.log</code> has no line for it.</li>
+        <li>Impact: the test holds one tensor pair in memory at a time, so it is not a model load. AC19 counts model loads, so there is no violation.</li>
+        <li>Suggested fix: none in Step 5. Table 3 records it in the AC19 row.</li>
+      </ul>
+    </li>
+    <li id="f14"><b>F14 [F-RR5] (low): light jobs of other Verify agents ran during the heavy jobs of the re-run.</b>
+      <ul>
+        <li>Evidence: the cross-check v4 ran from 05:01:30 to 05:01:47. In this time, another Verify agent ran three small-model pytest sessions in the main repo: <code>test_mlx_parts</code>, <code>test_mlx_rope</code> and <code>test_mlx_weights</code> without <code>test_mlx_load_peak</code>. They wrote 82 lines in <code>report.jsonl</code> at 05:01:32 to 05:01:43. The wait loops of the two agents ended at almost the same time (a race). The mutation pytest runs of the test auditor (05:00:57 to 05:01:51) also overlapped v4. During v5, light probes and worktree pytest runs ran in round 1 (05:02:33 to 05:06:19). One header-only probe ran in round 3 at 05:18:40, for less than 0.5 s. Round 2 had no light job. Light pytest runs also overlapped v3a and v3b. In v3a, the test auditor ran four light test files in a scratch worktree at 04:58:50 to 04:59:12 (<code>test_run_rules.py</code>, <code>test_parity_table.py</code>, <code>test_token_range_table.py</code>, <code>test_cross_check.py</code>). In v3b, an auditor ran <code>test_mlx_environment.py</code> at 05:00:31 to 05:00:41.</li>
+        <li>Impact: the run rule held: no other process loaded gated weights, and <code>memory-checks.log</code> has no line after 05:00:37 UTC. The cross-check lines equal the build lines. But round 1 of v5 is not an isolated timing, and round 3 has one overlap below one second. The wait loop protects only the agent that runs it.</li>
+        <li>Suggested fix: for later timing runs, all agents run the wait loop before light GPU work too. The wait loop takes a lock, so two agents cannot start at the same time.</li>
+      </ul>
+    </li>
+    <li id="f15"><b>F15 [F-RR2] (low): the slow-session times are warm-cache times, and the plan estimates are too high.</b>
+      <ul>
+        <li>Evidence: slow part 1 took 69 s and part 2 took 40 s, against plan estimates of about 10 min and 15 min (plan Table 10). Part 1 read 63.4 GB from the weight files, and the disks gave only 1.85 GB of it. Part 2 read 161.2 GB, and the disks gave only 14.43 GB of it. The number of loads is as planned: mlx 25 + 4 = 29, torch-mps 26 + 2, torch-cpu 6. But the file cache is not the main cause of the gap. The measured cold read speed of this SSD is 4.2 GB/s for mmap page faults and 12.5 GB/s for sequential reads. Assume a session that reads every byte from the disk at 4.2 GB/s. Then part 1 takes at most about 15 s more (about 84 s in all). Part 2 takes at most about 35 s more (about 75 s in all).</li>
+        <li>Impact: the plan estimates are about 7 times (part 1) and 12 times (part 2) too high, also with a cold cache. In part 2, the 149 skips of path D4-N add to the gap. The 217 GB of disk reads of plan Table 10 did not happen. R26 is far within its estimates.</li>
+        <li>Suggested fix: give the session times as warm-cache times with the disk reads (done in Table 1). Step 5 needs no cold-cache run. Later plans scale their estimates from the measured times.</li>
+      </ul>
+    </li>
+    <li id="f16"><b>F16 [F-RR3, R3] (low): the slow session of the build ran 1230 of the 1231 tests.</b>
+      <ul>
+        <li>Place: hand-over note, Section 9.2, row AC20: "jobs 5 and 7 together, each test once: 1038 passed, 152 skipped, 40 xfailed".</li>
+        <li>Evidence: that sum is 1230. Job 5 (<code>-k "not 7B"</code>) collected 1230 items. The build added the test <code>test_cross_check_worker_command_parses</code> at 04:23:57, after job 5 and before job 7. Job 7 (<code>-k 7B</code>) did not select it: its name does not contain "7b". It passed in the file-only green run of the job 6 fix and in the default session of job 10. The re-run selects 1047 tests in part 1 and gives 1004 passed (1039 in both parts).</li>
+        <li>Impact: not a defect. The claim "each test once" of plan Table 10 does not hold for the build record. The test has no parameters, so its slow-session form is the same test.</li>
+        <li>Suggested fix: use the re-run count for AC20: 1039 passed, 152 skipped, 40 xfailed, 0 failed (done in Table 3).</li>
+      </ul>
+    </li>
+    <li id="f17"><b>F17 [CR1] (low): "Load peak" has two meanings in one result line and across the results files.</b>
+      <ul>
+        <li>Place: <code>scripts/bench_mlx_port.py:281</code> and <code>:326</code>; <code>src/dinov3_apple/bench.py:371</code>; <code>src/dinov3_apple/torch_bench.py:133</code> and <code>:180</code>; <code>results/baseline-torch-mps.md:338</code>.</li>
+        <li>Evidence: Step 5 defines "Load peak" in <code>GLOSSARY.md</code> as the MLX active-memory peak of one load minus the active memory before it. The P1 and P2 lines still carry the Step 3 field <code>load_peak_bytes</code>, the lifetime maximum of the process footprint after the load, next to <code>load_report_peak_bytes</code>, the glossary load peak. Round-1 mlx lines of ViT-H+/16: fp32 3,423,849,448 against 3,363,164,160 bytes; fp16-cast 1,902,920,472 against 1,700,792,320. The Step 3 table calls the footprint value "Load peak (GB)". The explainers 03, 04-1 and 04-5 also use the footprint meaning.</li>
+        <li>Impact: a reader can compare the footprint value with the plan Table 5 targets. This breaks the rule "one word for one meaning". No pass or fail result depends on it: AC14 reads the load report.</li>
+        <li>Suggested fix: rename the footprint field in a later step (for example <code>load_footprint_peak_bytes</code>) and the Step 3 table column, or add a GLOSSARY note.</li>
+      </ul>
+    </li>
+    <li id="f18"><b>F18 [CR3] (low): "Load report" is a settled term without a GLOSSARY entry.</b>
+      <ul>
+        <li>Evidence: the plan (<code>9161cc2</code>: plan lines 90, 96, 172, 981) introduced it, and the build carried it into the code, the tests and the results: <code>class LoadReport</code> (<code>src/dinov3_apple/mlx_weights.py:61</code>), <code>MlxBackbone.load_report</code> (<code>src/dinov3_apple/mlx_model.py:429</code>), <code>load_report_fields</code>, and the four fields <code>load_report_{need,peak,cache,footprint}_bytes</code> in all 30 lines of <code>results/bench-all-sizes.jsonl</code>. Neither <code>GLOSSARY.md</code> nor plan Section 3.12 defines it.</li>
+        <li>Impact: this breaks the "Words" rule of <code>CLAUDE.md</code>. It does not fail AC22, which checks only the terms of Section 3.12.</li>
+        <li>Suggested fix: in the Close stage, add "Load report" to <code>GLOSSARY.md</code>: the need, the load peak, the MLX cache after the load and the process footprint of one mlx load.</li>
+      </ul>
+    </li>
+    <li id="f19"><b>F19 [CR4] (low): <code>bench_mlx_port.py</code> uses "variant", an Avoid word of the GLOSSARY.</b>
+      <ul>
+        <li>Evidence: the build brings in "variant" at <code>scripts/bench_mlx_port.py</code> lines 135, 137, 150, 154-155, 177, 182, 186, 188, 427-428, 458-459 and 476, for example in <code>worker_plan</code> and in <code>bench_config(round_, variant, priority)</code>. It means "the batch size of P1 or the dtype mode of P2". <code>GLOSSARY.md:17</code> lists "variant" as an Avoid word for Model size.</li>
+        <li>Impact: a reader of the glossary reads "variant" as a model size. Two public functions break the rule "use the terms of GLOSSARY.md in code". Not an AC22 failure.</li>
+        <li>Suggested fix: use a defined word, for example <code>batch_size_or_dtype_mode</code>, or split the field in two.</li>
+      </ul>
+    </li>
+    <li id="f20"><b>F20 [CR2] (low): <code>cross_check.py</code> copies the worker runner, the memory-check message and the bytes rule.</b>
+      <ul>
+        <li>Evidence: <code>cross_check.run_worker_subprocess</code> (<code>scripts/cross_check.py:231-255</code>, new in <code>7c30a3e</code>) is a copy of <code>bench_mlx_port.run_worker_subprocess</code> (<code>scripts/bench_mlx_port.py:382-420</code>). The bodies differ only in the command line and the env line, and <code>cross_check.py:40</code> already imports from <code>bench_mlx_port</code>. <code>scripts/benchmark.py:92</code> is a third runner without <code>replay_checks</code>. The driver memory-check line in <code>cross_check.run</code> (:271-277) is the fourth hand-written copy of the <code>check_free_memory</code> message (the others: <code>benchmark.py:162</code>, <code>bench_mlx_port.py:467</code>, <code>profile_block.py:138</code>). Two places compute the bytes per weight of each backend: <code>cross_check.worker_plan</code> (:73-77, :98) and <code>tests/parity_checks.run_rule_skip</code> (:88-91).</li>
+        <li>Impact: a fix to the timeout or the result parsing must go into more than one place. Plan Section 3.13 says that Step 6 makes <code>WEIGHT_BYTES</code> depend on the backend; Step 6 must then change both copies of the bytes rule.</li>
+        <li>Suggested fix: move <code>run_worker_subprocess</code> (command and env as parameters) and a helper <code>bytes_per_weight(backend, dtype_mode)</code> to one shared place and call them from both scripts and from <code>run_rule_skip</code>.</li>
+      </ul>
+    </li>
+    <li id="f21"><b>F21 [CR5] (low): the build copies new test constants and helpers across test files.</b>
+      <ul>
+        <li>Evidence: <code>7c30a3e</code> adds three copies of <code>VIT7B16_PARAMETER_COUNT = 6_716_035_072</code> (<code>tests/test_cross_check.py:10</code>, <code>tests/test_mlx_weights.py:48</code>, <code>tests/test_run_rules.py:20</code>), a copy of <code>_fail</code> (<code>tests/test_run_rules.py:25</code> duplicates <code>tests/test_mlx_weights.py:118</code>) and two copies of <code>_fail_load</code> (<code>tests/test_cross_check.py:13</code>, <code>tests/test_mlx_environment.py:397</code>). The inline record-and-skip in <code>tests/test_torch_mps_parity.py</code> was there before the build.</li>
+        <li>Impact: maintenance only; no documented code rule forbids it. Each copy of the constant comes with its own expected need (20.1 GB), so a partial update fails a test. It does not make a guard test pass for a wrong reason.</li>
+        <li>Suggested fix: move the constant and the helpers to <code>tests/parity_checks.py</code> or <code>tests/conftest.py</code>.</li>
+      </ul>
+    </li>
+    <li id="f22"><b>F22 [CR6] (low, cosmetic): three places write the sort key of model size and dtype mode.</b>
+      <ul>
+        <li>Evidence: <code>list(MODEL_IDS).index(...)</code> and <code>list(THRESHOLDS).index(...)</code> appear in <code>_order</code> (<code>scripts/parity_table.py:98</code>), inline in <code>non_finite_section</code> (:160-161) and in <code>_sorted</code> (<code>scripts/token_range_table.py:82-83</code>).</li>
+        <li>Impact: small. The order comes from <code>MODEL_IDS</code> and <code>THRESHOLDS</code>, so a new model size or dtype mode needs no change in any copy. Only a change of the sort rule in one copy can make the tables differ.</li>
+        <li>Suggested fix: let <code>_order</code> take (model size, dtype mode), make it public, and use it in all three places.</li>
+      </ul>
+    </li>
+    <li id="f23"><b>F23 [R1] (low): the open points of the hand-over note leave out the second-smallest parity margin.</b>
+      <ul>
+        <li>Evidence: hand-over Section 9.8 item 2 lists the ViT-S+/16 bf16-autocast patch mean and frame, and the two ViT-H+/16 bf16 p01 values. It does not list ViT-S+/16 bf16-cast patch mean 0.995816 (iss-kibo-lab/224x400). By budget share this row is second of the 24 measured mlx parity rows: 83.7 %, after 97.3 %. The two listed ViT-H+/16 rows use 35.2 % and 33.2 %. By absolute margin, 0.000816 is third, after 0.000136 and 0.000387. The value is in the AC4 rows of hand-over Sections 5 and 9.2.</li>
+        <li>Impact: low. Only the summary of open points is incomplete.</li>
+        <li>Suggested fix: Table 5 of this file lists the margins with the metric of the ranking (done).</li>
+      </ul>
+    </li>
+    <li id="f24"><b>F24 [R2] (low): the hand-over note gives a load-peak share range that is too narrow.</b>
+      <ul>
+        <li>Evidence: the note under hand-over Table 9.4 says that each load is at about 82 to 83 % of its target. The measured range is 80.8 % (ViT-B/16 cast, 173.7 / 215.0 MB) to 83.5 % (ViT-L/16 autocast, 621.2 / 744.3 MB). ViT-S/16, ViT-S+/16 and ViT-B/16 lie at 80.8 % to 81.9 %; ViT-L/16, ViT-H+/16 and ViT-7B/16 at 82.4 % to 83.5 %.</li>
+        <li>Impact: low. All loads stay below their targets, so AC14 does not change.</li>
+        <li>Suggested fix: use 80.8 % to 83.5 % (done in Table 10).</li>
+      </ul>
+    </li>
+    <li id="f25"><b>F25 [R4] (low): the hand-over note says "0 ViT-7B/16 lines in memory-checks.log" for job 2.</b>
+      <ul>
+        <li>Evidence: when job 2 ran, the file already had 28 ViT-7B/16 lines. Twenty-two are torch-mps memory-check lines from 2026-11-06 and from 2026-11-07 before 01:52 UTC; 8 of these say "does not fit", so not every line is a load. The other 6 are the fake T11 lines of F12. Job 2 wrote no ViT-7B/16 line.</li>
+        <li>Impact: low. Section 9.2 of the note gives the correct picture for AC15. The sentence is true only as "job 2 added no ViT-7B/16 line".</li>
+        <li>Suggested fix: use the AC15 row of Table 3, not the job 2 sentence of the note.</li>
+      </ul>
+    </li>
+  </ol>
+
+  <h3>7.1 Refuted findings and corrections</h3>
+  <p>The second check refuted no finding. It confirmed each of the 27 agent findings. For 23 of them it corrected or sharpened a detail. Table 12 gives each correction in one line. The findings above use the corrected text.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Agent id</th><th>Correction by the second check</th></tr></thead>
+      <tbody>
+        <tr><td>F-RR1</td><td>The build has no text that says mlx is faster; round 1 matched within 5 %, not 3 %; rounds 2 and 3 were 16.9 to 28.1 % faster, not 17 to 27 %.</td></tr>
+        <tr><td>F-RR2</td><td>The file cache is not the main cause of the short times; the plan estimates are too high, also for a cold cache.</td></tr>
+        <tr><td>F-RR3</td><td>The new test also ran in the file-only green run of the job 6 fix, not only in job 10.</td></tr>
+        <tr><td>F-RR5</td><td>Overlaps were also in v3a, v3b and round 3 of v5; round 2 had none; a race of two wait loops caused the v4 overlap.</td></tr>
+        <tr><td>F-RR6</td><td>The convert test is Step 1 code (<code>8bf56d6</code>), not Step 3 code.</td></tr>
+        <tr><td>N1</td><td>The cause is the NAX kernel with <code>relaxed_precision</code>; head dimension 80 runs another kernel that rounds once.</td></tr>
+        <tr><td>F-T1</td><td>A non-evaluating load gives a peak near 0, not always a negative one; a lower bound of <code>parameter_count</code> &times; bytes fails in fp32.</td></tr>
+        <tr><td>F-T2</td><td>The gap is in the plan's T26 row, not a departure of the build; the current values are correct.</td></tr>
+        <tr><td>F-T3</td><td>A target based on the stream dtype changes only the autocast targets, not fp32; job 6 does not use the slot.</td></tr>
+        <tr><td>F-T4</td><td>The gap is in the plan's test design; the rotation is fp32 today.</td></tr>
+        <tr><td>F-T5</td><td>The removal of the ViT-H+/16 pair also passes the light tests; the gap comes from the plan's T14 row.</td></tr>
+        <tr><td>RR1</td><td>Real ViT-S/16 loads show the double too (3 of 10 H2 records); the excess is up to one fp32 tensor (134.2 MB for ViT-7B/16).</td></tr>
+        <tr><td>RR2</td><td><code>available_memory_bytes</code> reads <code>vm_stat</code>, not a file; AC15 and AC19 hold; a refused run leaves an empty <code>driver.log</code>.</td></tr>
+        <tr><td>RR3</td><td>Not a plan deviation; a missing smaller model can stop the script before the skip line.</td></tr>
+        <tr><td>RR4</td><td>The log is git-ignored; <code>test_memory.py</code> writes only when the slot has attached the handler.</td></tr>
+        <tr><td>R1</td><td>0.995816 is second by budget share but third by absolute margin; it is also in the AC4 rows of the note.</td></tr>
+        <tr><td>R3</td><td>The test also ran in the job 6 fix runs.</td></tr>
+        <tr><td>R4</td><td>The 22 earlier lines are memory checks, and 8 of them say "does not fit".</td></tr>
+        <tr><td>CR2</td><td>The driver memory-check message has four copies, not three; <code>benchmark.py</code> has no <code>replay_checks</code>.</td></tr>
+        <tr><td>CR3</td><td>The plan introduced the term; the gap does not fail AC22.</td></tr>
+        <tr><td>CR4</td><td>A standards finding against <code>CLAUDE.md</code>, not an AC22 failure.</td></tr>
+        <tr><td>CR5</td><td>The torch-mps record-and-skip was there before the build; a partial update fails a test and does not pass silently.</td></tr>
+        <tr><td>CR6</td><td>The impact is cosmetic: a new model size or dtype mode needs no change in the copies.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 12.</b> Corrections of the second check. F-RR4, F-T6, R2 and CR1 held as stated. The CR1 check found more uses of the footprint meaning (F17).</p>
+</section>
+
+<section id="open">
+  <h2>8 Open items for the user</h2>
+  <ol>
+    <li><b>The D4 run-rule question stays open.</b> "May the streamed fp32 reference of ViT-7B/16 run, with the fp32 weights of one block in memory at a time?" No answer exists, so path D4-N applies. Until a yes, these stay "reference file missing": the 48 mlx parity rows of ViT-7B/16, W1 to W4 of ViT-7B/16 in the four half modes and the torch-mps parity of ViT-7B/16 in fp16-cast and bf16-cast. Only the cross-check (Table 9) shows the ViT-7B/16 port in bf16.</li>
+    <li><b>Fix session for F1 (medium).</b> Add a lower bound to the load-peak checks before Step 6 loads quantized weights. F5 (a fail-path test of the slot) fits the same session.</li>
+    <li><b>Benchmark claims (F2, medium).</b> Accept that the cast-mode result at P2 is "about equal". Step 6 takes more rounds or reports the spread between runs.</li>
+    <li><b>SDPA precision (F3).</b> Accept AC13 as partial. The Close stage corrects the row "SDPA" of Table 3 of <code>specs/05-all-sizes/plan.html</code> and of explore Table 7, or records the measured behaviour in an ADR. The Learn stage writes the measured behaviour. Decide on an optional report-only test.</li>
+    <li><b>Test gaps F6 to F9.</b> Decide which to close in the fix session. Each has a small test without weights.</li>
+    <li><b>Words (F17 to F19).</b> The Close stage adds "Load report" to <code>GLOSSARY.md</code>. Decide when to rename <code>load_peak_bytes</code> and "variant".</li>
+    <li><b>Inputs for the Learn stage (AC21).</b> 05-2: the paired ratios of both runs and no claim that mlx wins in the cast modes (F2). 05-3: the R20 margins (79.6 % and 91.3 % of the fp16 maximum), the ViT-7B/16 token range (20.7 %), the SDPA precision (F3), the load-peak statement of F4.</li>
+    <li><b>Run rules for later Verify stages (F14).</b> All agents run the wait loop also before light GPU work, and the wait loop takes a lock.</li>
+    <li><b>Plan estimates (F15).</b> Step 6 scales its time estimates from the measured times of this step.</li>
+  </ol>
+</section>
+
+<section id="commands">
+  <h2>9 Commands to reproduce</h2>
+  <p>Run the commands in the repo root, one heavy job at a time. Run the wait loop as its own command before each heavy job, then check the free memory. <code>&lt;scratch&gt;</code> is a folder outside the repo.</p>
+<pre># Wait loop (its own command, never chained with the heavy job)
+while pgrep -f '[b]in/pytest|[s]cripts/bench|[c]ross_check.py|[m]ake_reference.py|[p]rofile_block.py' &gt;/dev/null; do sleep 20; done
+uv run python -c "from dinov3_apple.memory import available_memory_bytes; print(available_memory_bytes() / 1e9)"
+
+# v1: lint
+uv run ruff format --check
+uv run ruff check
+
+# v2, v3a, v3b: default session, then the slow session in two parts (ViT-7B/16 last)
+uv run pytest
+DINOV3_SLOW=1 uv run pytest -k "not 7B"
+DINOV3_SLOW=1 uv run pytest -k 7B
+
+# v4: cross-check of ViT-7B/16 in bf16-cast (torch-mps first, then mlx)
+uv run python scripts/cross_check.py --model-size ViT-7B/16 --dtype-mode bf16-cast --torch-device mps --dry-run
+uv run python scripts/cross_check.py --model-size ViT-7B/16 --dtype-mode bf16-cast --torch-device mps
+
+# v5: P2 benchmark into a scratch file (results/bench-all-sizes.jsonl stays unchanged)
+uv run python scripts/bench_mlx_port.py --priority P2 --results &lt;scratch&gt;/bench-all-sizes-rerun.jsonl --dry-run
+uv run python scripts/bench_mlx_port.py --priority P2 --results &lt;scratch&gt;/bench-all-sizes-rerun.jsonl
+
+# v6: the three tables to scratch, without a repo write. A small script imports
+#     scripts/parity_table.py and scripts/token_range_table.py and writes
+#     write_table(latest_lines(parity_log("mlx")), "mlx", torch_lines),
+#     write_table(torch_lines, "torch-mps", None) and the token-range table
+#     to &lt;scratch&gt;/tables/. Then compare:
+cmp &lt;scratch&gt;/tables/parity-mlx.md results/parity-mlx.md
+cmp &lt;scratch&gt;/tables/parity-torch-mps.md results/parity-torch-mps.md
+cmp &lt;scratch&gt;/tables/token-range-mlx.md results/token-range-mlx.md
+
+# v7: test ids now, default and slow
+uv run pytest --collect-only -q &gt; &lt;scratch&gt;/ids-now.txt
+DINOV3_SLOW=1 uv run pytest --collect-only -q &gt; &lt;scratch&gt;/ids-now-slow.txt
+# v7: the same two commands in a worktree of 7c30a3e~1, with PYTHONPATH=&lt;worktree&gt;/src,
+#     then diff the id lists and remove the worktree
+git worktree add &lt;scratch&gt;/base 7c30a3e~1
+git worktree remove &lt;scratch&gt;/base
+
+# Check that nothing tracked changed
+git status --short
+git diff --stat</pre>
+  <p class="caption">The auditors' probes (mutation scripts, dtype hooks, kernel probes, header reads) live in the scratch folder of the Verify stage, not in the repo.</p>
+</section>
+
+</main>
+</body>
+</html>
