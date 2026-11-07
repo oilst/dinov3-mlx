@@ -13,10 +13,12 @@ import pytest
 import torch
 from mlx import nn
 from mlx.utils import tree_flatten
+from parity_checks import min_token_cosine
 from small_model import PIXEL_SHAPES, small_hf_model, small_mlx_model, small_pixels
 from transformers.activations import ACT2FN
 from transformers.models.dinov3_vit.modeling_dinov3_vit import DINOv3ViTModel
 
+from dinov3_apple import mlx_model as mlx_model_module
 from dinov3_apple.block_profile import block_parts, run_parts
 from dinov3_apple.flops import PART_NAMES
 from dinov3_apple.mlx_model import (
@@ -180,6 +182,58 @@ def test_mlx_forward_casts_the_pixels_to_the_weight_dtype(hf_model: DINOv3ViTMod
     assert embeddings.dtype == mx.bfloat16
     assert mx.array_equal(embeddings, model.embeddings(pixels.astype(mx.bfloat16))).item()
     assert model(pixels).dtype == mx.bfloat16
+
+
+def test_mlx_quantized_patch_embedding_gets_float_pixels(
+    hf_model: DINOv3ViTModel,
+    mlx_model: MlxBackbone,
+    report: Callable[..., None],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """nn.quantize packs the patch embedding weight into uint32; the pixels stay floating point.
+
+    F1 of specs/04-mlx-port/verify.html: a cast to the weight dtype turned the pixels into uint32,
+    without an error message. The default predicate of nn.quantize quantizes each Linear, also
+    the patch embedding (768 inputs, a multiple of the group size 64).
+
+    The bound 0.999 on the min token cosine: with 8-bit weights the small model gives 0.99998 for
+    the patch tokens of the embeddings and of run_mlx (measured with mlx 0.32.4). 4-bit weights
+    give about 0.995, the uint32 pixels about 0.63. So the bound leaves a margin of about 50 times
+    on 1 - cosine for 8 bits and still finds the wrong cast.
+    """
+    quantized = small_mlx_model(hf_model)
+    nn.quantize(quantized, bits=8)
+    assert isinstance(quantized.embeddings.patch_embeddings, nn.QuantizedLinear)
+    assert quantized.embeddings.patch_embeddings.weight.dtype == mx.uint32
+    pixels = small_pixels(PART_PIXELS)
+    expected = np.array(mlx_model.embeddings(mx.array(pixels)))
+    pixel_dtypes: list[mx.Dtype] = []
+
+    def record_patchify(x: mx.array, patch_size: int) -> mx.array:
+        pixel_dtypes.append(x.dtype)
+        return patchify(x, patch_size)
+
+    monkeypatch.setattr(mlx_model_module, "patchify", record_patchify)
+    output = np.array(quantized.embeddings(mx.array(pixels)))
+    assert pixel_dtypes == [mx.float32]
+    dim = expected.shape[-1]
+    embeddings = min_token_cosine(
+        expected[:, NUM_PREFIX_TOKENS:].reshape(-1, dim),
+        output[:, NUM_PREFIX_TOKENS:].reshape(-1, dim),
+    )
+    tokens = run_mlx(quantized, pixels, "fp32")
+    reference_tokens = run_mlx(mlx_model, pixels, "fp32")
+    assert tokens.dtype == np.float32
+    run = min_token_cosine(reference_tokens.reshape(-1, dim), tokens.reshape(-1, dim))
+    report(
+        "test_mlx_quantized_patch_embedding_gets_float_pixels",
+        bits=8,
+        embeddings_min_cosine=embeddings,
+        tokens_min_cosine=run,
+        target=0.999,
+    )
+    assert embeddings >= 0.999
+    assert run >= 0.999
 
 
 @pytest.mark.parametrize("shape", GRID_SHAPES, ids=GRID_IDS)

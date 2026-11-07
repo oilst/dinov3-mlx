@@ -1,10 +1,14 @@
 """Tests T21 to T25 of specs/04-mlx-port/plan.html: TF32, imports, the moved readers, the TF32
 probe and the dry run of the Step 4 benchmark. Also the fields of its mlx worker."""
 
+import dataclasses
 import json
+import logging
 import os
+import re
 import subprocess
 import sys
+import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -124,7 +128,9 @@ def test_mlx_tf32_probe(report: Callable[..., None]) -> None:
         assert line["MLX_ENABLE_TF32"] == value
         errors[value] = line["relative"]
     report("test_mlx_tf32_probe", tf32_off=errors["0"], tf32_on=errors["1"])
-    assert all(0 <= error < 1 for error in errors.values())
+    # TF32 off: 7.8e-7 with mlx 0.32.4. If MLX ignored MLX_ENABLE_TF32=0, the error would be the
+    # TF32 value, about 7e-4. The TF32-on value is a report only (F7 of verify.html).
+    assert 0 <= errors["0"] <= 1e-5
 
 
 def _other(backend: str) -> str:
@@ -209,3 +215,97 @@ def test_mlx_worker_records_its_memory_limit_and_model_slug(
     assert worker["tf32"] is False
     assert worker["timed_batches"] >= 2
     assert [path.name for path in tmp_path.glob("*.json")] == ["vits16plus_fp32_224_b1_r0.json"]
+
+
+def test_bench_mlx_port_files_follow_the_results_path(tmp_path: Path) -> None:
+    """With --results, the per-batch files and driver.log go next to the results file (F5 of
+    specs/04-mlx-port/verify.html). The default results file keeps the folder of the build."""
+    import bench_mlx_port
+
+    assert bench_mlx_port.bench_dir_of(bench_mlx_port.RESULTS) == bench_mlx_port.BENCH_DIR
+    results = tmp_path / "bench.jsonl"
+    assert bench_mlx_port.bench_dir_of(results) == tmp_path / "bench-batches"
+    default_log = bench_mlx_port.BENCH_DIR / "driver.log"
+    before = default_log.read_bytes() if default_log.exists() else None
+    # 0 rounds: the driver opens its log and starts no worker, so no model load.
+    result = subprocess.run(
+        [sys.executable, "bench_mlx_port.py", "--rounds", "0", "--results", str(results)],
+        check=False,
+        capture_output=True,
+        text=True,
+        cwd=REPO_ROOT / "scripts",
+        timeout=120,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "run of 0 workers" in (tmp_path / "bench-batches" / "driver.log").read_text()
+    assert (default_log.read_bytes() if default_log.exists() else None) == before
+
+
+# A worker that runs the real load_mlx_backbone up to its memory check and stops before the
+# weights: the need is 1 byte, and weights_dir raises.
+WORKER_UNTIL_THE_CHECK = """
+from typing import NoReturn
+
+import bench_mlx_port
+from dinov3_apple import mlx_weights
+from dinov3_apple.hub import WeightsNotFoundError
+
+
+def stop(model_size: str) -> NoReturn:
+    raise WeightsNotFoundError("stop after the memory check")
+
+
+mlx_weights.required_mlx_load_bytes = lambda *args: 1
+mlx_weights.weights_dir = stop
+bench_mlx_port.main()
+"""
+
+
+def test_mlx_worker_memory_check_reaches_the_driver_log(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The memory check of the load in an mlx worker reaches the driver log, with the time of the
+    worker (AC11; F6 of specs/04-mlx-port/verify.html). Also after a worker error."""
+    import bench_mlx_port
+
+    config = bench_mlx_port.bench_config(1, 1)
+    spec = json.dumps(dataclasses.asdict(config) | {"backend": "mlx", "bench_dir": str(tmp_path)})
+    start = time.time()
+    worker = subprocess.run(
+        [sys.executable, "-c", WORKER_UNTIL_THE_CHECK, "--worker", spec],
+        check=False,
+        capture_output=True,
+        text=True,
+        cwd=REPO_ROOT / "scripts",
+        env=bench_mlx_port.worker_env("mlx", False, os.environ),
+        timeout=120,
+    )
+    end = time.time()
+    assert "memory check: ViT-S/16 mlx fp32" in worker.stderr, worker.stderr
+
+    # The driver side: run_worker_subprocess gets the output of this worker.
+    commands: list[list[str]] = []
+
+    def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+        commands.append(command)
+        return worker
+
+    monkeypatch.setattr(subprocess, "run", run)
+    # The record must not reach memory-checks.log of the test session.
+    monkeypatch.setattr(logging.getLogger("dinov3_apple.memory"), "handlers", [])
+    with caplog.at_level(logging.INFO):
+        result = bench_mlx_port.run_worker_subprocess(config, "mlx", False, tmp_path)
+    assert json.loads(commands[0][-1])["bench_dir"] == str(tmp_path)
+    assert result["status"] == "error"
+    assert "stop after the memory check" in result["reason"]
+    records = [record for record in caplog.records if record.name == "dinov3_apple.memory"]
+    assert len(records) == 1
+    assert re.fullmatch(
+        r"memory check: ViT-S/16 mlx fp32: needs 0\.0 GB, \d+\.\d GB available, ok",
+        records[0].getMessage(),
+    )
+    assert start <= records[0].created <= end
+    line = logging.Formatter(bench_mlx_port.LOG_FORMAT).format(records[0])
+    assert re.fullmatch(
+        r"\d{4}-\d\d-\d\d \d\d:\d\d:\d\d,\d{3} dinov3_apple\.memory memory check: .+ ok", line
+    )

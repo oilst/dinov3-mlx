@@ -1,5 +1,6 @@
 """Tests T1 to T7b of specs/04-mlx-port/plan.html: the key map, the MLX config and the load."""
 
+import dataclasses
 import logging
 from collections.abc import Callable
 
@@ -77,6 +78,34 @@ def test_map_key_both_spellings() -> None:
     for name in ("rope_embeddings.inv_freq", "pooler.dense.weight"):
         with pytest.raises(UnknownWeightError):
             map_key(name)
+
+
+def test_map_key_rejects_a_block_name_that_is_not_a_parameter() -> None:
+    """A block key must name a parameter of the MLX block (F4 of specs/04-mlx-port/verify.html)."""
+    for name in (
+        "layer.0.foo.weight",
+        "model.layer.0.attention.qkv.weight",
+        "layer.3.norm3.bias",
+        "layer.3.attention.q_proj.base_layer.weight",  # the name of a PEFT LoRA wrapper
+        "layer.3.layer_scale1.gamma",
+    ):
+        with pytest.raises(UnknownWeightError):
+            map_key(name)
+    # map_key accepts each parameter name of a block with all biases, also k_proj.bias.
+    config = dataclasses.replace(MlxConfig.from_hf(VITS16_CONFIG), key_bias=True)
+    for name, _ in tree_flatten(Block(config).parameters()):
+        assert map_key(f"model.layer.7.{name}") == f"layer.7.{name}"
+
+
+def test_map_key_leaves_the_block_index_to_the_strict_load() -> None:
+    """map_key does not know the number of blocks. The strict load stops a block index beyond it."""
+    assert map_key("layer.12.norm1.weight") == "layer.12.norm1.weight"
+    hf_model = small_hf_model()
+    tensors = {name: mx.array(t.numpy()) for name, t in hf_model.state_dict().items()}
+    tensors["layer.2.norm1.weight"] = tensors["model.layer.1.norm1.weight"]  # blocks 0 and 1 only
+    model = MlxBackbone(MlxConfig.from_hf(hf_model.config.to_dict()))
+    with pytest.raises(ValueError, match=r"layer\.2\.norm1\.weight"):
+        model.load_weights(mlx_weights(tensors, mx.float32), strict=True)
 
 
 def test_mlx_weights_load_small_model() -> None:

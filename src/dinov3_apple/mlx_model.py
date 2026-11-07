@@ -211,11 +211,13 @@ class Embeddings(nn.Module):
     def __call__(self, pixels: mx.array) -> mx.array:
         """Return the token sequence (B, 1 + 4 + N, D) of NCHW pixels (B, C, H, W).
 
-        The pixels get the dtype of the patch embedding weight first, as in the Hugging Face
-        forward pass. Without this cast, fp32 pixels promote the residual stream of a model with
-        bf16 or fp16 weights to fp32.
+        The pixels get the dtype of the CLS token first, as in the Hugging Face forward pass (the
+        dtype of the model weights). Without this cast, fp32 pixels promote the residual stream of
+        a model with bf16 or fp16 weights to fp32. The cast does not use the dtype of the patch
+        embedding weight: nn.quantize packs that weight into uint32, and uint32 pixels give wrong
+        tokens without an error (F1 of specs/04-mlx-port/verify.html).
         """
-        pixels = pixels.astype(self.patch_embeddings.weight.dtype)
+        pixels = pixels.astype(self.cls_token.dtype)
         patches = self.patch_embeddings(patchify(pixels, self.patch_size))
         prefix = mx.concatenate([self.cls_token, self.register_tokens], axis=1)
         prefix = mx.broadcast_to(prefix, (pixels.shape[0], *prefix.shape[1:]))

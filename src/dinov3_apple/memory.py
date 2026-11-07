@@ -7,10 +7,14 @@ first.
 import logging
 import re
 import subprocess
+from typing import TextIO
 
 logger = logging.getLogger(__name__)
 
 GB = 1e9
+
+# The first word of a memory-check line that a worker subprocess sends to its driver.
+FORWARD_PREFIX = "memory-check-record"
 
 # The memory check of a model load: LOAD_RATIO x the weight bytes + LOAD_RESERVE_BYTES.
 LOAD_RATIO = 1.2
@@ -89,3 +93,56 @@ def load_bytes(weight_bytes: int, ratio: float = LOAD_RATIO) -> int:
         ratio x weight_bytes + LOAD_RESERVE_BYTES.
     """
     return round(ratio * weight_bytes) + LOAD_RESERVE_BYTES
+
+
+def send_checks_to(stream: TextIO) -> logging.Handler:
+    """Send the memory-check lines of this process to stream, for replay_checks in the driver.
+
+    A benchmark worker calls this once, before its model load. Its stderr then carries one line
+    for each memory check: FORWARD_PREFIX, the time of the check, the logger name, the message.
+
+    Args:
+        stream: The stream of the lines, for example sys.stderr.
+
+    Returns:
+        The new handler of the memory-check logger.
+    """
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(logging.Formatter(f"{FORWARD_PREFIX} %(created).6f %(name)s %(message)s"))
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+    return handler
+
+
+def replay_checks(text: str) -> int:
+    """Log the memory-check lines of a worker again in this process, with the time of the worker.
+
+    The records go to the handlers of this process, for example to the driver log, in the format
+    of these handlers. The other lines of text stay out.
+
+    Args:
+        text: The stderr of a worker that called send_checks_to.
+
+    Returns:
+        The number of replayed lines.
+    """
+    count = 0
+    for line in text.splitlines():
+        prefix, _, rest = line.partition(" ")
+        fields = rest.split(" ", 2)
+        if prefix != FORWARD_PREFIX or len(fields) != 3:
+            continue
+        created, name, message = float(fields[0]), fields[1], fields[2]
+        record = logging.makeLogRecord(
+            {
+                "name": name,
+                "msg": message,
+                "levelno": logging.INFO,
+                "levelname": logging.getLevelName(logging.INFO),
+                "created": created,
+                "msecs": (created % 1) * 1000,
+            }
+        )
+        logging.getLogger(name).handle(record)
+        count += 1
+    return count

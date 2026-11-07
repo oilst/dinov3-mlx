@@ -11,9 +11,14 @@ worker that does not fit gives a "skipped" line. The mlx worker imports no torch
 MLX_ENABLE_TF32=0 (D7). The torch-mps worker is the eager worker of Step 3 with the MPS
 watermarks 0.8 and 0.6.
 
+Each worker sends the memory check of its model load to the driver, and the driver writes it to
+driver.log. The per-batch files and driver.log go to tests/fixtures/generated/bench/mlx-port/. With
+another results file (--results), they go to the folder <stem>-batches/ next to that file.
+
 Usage:
     uv run python scripts/bench_mlx_port.py --dry-run     # the plan and the needs, no model load
     uv run python scripts/bench_mlx_port.py               # 3 rounds, 12 workers, about 4 min
+    uv run python scripts/bench_mlx_port.py --results <file>.jsonl   # a run that keeps the files
 """
 
 import argparse
@@ -52,7 +57,13 @@ from dinov3_apple.machine import (
     read_machine_state,
     read_versions,
 )
-from dinov3_apple.memory import GB, InsufficientMemoryError, available_memory_bytes
+from dinov3_apple.memory import (
+    GB,
+    InsufficientMemoryError,
+    available_memory_bytes,
+    replay_checks,
+    send_checks_to,
+)
 from dinov3_apple.outputs import NUM_PREFIX_TOKENS
 from dinov3_apple.stored import model_slug, read_inputs
 
@@ -62,7 +73,7 @@ if TYPE_CHECKING:  # the module imports mlx only in the mlx worker
 REPO_ROOT = Path(__file__).parents[1]
 RESULTS = REPO_ROOT / "results" / "bench-mlx-port.jsonl"
 BENCH_DIR = REPO_ROOT / "tests" / "fixtures" / "generated" / "bench" / "mlx-port"
-DRIVER_LOG = BENCH_DIR / "driver.log"
+LOG_FORMAT = "%(asctime)s %(name)s %(message)s"
 WORKER_TIMEOUT_S = 600
 STDERR_LINES = 20
 
@@ -77,6 +88,21 @@ WATERMARKS = {"PYTORCH_MPS_HIGH_WATERMARK_RATIO": "0.8", "PYTORCH_MPS_LOW_WATERM
 WORKERS: list[tuple[str, bool | None]] = [("torch-mps", None), ("mlx", False)]
 
 logger = logging.getLogger("bench_mlx_port")
+
+
+def bench_dir_of(results: Path) -> Path:
+    """Return the folder of the per-batch files and of driver.log for one results file.
+
+    Args:
+        results: The results file of the run.
+
+    Returns:
+        BENCH_DIR for the default results file. For another results file, the folder <stem>-batches
+        next to it, so a second run (for example of the verifier) keeps the files of the first run.
+    """
+    if results.resolve() == RESULTS.resolve():
+        return BENCH_DIR
+    return results.with_name(f"{results.stem}-batches")
 
 
 def worker_plan(rounds: int = 3) -> list[tuple[int, int, str, bool | None]]:
@@ -250,17 +276,26 @@ def run_mlx_worker(
 
 
 def worker_main(spec_json: str) -> None:
-    """Run one worker in this process and print the result as one JSON line."""
+    """Run one worker in this process and print the result as one JSON line.
+
+    The memory check of the model load goes to stderr; the driver writes it to driver.log.
+
+    Args:
+        spec_json: The fields of BenchConfig, plus backend and bench_dir (the folder of the
+            per-batch files), as JSON.
+    """
+    send_checks_to(sys.stderr)
     spec = json.loads(spec_json)
     backend = spec.pop("backend")
+    bench_dir = Path(spec.pop("bench_dir"))
     config = BenchConfig(**spec)
     try:
         if backend == "mlx":
-            result = run_mlx_worker(config)
+            result = run_mlx_worker(config, bench_dir=bench_dir / "mlx")
         else:
             from dinov3_apple.torch_bench import run_worker
 
-            result = run_worker(config, bench_dir=BENCH_DIR / "torch-mps")
+            result = run_worker(config, bench_dir=bench_dir / "torch-mps")
             result |= {"mlx_peak_bytes": None, "mlx_memory_limit_bytes": None, "tf32": None}
     except InsufficientMemoryError as error:
         result = {"status": "skipped", "reason": f"load check in the worker: {error}"}
@@ -270,12 +305,24 @@ def worker_main(spec_json: str) -> None:
     print(json.dumps(result))
 
 
-def run_worker_subprocess(config: BenchConfig, backend: str, tf32: bool | None) -> dict:
+def run_worker_subprocess(
+    config: BenchConfig, backend: str, tf32: bool | None, bench_dir: Path
+) -> dict:
     """Run one worker in a new subprocess and return its result.
 
+    The memory checks of the worker go to the log of the driver, with the time of the worker.
     A worker that exits with an error gives status "error" and the last lines of its stderr.
+
+    Args:
+        config: The configuration.
+        backend: "torch-mps" or "mlx".
+        tf32: The TF32 state of an mlx worker. None for torch-mps.
+        bench_dir: The folder of the per-batch files.
+
+    Returns:
+        The result of the worker.
     """
-    spec = json.dumps(asdict(config) | {"backend": backend})
+    spec = json.dumps(asdict(config) | {"backend": backend, "bench_dir": str(bench_dir)})
     command = [sys.executable, __file__, "--worker", spec]
     try:
         done = subprocess.run(
@@ -287,7 +334,10 @@ def run_worker_subprocess(config: BenchConfig, backend: str, tf32: bool | None) 
             timeout=WORKER_TIMEOUT_S,
         )
     except subprocess.TimeoutExpired as error:
+        stderr = error.stderr or ""
+        replay_checks(stderr.decode() if isinstance(stderr, bytes) else stderr)
         return {"status": "error", "reason": f"timeout after {error.timeout} s"}
+    replay_checks(done.stderr)
     if done.returncode == 0:
         for text in reversed(done.stdout.splitlines()):
             if text.startswith("{"):
@@ -310,8 +360,18 @@ def dry_run(plan: list[tuple[int, int, str, bool | None]]) -> None:
         )
 
 
-def run_plan(plan: list[tuple[int, int, str, bool | None]], results: Path) -> Counter:
+def run_plan(
+    plan: list[tuple[int, int, str, bool | None]], results: Path, bench_dir: Path
+) -> Counter:
     """Run the workers one after the other and append one line for each.
+
+    Args:
+        plan: The workers, from worker_plan.
+        results: The results file.
+        bench_dir: The folder of the per-batch files.
+
+    Returns:
+        The number of lines for each status.
 
     Raises:
         MachineStateError: On battery power or in Low Power Mode. No line is written.
@@ -330,7 +390,7 @@ def run_plan(plan: list[tuple[int, int, str, bool | None]], results: Path) -> Co
             f"{available / GB:.1f} GB available, {'ok' if fits else 'does not fit'}"
         )
         if fits:
-            worker = run_worker_subprocess(config, backend, tf32)
+            worker = run_worker_subprocess(config, backend, tf32, bench_dir)
         else:
             reason = f"needs {need / GB:.1f} GB, {available / GB:.1f} GB available"
             worker = {"status": "skipped", "reason": reason}
@@ -381,15 +441,16 @@ def main() -> None:
     if args.dry_run:
         dry_run(plan)
         return
-    BENCH_DIR.mkdir(parents=True, exist_ok=True)
+    bench_dir = bench_dir_of(args.results)
+    bench_dir.mkdir(parents=True, exist_ok=True)
     logging.basicConfig(
         level=logging.INFO,
-        format="%(asctime)s %(name)s %(message)s",
-        handlers=[logging.StreamHandler(sys.stderr), logging.FileHandler(DRIVER_LOG)],
+        format=LOG_FORMAT,
+        handlers=[logging.StreamHandler(sys.stderr), logging.FileHandler(bench_dir / "driver.log")],
     )
     logger.info(f"run of {len(plan)} workers")
     try:
-        counts = run_plan(plan, args.results)
+        counts = run_plan(plan, args.results, bench_dir)
     except MachineStateError as error:
         logger.error(f"stop: {error}")
         sys.exit(1)
