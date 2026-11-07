@@ -66,6 +66,10 @@ The RoPE rotation x · cos2 + reversed(x) · sin2 on a (…, 2, head_dim / 2) vi
 **RoPE cache**:
 The RoPE tables of each patch grid of one backbone, in the layout of the concat-free rotation (`RopeCache`). It is outside the module tree.
 
+**SDPA**:
+Scaled dot-product attention: softmax(q · kᵀ / √head_dim) · v for each head. On `mlx` one fused kernel computes it (`mx.fast.scaled_dot_product_attention`).
+_Avoid_: attention kernel (alone)
+
 **LayerScale**:
 A learned factor for each channel on the output of each branch of a block.
 
@@ -216,6 +220,24 @@ _Avoid_: ANE (in prose), NPU
 **Prior-art comparison**:
 The measurement of a related public repo with our benchmark harness and our parity tests.
 
+**Prior-art ratio**:
+Our throughput divided by the throughput of a port or a Core ML export in the same round. Above 1: ours is faster.
+
+**Core ML export**:
+A Core ML model package (`.mlpackage`) of a DINOv3 or DINOv2 backbone that another party made and published.
+
+**Compute units**:
+The Core ML setting that selects the devices of a model: ALL, CPU_AND_GPU, CPU_AND_NE or CPU_ONLY.
+
+**Spec-array input**:
+The image input of a Core ML export, changed in the loaded spec to a FLOAT32 multiArray, so the stored pixels go in without 8-bit rounding.
+
+**Port change**:
+One difference between a port and the Hugging Face backbone, for example bf16 RoPE tables.
+
+**Port-change variant**:
+Our backbone with one port change, to measure the cost of that change in parity and speed.
+
 **Baseline**:
 The speed and the memory of the Hugging Face backbone on `torch-mps`. All speedups are relative to it.
 _Avoid_: reference (for speed)
@@ -298,6 +320,15 @@ The largest absolute value in the token sequence before block 1 and after each b
 **Memory check**:
 The comparison of the free memory with the need of a model load, before the load. A load that does not fit stops with a recorded reason.
 
+**Memory need**:
+The bytes that one model load or one benchmark configuration needs, from the model size, the dtype mode, the bits, the batch size and the token count (`required_bench_bytes`). Since Step 6 it depends on the backend. The memory check compares it with the free memory.
+
+**MLX memory limit**:
+The limit of `mx.set_memory_limit` in one process. A benchmark worker of `mlx` loads with the load need as the limit, then raises the limit to the memory need of its configuration (fields `mlx_load_limit_bytes` and `mlx_memory_limit_bytes`).
+
+**MLX cache**:
+The freed buffers that MLX keeps for later use (`mx.get_cache_memory`). They are not active memory. `mx.clear_cache()` empties it.
+
 **Load peak**:
 The largest MLX active memory (`mx.get_peak_memory`) during one model load, minus the active memory before the load. It does not include the MLX cache. It is not the load footprint peak.
 
@@ -318,6 +349,24 @@ A job that loads a model, runs a benchmark or trains. One heavy job runs at a ti
 
 **GPU lock**:
 The exclusive file lock that each heavy job and each light GPU job takes before it starts (`heavy_job`). Its holder also waits for jobs that do not use the lock.
+
+**Lock-aware job**:
+A job that takes the GPU lock. It writes its process id into the lock registry before it waits.
+
+**Lock registry**:
+The folder with one entry for each lock-aware process. When the holder of the GPU lock looks for other heavy jobs (`other_heavy_jobs`), it leaves out each registered process, its ancestors and its children.
+
+**Lock log**:
+The log of the GPU lock: one line for the start of the wait, one for the start of the hold and one for the end of each job.
+
+**Benchmark worker**:
+The subprocess that measures one configuration on one backend: one memory check, one model load, the warm-up and the timed batches. It writes one result line with the frame time and the patch time.
+
+**Result line**:
+One JSON line in a file of `results/`: one configuration, its measured values, the versions and the machine state.
+
+**Probe**:
+A short measurement with throw-away code during the Explore stage. Its values are evidence for a decision, not a result of the step.
 
 **Throughput**:
 Images per second in steady state, after warm-up.
@@ -340,10 +389,31 @@ The rule that ends the warm-up and the timed batches of one benchmark configurat
 One of the two configurations that the benchmarks measure in two paired runs of five rounds, and where each change gets its change ratio: P1 (ViT-S/16, 224 px, batch size 8, frame embedding) and P2 (ViT-H+/16, 512 px, batch size 8, patch embeddings).
 
 **Compile row**:
-A benchmark result with the backbone wrapped by `torch.compile` on `torch-mps` or by `mx.compile` on `mlx`. Since Step 6, every configuration has compile rows.
+A benchmark result with the backbone wrapped by `torch.compile` on `torch-mps` or by `mx.compile` on `mlx`. Since Step 6, every configuration has compile rows (ADR 0009).
 
 **Compile check**:
-The comparison of a compiled `torch-mps` row with the Step 3 eager row of the same configuration and dtype mode. A compiled row below the eager row gets a follow-up group with both.
+The comparison of a compiled `torch-mps` row of the matrix run with the median of the Step 3 eager rows of the same configuration and dtype mode, for the frame and the patch output (`compile_check`). A compiled row below that median gets a follow-up group.
+
+**Matrix run**:
+One run of the benchmark matrix in paired groups, one round for each paired group (`results/speed-matrix.jsonl`).
+
+**Follow-up group**:
+A paired group that runs again after the matrix run for a cell that the compile check lists. It holds the eager and the compiled `torch-mps` row and the fastest valid `mlx` row of the dtype, so the speedup table can compare them in one group.
+
+**Eager fallback**:
+The eager `torch-mps` row that the driver runs in the same position when a compiled `torch-mps` worker of the matrix run ends with an error. The speedup table uses it as the baseline row of that cell, with the mark "eager torch: `torch.compile` failed".
+
+**Gate**:
+A short job that runs before a large job and decides how the large job runs. Step 6: the gate of ViT-7B/16 (job J13, phase "gate") decides whether its matrix rows on `torch-mps` run with `torch.compile` or eager.
+
+**Batch-size sweep**:
+A benchmark run over more batch sizes than the benchmark matrix has, for some model sizes and input resolutions (`results/speed-sweep.jsonl`). It shows how the throughput changes with the batch size. The best batch size of the speedup table comes from the matrix run, not from the sweep.
+
+**Host share**:
+The median time of a compiled call before `mx.eval` divided by the median time to the end of `mx.eval` (`run_profile_worker`). A low value shows that the GPU, not Python, sets the time.
+
+**Learn data**:
+Benchmark lines that only the explainers use, for example the input resolutions 768 and 1024 px and the pairs with the Neural Accelerators on and off (`results/speed-learn.jsonl`). The speedup table does not use them.
 
 **Best batch size**:
 The batch size with the highest throughput for one model size, input resolution and dtype mode.
@@ -355,7 +425,7 @@ One run of each configuration of a benchmark command, in order. A second round r
 The time of each part of block 1, with each part run alone in a loop, next to its FLOP count.
 
 **Speedup**:
-The throughput of `mlx` divided by the throughput of the baseline row, from a paired run. At P1 and P2 the median of the paired ratios of two runs.
+The throughput of `mlx` divided by the throughput of the baseline row, from a paired run (ADR 0009). At P1 and P2 the median of the paired ratios of two runs.
 
 **Speedup table**:
 The table with the speedup of each configuration of the benchmark matrix (`results/speedup-table.md`).
@@ -368,6 +438,9 @@ The workers of one model size, input resolution and batch size in one matrix run
 
 **Change ratio**:
 The throughput after a change divided by the throughput before it, both forms in one process, in alternation and in a rotated order. The median over the rounds. A change that compares two configurations (C3, C5) runs each configuration in its own subprocess, in alternation.
+
+**Pass rule**:
+The rule that gives the verdict of a speedup. At P1 and P2: "above 1" only if the pooled median of the paired ratios and the median of each run are above 1. Outside P1 and P2: "above 1" if the one paired ratio is above 1. Else "not above 1". A quantized row that fails the thresholds of its dtype mode is "not valid".
 
 **Inside the noise**:
 The mark of a paired ratio within 1 ± 0.03, the spread inside one arm in the probe paired-noise.
@@ -386,6 +459,12 @@ An MLX Metal kernel that uses the Neural Accelerators. Its name contains "nax", 
 
 **Neural Accelerators on / off**:
 The state with and without the NAX kernels. `MLX_METAL_GPU_ARCH=applegpu_g16s` turns the NAX kernels off.
+
+**SDPA fingerprint**:
+The share of the fp16 and bf16 SDPA outputs that differ from the float64 result rounded once, at a fixed shape. A high share shows the NAX attention kernel with relaxed precision. The report-only test `test_mlx_sdpa_nax_fingerprint` measures it in each default session.
+
+**GPU matmul limit**:
+The highest compute rate that the matmuls of one shape and dtype reach on the GPU. Where both backends reach it, the speedup stays near 1.
 
 **Relaxed precision**:
 The option of the NAX matrix operation that lets the hardware compute with less precision. MLX 0.32.4 turns it on in the NAX matmul and attention kernels.
@@ -438,8 +517,17 @@ _Avoid_: tutorial, write-up
 **Acceptance criterion**:
 A numbered, measurable condition in `plan.html` that `verify.html` checks.
 
+**Deviation**:
+A change of the approved plan that the build makes, for example a changed target. The build hand-over lists each deviation, and the user confirms or rejects it.
+
+**Mutation probe**:
+A deliberate fault in a copy of the code, which a test must catch. The Verify stage uses it to check that a test goes red for its red case. It is not a probe of the Explore stage.
+
 **Default session**:
 A pytest session without `DINOV3_SLOW`.
 
 **Slow session**:
 A pytest session with `DINOV3_SLOW=1`.
+
+**CPU stream**:
+The CPU device of MLX (`mx.cpu`). Some tests run the MLX backbone there as a second device; it rounds differently from the GPU.
