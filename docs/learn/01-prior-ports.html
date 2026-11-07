@@ -36,7 +36,7 @@ a { color: var(--accent); }
 <main>
 <header>
   <h1>Prior DINOv3 Ports</h1>
-  <p>Explainer for roadmap step 1. Date: 2026-11-06.</p>
+  <p>Explainer for roadmap step 1. Date: 2026-11-06. Corrected on 2026-11-07: Table 1, row "Meta (hub)".</p>
 </header>
 
 <nav>
@@ -129,7 +129,7 @@ angles = angles.flatten(1, 2).tile(2)                           # (H*W, head_dim
       <thead><tr><th>Project</th><th>Table computation</th><th>Default dtype of the tables</th></tr></thead>
       <tbody>
         <tr><td>Hugging Face</td><td>As above</td><td>fp32</td></tr>
-        <tr><td>Meta (hub)</td><td>Stores <code>periods</code> instead of <code>inv_freq</code>, same angles</td><td>fp32 (<code>pos_embed_rope_dtype="fp32"</code>)</td></tr>
+        <tr><td>Meta (hub)</td><td>Reads the periods 100<sup>k/16</sup> from the Meta checkpoint (<code>rope_embed.periods</code>) instead of the frequencies (<code>inv_freq</code>). The checkpoint stores the periods in bf16. So the angles differ from the Hugging Face angles by up to 0.0079 rad at 224 px and 0.0083 rad at 512 px (corrected on 2026-11-07, see the note below)</td><td>fp32 (<code>pos_embed_rope_dtype="fp32"</code>), from the bf16 periods</td></tr>
         <tr><td>MLXDINOv3</td><td>Line-by-line copy of the Hugging Face steps</td><td>fp32, then the input dtype</td></tr>
         <tr><td>mlx_dinov3</td><td>Port of the Meta class</td><td>bf16 (the model default <code>pos_embed_rope_dtype="bf16"</code>)</td></tr>
         <tr><td>mlx-image</td><td>Port of the Meta class</td><td>bf16 (the same default, the factories do not change it)</td></tr>
@@ -137,6 +137,7 @@ angles = angles.flatten(1, 2).tile(2)                           # (H*W, head_dim
     </table>
   </div>
   <p class="caption"><b>Table 1.</b> RoPE in each project. We read the defaults from the code. We did not measure the effect of bf16 tables on parity.</p>
+  <p class="note"><b>Correction of 2026-11-07 (Step 4).</b> The first version of this page (2026-11-06) said "same angles" for the Meta hub code. That is wrong. The ViT-S/16 Meta checkpoint stores <code>rope_embed.periods</code> as 16 bf16 values. bf16 rounds the periods, for example 1.33352 to 1.33594 (k = 1). The Meta hub code then computes the angles in fp32 from these rounded periods. The Hugging Face code computes exact fp32 frequencies. For k = 1 and a coordinate of 1, the angle difference is 0.00852 rad. The largest coordinate is 13/14 at 224 px, so the largest angle difference is 0.0079 rad at 224 px and 0.0083 rad at 512 px. Test T9 (<code>test_rope_tables_meta_difference</code>) measured 0.00791 rad at the 14 × 14 grid and 0.00825 rad at the 32 × 32 grid. So two different "official" RoPE tables exist. The port uses the Hugging Face tables, because the reference output comes from the Hugging Face code (ADR 0006). Sources: Section 3.3.2 and Table 8 of <code>specs/04-mlx-port/explore.html</code>, and Section 10 of <a href="04-2-rope.html#meta">04-2-rope.html</a>.</p>
 </section>
 
 <section id="ffn">
@@ -245,7 +246,7 @@ angles = angles.flatten(1, 2).tile(2)                           # (H*W, head_dim
   <ol>
     <li class="note"><b>The k bias is always zero.</b> Meta trains with one fused qkv bias, but a mask (<code>mask_k_bias=True</code>, <code>bias_mask</code>) sets the k part to zero. So the Hugging Face model has no <code>k_proj.bias</code> (<code>key_bias=False</code>). ViT-7B/16 has no q bias and no v bias either.</li>
     <li class="note"><b>8-bit pixels change the output.</b> Our first conversion check resized the 8-bit image with Pillow and missed the expected values by 0.004. A resize on float pixels, as torchvision does, missed by 0.0004 or less. The preprocessing must be fixed before the parity tests of Step 2 can mean anything.</li>
-    <li class="note"><b>bf16 RoPE tables by default.</b> Both Python ports build the RoPE tables in bf16 unless the caller changes a default. Meta's hub code and Hugging Face use fp32.</li>
+    <li class="note"><b>bf16 RoPE tables by default.</b> Both Python ports build the RoPE tables in bf16 unless the caller changes a default. Meta's hub code and Hugging Face use fp32. But the Meta hub code computes its fp32 tables from bf16 periods (the note under Table 1, added on 2026-11-07).</li>
     <li class="note"><b>SwiGLU width.</b> <code>intermediate_size</code> is 4 × the embedding dimension for ViT-S+/16 and ViT-H+/16, but Meta's ratio is 6 (Table 2).</li>
     <li class="note"><b>Shards break a simple converter.</b> MLXDINOv3 downloads only <code>model.safetensors</code>. ViT-7B/16 has six shards and an index, so the converter cannot read it.</li>
     <li class="note"><b>The converted file has the same size as the Hub file.</b> Our converted ViT-S/16 and ViT-H+/16 files have exactly the byte count of the files on the Hub. After the downloads, a test showed that each converted tensor is equal to the Hub tensor.</li>
@@ -259,6 +260,7 @@ angles = angles.flatten(1, 2).tile(2)                           # (H*W, head_dim
     <li>Official DINOv3 code, <code>dinov3/hub/backbones.py</code> and <code>dinov3/layers/rope_position_encoding.py</code>. Read to check facts only (ADR 0002).</li>
     <li>MLXDINOv3 commit 3122d79, mlx_dinov3 commit 43d139b, mlx-image commit da92532, mlx-dinov3 commit 0bdeaa0.</li>
     <li>Hugging Face Hub API, file sizes of the six model sizes, 2026-11-06.</li>
+    <li>For the correction of 2026-11-07: <code>specs/04-mlx-port/explore.html</code> (Section 3.3.2, Table 8, risk R11), <code>tests/test_mlx_rope.py</code> (T9), <code>docs/adr/0006-hugging-face-rope-tables-as-the-target.md</code> and <a href="04-2-rope.html">04-2-rope.html</a>.</li>
   </ul>
 </section>
 </main>

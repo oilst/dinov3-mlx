@@ -851,7 +851,7 @@ figcaption { font-size: 0.88rem; color: var(--muted); max-width: 52rem; }
             <tr><td><code>test_patch_parity</code></td><td>Mean, 1st percentile and minimum of the parity over all patch embeddings</td><td>Mean: fp32 ≥ 0.9999, fp16 ≥ 0.999, bf16 ≥ 0.995. 1st percentile: fp32 ≥ 0.9999, fp16 ≥ 0.99, bf16 ≥ 0.96. Minimum: report only.</td></tr>
             <tr><td><code>test_batch_consistency</code></td><td>A batch of 1 and a batch of 8 give the same outputs.</td><td>The frame and patch thresholds of the dtype</td></tr>
             <tr><td><code>test_input_resolutions</code></td><td>224, 448 and 512 px, plus the own aspect ratio of each test image with a short side of 224 px. Step 2: one parity test for each configuration.</td><td>The frame and patch thresholds of the dtype</td></tr>
-            <tr><td><code>test_rope_tables</code></td><td>The MLX RoPE tables against the official tables</td><td>Largest difference ≤ 1e-6 in fp32</td></tr>
+            <tr><td><code>test_rope_tables</code></td><td>The MLX RoPE tables against the Hugging Face tables. A report-only test gives the difference to the Meta tables, whose periods are bf16 (ADR 0006, changed in Step 4)</td><td>Largest difference ≤ 1e-6 in fp32</td></tr>
             <tr><td><code>test_quantized</code></td><td>Parity of the models with 8-bit and 4-bit weights</td><td>Report only</td></tr>
           </tbody>
         </table>
@@ -1014,7 +1014,7 @@ figcaption { font-size: 0.88rem; color: var(--muted); max-width: 52rem; }
           <tr><td>R2</td><td>Repo name</td><td>The name is part of the public URL.</td><td>Keep <code>dinov3-apple</code> or rename before the first push.</td><td>User</td></tr>
           <tr><td>R3</td><td>Expired Hugging Face token</td><td>The gated weights do not download.</td><td>Renew the token in Step 1.</td><td>User</td></tr>
           <tr><td>R4</td><td>Out-of-memory crash</td><td>This Mac crashed before. Work gets lost.</td><td>The run rules in <code>CLAUDE.md</code>: one heavy job, one subprocess per configuration, a memory check.</td><td>Agent</td></tr>
-          <tr><td>R5</td><td>2D RoPE in MLX</td><td><code>mx.fast.rope</code> can possibly not compute the 2D RoPE of DINOv3.</td><td>Step 4 checks it. The fallback keeps sine and cosine tables in a cache.</td><td>Agent</td></tr>
+          <tr><td>R5</td><td>2D RoPE in MLX</td><td><code>mx.fast.rope</code> can possibly not compute the 2D RoPE of DINOv3.</td><td>Step 4 checks it. The fallback keeps sine and cosine tables in a cache. Result of Step 4: confirmed. <code>mx.fast.rope</code> cannot compute it in one call, so the MLX backbone uses RoPE tables, cached by patch grid.</td><td>Agent</td></tr>
           <tr><td>R6</td><td>fp16 overflow</td><td>Large model sizes can give wrong outputs in fp16.</td><td>Step 5 records the token range. Use bf16 where fp16 fails.</td><td>Agent</td></tr>
           <tr><td>R7</td><td>Overlap with prior work</td><td>The repo can add less than this plan expects.</td><td>Step 1 compares the ports and adjusts the scope.</td><td>Agent and user</td></tr>
           <tr><td>R8</td><td>Small speedup for small model sizes</td><td>Goal 3 can fail for ViT-S/16 when fixed costs dominate.</td><td>Report the measured values. <code>verify.html</code> explains each miss.</td><td>Agent</td></tr>

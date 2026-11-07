@@ -1,0 +1,697 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RoPE Tables and Rotation</title>
+<style>
+/* Explainer page. White page, black text, no dark mode. */
+:root { --bg: #ffffff; --fg: #111414; --muted: #4a5655; --rule: #d6dedd; --panel: #f5f8f7; --accent: #057379; --cls: #057379; --patch: #9fd3d1; --reg: #e0a336; color-scheme: light; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif; }
+main { max-width: 62rem; margin: 0 auto; padding: 40px 20px 64px; display: grid; gap: 1.75rem; }
+h1 { font-size: 1.9rem; line-height: 1.15; margin: 0; }
+h2 { font-size: 1.3rem; margin: 0; }
+h3 { font-size: 1.05rem; margin: 0; }
+section { display: grid; gap: 0.8rem; }
+p, ul, ol { margin: 0; max-width: 46rem; }
+li + li { margin-top: 0.25rem; }
+code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.86em; }
+pre { margin: 0; background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 0.8rem 1rem; overflow-x: auto; }
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 0.92rem; }
+th, td { text-align: left; vertical-align: top; padding: 0.45rem 0.7rem 0.45rem 0; border-bottom: 1px solid var(--rule); }
+th { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); border-bottom: 1.5px solid var(--fg); }
+td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.caption, figcaption { font-size: 0.88rem; color: var(--muted); }
+figure { margin: 0; display: grid; gap: 0.4rem; }
+.fig { border: 1px solid var(--rule); border-radius: 6px; padding: 0.5rem; overflow-x: auto; }
+.fig svg { display: block; width: 100%; height: auto; min-width: 640px; }
+.note { border-left: 3px solid var(--accent); padding: 0.3rem 0 0.3rem 0.9rem; }
+details summary { cursor: pointer; color: var(--accent); }
+nav ol { columns: 2; }
+a { color: var(--accent); }
+.pages { font-size: 0.92rem; color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+<header>
+  <h1>RoPE Tables and Rotation</h1>
+  <p>Explainer for roadmap Step 4. Date: 2026-11-07.</p>
+  <p class="pages">Step 4 explainers: <a href="04-1-patch-embedding.html">1 Patch embedding</a> · <b>2 RoPE</b> (this page) · <a href="04-3-attention.html">3 Attention</a> · <a href="04-4-layerscale.html">4 LayerScale and the block</a> · <a href="04-5-mlp.html">5 MLP and the outputs</a>. Step 3: <a href="03-where-the-compute-goes.html">Where the compute goes</a>.</p>
+  <p class="pages">Previous: <a href="04-1-patch-embedding.html">1 Patch embedding and MLX weights</a> · Next: <a href="04-3-attention.html">3 Attention</a></p>
+</header>
+
+<nav>
+  <h2>Contents</h2>
+  <ol>
+    <li><a href="#why">Why this explainer</a></li>
+    <li><a href="#picture">RoPE in one picture</a></li>
+    <li><a href="#coords">Patch-center coordinates: y, then x</a></li>
+    <li><a href="#freqs">Sixteen frequencies from base 100</a></li>
+    <li><a href="#layout">The half-split layout and rotate_half</a></li>
+    <li><a href="#prefix">Identity rows for the prefix tokens</a></li>
+    <li><a href="#fastrope">Why mx.fast.rope cannot do it in one call</a></li>
+    <li><a href="#fp32">The rotation in fp32</a></li>
+    <li><a href="#cache">The cache by patch grid</a></li>
+    <li><a href="#meta">Two official tables: Hugging Face and Meta</a></li>
+    <li><a href="#jitter">RoPE-box jittering: training only</a></li>
+    <li><a href="#measured">The measured results of Step 4</a></li>
+    <li><a href="#surprises">Surprises</a></li>
+    <li><a href="#sources">Sources</a></li>
+  </ol>
+</nav>
+
+<section id="why">
+  <h2>1 Why this explainer</h2>
+  <p>DINOv3 has no learned position embedding. RoPE gives each patch token its position. Each block rotates the queries and the keys of the patch tokens by angles that come from the 2D position of the patch. The tensor v does not rotate. The prefix tokens do not rotate.</p>
+  <p>Step 4 ported ViT-S/16 to MLX (commit <code>c212226</code>). This page explains the RoPE part of the port. It covers four functions of <code>src/dinov3_apple/mlx_model.py</code> and two attributes of <code>MlxBackbone</code> (Table 1). Each section quotes the code with its line numbers. The line numbers are those of commit <code>ea82d58</code>, which fixed the findings of the verification. That commit did not change the RoPE code, but it added 2 lines to the docstring of <code>Embeddings.__call__</code>. So each line after this docstring moved down by 2. The RoPE functions come before it and kept their line numbers. Some comments in the quotes are annotations of this page. Section 12 gives the measured results.</p>
+  <p>The result in three numbers:</p>
+  <ul>
+    <li>The MLX RoPE tables differ from the Hugging Face tables by at most 1.2e-7 on all six patch grids (acceptance criterion AC5, target 1e-6).</li>
+    <li>The rotation is bit-equal to the Hugging Face rotation: the part test <code>rope</code> gives a difference of 0.</li>
+    <li>The Meta tables differ from the Hugging Face tables by up to 0.0083 rad, because the Meta checkpoint stores the periods in bf16 (AC6, report only).</li>
+  </ul>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Name</th><th>Lines</th><th>Job</th><th>Tests</th></tr></thead>
+      <tbody>
+        <tr><td><code>rope_tables(grid_h, grid_w, head_dim, theta)</code></td><td class="num">118–146</td><td>Makes the cos table and the sin table of one patch grid in NumPy fp32, with 5 identity rows on top.</td><td>T8 <code>test_rope_tables</code> (AC5), T9 <code>test_rope_tables_meta_difference</code> (AC6)</td></tr>
+        <tr><td><code>rotate_half(x)</code></td><td class="num">149–152</td><td>Returns (−x2, x1) for the two halves x1 and x2 of the last axis.</td><td>Through T10</td></tr>
+        <tr><td><code>apply_rope(x, cos, sin)</code></td><td class="num">155–170</td><td>Rotates q or k in fp32 and casts the result back to the dtype of x.</td><td>T10 <code>test_mlx_block_part[rope]</code>, T13, T16</td></tr>
+        <tr><td><code>MlxBackbone.rope(grid_h, grid_w)</code></td><td class="num">336–341</td><td>Returns the tables of one patch grid from the cache. Makes them on the first call for the grid.</td><td>T13, T16, T18, T19, W2, W5</td></tr>
+        <tr><td><code>MlxBackbone._rope_cache</code></td><td class="num">333</td><td>The cache: one pair of tables for each patch grid. Not a parameter.</td><td>T19</td></tr>
+        <tr><td><code>MlxBackbone.rope_box_jitter</code></td><td class="num">334</td><td>The flag of RoPE-box jittering. Always False in Step 4. No code reads it yet.</td><td>None</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 1.</b> The RoPE code of Step 4 in <code>src/dinov3_apple/mlx_model.py</code>. The callers are <code>Attention.__call__</code> (line 266), <code>MlxBackbone.__call__</code> (line 347) and <code>run_mlx_hidden_states</code> (line 386). <code>MlxConfig</code> gives <code>head_dim</code> (lines 90–93) and <code>rope_theta</code> (line 81); <a href="04-1-patch-embedding.html">04-1</a> explains it. The test numbers are the numbers of Table 6 and Table 8 of <code>specs/04-mlx-port/plan.html</code>.</p>
+</section>
+
+<section id="picture">
+  <h2>2 RoPE in one picture</h2>
+  <p>Figure 1 shows the path at 224 × 224 px. The input resolution gives the patch grid: 224 / 16 = 14 rows and 14 columns. <code>MlxBackbone.rope</code> looks up the grid in the cache. On the first call for a grid, <code>rope_tables</code> makes the two tables in NumPy. Each table has 5 + 196 = 201 rows and 64 columns: one row for each token and one column for each value of a head. All 12 blocks use the same two tables. In each block, <code>apply_rope</code> rotates q and k. The tables broadcast over the batch and over the 6 heads.</p>
+  <figure>
+    <div class="fig"><svg viewBox="0 0 960 470" role="img" aria-labelledby="f1t" font-family="-apple-system, Helvetica Neue, Arial, sans-serif">
+      <title id="f1t">Data flow of RoPE in the MLX backbone for ViT-S/16 at 224 by 224 px</title>
+      <defs>
+        <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#4a5655"/></marker>
+        <marker id="at" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#057379"/></marker>
+      </defs>
+      <rect width="960" height="470" fill="#ffffff"/>
+      <g font-size="13" fill="#111414">
+        <text x="20" y="24" font-weight="600">ViT-S/16, 224 × 224 px, batch size B: one pair of RoPE tables for the 14 × 14 patch grid</text>
+        <!-- row 1 -->
+        <rect x="20" y="40" width="170" height="64" rx="4" fill="#f5f8f7" stroke="#d6dedd"/>
+        <text x="105" y="66" text-anchor="middle" font-weight="600">stored pixels</text>
+        <text x="105" y="86" text-anchor="middle" font-size="12" fill="#4a5655">(B, 3, 224, 224)</text>
+        <line x1="190" y1="72" x2="222" y2="72" stroke="#4a5655" stroke-width="1.5" marker-end="url(#ar)"/>
+        <rect x="225" y="40" width="190" height="64" rx="4" fill="#f5f8f7" stroke="#d6dedd"/>
+        <text x="320" y="66" text-anchor="middle" font-weight="600">patch grid</text>
+        <text x="320" y="86" text-anchor="middle" font-size="12" fill="#4a5655">224 // 16 = 14 rows, 14 columns</text>
+        <line x1="415" y1="72" x2="437" y2="72" stroke="#4a5655" stroke-width="1.5" marker-end="url(#ar)"/>
+        <rect x="440" y="40" width="210" height="64" rx="4" fill="#ffffff" stroke="#057379" stroke-width="2"/>
+        <text x="545" y="66" text-anchor="middle" font-weight="600">MlxBackbone.rope(14, 14)</text>
+        <text x="545" y="86" text-anchor="middle" font-size="12" fill="#4a5655">lines 336–341</text>
+        <line x1="650" y1="72" x2="697" y2="72" stroke="#057379" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#at)"/>
+        <rect x="700" y="40" width="240" height="64" rx="4" fill="#ffffff" stroke="#057379" stroke-width="2"/>
+        <text x="820" y="61" text-anchor="middle" font-weight="600">rope_tables(14, 14, 64, 100.0)</text>
+        <text x="820" y="79" text-anchor="middle" font-size="12" fill="#4a5655">lines 118–146, NumPy, fp32</text>
+        <text x="820" y="96" text-anchor="middle" font-size="11" fill="#4a5655">only on the first call for (14, 14)</text>
+        <!-- row 2: cache entry -->
+        <rect x="24" y="126" width="400" height="168" rx="6" fill="none" stroke="#d6dedd" stroke-dasharray="5 4"/>
+        <text x="36" y="144" font-size="11" fill="#4a5655">one cache entry: 2 tables × 201 rows × 64 columns × 4 bytes = 102,912 bytes</text>
+        <text x="80" y="164" text-anchor="middle" font-size="12" font-weight="600">cos</text>
+        <text x="190" y="164" text-anchor="middle" font-size="12" font-weight="600">sin</text>
+        <rect x="40" y="170" width="80" height="4" fill="#057379"/>
+        <rect x="40" y="174" width="80" height="14" fill="#e0a336"/>
+        <rect x="40" y="188" width="80" height="94" fill="#9fd3d1"/>
+        <rect x="40" y="170" width="80" height="112" fill="none" stroke="#4a5655" stroke-width="0.8"/>
+        <rect x="150" y="170" width="80" height="4" fill="#057379"/>
+        <rect x="150" y="174" width="80" height="14" fill="#e0a336"/>
+        <rect x="150" y="188" width="80" height="94" fill="#9fd3d1"/>
+        <rect x="150" y="170" width="80" height="112" fill="none" stroke="#4a5655" stroke-width="0.8"/>
+        <text x="80" y="183" text-anchor="middle" font-size="10">1</text>
+        <text x="190" y="183" text-anchor="middle" font-size="10">0</text>
+        <text x="80" y="240" text-anchor="middle" font-size="11">cos θ</text>
+        <text x="190" y="240" text-anchor="middle" font-size="11">sin θ</text>
+        <text x="244" y="178" font-size="11" fill="#111414">← rows 0–4: the 5 prefix tokens,</text>
+        <text x="258" y="192" font-size="11" fill="#4a5655">identity rows (cos 1, sin 0)</text>
+        <text x="244" y="234" font-size="11" fill="#111414">← rows 5–200: the 196 patch</text>
+        <text x="258" y="248" font-size="11" fill="#4a5655">tokens, row-major order</text>
+        <line x1="440" y1="182" x2="426" y2="182" stroke="#d6dedd" stroke-width="1.5"/>
+        <!-- cache box -->
+        <rect x="440" y="154" width="210" height="56" rx="4" fill="#ffffff" stroke="#057379" stroke-width="2"/>
+        <text x="545" y="178" text-anchor="middle" font-weight="600">_rope_cache[(14, 14)]</text>
+        <text x="545" y="197" text-anchor="middle" font-size="12" fill="#4a5655">line 333: a dict, not a parameter</text>
+        <line x1="545" y1="104" x2="545" y2="151" stroke="#4a5655" stroke-width="1.5" marker-end="url(#ar)"/>
+        <text x="553" y="133" font-size="11" fill="#4a5655">look up</text>
+        <path d="M820,104 L820,182 L654,182" fill="none" stroke="#057379" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#at)"/>
+        <text x="737" y="174" text-anchor="middle" font-size="11" fill="#4a5655">store as mx.array</text>
+        <!-- arrow to apply_rope -->
+        <path d="M600,210 L600,296 L661,296 L661,327" fill="none" stroke="#057379" stroke-width="2" marker-end="url(#at)"/>
+        <text x="612" y="250" font-size="11" fill="#057379">cos, sin (201, 64): the same in all 12 blocks,</text>
+        <text x="612" y="264" font-size="11" fill="#057379">broadcast over B and over the 6 heads</text>
+        <!-- row 3: one block -->
+        <rect x="20" y="310" width="920" height="146" rx="6" fill="none" stroke="#d6dedd" stroke-dasharray="5 4"/>
+        <text x="32" y="328" font-size="12" fill="#4a5655">attention branch of one block (lines 257–268)</text>
+        <rect x="36" y="345" width="130" height="56" rx="4" fill="#f5f8f7" stroke="#d6dedd"/>
+        <text x="101" y="369" text-anchor="middle" font-weight="600">x after norm1</text>
+        <text x="101" y="388" text-anchor="middle" font-size="12" fill="#4a5655">(B, 201, 384)</text>
+        <line x1="166" y1="373" x2="188" y2="373" stroke="#4a5655" stroke-width="1.5" marker-end="url(#ar)"/>
+        <rect x="190" y="345" width="160" height="56" rx="4" fill="#f5f8f7" stroke="#d6dedd"/>
+        <text x="270" y="369" text-anchor="middle" font-weight="600">q_proj, k_proj, v_proj</text>
+        <text x="270" y="388" text-anchor="middle" font-size="12" fill="#4a5655">6 heads of 64 values</text>
+        <line x1="350" y1="360" x2="374" y2="357" stroke="#4a5655" stroke-width="1.5" marker-end="url(#ar)"/>
+        <line x1="350" y1="388" x2="374" y2="414" stroke="#4a5655" stroke-width="1.5" marker-end="url(#ar)"/>
+        <rect x="376" y="335" width="150" height="44" rx="4" fill="#f5f8f7" stroke="#d6dedd"/>
+        <text x="451" y="354" text-anchor="middle" font-weight="600">q, k</text>
+        <text x="451" y="371" text-anchor="middle" font-size="12" fill="#4a5655">(B, 6, 201, 64) each</text>
+        <rect x="376" y="395" width="150" height="44" rx="4" fill="#f5f8f7" stroke="#d6dedd"/>
+        <text x="451" y="414" text-anchor="middle" font-weight="600">v</text>
+        <text x="451" y="431" text-anchor="middle" font-size="12" fill="#4a5655">(B, 6, 201, 64)</text>
+        <line x1="526" y1="357" x2="553" y2="357" stroke="#4a5655" stroke-width="1.5" marker-end="url(#ar)"/>
+        <rect x="556" y="330" width="210" height="54" rx="4" fill="#ffffff" stroke="#057379" stroke-width="3"/>
+        <text x="661" y="352" text-anchor="middle" font-weight="600">apply_rope on q and on k</text>
+        <text x="661" y="371" text-anchor="middle" font-size="11" fill="#4a5655">x · cos + rotate_half(x) · sin, in fp32</text>
+        <line x1="766" y1="357" x2="788" y2="357" stroke="#4a5655" stroke-width="1.5" marker-end="url(#ar)"/>
+        <rect x="790" y="345" width="140" height="56" rx="4" fill="#f5f8f7" stroke="#d6dedd"/>
+        <text x="860" y="369" text-anchor="middle" font-weight="600">SDPA, o_proj</text>
+        <text x="860" y="388" text-anchor="middle" font-size="12" fill="#4a5655">scale 0.125</text>
+        <path d="M526,417 L860,417 L860,404" fill="none" stroke="#4a5655" stroke-width="1.5" marker-end="url(#ar)"/>
+        <text x="661" y="434" text-anchor="middle" font-size="11" fill="#4a5655">v: no RoPE</text>
+      </g>
+    </svg></div>
+    <figcaption><b>Figure 1.</b> RoPE in the MLX backbone of ViT-S/16 at 224 × 224 px. Teal frames: Step 4 code for RoPE. Dashed teal arrows: only on the first call for a patch grid. In each table, row 0 (teal) is the CLS token, rows 1 to 4 (amber) are the register tokens and rows 5 to 200 (light teal) are the patch tokens. The tables are not parameters of the backbone. The tensor v goes to SDPA without RoPE. <a href="04-3-attention.html">04-3</a> explains the attention around it.</figcaption>
+  </figure>
+  <p>The backbone finds the patch grid from the shape of the pixels and gets the tables once for the whole forward pass:</p>
+  <pre><code># src/dinov3_apple/mlx_model.py, lines 345–349 (MlxBackbone.__call__)
+x = self.embeddings(pixels)
+p = self.config.patch_size
+cos, sin = self.rope(pixels.shape[2] // p, pixels.shape[3] // p)   # (H // 16, W // 16)
+for block in self.layer:
+    x = block(x, cos, sin)                                          # the same tables in every block
+
+# line 266 (Attention.__call__)
+q, k = apply_rope(q, cos, sin), apply_rope(k, cos, sin)             # v is not rotated</code></pre>
+</section>
+
+<section id="coords">
+  <h2>3 Patch-center coordinates: y, then x</h2>
+  <p>RoPE puts the patch grid into a box from −1 to 1 on each axis. Each patch gets the coordinates of its center:</p>
+  <ul>
+    <li>Row i of H<sub>p</sub> rows: y = (2i + 1) / H<sub>p</sub> − 1.</li>
+    <li>Column j of W<sub>p</sub> columns: x = (2j + 1) / W<sub>p</sub> − 1.</li>
+  </ul>
+  <p>At 224 px, the 14 centers of an axis are at −13/14, −11/14, …, 13/14. The spacing is 2/14 = 0.143. No center is at −1 or at 1. On a grid with an even number of rows, no center is at 0. Each axis has its own scale: a 224 × 304 px input has 14 rows and 19 columns, and both axes still span the full box (Figure 2, middle). The Meta code calls this "separate" normalization. So the angles depend on the relative position of a patch in the image, not on its position in pixels. A patch near the image center has a coordinate near 0 at 224 px and at 512 px.</p>
+  <p>The order is y, then x. Token n = 5 + W<sub>p</sub> · i + j gets the pair (y<sub>i</sub>, x<sub>j</sub>). This is the row-major order of the patch embedding (<a href="04-1-patch-embedding.html">04-1</a>).</p>
+  <figure>
+    <div class="fig"><svg viewBox="0 0 960 440" role="img" aria-labelledby="f2t" font-family="-apple-system, Helvetica Neue, Arial, sans-serif">
+      <title id="f2t">Patch-center coordinates of a 14 by 14 grid and of a 14 by 19 grid in the RoPE box from minus 1 to 1</title>
+      <rect width="960" height="440" fill="#ffffff"/>
+      <g font-size="13" fill="#111414">
+        <text x="70" y="26" font-weight="600">224 × 224 px: 14 × 14 patches</text>
+        <text x="450" y="26" font-weight="600">224 × 304 px: 14 × 19 patches, the same box</text>
+        <rect x="250.00" y="100.00" width="20.00" height="20.00" fill="#9fd3d1"/>
+        <line x1="90.00" y1="60" x2="90.00" y2="340" stroke="#e3e8e7" stroke-width="1"/>
+        <line x1="110.00" y1="60" x2="110.00" y2="340" stroke="#e3e8e7" stroke-width="1"/>
+        <line x1="130.00" y1="60" x2="130.00" y2="340" stroke="#e3e8e7" stroke-width="1"/>
+        <line x1="150.00" y1="60" x2="150.00" y2="340" stroke="#e3e8e7" stroke-width="1"/>
+        <line x1="170.00" y1="60" x2="170.00" y2="340" stroke="#e3e8e7" stroke-width="1"/>
+        <line x1="190.00" y1="60" x2="190.00" y2="340" stroke="#e3e8e7" stroke-width="1"/>
+        <line x1="210.00" y1="60" x2="210.00" y2="340" stroke="#e3e8e7" stroke-width="1"/>
+        <line x1="230.00" y1="60" x2="230.00" y2="340" stroke="#e3e8e7" stroke-width="1"/>
+        <line x1="250.00" y1="60" x2="250.00" y2="340" stroke="#e3e8e7" stroke-width="1"/>
+        <line x1="270.00" y1="60" x2="270.00" y2="340" stroke="#e3e8e7" stroke-width="1"/>
+        <line x1="290.00" y1="60" x2="290.00" y2="340" stroke="#e3e8e7" stroke-width="1"/>
+        <line x1="310.00" y1="60" x2="310.00" y2="340" stroke="#e3e8e7" stroke-width="1"/>
+        <line x1="330.00" y1="60" x2="330.00" y2="340" stroke="#e3e8e7" stroke-width="1"/>
+        <line x1="70" y1="80.00" x2="350" y2="80.00" stroke="#e3e8e7" stroke-width="1"/>
+        <line x1="70" y1="100.00" x2="350" y2="100.00" stroke="#e3e8e7" stroke-width="1"/>
+        <line x1="70" y1="120.00" x2="350" y2="120.00" stroke="#e3e8e7" stroke-width="1"/>
+        <line x1="70" y1="140.00" x2="350" y2="140.00" stroke="#e3e8e7" stroke-width="1"/>
+        <line x1="70" y1="160.00" x2="350" y2="160.00" stroke="#e3e8e7" stroke-width="1"/>
+        <line x1="70" y1="180.00" x2="350" y2="180.00" stroke="#e3e8e7" stroke-width="1"/>
+        <line x1="70" y1="200.00" x2="350" y2="200.00" stroke="#e3e8e7" stroke-width="1"/>
+        <line x1="70" y1="220.00" x2="350" y2="220.00" stroke="#e3e8e7" stroke-width="1"/>
+        <line x1="70" y1="240.00" x2="350" y2="240.00" stroke="#e3e8e7" stroke-width="1"/>
+        <line x1="70" y1="260.00" x2="350" y2="260.00" stroke="#e3e8e7" stroke-width="1"/>
+        <line x1="70" y1="280.00" x2="350" y2="280.00" stroke="#e3e8e7" stroke-width="1"/>
+        <line x1="70" y1="300.00" x2="350" y2="300.00" stroke="#e3e8e7" stroke-width="1"/>
+        <line x1="70" y1="320.00" x2="350" y2="320.00" stroke="#e3e8e7" stroke-width="1"/>
+        <line x1="210.0" y1="60" x2="210.0" y2="340" stroke="#4a5655" stroke-width="1" stroke-dasharray="3 3"/>
+        <line x1="70" y1="200.0" x2="350" y2="200.0" stroke="#4a5655" stroke-width="1" stroke-dasharray="3 3"/>
+        <rect x="70" y="60" width="280" height="280" fill="none" stroke="#111414" stroke-width="1.5"/>
+        <g><circle cx="80.00" cy="70.00" r="2.2" fill="#4a5655"/><circle cx="100.00" cy="70.00" r="2.2" fill="#4a5655"/><circle cx="120.00" cy="70.00" r="2.2" fill="#4a5655"/><circle cx="140.00" cy="70.00" r="2.2" fill="#4a5655"/><circle cx="160.00" cy="70.00" r="2.2" fill="#4a5655"/><circle cx="180.00" cy="70.00" r="2.2" fill="#4a5655"/><circle cx="200.00" cy="70.00" r="2.2" fill="#4a5655"/><circle cx="220.00" cy="70.00" r="2.2" fill="#4a5655"/><circle cx="240.00" cy="70.00" r="2.2" fill="#4a5655"/><circle cx="260.00" cy="70.00" r="2.2" fill="#4a5655"/><circle cx="280.00" cy="70.00" r="2.2" fill="#4a5655"/><circle cx="300.00" cy="70.00" r="2.2" fill="#4a5655"/><circle cx="320.00" cy="70.00" r="2.2" fill="#4a5655"/><circle cx="340.00" cy="70.00" r="2.2" fill="#4a5655"/><circle cx="80.00" cy="90.00" r="2.2" fill="#4a5655"/><circle cx="100.00" cy="90.00" r="2.2" fill="#4a5655"/><circle cx="120.00" cy="90.00" r="2.2" fill="#4a5655"/><circle cx="140.00" cy="90.00" r="2.2" fill="#4a5655"/><circle cx="160.00" cy="90.00" r="2.2" fill="#4a5655"/><circle cx="180.00" cy="90.00" r="2.2" fill="#4a5655"/><circle cx="200.00" cy="90.00" r="2.2" fill="#4a5655"/><circle cx="220.00" cy="90.00" r="2.2" fill="#4a5655"/><circle cx="240.00" cy="90.00" r="2.2" fill="#4a5655"/><circle cx="260.00" cy="90.00" r="2.2" fill="#4a5655"/><circle cx="280.00" cy="90.00" r="2.2" fill="#4a5655"/><circle cx="300.00" cy="90.00" r="2.2" fill="#4a5655"/><circle cx="320.00" cy="90.00" r="2.2" fill="#4a5655"/><circle cx="340.00" cy="90.00" r="2.2" fill="#4a5655"/><circle cx="80.00" cy="110.00" r="2.2" fill="#4a5655"/><circle cx="100.00" cy="110.00" r="2.2" fill="#4a5655"/><circle cx="120.00" cy="110.00" r="2.2" fill="#4a5655"/><circle cx="140.00" cy="110.00" r="2.2" fill="#4a5655"/><circle cx="160.00" cy="110.00" r="2.2" fill="#4a5655"/><circle cx="180.00" cy="110.00" r="2.2" fill="#4a5655"/><circle cx="200.00" cy="110.00" r="2.2" fill="#4a5655"/><circle cx="220.00" cy="110.00" r="2.2" fill="#4a5655"/><circle cx="240.00" cy="110.00" r="2.2" fill="#4a5655"/><circle cx="280.00" cy="110.00" r="2.2" fill="#4a5655"/><circle cx="300.00" cy="110.00" r="2.2" fill="#4a5655"/><circle cx="320.00" cy="110.00" r="2.2" fill="#4a5655"/><circle cx="340.00" cy="110.00" r="2.2" fill="#4a5655"/><circle cx="80.00" cy="130.00" r="2.2" fill="#4a5655"/><circle cx="100.00" cy="130.00" r="2.2" fill="#4a5655"/><circle cx="120.00" cy="130.00" r="2.2" fill="#4a5655"/><circle cx="140.00" cy="130.00" r="2.2" fill="#4a5655"/><circle cx="160.00" cy="130.00" r="2.2" fill="#4a5655"/><circle cx="180.00" cy="130.00" r="2.2" fill="#4a5655"/><circle cx="200.00" cy="130.00" r="2.2" fill="#4a5655"/><circle cx="220.00" cy="130.00" r="2.2" fill="#4a5655"/><circle cx="240.00" cy="130.00" r="2.2" fill="#4a5655"/><circle cx="260.00" cy="130.00" r="2.2" fill="#4a5655"/><circle cx="280.00" cy="130.00" r="2.2" fill="#4a5655"/><circle cx="300.00" cy="130.00" r="2.2" fill="#4a5655"/><circle cx="320.00" cy="130.00" r="2.2" fill="#4a5655"/><circle cx="340.00" cy="130.00" r="2.2" fill="#4a5655"/><circle cx="80.00" cy="150.00" r="2.2" fill="#4a5655"/><circle cx="100.00" cy="150.00" r="2.2" fill="#4a5655"/><circle cx="120.00" cy="150.00" r="2.2" fill="#4a5655"/><circle cx="140.00" cy="150.00" r="2.2" fill="#4a5655"/><circle cx="160.00" cy="150.00" r="2.2" fill="#4a5655"/><circle cx="180.00" cy="150.00" r="2.2" fill="#4a5655"/><circle cx="200.00" cy="150.00" r="2.2" fill="#4a5655"/><circle cx="220.00" cy="150.00" r="2.2" fill="#4a5655"/><circle cx="240.00" cy="150.00" r="2.2" fill="#4a5655"/><circle cx="260.00" cy="150.00" r="2.2" fill="#4a5655"/><circle cx="280.00" cy="150.00" r="2.2" fill="#4a5655"/><circle cx="300.00" cy="150.00" r="2.2" fill="#4a5655"/><circle cx="320.00" cy="150.00" r="2.2" fill="#4a5655"/><circle cx="340.00" cy="150.00" r="2.2" fill="#4a5655"/><circle cx="80.00" cy="170.00" r="2.2" fill="#4a5655"/><circle cx="100.00" cy="170.00" r="2.2" fill="#4a5655"/><circle cx="120.00" cy="170.00" r="2.2" fill="#4a5655"/><circle cx="140.00" cy="170.00" r="2.2" fill="#4a5655"/><circle cx="160.00" cy="170.00" r="2.2" fill="#4a5655"/><circle cx="180.00" cy="170.00" r="2.2" fill="#4a5655"/><circle cx="200.00" cy="170.00" r="2.2" fill="#4a5655"/><circle cx="220.00" cy="170.00" r="2.2" fill="#4a5655"/><circle cx="240.00" cy="170.00" r="2.2" fill="#4a5655"/><circle cx="260.00" cy="170.00" r="2.2" fill="#4a5655"/><circle cx="280.00" cy="170.00" r="2.2" fill="#4a5655"/><circle cx="300.00" cy="170.00" r="2.2" fill="#4a5655"/><circle cx="320.00" cy="170.00" r="2.2" fill="#4a5655"/><circle cx="340.00" cy="170.00" r="2.2" fill="#4a5655"/><circle cx="80.00" cy="190.00" r="2.2" fill="#4a5655"/><circle cx="100.00" cy="190.00" r="2.2" fill="#4a5655"/><circle cx="120.00" cy="190.00" r="2.2" fill="#4a5655"/><circle cx="140.00" cy="190.00" r="2.2" fill="#4a5655"/><circle cx="160.00" cy="190.00" r="2.2" fill="#4a5655"/><circle cx="180.00" cy="190.00" r="2.2" fill="#4a5655"/><circle cx="200.00" cy="190.00" r="2.2" fill="#4a5655"/><circle cx="220.00" cy="190.00" r="2.2" fill="#4a5655"/><circle cx="240.00" cy="190.00" r="2.2" fill="#4a5655"/><circle cx="260.00" cy="190.00" r="2.2" fill="#4a5655"/><circle cx="280.00" cy="190.00" r="2.2" fill="#4a5655"/><circle cx="300.00" cy="190.00" r="2.2" fill="#4a5655"/><circle cx="320.00" cy="190.00" r="2.2" fill="#4a5655"/><circle cx="340.00" cy="190.00" r="2.2" fill="#4a5655"/><circle cx="80.00" cy="210.00" r="2.2" fill="#4a5655"/><circle cx="100.00" cy="210.00" r="2.2" fill="#4a5655"/><circle cx="120.00" cy="210.00" r="2.2" fill="#4a5655"/><circle cx="140.00" cy="210.00" r="2.2" fill="#4a5655"/><circle cx="160.00" cy="210.00" r="2.2" fill="#4a5655"/><circle cx="180.00" cy="210.00" r="2.2" fill="#4a5655"/><circle cx="200.00" cy="210.00" r="2.2" fill="#4a5655"/><circle cx="220.00" cy="210.00" r="2.2" fill="#4a5655"/><circle cx="240.00" cy="210.00" r="2.2" fill="#4a5655"/><circle cx="260.00" cy="210.00" r="2.2" fill="#4a5655"/><circle cx="280.00" cy="210.00" r="2.2" fill="#4a5655"/><circle cx="300.00" cy="210.00" r="2.2" fill="#4a5655"/><circle cx="320.00" cy="210.00" r="2.2" fill="#4a5655"/><circle cx="340.00" cy="210.00" r="2.2" fill="#4a5655"/><circle cx="80.00" cy="230.00" r="2.2" fill="#4a5655"/><circle cx="100.00" cy="230.00" r="2.2" fill="#4a5655"/><circle cx="120.00" cy="230.00" r="2.2" fill="#4a5655"/><circle cx="140.00" cy="230.00" r="2.2" fill="#4a5655"/><circle cx="160.00" cy="230.00" r="2.2" fill="#4a5655"/><circle cx="180.00" cy="230.00" r="2.2" fill="#4a5655"/><circle cx="200.00" cy="230.00" r="2.2" fill="#4a5655"/><circle cx="220.00" cy="230.00" r="2.2" fill="#4a5655"/><circle cx="240.00" cy="230.00" r="2.2" fill="#4a5655"/><circle cx="260.00" cy="230.00" r="2.2" fill="#4a5655"/><circle cx="280.00" cy="230.00" r="2.2" fill="#4a5655"/><circle cx="300.00" cy="230.00" r="2.2" fill="#4a5655"/><circle cx="320.00" cy="230.00" r="2.2" fill="#4a5655"/><circle cx="340.00" cy="230.00" r="2.2" fill="#4a5655"/><circle cx="80.00" cy="250.00" r="2.2" fill="#4a5655"/><circle cx="100.00" cy="250.00" r="2.2" fill="#4a5655"/><circle cx="120.00" cy="250.00" r="2.2" fill="#4a5655"/><circle cx="140.00" cy="250.00" r="2.2" fill="#4a5655"/><circle cx="160.00" cy="250.00" r="2.2" fill="#4a5655"/><circle cx="180.00" cy="250.00" r="2.2" fill="#4a5655"/><circle cx="200.00" cy="250.00" r="2.2" fill="#4a5655"/><circle cx="220.00" cy="250.00" r="2.2" fill="#4a5655"/><circle cx="240.00" cy="250.00" r="2.2" fill="#4a5655"/><circle cx="260.00" cy="250.00" r="2.2" fill="#4a5655"/><circle cx="280.00" cy="250.00" r="2.2" fill="#4a5655"/><circle cx="300.00" cy="250.00" r="2.2" fill="#4a5655"/><circle cx="320.00" cy="250.00" r="2.2" fill="#4a5655"/><circle cx="340.00" cy="250.00" r="2.2" fill="#4a5655"/><circle cx="80.00" cy="270.00" r="2.2" fill="#4a5655"/><circle cx="100.00" cy="270.00" r="2.2" fill="#4a5655"/><circle cx="120.00" cy="270.00" r="2.2" fill="#4a5655"/><circle cx="140.00" cy="270.00" r="2.2" fill="#4a5655"/><circle cx="160.00" cy="270.00" r="2.2" fill="#4a5655"/><circle cx="180.00" cy="270.00" r="2.2" fill="#4a5655"/><circle cx="200.00" cy="270.00" r="2.2" fill="#4a5655"/><circle cx="220.00" cy="270.00" r="2.2" fill="#4a5655"/><circle cx="240.00" cy="270.00" r="2.2" fill="#4a5655"/><circle cx="260.00" cy="270.00" r="2.2" fill="#4a5655"/><circle cx="280.00" cy="270.00" r="2.2" fill="#4a5655"/><circle cx="300.00" cy="270.00" r="2.2" fill="#4a5655"/><circle cx="320.00" cy="270.00" r="2.2" fill="#4a5655"/><circle cx="340.00" cy="270.00" r="2.2" fill="#4a5655"/><circle cx="80.00" cy="290.00" r="2.2" fill="#4a5655"/><circle cx="100.00" cy="290.00" r="2.2" fill="#4a5655"/><circle cx="120.00" cy="290.00" r="2.2" fill="#4a5655"/><circle cx="140.00" cy="290.00" r="2.2" fill="#4a5655"/><circle cx="160.00" cy="290.00" r="2.2" fill="#4a5655"/><circle cx="180.00" cy="290.00" r="2.2" fill="#4a5655"/><circle cx="200.00" cy="290.00" r="2.2" fill="#4a5655"/><circle cx="220.00" cy="290.00" r="2.2" fill="#4a5655"/><circle cx="240.00" cy="290.00" r="2.2" fill="#4a5655"/><circle cx="260.00" cy="290.00" r="2.2" fill="#4a5655"/><circle cx="280.00" cy="290.00" r="2.2" fill="#4a5655"/><circle cx="300.00" cy="290.00" r="2.2" fill="#4a5655"/><circle cx="320.00" cy="290.00" r="2.2" fill="#4a5655"/><circle cx="340.00" cy="290.00" r="2.2" fill="#4a5655"/><circle cx="80.00" cy="310.00" r="2.2" fill="#4a5655"/><circle cx="100.00" cy="310.00" r="2.2" fill="#4a5655"/><circle cx="120.00" cy="310.00" r="2.2" fill="#4a5655"/><circle cx="140.00" cy="310.00" r="2.2" fill="#4a5655"/><circle cx="160.00" cy="310.00" r="2.2" fill="#4a5655"/><circle cx="180.00" cy="310.00" r="2.2" fill="#4a5655"/><circle cx="200.00" cy="310.00" r="2.2" fill="#4a5655"/><circle cx="220.00" cy="310.00" r="2.2" fill="#4a5655"/><circle cx="240.00" cy="310.00" r="2.2" fill="#4a5655"/><circle cx="260.00" cy="310.00" r="2.2" fill="#4a5655"/><circle cx="280.00" cy="310.00" r="2.2" fill="#4a5655"/><circle cx="300.00" cy="310.00" r="2.2" fill="#4a5655"/><circle cx="320.00" cy="310.00" r="2.2" fill="#4a5655"/><circle cx="340.00" cy="310.00" r="2.2" fill="#4a5655"/><circle cx="80.00" cy="330.00" r="2.2" fill="#4a5655"/><circle cx="100.00" cy="330.00" r="2.2" fill="#4a5655"/><circle cx="120.00" cy="330.00" r="2.2" fill="#4a5655"/><circle cx="140.00" cy="330.00" r="2.2" fill="#4a5655"/><circle cx="160.00" cy="330.00" r="2.2" fill="#4a5655"/><circle cx="180.00" cy="330.00" r="2.2" fill="#4a5655"/><circle cx="200.00" cy="330.00" r="2.2" fill="#4a5655"/><circle cx="220.00" cy="330.00" r="2.2" fill="#4a5655"/><circle cx="240.00" cy="330.00" r="2.2" fill="#4a5655"/><circle cx="260.00" cy="330.00" r="2.2" fill="#4a5655"/><circle cx="280.00" cy="330.00" r="2.2" fill="#4a5655"/><circle cx="300.00" cy="330.00" r="2.2" fill="#4a5655"/><circle cx="320.00" cy="330.00" r="2.2" fill="#4a5655"/><circle cx="340.00" cy="330.00" r="2.2" fill="#4a5655"/></g>
+        <circle cx="260.00" cy="110.00" r="4.5" fill="#057379"/>
+        <text x="70" y="48" text-anchor="middle" font-size="11" fill="#4a5655">x = −1</text>
+        <text x="210.0" y="48" text-anchor="middle" font-size="11" fill="#4a5655">x = 0</text>
+        <text x="350" y="48" text-anchor="middle" font-size="11" fill="#4a5655">x = 1</text>
+        <text x="64" y="64" text-anchor="end" font-size="11" fill="#4a5655">y = −1</text>
+        <text x="64" y="204.0" text-anchor="end" font-size="11" fill="#4a5655">y = 0</text>
+        <text x="64" y="344" text-anchor="end" font-size="11" fill="#4a5655">y = 1</text>
+        <text x="210.0" y="362" text-anchor="middle" font-size="11" fill="#4a5655">14 columns: x of column j; 14 rows: y of row i</text>
+        <rect x="582.63" y="60" width="14.74" height="280" fill="#9fd3d1"/>
+        <line x1="464.74" y1="60" x2="464.74" y2="340" stroke="#e3e8e7" stroke-width="1"/>
+        <line x1="479.47" y1="60" x2="479.47" y2="340" stroke="#e3e8e7" stroke-width="1"/>
+        <line x1="494.21" y1="60" x2="494.21" y2="340" stroke="#e3e8e7" stroke-width="1"/>
+        <line x1="508.95" y1="60" x2="508.95" y2="340" stroke="#e3e8e7" stroke-width="1"/>
+        <line x1="523.68" y1="60" x2="523.68" y2="340" stroke="#e3e8e7" stroke-width="1"/>
+        <line x1="538.42" y1="60" x2="538.42" y2="340" stroke="#e3e8e7" stroke-width="1"/>
+        <line x1="553.16" y1="60" x2="553.16" y2="340" stroke="#e3e8e7" stroke-width="1"/>
+        <line x1="567.89" y1="60" x2="567.89" y2="340" stroke="#e3e8e7" stroke-width="1"/>
+        <line x1="582.63" y1="60" x2="582.63" y2="340" stroke="#e3e8e7" stroke-width="1"/>
+        <line x1="597.37" y1="60" x2="597.37" y2="340" stroke="#e3e8e7" stroke-width="1"/>
+        <line x1="612.11" y1="60" x2="612.11" y2="340" stroke="#e3e8e7" stroke-width="1"/>
+        <line x1="626.84" y1="60" x2="626.84" y2="340" stroke="#e3e8e7" stroke-width="1"/>
+        <line x1="641.58" y1="60" x2="641.58" y2="340" stroke="#e3e8e7" stroke-width="1"/>
+        <line x1="656.32" y1="60" x2="656.32" y2="340" stroke="#e3e8e7" stroke-width="1"/>
+        <line x1="671.05" y1="60" x2="671.05" y2="340" stroke="#e3e8e7" stroke-width="1"/>
+        <line x1="685.79" y1="60" x2="685.79" y2="340" stroke="#e3e8e7" stroke-width="1"/>
+        <line x1="700.53" y1="60" x2="700.53" y2="340" stroke="#e3e8e7" stroke-width="1"/>
+        <line x1="715.26" y1="60" x2="715.26" y2="340" stroke="#e3e8e7" stroke-width="1"/>
+        <line x1="450" y1="80.00" x2="730" y2="80.00" stroke="#e3e8e7" stroke-width="1"/>
+        <line x1="450" y1="100.00" x2="730" y2="100.00" stroke="#e3e8e7" stroke-width="1"/>
+        <line x1="450" y1="120.00" x2="730" y2="120.00" stroke="#e3e8e7" stroke-width="1"/>
+        <line x1="450" y1="140.00" x2="730" y2="140.00" stroke="#e3e8e7" stroke-width="1"/>
+        <line x1="450" y1="160.00" x2="730" y2="160.00" stroke="#e3e8e7" stroke-width="1"/>
+        <line x1="450" y1="180.00" x2="730" y2="180.00" stroke="#e3e8e7" stroke-width="1"/>
+        <line x1="450" y1="200.00" x2="730" y2="200.00" stroke="#e3e8e7" stroke-width="1"/>
+        <line x1="450" y1="220.00" x2="730" y2="220.00" stroke="#e3e8e7" stroke-width="1"/>
+        <line x1="450" y1="240.00" x2="730" y2="240.00" stroke="#e3e8e7" stroke-width="1"/>
+        <line x1="450" y1="260.00" x2="730" y2="260.00" stroke="#e3e8e7" stroke-width="1"/>
+        <line x1="450" y1="280.00" x2="730" y2="280.00" stroke="#e3e8e7" stroke-width="1"/>
+        <line x1="450" y1="300.00" x2="730" y2="300.00" stroke="#e3e8e7" stroke-width="1"/>
+        <line x1="450" y1="320.00" x2="730" y2="320.00" stroke="#e3e8e7" stroke-width="1"/>
+        <line x1="590.0" y1="60" x2="590.0" y2="340" stroke="#4a5655" stroke-width="1" stroke-dasharray="3 3"/>
+        <line x1="450" y1="200.0" x2="730" y2="200.0" stroke="#4a5655" stroke-width="1" stroke-dasharray="3 3"/>
+        <rect x="450" y="60" width="280" height="280" fill="none" stroke="#111414" stroke-width="1.5"/>
+        <g><circle cx="457.37" cy="70.00" r="2.2" fill="#4a5655"/><circle cx="472.11" cy="70.00" r="2.2" fill="#4a5655"/><circle cx="486.84" cy="70.00" r="2.2" fill="#4a5655"/><circle cx="501.58" cy="70.00" r="2.2" fill="#4a5655"/><circle cx="516.32" cy="70.00" r="2.2" fill="#4a5655"/><circle cx="531.05" cy="70.00" r="2.2" fill="#4a5655"/><circle cx="545.79" cy="70.00" r="2.2" fill="#4a5655"/><circle cx="560.53" cy="70.00" r="2.2" fill="#4a5655"/><circle cx="575.26" cy="70.00" r="2.2" fill="#4a5655"/><circle cx="590.00" cy="70.00" r="2.2" fill="#4a5655"/><circle cx="604.74" cy="70.00" r="2.2" fill="#4a5655"/><circle cx="619.47" cy="70.00" r="2.2" fill="#4a5655"/><circle cx="634.21" cy="70.00" r="2.2" fill="#4a5655"/><circle cx="648.95" cy="70.00" r="2.2" fill="#4a5655"/><circle cx="663.68" cy="70.00" r="2.2" fill="#4a5655"/><circle cx="678.42" cy="70.00" r="2.2" fill="#4a5655"/><circle cx="693.16" cy="70.00" r="2.2" fill="#4a5655"/><circle cx="707.89" cy="70.00" r="2.2" fill="#4a5655"/><circle cx="722.63" cy="70.00" r="2.2" fill="#4a5655"/><circle cx="457.37" cy="90.00" r="2.2" fill="#4a5655"/><circle cx="472.11" cy="90.00" r="2.2" fill="#4a5655"/><circle cx="486.84" cy="90.00" r="2.2" fill="#4a5655"/><circle cx="501.58" cy="90.00" r="2.2" fill="#4a5655"/><circle cx="516.32" cy="90.00" r="2.2" fill="#4a5655"/><circle cx="531.05" cy="90.00" r="2.2" fill="#4a5655"/><circle cx="545.79" cy="90.00" r="2.2" fill="#4a5655"/><circle cx="560.53" cy="90.00" r="2.2" fill="#4a5655"/><circle cx="575.26" cy="90.00" r="2.2" fill="#4a5655"/><circle cx="590.00" cy="90.00" r="2.2" fill="#4a5655"/><circle cx="604.74" cy="90.00" r="2.2" fill="#4a5655"/><circle cx="619.47" cy="90.00" r="2.2" fill="#4a5655"/><circle cx="634.21" cy="90.00" r="2.2" fill="#4a5655"/><circle cx="648.95" cy="90.00" r="2.2" fill="#4a5655"/><circle cx="663.68" cy="90.00" r="2.2" fill="#4a5655"/><circle cx="678.42" cy="90.00" r="2.2" fill="#4a5655"/><circle cx="693.16" cy="90.00" r="2.2" fill="#4a5655"/><circle cx="707.89" cy="90.00" r="2.2" fill="#4a5655"/><circle cx="722.63" cy="90.00" r="2.2" fill="#4a5655"/><circle cx="457.37" cy="110.00" r="2.2" fill="#4a5655"/><circle cx="472.11" cy="110.00" r="2.2" fill="#4a5655"/><circle cx="486.84" cy="110.00" r="2.2" fill="#4a5655"/><circle cx="501.58" cy="110.00" r="2.2" fill="#4a5655"/><circle cx="516.32" cy="110.00" r="2.2" fill="#4a5655"/><circle cx="531.05" cy="110.00" r="2.2" fill="#4a5655"/><circle cx="545.79" cy="110.00" r="2.2" fill="#4a5655"/><circle cx="560.53" cy="110.00" r="2.2" fill="#4a5655"/><circle cx="575.26" cy="110.00" r="2.2" fill="#4a5655"/><circle cx="590.00" cy="110.00" r="2.2" fill="#4a5655"/><circle cx="604.74" cy="110.00" r="2.2" fill="#4a5655"/><circle cx="619.47" cy="110.00" r="2.2" fill="#4a5655"/><circle cx="634.21" cy="110.00" r="2.2" fill="#4a5655"/><circle cx="648.95" cy="110.00" r="2.2" fill="#4a5655"/><circle cx="663.68" cy="110.00" r="2.2" fill="#4a5655"/><circle cx="678.42" cy="110.00" r="2.2" fill="#4a5655"/><circle cx="693.16" cy="110.00" r="2.2" fill="#4a5655"/><circle cx="707.89" cy="110.00" r="2.2" fill="#4a5655"/><circle cx="722.63" cy="110.00" r="2.2" fill="#4a5655"/><circle cx="457.37" cy="130.00" r="2.2" fill="#4a5655"/><circle cx="472.11" cy="130.00" r="2.2" fill="#4a5655"/><circle cx="486.84" cy="130.00" r="2.2" fill="#4a5655"/><circle cx="501.58" cy="130.00" r="2.2" fill="#4a5655"/><circle cx="516.32" cy="130.00" r="2.2" fill="#4a5655"/><circle cx="531.05" cy="130.00" r="2.2" fill="#4a5655"/><circle cx="545.79" cy="130.00" r="2.2" fill="#4a5655"/><circle cx="560.53" cy="130.00" r="2.2" fill="#4a5655"/><circle cx="575.26" cy="130.00" r="2.2" fill="#4a5655"/><circle cx="590.00" cy="130.00" r="2.2" fill="#4a5655"/><circle cx="604.74" cy="130.00" r="2.2" fill="#4a5655"/><circle cx="619.47" cy="130.00" r="2.2" fill="#4a5655"/><circle cx="634.21" cy="130.00" r="2.2" fill="#4a5655"/><circle cx="648.95" cy="130.00" r="2.2" fill="#4a5655"/><circle cx="663.68" cy="130.00" r="2.2" fill="#4a5655"/><circle cx="678.42" cy="130.00" r="2.2" fill="#4a5655"/><circle cx="693.16" cy="130.00" r="2.2" fill="#4a5655"/><circle cx="707.89" cy="130.00" r="2.2" fill="#4a5655"/><circle cx="722.63" cy="130.00" r="2.2" fill="#4a5655"/><circle cx="457.37" cy="150.00" r="2.2" fill="#4a5655"/><circle cx="472.11" cy="150.00" r="2.2" fill="#4a5655"/><circle cx="486.84" cy="150.00" r="2.2" fill="#4a5655"/><circle cx="501.58" cy="150.00" r="2.2" fill="#4a5655"/><circle cx="516.32" cy="150.00" r="2.2" fill="#4a5655"/><circle cx="531.05" cy="150.00" r="2.2" fill="#4a5655"/><circle cx="545.79" cy="150.00" r="2.2" fill="#4a5655"/><circle cx="560.53" cy="150.00" r="2.2" fill="#4a5655"/><circle cx="575.26" cy="150.00" r="2.2" fill="#4a5655"/><circle cx="590.00" cy="150.00" r="2.2" fill="#4a5655"/><circle cx="604.74" cy="150.00" r="2.2" fill="#4a5655"/><circle cx="619.47" cy="150.00" r="2.2" fill="#4a5655"/><circle cx="634.21" cy="150.00" r="2.2" fill="#4a5655"/><circle cx="648.95" cy="150.00" r="2.2" fill="#4a5655"/><circle cx="663.68" cy="150.00" r="2.2" fill="#4a5655"/><circle cx="678.42" cy="150.00" r="2.2" fill="#4a5655"/><circle cx="693.16" cy="150.00" r="2.2" fill="#4a5655"/><circle cx="707.89" cy="150.00" r="2.2" fill="#4a5655"/><circle cx="722.63" cy="150.00" r="2.2" fill="#4a5655"/><circle cx="457.37" cy="170.00" r="2.2" fill="#4a5655"/><circle cx="472.11" cy="170.00" r="2.2" fill="#4a5655"/><circle cx="486.84" cy="170.00" r="2.2" fill="#4a5655"/><circle cx="501.58" cy="170.00" r="2.2" fill="#4a5655"/><circle cx="516.32" cy="170.00" r="2.2" fill="#4a5655"/><circle cx="531.05" cy="170.00" r="2.2" fill="#4a5655"/><circle cx="545.79" cy="170.00" r="2.2" fill="#4a5655"/><circle cx="560.53" cy="170.00" r="2.2" fill="#4a5655"/><circle cx="575.26" cy="170.00" r="2.2" fill="#4a5655"/><circle cx="590.00" cy="170.00" r="2.2" fill="#4a5655"/><circle cx="604.74" cy="170.00" r="2.2" fill="#4a5655"/><circle cx="619.47" cy="170.00" r="2.2" fill="#4a5655"/><circle cx="634.21" cy="170.00" r="2.2" fill="#4a5655"/><circle cx="648.95" cy="170.00" r="2.2" fill="#4a5655"/><circle cx="663.68" cy="170.00" r="2.2" fill="#4a5655"/><circle cx="678.42" cy="170.00" r="2.2" fill="#4a5655"/><circle cx="693.16" cy="170.00" r="2.2" fill="#4a5655"/><circle cx="707.89" cy="170.00" r="2.2" fill="#4a5655"/><circle cx="722.63" cy="170.00" r="2.2" fill="#4a5655"/><circle cx="457.37" cy="190.00" r="2.2" fill="#4a5655"/><circle cx="472.11" cy="190.00" r="2.2" fill="#4a5655"/><circle cx="486.84" cy="190.00" r="2.2" fill="#4a5655"/><circle cx="501.58" cy="190.00" r="2.2" fill="#4a5655"/><circle cx="516.32" cy="190.00" r="2.2" fill="#4a5655"/><circle cx="531.05" cy="190.00" r="2.2" fill="#4a5655"/><circle cx="545.79" cy="190.00" r="2.2" fill="#4a5655"/><circle cx="560.53" cy="190.00" r="2.2" fill="#4a5655"/><circle cx="575.26" cy="190.00" r="2.2" fill="#4a5655"/><circle cx="590.00" cy="190.00" r="2.2" fill="#4a5655"/><circle cx="604.74" cy="190.00" r="2.2" fill="#4a5655"/><circle cx="619.47" cy="190.00" r="2.2" fill="#4a5655"/><circle cx="634.21" cy="190.00" r="2.2" fill="#4a5655"/><circle cx="648.95" cy="190.00" r="2.2" fill="#4a5655"/><circle cx="663.68" cy="190.00" r="2.2" fill="#4a5655"/><circle cx="678.42" cy="190.00" r="2.2" fill="#4a5655"/><circle cx="693.16" cy="190.00" r="2.2" fill="#4a5655"/><circle cx="707.89" cy="190.00" r="2.2" fill="#4a5655"/><circle cx="722.63" cy="190.00" r="2.2" fill="#4a5655"/><circle cx="457.37" cy="210.00" r="2.2" fill="#4a5655"/><circle cx="472.11" cy="210.00" r="2.2" fill="#4a5655"/><circle cx="486.84" cy="210.00" r="2.2" fill="#4a5655"/><circle cx="501.58" cy="210.00" r="2.2" fill="#4a5655"/><circle cx="516.32" cy="210.00" r="2.2" fill="#4a5655"/><circle cx="531.05" cy="210.00" r="2.2" fill="#4a5655"/><circle cx="545.79" cy="210.00" r="2.2" fill="#4a5655"/><circle cx="560.53" cy="210.00" r="2.2" fill="#4a5655"/><circle cx="575.26" cy="210.00" r="2.2" fill="#4a5655"/><circle cx="590.00" cy="210.00" r="2.2" fill="#4a5655"/><circle cx="604.74" cy="210.00" r="2.2" fill="#4a5655"/><circle cx="619.47" cy="210.00" r="2.2" fill="#4a5655"/><circle cx="634.21" cy="210.00" r="2.2" fill="#4a5655"/><circle cx="648.95" cy="210.00" r="2.2" fill="#4a5655"/><circle cx="663.68" cy="210.00" r="2.2" fill="#4a5655"/><circle cx="678.42" cy="210.00" r="2.2" fill="#4a5655"/><circle cx="693.16" cy="210.00" r="2.2" fill="#4a5655"/><circle cx="707.89" cy="210.00" r="2.2" fill="#4a5655"/><circle cx="722.63" cy="210.00" r="2.2" fill="#4a5655"/><circle cx="457.37" cy="230.00" r="2.2" fill="#4a5655"/><circle cx="472.11" cy="230.00" r="2.2" fill="#4a5655"/><circle cx="486.84" cy="230.00" r="2.2" fill="#4a5655"/><circle cx="501.58" cy="230.00" r="2.2" fill="#4a5655"/><circle cx="516.32" cy="230.00" r="2.2" fill="#4a5655"/><circle cx="531.05" cy="230.00" r="2.2" fill="#4a5655"/><circle cx="545.79" cy="230.00" r="2.2" fill="#4a5655"/><circle cx="560.53" cy="230.00" r="2.2" fill="#4a5655"/><circle cx="575.26" cy="230.00" r="2.2" fill="#4a5655"/><circle cx="590.00" cy="230.00" r="2.2" fill="#4a5655"/><circle cx="604.74" cy="230.00" r="2.2" fill="#4a5655"/><circle cx="619.47" cy="230.00" r="2.2" fill="#4a5655"/><circle cx="634.21" cy="230.00" r="2.2" fill="#4a5655"/><circle cx="648.95" cy="230.00" r="2.2" fill="#4a5655"/><circle cx="663.68" cy="230.00" r="2.2" fill="#4a5655"/><circle cx="678.42" cy="230.00" r="2.2" fill="#4a5655"/><circle cx="693.16" cy="230.00" r="2.2" fill="#4a5655"/><circle cx="707.89" cy="230.00" r="2.2" fill="#4a5655"/><circle cx="722.63" cy="230.00" r="2.2" fill="#4a5655"/><circle cx="457.37" cy="250.00" r="2.2" fill="#4a5655"/><circle cx="472.11" cy="250.00" r="2.2" fill="#4a5655"/><circle cx="486.84" cy="250.00" r="2.2" fill="#4a5655"/><circle cx="501.58" cy="250.00" r="2.2" fill="#4a5655"/><circle cx="516.32" cy="250.00" r="2.2" fill="#4a5655"/><circle cx="531.05" cy="250.00" r="2.2" fill="#4a5655"/><circle cx="545.79" cy="250.00" r="2.2" fill="#4a5655"/><circle cx="560.53" cy="250.00" r="2.2" fill="#4a5655"/><circle cx="575.26" cy="250.00" r="2.2" fill="#4a5655"/><circle cx="590.00" cy="250.00" r="2.2" fill="#4a5655"/><circle cx="604.74" cy="250.00" r="2.2" fill="#4a5655"/><circle cx="619.47" cy="250.00" r="2.2" fill="#4a5655"/><circle cx="634.21" cy="250.00" r="2.2" fill="#4a5655"/><circle cx="648.95" cy="250.00" r="2.2" fill="#4a5655"/><circle cx="663.68" cy="250.00" r="2.2" fill="#4a5655"/><circle cx="678.42" cy="250.00" r="2.2" fill="#4a5655"/><circle cx="693.16" cy="250.00" r="2.2" fill="#4a5655"/><circle cx="707.89" cy="250.00" r="2.2" fill="#4a5655"/><circle cx="722.63" cy="250.00" r="2.2" fill="#4a5655"/><circle cx="457.37" cy="270.00" r="2.2" fill="#4a5655"/><circle cx="472.11" cy="270.00" r="2.2" fill="#4a5655"/><circle cx="486.84" cy="270.00" r="2.2" fill="#4a5655"/><circle cx="501.58" cy="270.00" r="2.2" fill="#4a5655"/><circle cx="516.32" cy="270.00" r="2.2" fill="#4a5655"/><circle cx="531.05" cy="270.00" r="2.2" fill="#4a5655"/><circle cx="545.79" cy="270.00" r="2.2" fill="#4a5655"/><circle cx="560.53" cy="270.00" r="2.2" fill="#4a5655"/><circle cx="575.26" cy="270.00" r="2.2" fill="#4a5655"/><circle cx="590.00" cy="270.00" r="2.2" fill="#4a5655"/><circle cx="604.74" cy="270.00" r="2.2" fill="#4a5655"/><circle cx="619.47" cy="270.00" r="2.2" fill="#4a5655"/><circle cx="634.21" cy="270.00" r="2.2" fill="#4a5655"/><circle cx="648.95" cy="270.00" r="2.2" fill="#4a5655"/><circle cx="663.68" cy="270.00" r="2.2" fill="#4a5655"/><circle cx="678.42" cy="270.00" r="2.2" fill="#4a5655"/><circle cx="693.16" cy="270.00" r="2.2" fill="#4a5655"/><circle cx="707.89" cy="270.00" r="2.2" fill="#4a5655"/><circle cx="722.63" cy="270.00" r="2.2" fill="#4a5655"/><circle cx="457.37" cy="290.00" r="2.2" fill="#4a5655"/><circle cx="472.11" cy="290.00" r="2.2" fill="#4a5655"/><circle cx="486.84" cy="290.00" r="2.2" fill="#4a5655"/><circle cx="501.58" cy="290.00" r="2.2" fill="#4a5655"/><circle cx="516.32" cy="290.00" r="2.2" fill="#4a5655"/><circle cx="531.05" cy="290.00" r="2.2" fill="#4a5655"/><circle cx="545.79" cy="290.00" r="2.2" fill="#4a5655"/><circle cx="560.53" cy="290.00" r="2.2" fill="#4a5655"/><circle cx="575.26" cy="290.00" r="2.2" fill="#4a5655"/><circle cx="590.00" cy="290.00" r="2.2" fill="#4a5655"/><circle cx="604.74" cy="290.00" r="2.2" fill="#4a5655"/><circle cx="619.47" cy="290.00" r="2.2" fill="#4a5655"/><circle cx="634.21" cy="290.00" r="2.2" fill="#4a5655"/><circle cx="648.95" cy="290.00" r="2.2" fill="#4a5655"/><circle cx="663.68" cy="290.00" r="2.2" fill="#4a5655"/><circle cx="678.42" cy="290.00" r="2.2" fill="#4a5655"/><circle cx="693.16" cy="290.00" r="2.2" fill="#4a5655"/><circle cx="707.89" cy="290.00" r="2.2" fill="#4a5655"/><circle cx="722.63" cy="290.00" r="2.2" fill="#4a5655"/><circle cx="457.37" cy="310.00" r="2.2" fill="#4a5655"/><circle cx="472.11" cy="310.00" r="2.2" fill="#4a5655"/><circle cx="486.84" cy="310.00" r="2.2" fill="#4a5655"/><circle cx="501.58" cy="310.00" r="2.2" fill="#4a5655"/><circle cx="516.32" cy="310.00" r="2.2" fill="#4a5655"/><circle cx="531.05" cy="310.00" r="2.2" fill="#4a5655"/><circle cx="545.79" cy="310.00" r="2.2" fill="#4a5655"/><circle cx="560.53" cy="310.00" r="2.2" fill="#4a5655"/><circle cx="575.26" cy="310.00" r="2.2" fill="#4a5655"/><circle cx="590.00" cy="310.00" r="2.2" fill="#4a5655"/><circle cx="604.74" cy="310.00" r="2.2" fill="#4a5655"/><circle cx="619.47" cy="310.00" r="2.2" fill="#4a5655"/><circle cx="634.21" cy="310.00" r="2.2" fill="#4a5655"/><circle cx="648.95" cy="310.00" r="2.2" fill="#4a5655"/><circle cx="663.68" cy="310.00" r="2.2" fill="#4a5655"/><circle cx="678.42" cy="310.00" r="2.2" fill="#4a5655"/><circle cx="693.16" cy="310.00" r="2.2" fill="#4a5655"/><circle cx="707.89" cy="310.00" r="2.2" fill="#4a5655"/><circle cx="722.63" cy="310.00" r="2.2" fill="#4a5655"/><circle cx="457.37" cy="330.00" r="2.2" fill="#4a5655"/><circle cx="472.11" cy="330.00" r="2.2" fill="#4a5655"/><circle cx="486.84" cy="330.00" r="2.2" fill="#4a5655"/><circle cx="501.58" cy="330.00" r="2.2" fill="#4a5655"/><circle cx="516.32" cy="330.00" r="2.2" fill="#4a5655"/><circle cx="531.05" cy="330.00" r="2.2" fill="#4a5655"/><circle cx="545.79" cy="330.00" r="2.2" fill="#4a5655"/><circle cx="560.53" cy="330.00" r="2.2" fill="#4a5655"/><circle cx="575.26" cy="330.00" r="2.2" fill="#4a5655"/><circle cx="590.00" cy="330.00" r="2.2" fill="#4a5655"/><circle cx="604.74" cy="330.00" r="2.2" fill="#4a5655"/><circle cx="619.47" cy="330.00" r="2.2" fill="#4a5655"/><circle cx="634.21" cy="330.00" r="2.2" fill="#4a5655"/><circle cx="648.95" cy="330.00" r="2.2" fill="#4a5655"/><circle cx="663.68" cy="330.00" r="2.2" fill="#4a5655"/><circle cx="678.42" cy="330.00" r="2.2" fill="#4a5655"/><circle cx="693.16" cy="330.00" r="2.2" fill="#4a5655"/><circle cx="707.89" cy="330.00" r="2.2" fill="#4a5655"/><circle cx="722.63" cy="330.00" r="2.2" fill="#4a5655"/></g>
+        <text x="450" y="48" text-anchor="middle" font-size="11" fill="#4a5655">x = −1</text>
+        <text x="590.0" y="48" text-anchor="middle" font-size="11" fill="#4a5655">x = 0</text>
+        <text x="730" y="48" text-anchor="middle" font-size="11" fill="#4a5655">x = 1</text>
+        <text x="444" y="64" text-anchor="end" font-size="11" fill="#4a5655">y = −1</text>
+        <text x="444" y="204.0" text-anchor="end" font-size="11" fill="#4a5655">y = 0</text>
+        <text x="444" y="344" text-anchor="end" font-size="11" fill="#4a5655">y = 1</text>
+        <text x="590.0" y="362" text-anchor="middle" font-size="11" fill="#4a5655">19 columns: x of column j; 14 rows: y of row i</text>
+        <text x="70" y="398" font-size="12">Highlighted: row i = 2, column j = 9.</text>
+        <text x="70" y="416" font-size="12">y = 5/14 − 1 = −0.643, x = 19/14 − 1 = 0.357.</text>
+        <text x="70" y="434" font-size="12">Token n = 5 + 14 · 2 + 9 = 42.</text>
+        <text x="450" y="398" font-size="12">Highlighted: column j = 9 of 19.</text>
+        <text x="450" y="416" font-size="12">x = 19/19 − 1 = 0 exactly: the x pairs of these</text>
+        <text x="450" y="434" font-size="12">14 patches get the angle 0 (cos 1, sin 0).</text>
+        <g font-size="12">
+          <text x="772" y="84" font-weight="600">Row i of Hp rows</text>
+          <text x="772" y="102">y = (2i + 1) / Hp − 1</text>
+          <text x="772" y="134" font-weight="600">Column j of Wp columns</text>
+          <text x="772" y="152">x = (2j + 1) / Wp − 1</text>
+          <text x="772" y="184" font-weight="600">Spacing between centers</text>
+          <text x="772" y="202">2 / Hp and 2 / Wp</text>
+          <text x="772" y="234" font-weight="600">Token of row i, column j</text>
+          <text x="772" y="252">n = 5 + Wp · i + j</text>
+          <text x="772" y="284" font-weight="600">Order of the pair</text>
+          <text x="772" y="302">(y, x): y first</text>
+        </g>
+      </g>
+    </svg></div>
+    <figcaption><b>Figure 2.</b> The RoPE box from −1 to 1 on each axis. Each dot is the center of one patch. Left: the 14 × 14 grid of a 224 × 224 px input. Middle: the 14 × 19 grid of a 224 × 304 px input (the forest test image). Its 19 columns fill the same box, so the x spacing (2/19 = 0.105) is smaller than the y spacing (2/14 = 0.143). y grows from the top row to the bottom row, as the rows of the image.</figcaption>
+  </figure>
+  <pre><code># src/dinov3_apple/mlx_model.py, lines 139–142 (rope_tables)
+coord_h = np.arange(0.5, grid_h, dtype=np.float32) / grid_h    # (i + 0.5) / Hp, in (0, 1)
+coord_w = np.arange(0.5, grid_w, dtype=np.float32) / grid_w    # (j + 0.5) / Wp
+coords = np.stack(np.meshgrid(coord_h, coord_w, indexing="ij"), axis=-1).reshape(-1, 2)  # (N, 2), row-major
+coords = 2.0 * coords - 1.0  # (N, 2): y, x in [-1, 1]</code></pre>
+  <p><code>indexing="ij"</code> makes the row index the slow index. So row n of <code>coords</code> belongs to token 5 + n, and column 0 holds y. Table 2 gives the six patch grids of the parity tests.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Patch grid (Hp × Wp)</th><th>Input resolution (px)</th><th>Test images</th><th class="num">Patch tokens N</th><th class="num">Table rows 5 + N</th><th class="num">y spacing</th><th class="num">x spacing</th><th class="num">Largest |c|</th><th class="num">Cache entry (bytes)</th></tr></thead>
+      <tbody>
+        <tr><td>14 × 14</td><td>224 × 224</td><td>all three</td><td class="num">196</td><td class="num">201</td><td class="num">0.143</td><td class="num">0.143</td><td class="num">13/14 = 0.929</td><td class="num">102,912</td></tr>
+        <tr><td>28 × 28</td><td>448 × 448</td><td>all three</td><td class="num">784</td><td class="num">789</td><td class="num">0.071</td><td class="num">0.071</td><td class="num">27/28 = 0.964</td><td class="num">403,968</td></tr>
+        <tr><td>32 × 32</td><td>512 × 512</td><td>all three</td><td class="num">1,024</td><td class="num">1,029</td><td class="num">0.063</td><td class="num">0.063</td><td class="num">31/32 = 0.969</td><td class="num">526,848</td></tr>
+        <tr><td>14 × 25</td><td>224 × 400</td><td>iss-kibo-lab</td><td class="num">350</td><td class="num">355</td><td class="num">0.143</td><td class="num">0.080</td><td class="num">24/25 = 0.960</td><td class="num">181,760</td></tr>
+        <tr><td>14 × 19</td><td>224 × 304</td><td>forest</td><td class="num">266</td><td class="num">271</td><td class="num">0.143</td><td class="num">0.105</td><td class="num">18/19 = 0.947</td><td class="num">138,752</td></tr>
+        <tr><td>19 × 14</td><td>304 × 224</td><td>iss-conference</td><td class="num">266</td><td class="num">271</td><td class="num">0.105</td><td class="num">0.143</td><td class="num">18/19 = 0.947</td><td class="num">138,752</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 2.</b> The six patch grids of the 12 configurations (H × W). "Largest |c|" is the coordinate of the outermost patch center on the longer axis: (n − 1)/n for n patches. Section 10 uses it. "Cache entry" = 2 tables × (5 + N) rows × 64 columns × 4 bytes, for ViT-S/16 (head dimension 64). All six entries together hold 1.49 MB.</p>
+</section>
+
+<section id="freqs">
+  <h2>4 Sixteen frequencies from base 100</h2>
+  <p>One head of ViT-S/16 has 64 values. RoPE rotates them in 32 pairs. Each axis gets 16 pairs. Pair k of an axis has the frequency f<sub>k</sub> = 100<sup>−k/16</sup>, for k = 0 to 15. Its period is p<sub>k</sub> = 1 / f<sub>k</sub> = 100<sup>k/16</sup>, from 1 to 75. The angle of the pair is θ = 2π · c · f<sub>k</sub>, with c the y or the x coordinate of the patch. The base 100 is <code>rope_theta</code> in <code>config.json</code>. All six model sizes use 100.</p>
+  <pre><code># src/dinov3_apple/mlx_model.py, line 138 and lines 143–144 (rope_tables)
+inv_freq = 1 / theta ** np.arange(0, 1, 4 / head_dim, dtype=np.float32)  # 100^(-k/16): 16 frequencies for head_dim 64
+angles = (2 * np.pi * coords[:, :, None] * inv_freq[None, None, :]).reshape(len(coords), -1)
+                                                                       # (N, 2, 16) -> (N, 32): 16 y angles, then 16 x angles
+angles = np.tile(angles, 2)                                            # (N, 64): column d and column d + 32 hold the same angle</code></pre>
+  <ul>
+    <li><code>np.arange(0, 1, 4 / 64)</code> gives the 16 exponents 0, 0.0625, …, 0.9375, so k/16. For ViT-7B/16 (head dimension 128), the same line gives 32 frequencies.</li>
+    <li>The reshape puts the 16 y angles of a token first and its 16 x angles second.</li>
+    <li>The tile doubles the 32 angles to 64 columns. Section 5 shows why.</li>
+  </ul>
+  <p>The operations and their order follow <code>DINOv3ViTRopePositionEmbedding</code> of Hugging Face, in fp32. NumPy 2 keeps a Python float "weak" (NEP 50): <code>2.0 * coords</code> and <code>2 * np.pi * coords</code> stay fp32. A float64 computation with a cast to fp32 at the end (variant C2 of <code>explore.html</code>) differs from the fp32 order (variant C1) by up to 5.4e-7. The reference output uses the fp32 order, so the port uses it too (decision D3).</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th class="num">k</th><th class="num">y pair (values)</th><th class="num">x pair (values)</th><th class="num">Frequency f<sub>k</sub></th><th class="num">Period p<sub>k</sub></th><th class="num">Period in the Meta checkpoint (bf16)</th><th class="num">Largest |θ| at 224 px (rad)</th><th class="num">Turns across the box at 224 px</th><th class="num">Meta angle difference for c = 1 (rad)</th></tr></thead>
+      <tbody>
+        <tr><td class="num">0</td><td class="num">0 and 32</td><td class="num">16 and 48</td><td class="num">1.000000</td><td class="num">1.00000</td><td class="num">1</td><td class="num">5.834</td><td class="num">1.857</td><td class="num">0.00000</td></tr>
+        <tr><td class="num">1</td><td class="num">1 and 33</td><td class="num">17 and 49</td><td class="num">0.749894</td><td class="num">1.33352</td><td class="num">1.33594</td><td class="num">4.375</td><td class="num">1.393</td><td class="num">0.00852</td></tr>
+        <tr><td class="num">2</td><td class="num">2 and 34</td><td class="num">18 and 50</td><td class="num">0.562341</td><td class="num">1.77828</td><td class="num">1.78125</td><td class="num">3.281</td><td class="num">1.044</td><td class="num">0.00589</td></tr>
+        <tr><td class="num">3</td><td class="num">3 and 35</td><td class="num">19 and 51</td><td class="num">0.421697</td><td class="num">2.37137</td><td class="num">2.375</td><td class="num">2.460</td><td class="num">0.783</td><td class="num">0.00405</td></tr>
+        <tr><td class="num">4</td><td class="num">4 and 36</td><td class="num">20 and 52</td><td class="num">0.316228</td><td class="num">3.16228</td><td class="num">3.15625</td><td class="num">1.845</td><td class="num">0.587</td><td class="num">0.00379</td></tr>
+        <tr><td class="num">5</td><td class="num">5 and 37</td><td class="num">21 and 53</td><td class="num">0.237137</td><td class="num">4.21697</td><td class="num">4.21875</td><td class="num">1.384</td><td class="num">0.440</td><td class="num">0.00063</td></tr>
+        <tr><td class="num">6</td><td class="num">6 and 38</td><td class="num">22 and 54</td><td class="num">0.177828</td><td class="num">5.62341</td><td class="num">5.625</td><td class="num">1.038</td><td class="num">0.330</td><td class="num">0.00032</td></tr>
+        <tr><td class="num">7</td><td class="num">7 and 39</td><td class="num">23 and 55</td><td class="num">0.133352</td><td class="num">7.49894</td><td class="num">7.5</td><td class="num">0.778</td><td class="num">0.248</td><td class="num">0.00012</td></tr>
+        <tr><td class="num">8</td><td class="num">8 and 40</td><td class="num">24 and 56</td><td class="num">0.100000</td><td class="num">10.00000</td><td class="num">10</td><td class="num">0.583</td><td class="num">0.186</td><td class="num">0.00000</td></tr>
+        <tr><td class="num">9</td><td class="num">9 and 41</td><td class="num">25 and 57</td><td class="num">0.074989</td><td class="num">13.33521</td><td class="num">13.3125</td><td class="num">0.438</td><td class="num">0.139</td><td class="num">0.00080</td></tr>
+        <tr><td class="num">10</td><td class="num">10 and 42</td><td class="num">26 and 58</td><td class="num">0.056234</td><td class="num">17.78279</td><td class="num">17.75</td><td class="num">0.328</td><td class="num">0.104</td><td class="num">0.00065</td></tr>
+        <tr><td class="num">11</td><td class="num">11 and 43</td><td class="num">27 and 59</td><td class="num">0.042170</td><td class="num">23.71374</td><td class="num">23.75</td><td class="num">0.246</td><td class="num">0.078</td><td class="num">0.00040</td></tr>
+        <tr><td class="num">12</td><td class="num">12 and 44</td><td class="num">28 and 60</td><td class="num">0.031623</td><td class="num">31.62278</td><td class="num">31.625</td><td class="num">0.184</td><td class="num">0.059</td><td class="num">0.00001</td></tr>
+        <tr><td class="num">13</td><td class="num">13 and 45</td><td class="num">29 and 61</td><td class="num">0.023714</td><td class="num">42.16965</td><td class="num">42.25</td><td class="num">0.138</td><td class="num">0.044</td><td class="num">0.00028</td></tr>
+        <tr><td class="num">14</td><td class="num">14 and 46</td><td class="num">30 and 62</td><td class="num">0.017783</td><td class="num">56.23413</td><td class="num">56.25</td><td class="num">0.104</td><td class="num">0.033</td><td class="num">0.00003</td></tr>
+        <tr><td class="num">15</td><td class="num">15 and 47</td><td class="num">31 and 63</td><td class="num">0.013335</td><td class="num">74.98942</td><td class="num">75</td><td class="num">0.078</td><td class="num">0.025</td><td class="num">0.00001</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 3.</b> The 16 frequencies of ViT-S/16 (our NumPy computation). "Largest |θ|" = 2π · 13/14 · f<sub>k</sub>. "Turns across the box" = (26/14) / p<sub>k</sub>: the angle change from the first to the last patch center of an axis, in full turns. The last two columns belong to Section 10.</p>
+  <p>The fastest pair (k = 0) has a period of 1, half the width of the box. At 224 px its angle goes from −5.83 to 5.83 rad, 1.86 turns. Two patches 7 rows apart have a coordinate difference of exactly 1, so they get the same angle in this pair. The slower pairs tell them apart. The slowest pair (k = 15) turns by only 0.025 of a turn across the box. Its angle changes little inside one image.</p>
+</section>
+
+<section id="layout">
+  <h2>5 The half-split layout and rotate_half</h2>
+  <p>RoPE rotates pairs of values. In the half-split layout, value d pairs with value d + 32. Pairs 0 to 15 (values 0–15 with values 32–47) rotate by the y angles. Pairs 16 to 31 (values 16–31 with values 48–63) rotate by the x angles. Figure 3 shows the layout. The other common layout, the interleaved layout, pairs value 2d with value 2d + 1. The DINOv3 weights expect the half-split layout. The interleaved layout has the same shapes, so it gives wrong attention scores and no error.</p>
+  <figure>
+    <div class="fig"><svg viewBox="0 0 960 360" role="img" aria-labelledby="f3t" font-family="-apple-system, Helvetica Neue, Arial, sans-serif">
+      <title id="f3t">The half-split RoPE layout of one head with 64 values</title>
+      <defs>
+        <pattern id="cells" width="13" height="28" patternUnits="userSpaceOnUse" x="64" y="0"><line x1="12.5" y1="0" x2="12.5" y2="28" stroke="#ffffff" stroke-width="1"/></pattern>
+      </defs>
+      <rect width="960" height="360" fill="#ffffff"/>
+      <g font-size="13" fill="#111414">
+        <text x="64" y="22" font-weight="600">q or k of one patch token in one head: 64 values, 32 pairs</text>
+        <text x="168" y="48" text-anchor="middle" font-size="12">values 0–15: y</text>
+        <text x="376" y="48" text-anchor="middle" font-size="12">values 16–31: x</text>
+        <text x="584" y="48" text-anchor="middle" font-size="12">values 32–47: y</text>
+        <text x="792" y="48" text-anchor="middle" font-size="12">values 48–63: x</text>
+        <rect x="64" y="56" width="208" height="28" fill="#057379"/>
+        <rect x="272" y="56" width="208" height="28" fill="#9fd3d1"/>
+        <rect x="480" y="56" width="208" height="28" fill="#057379"/>
+        <rect x="688" y="56" width="208" height="28" fill="#9fd3d1"/>
+        <rect x="64" y="56" width="832" height="28" fill="url(#cells)"/>
+        <g font-size="10" fill="#4a5655" text-anchor="middle">
+          <text x="70.5" y="98">0</text><text x="278.5" y="98">16</text><text x="486.5" y="98">32</text><text x="694.5" y="98">48</text><text x="889.5" y="98">63</text>
+        </g>
+        <path d="M70.5,102 Q278.5,178 486.5,102" fill="none" stroke="#057379" stroke-width="2"/>
+        <path d="M278.5,102 Q486.5,178 694.5,102" fill="none" stroke="#5fb0ad" stroke-width="2"/>
+        <text x="64" y="160" font-size="12">pair 0: values 0 and 32, y angle, k = 0</text>
+        <text x="560" y="160" font-size="12">pair 16: values 16 and 48, x angle, k = 0</text>
+        <text x="64" y="194" font-size="12" fill="#4a5655">The cos row and the sin row of this token: the angle of pair d in column d and in column d + 32 (np.tile)</text>
+        <rect x="64" y="202" width="208" height="28" fill="#057379"/>
+        <rect x="272" y="202" width="208" height="28" fill="#9fd3d1"/>
+        <rect x="480" y="202" width="208" height="28" fill="#057379"/>
+        <rect x="688" y="202" width="208" height="28" fill="#9fd3d1"/>
+        <g font-size="12" text-anchor="middle">
+          <text x="168" y="221" fill="#ffffff">θy,0 … θy,15</text><text x="376" y="221">θx,0 … θx,15</text><text x="584" y="221" fill="#ffffff">θy,0 … θy,15</text><text x="792" y="221">θx,0 … θx,15</text>
+        </g>
+        <text x="64" y="256" font-size="12" fill="#4a5655">rotate_half(q) swaps the two halves and negates the new first half</text>
+        <rect x="64" y="264" width="208" height="28" fill="#057379"/>
+        <rect x="272" y="264" width="208" height="28" fill="#9fd3d1"/>
+        <rect x="480" y="264" width="208" height="28" fill="#057379"/>
+        <rect x="688" y="264" width="208" height="28" fill="#9fd3d1"/>
+        <g font-size="12" text-anchor="middle">
+          <text x="168" y="283" fill="#ffffff">−q[32 … 47]</text><text x="376" y="283">−q[48 … 63]</text><text x="584" y="283" fill="#ffffff">q[0 … 15]</text><text x="792" y="283">q[16 … 31]</text>
+        </g>
+        <text x="64" y="322" font-size="12">out = q · cos + rotate_half(q) · sin. For the pair (a, b) = (q[d], q[d + 32]) with the angle θ:</text>
+        <text x="64" y="342" font-size="12">out[d] = a · cos θ − b · sin θ and out[d + 32] = b · cos θ + a · sin θ. This is a rotation of the point (a, b) by θ.</text>
+      </g>
+    </svg></div>
+    <figcaption><b>Figure 3.</b> The half-split layout of one head of ViT-S/16. Dark teal: values whose angle comes from the y coordinate. Light teal: values whose angle comes from the x coordinate. The two arcs show two of the 32 pairs. Each pair rotates by one angle. Top: the values of q or k. Middle: the angles in one row of the RoPE tables. Bottom: <code>rotate_half</code> of the top row.</figcaption>
+  </figure>
+  <pre><code># src/dinov3_apple/mlx_model.py, lines 149–152
+def rotate_half(x: mx.array) -> mx.array:
+    """Return (-x2, x1) for the halves x1 and x2 of the last axis (the half-split layout)."""
+    half = x.shape[-1] // 2                                         # 32 for head_dim 64
+    return mx.concatenate([-x[..., half:], x[..., :half]], axis=-1)
+
+# lines 169–170 (apply_rope)
+xf = x.astype(mx.float32)
+return (xf * cos + rotate_half(xf) * sin).astype(x.dtype)</code></pre>
+  <p>Why the rotation encodes the position: after the rotation, the score q · k of two tokens depends, for each pair, on the angle difference θ<sub>q</sub> − θ<sub>k</sub>. The angle difference depends only on the coordinate difference of the two patches. So RoPE gives the attention the relative position of two patches, separately for y and for x (RoFormer, Section 3).</p>
+</section>
+
+<section id="prefix">
+  <h2>6 Identity rows for the prefix tokens</h2>
+  <p>The sequence has 5 prefix tokens in front of the patch tokens: the CLS token and the 4 register tokens. RoPE must not rotate them. Hugging Face splits q and k, rotates the patch tokens and joins the two pieces again:</p>
+  <pre><code># transformers 5.22.1, models/dinov3_vit/modeling_dinov3_vit.py, apply_rotary_pos_emb (Apache-2.0), shortened
+q_prefix_tokens, q_patches = q.split((num_prefix_tokens, num_patches), dim=-2)
+q_patches = (q_patches * cos) + (rotate_half(q_patches) * sin)
+q = torch.cat((q_prefix_tokens, q_patches), dim=-2)                 # the same three lines for k</code></pre>
+  <p>The MLX port puts 5 identity rows on top of the tables: cos 1 and sin 0. Then <code>apply_rope</code> gives x · 1 + rotate_half(x) · 0 = x for each prefix token. The result is exact for finite values, because a product with 1 and a sum with 0 do not round.</p>
+  <pre><code># src/dinov3_apple/mlx_model.py, lines 145–146 (rope_tables)
+prefix = np.ones((NUM_PREFIX_TOKENS, head_dim), np.float32)        # NUM_PREFIX_TOKENS = 5 (outputs.py)
+return np.concatenate([prefix, np.cos(angles)]), np.concatenate([0 * prefix, np.sin(angles)])</code></pre>
+  <ul>
+    <li>The port has no split and no join. The rotation is one expression on all 5 + N rows.</li>
+    <li>The extra work is 5 rows: 2.5 % of 201 rows at 224 px, 0.5 % of 1,029 rows at 512 px.</li>
+    <li>The Hugging Face tables have N rows; the MLX tables have 5 + N rows. The part test <code>rope</code> therefore gives the MLX code the Hugging Face tables plus 5 identity rows. So it tests the rotation alone (<code>tests/test_mlx_parts.py</code>, <code>_rope_tables</code>).</li>
+  </ul>
+  <p>The MLX rotation is still a chain of element-wise operations: a negation, a concatenation, two products and a sum, plus the two casts. Without <code>mx.compile</code>, each operation reads and writes a full q or k tensor. On <code>torch-mps</code>, Step 3 measured RoPE at 15.0 % of the block time of ViT-S/16 in fp32 at 224 px, batch size 8. In fp16-cast, the RoPE share went up to 30.5 % (Table 10 of <a href="03-where-the-compute-goes.html">03-where-the-compute-goes.html</a>). Step 4 did not time RoPE on <code>mlx</code>. Step 6 profiles the <code>mlx</code> block and can fuse the chain.</p>
+</section>
+
+<section id="fastrope">
+  <h2>7 Why mx.fast.rope cannot do it in one call</h2>
+  <p>MLX has a fused RoPE kernel, <code>mx.fast.rope</code>. <code>explore.html</code> checked it against the needs of DINOv3 (Table 6 there). Table 4 gives the result.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>DINOv3 needs</th><th><code>mx.fast.rope</code> in mlx 0.32.4 gives</th><th>Fit</th></tr></thead>
+      <tbody>
+        <tr><td>Pairs (d, d + 32): the half-split layout</td><td><code>traditional=False</code> rotates the pairs (d, d + dims/2)</td><td>yes</td></tr>
+        <tr><td>Two coordinates for each token: y for pairs 0 to 15, x for pairs 16 to 31</td><td>One position for each token, for all pairs</td><td>no</td></tr>
+        <tr><td>Fractional positions (2i + 1)/Hp − 1</td><td>The position (t + offset) · scale. t is the index on axis −2. The offset must be an integer</td><td>no: a centered offset (1 − Hp)/2 is a half-integer for the even grids 14, 28 and 32</td></tr>
+        <tr><td>The angle 2π · c / p<sub>k</sub></td><td>The angle position / freqs: <code>freqs</code> divides</td><td>yes, with freqs = Hp · p<sub>k</sub> / 2π</td></tr>
+        <tr><td>No rotation for the 5 prefix tokens</td><td>Every token with a position other than 0 rotates</td><td>no: a split and a join are necessary</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 4.</b> The fit of <code>mx.fast.rope</code>, from Table 6 of <code>specs/04-mlx-port/explore.html</code>. Evidence: the docstring of mlx 0.32.4 and a probe on the CPU stream against NumPy (largest error 2e-7).</p>
+  <p>An exact workaround exists. It puts each patch token in its own batch entry (axis 0) with T = 1. A vector offset then gives each token its own integer offset m = 2i + 1 − Hp. The workaround uses freqs = Hp · p<sub>k</sub> / 2π. Then the angle is m / freqs = 2π · ((2i + 1)/Hp − 1) / p<sub>k</sub>. The workaround needs one call for the y pairs and one call for the x pairs, plus gathers, transposes and a join. Only the CPU stream checked it (largest error 3e-7). Step 4 uses the tables instead (decision D3). This confirms risk R5 of <code>docs/plan.html</code>. If the <code>mlx</code> block profile of Step 6 shows a large RoPE share, Step 6 can try the two-call form.</p>
+</section>
+
+<section id="fp32">
+  <h2>8 The rotation in fp32</h2>
+  <p><code>apply_rope</code> casts x to fp32, rotates it with the fp32 tables and casts the result back to the dtype of x (lines 169–170, Section 5). In Step 4 the only dtype mode of <code>mlx</code> is fp32, so both casts change no value. They prepare Step 5, which adds fp16 and bf16. The three codes treat the dtype in three ways:</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Code</th><th>Dtype of the tables</th><th>Dtype of the rotation</th><th>Dtype of the result</th></tr></thead>
+      <tbody>
+        <tr><td>Hugging Face 5.22.1</td><td>fp32, then cast to the dtype of the pixels: <code>cos.to(dtype=dtype)</code></td><td>No cast of q and k. In fp16-cast and bf16-cast mode, the rotation runs in fp16 or bf16</td><td>The dtype of the products</td></tr>
+        <tr><td>Meta (<code>dinov3/layers/attention.py</code>)</td><td>The dtype of the RoPE module (fp32 in the hub models)</td><td>Casts q and k to the dtype of the tables</td><td>Cast back to the dtype of q and k</td></tr>
+        <tr><td>MLX port (<code>apply_rope</code>)</td><td>Always fp32</td><td>fp32</td><td>Cast back to the dtype of x</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 5.</b> Dtypes of RoPE in the two official codes and in the port. The port follows the Meta code. In fp32 all three give the same dtypes.</p>
+  <ul>
+    <li>In MLX, a bf16 array times an fp32 array gives fp32. Without the last cast, the fp32 tables would turn q and k into fp32, and the attention would run in fp32. <code>.astype(x.dtype)</code> keeps the dtype of the dtype mode.</li>
+    <li>In bf16-cast mode, Hugging Face rotates in bf16 and the port rotates in fp32. The reference output is fp32, so the fp32 rotation is closer to it. Step 5 measures the effect on parity.</li>
+    <li>The tables stay fp32 in every dtype mode. They are not parameters, so <code>set_dtype</code> does not cast them (Section 9).</li>
+  </ul>
+</section>
+
+<section id="cache">
+  <h2>9 The cache by patch grid</h2>
+  <pre><code># src/dinov3_apple/mlx_model.py, line 333 (MlxBackbone.__init__) and lines 336–341
+self._rope_cache: dict[tuple[int, int], tuple[mx.array, mx.array]] = {}
+
+def rope(self, grid_h: int, grid_w: int) -> tuple[mx.array, mx.array]:
+    """Return the RoPE tables (cos, sin) of one patch grid, from the cache."""
+    if (grid_h, grid_w) not in self._rope_cache:                   # first call for this grid
+        cos, sin = rope_tables(grid_h, grid_w, self.config.head_dim, self.config.rope_theta)
+        self._rope_cache[(grid_h, grid_w)] = (mx.array(cos), mx.array(sin))
+    return self._rope_cache[(grid_h, grid_w)]</code></pre>
+  <ul>
+    <li>The key is the patch grid (Hp, Wp), not the input resolution and not the batch size. A batch of 8 and a batch of 1 at 224 px use the same entry.</li>
+    <li>The first forward pass for a grid calls <code>rope_tables</code> on the CPU and converts the two NumPy arrays to <code>mx.array</code>. Later forward passes for the grid reuse the arrays.</li>
+    <li>The 12 configurations of the parity tests have 6 patch grids. So the cache holds at most 6 entries, 1.49 MB in all (Table 2). The cache has no size limit. A video at one input resolution uses one entry.</li>
+    <li>The attribute name starts with "_". MLX does not treat such an attribute as a parameter. So <code>load_weights(strict=True)</code>, <code>set_dtype</code> and <code>nn.quantize</code> do not see the tables. T19 checks it: after a forward pass, the small model still has 40 parameters (2 blocks × 17 + 4 + 2).</li>
+    <li>The tables enter each block as inputs, not as constants. So <code>mx.compile</code> in Step 6 can take them as inputs of the compiled function.</li>
+  </ul>
+  <p>Hugging Face caches less. An <code>lru_cache</code> with 32 entries keeps the patch-center coordinates (<code>get_patches_center_coordinates</code>). Hugging Face computes the angles, cos and sin again in every forward pass.</p>
+</section>
+
+<section id="meta">
+  <h2>10 Two official tables: Hugging Face and Meta</h2>
+  <p>Two official codes make the RoPE tables, and they do not agree:</p>
+  <ul>
+    <li>Hugging Face computes the frequencies 100<sup>−k/16</sup> in fp32 in the code. The frequencies are a buffer of the module, not part of the weights file. The key map raises <code>UnknownWeightError</code> for <code>rope_embeddings.inv_freq</code> (test T1).</li>
+    <li>The Meta code keeps the periods 100<sup>k/16</sup> in the Meta checkpoint (<code>rope_embed.periods</code>). The checkpoint stores them in bf16, with 8 significant bits. bf16 rounds the Meta periods, for example 1.33352 to 1.33594 (k = 1). The Meta code then divides by the rounded periods in fp32: θ = 2π · c / p<sub>bf16</sub>.</li>
+  </ul>
+  <p>The angle difference for one pair is 2π · |c| · |1/p<sub>bf16</sub> − 1/p<sub>k</sub>|. The relative rounding error of a period is at most 1.91e-3 for every k (the bf16 bound is 2<sup>−9</sup> = 1.95e-3). The angle difference also grows with the frequency, so it is largest for the fast pairs. Figure 4 shows the difference for c = 1. The periods 1 (k = 0) and 10 (k = 8) are exact in bf16.</p>
+  <figure>
+    <div class="fig"><svg viewBox="0 0 960 380" role="img" aria-labelledby="f4t" font-family="-apple-system, Helvetica Neue, Arial, sans-serif">
+      <title id="f4t">Angle difference between the Meta bf16 periods and the exact periods for each of the 16 frequencies, for a coordinate of 1</title>
+      <rect width="960" height="380" fill="#ffffff"/>
+      <g font-size="13" fill="#111414">
+        <text x="90" y="26" font-weight="600">Angle difference of the Meta tables (bf16 periods) against the exact periods, coordinate c = 1</text>
+        <line x1="90" y1="246.7" x2="930" y2="246.7" stroke="#e3e8e7" stroke-width="1"/>
+        <line x1="90" y1="193.3" x2="930" y2="193.3" stroke="#e3e8e7" stroke-width="1"/>
+        <line x1="90" y1="140.0" x2="930" y2="140.0" stroke="#e3e8e7" stroke-width="1"/>
+        <line x1="90" y1="86.7" x2="930" y2="86.7" stroke="#e3e8e7" stroke-width="1"/>
+        <text x="82" y="304.0" text-anchor="end" font-size="11" fill="#4a5655">0</text>
+        <text x="82" y="250.7" text-anchor="end" font-size="11" fill="#4a5655">0.002</text>
+        <text x="82" y="197.3" text-anchor="end" font-size="11" fill="#4a5655">0.004</text>
+        <text x="82" y="144.0" text-anchor="end" font-size="11" fill="#4a5655">0.006</text>
+        <text x="82" y="90.7" text-anchor="end" font-size="11" fill="#4a5655">0.008</text>
+        <text x="116.2" y="295" text-anchor="middle" font-size="10" fill="#4a5655">0</text>
+        <text x="116.2" y="318" text-anchor="middle" font-size="11" fill="#4a5655">0</text>
+        <path d="M154.8,300 L154.8,76.8 Q154.8,72.8 158.8,72.8 L178.8,72.8 Q182.8,72.8 182.8,76.8 L182.8,300 Z" fill="#057379"/>
+        <text x="168.8" y="318" text-anchor="middle" font-size="11" fill="#4a5655">1</text>
+        <path d="M207.2,300 L207.2,146.9 Q207.2,142.9 211.2,142.9 L231.2,142.9 Q235.2,142.9 235.2,146.9 L235.2,300 Z" fill="#057379"/>
+        <text x="221.2" y="318" text-anchor="middle" font-size="11" fill="#4a5655">2</text>
+        <path d="M259.8,300 L259.8,196.1 Q259.8,192.1 263.8,192.1 L283.8,192.1 Q287.8,192.1 287.8,196.1 L287.8,300 Z" fill="#057379"/>
+        <text x="273.8" y="318" text-anchor="middle" font-size="11" fill="#4a5655">3</text>
+        <path d="M312.2,300 L312.2,202.8 Q312.2,198.8 316.2,198.8 L336.2,198.8 Q340.2,198.8 340.2,202.8 L340.2,300 Z" fill="#057379"/>
+        <text x="326.2" y="318" text-anchor="middle" font-size="11" fill="#4a5655">4</text>
+        <path d="M364.8,300 L364.8,287.2 Q364.8,283.2 368.8,283.2 L388.8,283.2 Q392.8,283.2 392.8,287.2 L392.8,300 Z" fill="#057379"/>
+        <text x="378.8" y="318" text-anchor="middle" font-size="11" fill="#4a5655">5</text>
+        <path d="M417.2,300 L417.2,295.6 Q417.2,291.6 421.2,291.6 L441.2,291.6 Q445.2,291.6 445.2,295.6 L445.2,300 Z" fill="#057379"/>
+        <text x="431.2" y="318" text-anchor="middle" font-size="11" fill="#4a5655">6</text>
+        <rect x="469.8" y="296.8" width="28" height="3.2" fill="#057379"/>
+        <text x="483.8" y="318" text-anchor="middle" font-size="11" fill="#4a5655">7</text>
+        <text x="536.2" y="295" text-anchor="middle" font-size="10" fill="#4a5655">0</text>
+        <text x="536.2" y="318" text-anchor="middle" font-size="11" fill="#4a5655">8</text>
+        <path d="M574.8,300 L574.8,282.6 Q574.8,278.6 578.8,278.6 L598.8,278.6 Q602.8,278.6 602.8,282.6 L602.8,300 Z" fill="#057379"/>
+        <text x="588.8" y="318" text-anchor="middle" font-size="11" fill="#4a5655">9</text>
+        <path d="M627.2,300 L627.2,286.6 Q627.2,282.6 631.2,282.6 L651.2,282.6 Q655.2,282.6 655.2,286.6 L655.2,300 Z" fill="#057379"/>
+        <text x="641.2" y="318" text-anchor="middle" font-size="11" fill="#4a5655">10</text>
+        <path d="M679.8,300 L679.8,293.2 Q679.8,289.2 683.8,289.2 L703.8,289.2 Q707.8,289.2 707.8,293.2 L707.8,300 Z" fill="#057379"/>
+        <text x="693.8" y="318" text-anchor="middle" font-size="11" fill="#4a5655">11</text>
+        <rect x="732.2" y="298.0" width="28" height="2.0" fill="#057379"/>
+        <text x="746.2" y="318" text-anchor="middle" font-size="11" fill="#4a5655">12</text>
+        <path d="M784.8,300 L784.8,296.4 Q784.8,292.4 788.8,292.4 L808.8,292.4 Q812.8,292.4 812.8,296.4 L812.8,300 Z" fill="#057379"/>
+        <text x="798.8" y="318" text-anchor="middle" font-size="11" fill="#4a5655">13</text>
+        <rect x="837.2" y="298.0" width="28" height="2.0" fill="#057379"/>
+        <text x="851.2" y="318" text-anchor="middle" font-size="11" fill="#4a5655">14</text>
+        <rect x="889.8" y="298.0" width="28" height="2.0" fill="#057379"/>
+        <text x="903.8" y="318" text-anchor="middle" font-size="11" fill="#4a5655">15</text>
+        <line x1="90" y1="300" x2="930" y2="300" stroke="#4a5655" stroke-width="1"/>
+        <text x="168.8" y="64.8" text-anchor="middle" font-size="11">0.00852</text>
+        <text x="214" y="100" font-size="12">k = 1: 0.00852 rad × 13/14 = 0.00791 rad at 224 px (14 × 14)</text>
+        <text x="214" y="118" font-size="12">k = 1: 0.00852 rad × 31/32 = 0.00825 rad at 512 px (32 × 32)</text>
+        <text x="560" y="240" font-size="12" fill="#4a5655">k = 0 and k = 8: the periods 1 and 10 are exact in bf16</text>
+        <text x="510.0" y="344" text-anchor="middle" font-size="12" fill="#4a5655">frequency index k (each k serves one y pair and one x pair)</text>
+        <text x="28" y="180.0" text-anchor="middle" font-size="12" fill="#4a5655" transform="rotate(-90 28 180.0)">angle difference (rad)</text>
+        <rect x="90.0" y="60" width="52.5" height="264" fill="#ffffff" fill-opacity="0"><title>k = 0: period 1.00000 (exact), 1 (bf16); angle difference 0.00000 rad for c = 1</title></rect>
+        <rect x="142.5" y="60" width="52.5" height="264" fill="#ffffff" fill-opacity="0"><title>k = 1: period 1.33352 (exact), 1.33594 (bf16); angle difference 0.00852 rad for c = 1</title></rect>
+        <rect x="195.0" y="60" width="52.5" height="264" fill="#ffffff" fill-opacity="0"><title>k = 2: period 1.77828 (exact), 1.78125 (bf16); angle difference 0.00589 rad for c = 1</title></rect>
+        <rect x="247.5" y="60" width="52.5" height="264" fill="#ffffff" fill-opacity="0"><title>k = 3: period 2.37137 (exact), 2.375 (bf16); angle difference 0.00405 rad for c = 1</title></rect>
+        <rect x="300.0" y="60" width="52.5" height="264" fill="#ffffff" fill-opacity="0"><title>k = 4: period 3.16228 (exact), 3.15625 (bf16); angle difference 0.00379 rad for c = 1</title></rect>
+        <rect x="352.5" y="60" width="52.5" height="264" fill="#ffffff" fill-opacity="0"><title>k = 5: period 4.21697 (exact), 4.21875 (bf16); angle difference 0.00063 rad for c = 1</title></rect>
+        <rect x="405.0" y="60" width="52.5" height="264" fill="#ffffff" fill-opacity="0"><title>k = 6: period 5.62341 (exact), 5.625 (bf16); angle difference 0.00032 rad for c = 1</title></rect>
+        <rect x="457.5" y="60" width="52.5" height="264" fill="#ffffff" fill-opacity="0"><title>k = 7: period 7.49894 (exact), 7.5 (bf16); angle difference 0.00012 rad for c = 1</title></rect>
+        <rect x="510.0" y="60" width="52.5" height="264" fill="#ffffff" fill-opacity="0"><title>k = 8: period 10.00000 (exact), 10 (bf16); angle difference 0.00000 rad for c = 1</title></rect>
+        <rect x="562.5" y="60" width="52.5" height="264" fill="#ffffff" fill-opacity="0"><title>k = 9: period 13.33521 (exact), 13.3125 (bf16); angle difference 0.00080 rad for c = 1</title></rect>
+        <rect x="615.0" y="60" width="52.5" height="264" fill="#ffffff" fill-opacity="0"><title>k = 10: period 17.78279 (exact), 17.75 (bf16); angle difference 0.00065 rad for c = 1</title></rect>
+        <rect x="667.5" y="60" width="52.5" height="264" fill="#ffffff" fill-opacity="0"><title>k = 11: period 23.71374 (exact), 23.75 (bf16); angle difference 0.00040 rad for c = 1</title></rect>
+        <rect x="720.0" y="60" width="52.5" height="264" fill="#ffffff" fill-opacity="0"><title>k = 12: period 31.62278 (exact), 31.625 (bf16); angle difference 0.00001 rad for c = 1</title></rect>
+        <rect x="772.5" y="60" width="52.5" height="264" fill="#ffffff" fill-opacity="0"><title>k = 13: period 42.16965 (exact), 42.25 (bf16); angle difference 0.00028 rad for c = 1</title></rect>
+        <rect x="825.0" y="60" width="52.5" height="264" fill="#ffffff" fill-opacity="0"><title>k = 14: period 56.23413 (exact), 56.25 (bf16); angle difference 0.00003 rad for c = 1</title></rect>
+        <rect x="877.5" y="60" width="52.5" height="264" fill="#ffffff" fill-opacity="0"><title>k = 15: period 74.98942 (exact), 75 (bf16); angle difference 0.00001 rad for c = 1</title></rect>
+      </g>
+    </svg></div>
+    <figcaption><b>Figure 4.</b> The angle difference 2π · |1/p<sub>bf16</sub> − 1/p<sub>k</sub>| for each frequency index k, for a coordinate of 1 (our NumPy computation, the results of Table 3 and of Table 8 of <code>explore.html</code>). Each k serves one y pair and one x pair. Hover over a bar for the two periods. For a patch at coordinate c, multiply by |c|.</figcaption>
+  </figure>
+  <p>The largest |c| of a grid is (n − 1)/n on its longer axis (Table 2). So the largest angle difference grows with the grid, from 0.00791 rad at 14 × 14 to 0.00825 rad at 32 × 32. T9 measured these angle differences (Table 6). A target of 1e-6 against the Meta tables must fail: the cos difference is up to 0.0082.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Patch grid</th><th class="num">Largest |c|</th><th class="num">Prediction 0.00852 · |c| (rad)</th><th class="num">Measured angle difference (rad)</th><th class="num">cos difference</th><th class="num">sin difference</th><th>AC6 target</th><th>Result</th></tr></thead>
+      <tbody>
+        <tr><td>14 × 14</td><td class="num">0.929</td><td class="num">0.00791</td><td class="num">0.00791</td><td class="num">0.00746</td><td class="num">0.00568</td><td>0.0079 ± 5 %</td><td>pass</td></tr>
+        <tr><td>28 × 28</td><td class="num">0.964</td><td class="num">0.00822</td><td class="num">0.00822</td><td class="num">0.00809</td><td class="num">0.00591</td><td>none (report only)</td><td>recorded</td></tr>
+        <tr><td>32 × 32</td><td class="num">0.969</td><td class="num">0.00825</td><td class="num">0.00825</td><td class="num">0.00816</td><td class="num">0.00595</td><td>0.0083 ± 5 %</td><td>pass</td></tr>
+        <tr><td>14 × 25</td><td class="num">0.960</td><td class="num">0.00818</td><td class="num">0.00818</td><td class="num">0.00803</td><td class="num">0.00595</td><td>none (report only)</td><td>recorded</td></tr>
+        <tr><td>14 × 19</td><td class="num">0.947</td><td class="num">0.00807</td><td class="num">0.00807</td><td class="num">0.00782</td><td class="num">0.00595</td><td>none (report only)</td><td>recorded</td></tr>
+        <tr><td>19 × 14</td><td class="num">0.947</td><td class="num">0.00807</td><td class="num">0.00807</td><td class="num">0.00782</td><td class="num">0.00595</td><td>none (report only)</td><td>recorded</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 6.</b> T9 <code>test_rope_tables_meta_difference</code>: the MLX tables against the Meta formula with the bf16 periods, rows 5 and up. The largest difference of each grid, in fp32. AC6 is report only: it asks for six recorded grids and for the 14 × 14 and 32 × 32 results within 5 % of Table 8 of <code>explore.html</code>. The prediction uses 0.008521 rad, the angle difference of k = 1.</p>
+  <p>Which table is the target? The reference output comes from the Hugging Face code. So the port uses the Hugging Face tables (decision D3, <code>docs/adr/0006-hugging-face-rope-tables-as-the-target.md</code>). With the Meta tables, the parity tests would measure the difference between the two official codes, not the port. Step 4 did not measure the effect of the bf16 periods on the outputs of the Meta model.</p>
+  <p class="note"><b>Correction to Table 1 of <a href="01-prior-ports.html">01-prior-ports.html</a>.</b> That table says "same angles" for the Meta hub code. The angles are not the same. The correct entry: the Meta checkpoint stores the periods 100<sup>k/16</sup> in bf16. The Meta hub code reads these rounded periods and computes the angles in fp32. Its angles differ from the Hugging Face angles by up to 0.0079 rad at 224 px and 0.0083 rad at 512 px.</p>
+</section>
+
+<section id="jitter">
+  <h2>11 RoPE-box jittering: training only</h2>
+  <p>In training, DINOv3 changes the RoPE coordinates at random: RoPE-box jittering. In the Hugging Face config of all six model sizes, <code>pos_embed_rescale</code> is 2.0, and <code>pos_embed_jitter</code> and <code>pos_embed_shift</code> are None. With rescale 2.0, each forward pass multiplies all coordinates by one random factor s, log-uniform between 1/2 and 2. The box becomes [−s, s]. Hugging Face applies it only in train mode:</p>
+  <pre><code># transformers 5.22.1, DINOv3ViTRopePositionEmbedding.forward (Apache-2.0), shortened
+patch_coords = get_patches_center_coordinates(num_patches_h, num_patches_w, dtype=torch.float32, device=device)
+if self.training:
+    patch_coords = augment_patches_center_coordinates(patch_coords, shift=..., jitter=..., rescale=...)</code></pre>
+  <ul>
+    <li>The reference output comes from eval mode, without jittering. The small model of the part tests also runs in eval mode (<code>tests/small_model.py</code>).</li>
+    <li>Step 4 leaves RoPE-box jittering out. <code>MlxBackbone</code> has the flag <code>rope_box_jitter = False</code> (line 334). No code reads it yet.</li>
+    <li>The flag is separate from the train mode of <code>nn.Module</code>. A call of <code>model.train()</code> in MLX does not turn on jittering. In Hugging Face, <code>model.train()</code> does turn it on.</li>
+    <li>Step 8 decides if LoRA fine-tuning uses it (risk R17 of <code>explore.html</code>). With jittering on, the tables change in each iteration, so the cache by patch grid cannot hold them. The factor s multiplies the coordinates before the angles: between line 142 and line 143 of <code>rope_tables</code>.</li>
+  </ul>
+</section>
+
+<section id="measured">
+  <h2>12 The measured results of Step 4</h2>
+  <p>Table 7 collects every Step 4 result for RoPE alone or for a chain that contains RoPE. The results come from the test report of the build (8 runs on 2026-11-07 gave the same results for T8, T9 and T10), from <code>results/parity-mlx.md</code> and from <code>results/bench-mlx-port.jsonl</code>. mlx 0.32.4, GPU, TF32 off.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Check</th><th>Test</th><th>Input</th><th>Measured</th><th>Target</th><th>Result</th></tr></thead>
+      <tbody>
+        <tr><td>AC5: tables against Hugging Face, rows 5 and up</td><td>T8 <code>test_rope_tables</code></td><td>6 patch grids</td><td>cos 1.19e-7, sin 5.96e-8 (the same on all six grids)</td><td>≤ 1e-6</td><td>pass</td></tr>
+        <tr><td>AC5: rows 0 to 4, dtype, shape</td><td>T8</td><td>6 patch grids</td><td>cos 1 and sin 0 exactly; fp32; (5 + N, 64)</td><td>exact</td><td>pass</td></tr>
+        <tr><td>AC6: tables against the Meta formula</td><td>T9 <code>test_rope_tables_meta_difference</code></td><td>6 patch grids</td><td>0.00791 to 0.00825 rad (Table 6)</td><td>report only; 0.0079 and 0.0083 ± 5 %</td><td>pass</td></tr>
+        <tr><td>AC7: the rotation alone</td><td>T10 <code>test_mlx_block_part[rope]</code></td><td>small model, first block, (2, 3, 224, 224)</td><td>0 (bit-equal)</td><td>≤ 2e-6</td><td>pass</td></tr>
+        <tr><td>AC7: attention with RoPE</td><td>T13 <code>test_mlx_part_attention</code></td><td>14 × 14 (batch 2) and 14 × 19</td><td>4.53e-6 and 3.58e-6</td><td>≤ 1e-5</td><td>pass</td></tr>
+        <tr><td>AC7: block</td><td>T16 <code>test_mlx_part_block</code></td><td>14 × 14 and 14 × 19</td><td>3.58e-6 and 3.58e-6</td><td>≤ 3e-5</td><td>pass</td></tr>
+        <tr><td>AC9: small model, end to end</td><td>T18 <code>test_mlx_small_model_tokens</code></td><td>224 × 224, 224 × 304, 304 × 224</td><td>8.82e-6, 7.09e-6, 5.25e-6</td><td>≤ 5e-5</td><td>pass</td></tr>
+        <tr><td>AC3: each block of ViT-S/16 on its stored input, with the 14 × 14 tables</td><td>W2 <code>test_mlx_block_matches_stored</code></td><td>iss-kibo-lab, 224 × 224</td><td>1 − minimum token cosine ≤ 1.68e-11 (block 0)</td><td>minimum token cosine ≥ 0.99999</td><td>pass</td></tr>
+        <tr><td>AC1: parity of ViT-S/16</td><td>W5 <code>test_parity</code></td><td>12 configurations, all 6 patch grids</td><td>frame, patch mean and patch 1st percentile 1.000000</td><td>≥ 0.9999</td><td>pass</td></tr>
+        <tr><td>Speed of the whole forward pass (report only)</td><td><code>scripts/bench_mlx_port.py</code></td><td>ViT-S/16, 224 px, fp32, batch sizes 8 (P1) and 1</td><td>median paired ratio 1.39 (batch size 8) and 3.12 (batch size 1), frame embedding</td><td>none</td><td>recorded</td></tr>
+        <tr><td>RoPE time on <code>mlx</code></td><td>none</td><td>none</td><td>not measured in Step 4</td><td>none</td><td>Step 6</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 7.</b> Step 4 results for RoPE. "Measured" is the largest absolute difference against the Hugging Face module on <code>torch-cpu</code> in fp32, unless the row says otherwise. The paired ratio is the throughput of <code>mlx</code> divided by the throughput of <code>torch-mps</code> in the same round, median of 3 rounds; RoPE is one part of it.</p>
+  <p>The table difference is 1 or 2 units in the last place of fp32 (1.19e-7 is one unit at 1.0). The operations and their order are the same as in Hugging Face. So the probable cause is the fp32 power, cos and sin functions of NumPy and torch. These functions can round differently. We did not find which function differs. The rotation has no such function: the same products and sums in the same order give the same bits.</p>
+</section>
+
+<section id="surprises">
+  <h2>13 Surprises</h2>
+  <ol>
+    <li class="note"><b>Two official RoPE tables exist.</b> The Meta checkpoint stores the periods in bf16. Its angles differ from the Hugging Face angles by up to 0.0079 rad at 224 px and 0.0083 rad at 512 px. The largest difference comes from k = 1, not from the slowest pair. Table 1 of <code>01-prior-ports.html</code> said "same angles" (Section 10).</li>
+    <li class="note"><b><code>mx.fast.rope</code> has the right layout and still cannot do it.</b> It supports the half-split layout. But it has one position for each token, integer offsets only, and no exception for the prefix tokens. An exact form needs two calls, gathers and a join (Section 7).</li>
+    <li class="note"><b>The tables are not bit-equal, but the rotation is.</b> The same fp32 operations in the same order give tables 1.19e-7 away from Hugging Face on all six grids. The rotation with the same tables gives a difference of exactly 0.</li>
+    <li class="note"><b>Five rows replace a split and a join.</b> cos 1 and sin 0 leave the prefix tokens unchanged, without a rounding. The cost is 5 extra rows of an element-wise operation (Section 6).</li>
+    <li class="note"><b>Hugging Face and Meta treat half precision differently.</b> Hugging Face casts the tables down to the dtype of the pixels and rotates in that dtype. Meta casts q and k up to fp32. The port follows Meta (Section 8).</li>
+    <li class="note"><b><code>model.train()</code> changes the positions in Hugging Face.</b> Train mode turns on RoPE-box jittering, with a random box from [−0.5, 0.5] to [−2, 2]. A fine-tuning run in train mode sees other angles than the reference output. The MLX flag is separate from the train mode (Section 11).</li>
+    <li class="note"><b>The fastest pair repeats inside one image.</b> Its period (1) is half the box. At 224 px, patches 7 rows apart get the same angle in pair 0. The 15 slower pairs tell them apart (Section 4).</li>
+  </ol>
+</section>
+
+<section id="sources">
+  <h2>14 Sources</h2>
+  <ul>
+    <li>Repo files: <code>specs/04-mlx-port/explore.html</code> (Section 3.3, Tables 6 to 8, risks R5, R11 and R17), <code>specs/04-mlx-port/plan.html</code> (Sections 2, 3.4 and 6, Table 11), <code>docs/adr/0006-hugging-face-rope-tables-as-the-target.md</code>, <code>GLOSSARY.md</code>, <code>docs/learn/01-prior-ports.html</code>, <code>docs/learn/03-where-the-compute-goes.html</code>.</li>
+    <li>Code and tests: <code>src/dinov3_apple/mlx_model.py</code> (commit <code>c212226</code>; the line numbers of this page are those of commit <code>ea82d58</code>), <code>src/dinov3_apple/mlx_weights.py</code>, <code>src/dinov3_apple/outputs.py</code>, <code>tests/test_mlx_rope.py</code>, <code>tests/test_mlx_parts.py</code>, <code>tests/small_model.py</code>.</li>
+    <li>Results: <code>results/parity-mlx.md</code>, <code>results/bench-mlx-port.jsonl</code> and the test report of the build, <code>tests/fixtures/generated/mlx/report.jsonl</code> (not in git).</li>
+    <li>Hugging Face transformers 5.22.1: <code>models/dinov3_vit/modeling_dinov3_vit.py</code> (<code>get_patches_center_coordinates</code>, <code>augment_patches_center_coordinates</code>, <code>DINOv3ViTRopePositionEmbedding</code>, <code>rotate_half</code>, <code>apply_rotary_pos_emb</code>) and <code>configuration_dinov3_vit.py</code>, Apache-2.0. <a href="https://github.com/huggingface/transformers">github.com/huggingface/transformers</a>.</li>
+    <li>Official DINOv3 code, <code>dinov3/layers/rope_position_encoding.py</code> and <code>dinov3/layers/attention.py</code>. Read to check facts only (ADR 0002). <a href="https://github.com/facebookresearch/dinov3">github.com/facebookresearch/dinov3</a>.</li>
+    <li>MLX 0.32.4: <code>mlx.core.fast.rope</code>. <a href="https://ml-explore.github.io/mlx/build/html/python/_autosummary/mlx.core.fast.rope.html">ml-explore.github.io/mlx</a>.</li>
+    <li>DINOv3 paper: Siméoni et al., arXiv 2508.10104 (August 2025). <a href="https://arxiv.org/abs/2508.10104">arxiv.org/abs/2508.10104</a>.</li>
+    <li>RoPE: Su et al., "RoFormer: Enhanced Transformer with Rotary Position Embedding", arXiv 2104.09864. <a href="https://arxiv.org/abs/2104.09864">arxiv.org/abs/2104.09864</a>.</li>
+    <li>NumPy NEP 50, "Promotion rules for Python scalars". <a href="https://numpy.org/neps/nep-0050-scalar-promotion.html">numpy.org/neps/nep-0050-scalar-promotion.html</a>.</li>
+  </ul>
+</section>
+
+<footer class="pages">Previous: <a href="04-1-patch-embedding.html">1 Patch embedding and MLX weights</a> · Next: <a href="04-3-attention.html">3 Attention</a></footer>
+</main>
+</body>
+</html>

@@ -96,6 +96,9 @@ A Hugging Face model folder that `scripts/convert_meta_checkpoint.py` made from 
 **MLX weights**:
 The weights of one model size as MLX arrays, with the names and layouts of the MLX backbone. The key map makes them at load time from the Hugging Face safetensors.
 
+**Key map**:
+The map from a Hugging Face tensor name to the name of the MLX parameter (`map_key`). It drops the mask token and reshapes the patch embedding weight.
+
 ## Outputs
 
 **Frame embedding**:
@@ -160,6 +163,9 @@ _Avoid_: engine, runtime, framework (in this sense)
 **TF32**:
 A matmul mode that rounds the fp32 inputs to a 10-bit mantissa. MLX turns it on by default; the fp32 dtype mode of `mlx` turns it off (`MLX_ENABLE_TF32=0`).
 
+**TF32 probe**:
+The test of one fp32 matmul with `MLX_ENABLE_TF32=0` and `=1` against NumPy float64.
+
 **Reference output**:
 The output of the Hugging Face backbone on `torch-cpu` in fp32. All parity tests compare with it.
 _Avoid_: ground truth, golden output
@@ -171,6 +177,12 @@ _Avoid_: reference (for speed)
 **Parity**:
 The agreement of an output with the reference output, measured as cosine similarity.
 _Avoid_: accuracy, correctness, fidelity
+
+**Part test**:
+A test of one part of a block in `mlx` against the Hugging Face module on torch-cpu, with the small model.
+
+**Small model**:
+The Hugging Face backbone with the values of ViT-S/16, 2 blocks and random weights (`tests/small_model.py`). The oracle of the part tests. It needs no gated weights.
 
 **Configuration**:
 One combination of model size, backend, dtype, input resolution, batch size and output. In a parity test, the test image is also part of it.
@@ -235,6 +247,9 @@ The time of each part of block 1, with each part run alone in a loop, next to it
 
 **Speedup**:
 The throughput of `mlx` divided by the throughput of the baseline, for the same configuration.
+
+**Paired ratio**:
+The throughput of `mlx` divided by the throughput of torch-mps in the same round of one benchmark run, for the same configuration. The median of the paired ratios over the rounds is robust to a change of the speed of the Mac between rounds.
 
 **Unified memory**:
 The one memory pool that the CPU and the GPU share on Apple silicon.

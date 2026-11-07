@@ -1,0 +1,742 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Patch Embedding and MLX Weights</title>
+<style>
+/* Explainer page. White page, black text, no dark mode. */
+:root { --bg: #ffffff; --fg: #111414; --muted: #4a5655; --rule: #d6dedd; --panel: #f5f8f7; --accent: #057379; --cls: #057379; --patch: #9fd3d1; --reg: #e0a336; color-scheme: light; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif; }
+main { max-width: 62rem; margin: 0 auto; padding: 40px 20px 64px; display: grid; gap: 1.75rem; }
+main > *, section > * { min-width: 0; }
+h1 { font-size: 1.9rem; line-height: 1.15; margin: 0; }
+h2 { font-size: 1.3rem; margin: 0; }
+h3 { font-size: 1.05rem; margin: 0.4rem 0 0; }
+section { display: grid; gap: 0.8rem; }
+p, ul, ol { margin: 0; max-width: 46rem; }
+li + li { margin-top: 0.25rem; }
+code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.86em; }
+p code, li code, td code { overflow-wrap: anywhere; }
+pre { margin: 0; background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 0.8rem 1rem; overflow-x: auto; }
+pre.code .ln { display: inline-block; color: var(--muted); margin-right: 1.1em; user-select: none; }
+pre.code .gap { color: var(--muted); }
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 0.92rem; }
+th, td { text-align: left; vertical-align: top; padding: 0.45rem 0.7rem 0.45rem 0; border-bottom: 1px solid var(--rule); }
+th { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); border-bottom: 1.5px solid var(--fg); }
+th.num { text-align: right; }
+td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.caption, figcaption { font-size: 0.88rem; color: var(--muted); }
+figure { margin: 0; display: grid; gap: 0.4rem; }
+.fig { border: 1px solid var(--rule); border-radius: 6px; padding: 0.5rem; overflow-x: auto; }
+.fig svg { display: block; width: 100%; height: auto; min-width: 640px; }
+.note { border-left: 3px solid var(--accent); padding: 0.3rem 0 0.3rem 0.9rem; }
+.steps { font-size: 0.92rem; color: var(--muted); }
+details summary { cursor: pointer; color: var(--accent); }
+nav ol { columns: 2; }
+a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+<header>
+  <h1>Patch Embedding and MLX Weights</h1>
+  <p>Explainer for roadmap step 4. Date: 2026-11-07.</p>
+  <p class="steps">Step 4 explainers: 1 Patch embedding and MLX weights (this page) · <a href="04-2-rope.html">2 RoPE</a> · <a href="04-3-attention.html">3 Attention</a> · <a href="04-4-layerscale.html">4 LayerScale and the block</a> · <a href="04-5-mlp.html">5 MLP, outputs and speed</a></p>
+  <p class="steps">Previous: <a href="03-where-the-compute-goes.html">Where the compute goes</a> (step 3) · Next: <a href="04-2-rope.html">2 RoPE tables and rotation</a></p>
+</header>
+
+<nav>
+  <h2>Contents</h2>
+  <ol>
+    <li><a href="#why">Why this explainer</a></li>
+    <li><a href="#matmul">The convolution is one matmul</a></li>
+    <li><a href="#patchify">patchify: from NCHW pixels to patches</a></li>
+    <li><a href="#weight">The weight reshape of the key map</a></li>
+    <li><a href="#prefix">The prefix tokens and the token order</a></li>
+    <li><a href="#cast">The pixel cast</a></li>
+    <li><a href="#config">MlxConfig</a></li>
+    <li><a href="#load">The key map and the load</a></li>
+    <li><a href="#stored">The readers of the stored files</a></li>
+    <li><a href="#measured">The measured values of Step 4</a></li>
+    <li><a href="#surprises">Surprises</a></li>
+    <li><a href="#sources">Sources</a></li>
+  </ol>
+</nav>
+
+<section id="why">
+  <h2>1 Why this explainer</h2>
+  <p>Step 4 ports the ViT-S/16 backbone to MLX. This explainer covers the start of the forward pass: the patch embedding. The patch embedding is the input layer before block 0. It cuts the image into patches and maps each patch to one patch token. Then it puts the 5 prefix tokens in front. On this page, "patch embedding" (singular) is always this layer. "Patch embeddings" (plural) is the output of the backbone: the patch tokens after the final layer norm. This explainer also covers the code that brings the weights into MLX: the MLX config, the key map, the load with its memory check, and the readers of the stored files.</p>
+  <p>Table 1 of <a href="../../specs/04-mlx-port/plan.html"><code>specs/04-mlx-port/plan.html</code></a> gives each new function of <code>src/</code> to one explainer. This page explains <code>patchify</code>, <code>Embeddings</code>, <code>MlxConfig</code>, <code>map_key</code>, <code>mlx_weights</code>, <code>UnknownWeightError</code>, <code>required_mlx_load_bytes</code>, <code>load_mlx_backbone</code> and the readers in <code>stored.py</code>. It also explains two functions that Table 1 of the plan does not name: <code>own_aspect_size</code>, which moved from <code>preprocess.py</code> to <code>stored.py</code>, and <code>reference_tokens</code>, which moved from <code>torch_bench.py</code> to <code>bench.py</code> (Section 9). The fixes after the verification (commit <code>ea82d58</code>) added three functions to <code>src/</code>. This page explains them too: <code>block_parameter_names</code> of <code>mlx_weights.py</code> (Section 8.1), and <code>send_checks_to</code> and <code>replay_checks</code> of <code>memory.py</code> (Section 8.4). <code>MlxBackbone</code> and <code>run_mlx</code> are on <a href="04-5-mlp.html">page 5</a>. <code>tf32_enabled</code> and <code>TF32ModeError</code> are on <a href="04-3-attention.html">page 3</a>.</p>
+  <p>The measured values come from the Step 4 build of 2026-11-07: the test report of the build (<code>tests/fixtures/generated/mlx/report.jsonl</code>, which git ignores), <code>results/parity-mlx.md</code> and <code>results/bench-mlx-port.jsonl</code>. The values of the fixes after the verification come from the test report of the fix session and from <code>driver.log</code> of the benchmark run after the fix of F6 (2026-11-07, 01:38 to 01:41 UTC). For this page, nobody loaded a model, ran a test or ran a benchmark. Sections 2, 4, 9.2 and 11 add small computations of our own (NumPy, and Pillow for the image sizes).</p>
+</section>
+
+<section id="matmul">
+  <h2>2 The convolution is one matmul</h2>
+  <p>The Hugging Face model uses <code>nn.Conv2d(3, 384, kernel_size=16, stride=16)</code> as its patch embedding. The kernel and the stride are both 16. So each output position of the convolution sees exactly one patch, and the patches do not overlap. Each patch token is therefore a linear map of the 768 values of its patch (3 colors × 16 rows × 16 columns): patch token = W · patch + b, with a weight W of 384 × 768 and a bias b of 384.</p>
+  <p>The port uses this fact (option B of D4 in <a href="../../specs/04-mlx-port/explore.html"><code>explore.html</code></a>). <code>patchify</code> cuts the pixels into patches with a reshape and a transpose. Then one <code>nn.Linear(768, 384)</code> does the matmul and adds the bias. The port has no convolution. Three reasons decided this:</p>
+  <ul>
+    <li>The patch embedding uses the matmul kernel of all other linear maps. The TF32 setting of the fp32 dtype mode covers it (<a href="04-3-attention.html">page 3</a>). No convolution kernel needs a check.</li>
+    <li>The weight needs only a reshape, not a transpose (Section 4).</li>
+    <li>An input resolution that is not a multiple of 16 gives a clear error. The torch convolution drops the rest of the pixels without a message.</li>
+  </ul>
+  <p>The prior ports use <code>nn.Conv2d</code> of MLX. MLX convolutions use the channels-last layout NHWC, so these ports move the axes of the weight from (out, in, 16, 16) to (out, 16, 16, in) (<a href="01-prior-ports.html">01-prior-ports.html</a>).</p>
+  <p>Our NumPy check of the equivalence: 2 images of 224 × 224 px with normal random values, a random weight of (384, 3, 16, 16) and a random bias. A convolution with stride 16, written from its definition in float64, and <code>patchify</code> plus one matmul in float64 differ by at most 1.1e-14. So the two paths do the same math. Only the order of the sums can differ.</p>
+  <figure>
+    <div class="fig"><svg viewBox="0 0 960 636" role="img" aria-labelledby="fig1-title" font-family="-apple-system, Helvetica Neue, Arial, sans-serif">
+      <title id="fig1-title">The patch embedding of one 224 by 224 pixel image: from NCHW pixels to patches, the reshaped weight and the token sequence</title>
+      <rect width="960" height="636" fill="#ffffff"/>
+      <g font-size="13" fill="#111414">
+        <text x="20" y="24" font-weight="600">ViT-S/16, one image at 224 × 224 px: 14 × 14 patches, 196 patch tokens, 201 tokens</text>
+        <!-- Panel A: the stored pixels -->
+        <rect x="52" y="44" width="168" height="168" fill="#b3c7e6" stroke="#4a5655" stroke-width="0.8"/>
+        <rect x="44" y="52" width="168" height="168" fill="#b7d9b0" stroke="#4a5655" stroke-width="0.8"/>
+        <rect x="36" y="60" width="168" height="168" fill="#e8b4aa" stroke="#4a5655" stroke-width="0.8"/>
+        <path d="M48,60V228M36,72H204M60,60V228M36,84H204M72,60V228M36,96H204M84,60V228M36,108H204M96,60V228M36,120H204M108,60V228M36,132H204M120,60V228M36,144H204M132,60V228M36,156H204M144,60V228M36,168H204M156,60V228M36,180H204M168,60V228M36,192H204M180,60V228M36,204H204M192,60V228M36,216H204" stroke="#ffffff" stroke-width="0.8" fill="none"/>
+        <rect x="120" y="96" width="12" height="12" fill="#ffffff" fill-opacity="0.55" stroke="#111414" stroke-width="2.5"/>
+        <text x="31" y="106" font-size="11" fill="#4a5655" text-anchor="end">i = 3</text>
+        <text x="126" y="242" font-size="11" fill="#4a5655" text-anchor="middle">j = 7</text>
+        <text x="20" y="264" font-weight="600">stored pixels (1, 3, 224, 224)</text>
+        <text x="20" y="281" font-size="12" fill="#4a5655">NCHW, fp32; one square = one patch of 16 × 16 px</text>
+        <!-- zoom lines -->
+        <line x1="132" y1="96" x2="280" y2="90" stroke="#4a5655" stroke-width="1" stroke-dasharray="4 3"/>
+        <line x1="132" y1="108" x2="280" y2="138" stroke="#4a5655" stroke-width="1" stroke-dasharray="4 3"/>
+        <!-- Panel B: one patch -->
+        <text x="280" y="78" font-weight="600">one patch (3, 16, 16)</text>
+        <rect x="280" y="90" width="48" height="48" fill="#e8b4aa" stroke="#4a5655"/>
+        <rect x="336" y="90" width="48" height="48" fill="#b7d9b0" stroke="#4a5655"/>
+        <rect x="392" y="90" width="48" height="48" fill="#b3c7e6" stroke="#4a5655"/>
+        <text x="304" y="119" text-anchor="middle">R</text>
+        <text x="360" y="119" text-anchor="middle">G</text>
+        <text x="416" y="119" text-anchor="middle">B</text>
+        <g font-size="11" fill="#4a5655" text-anchor="middle">
+          <text x="304" y="154">c = 0</text><text x="360" y="154">c = 1</text><text x="416" y="154">c = 2</text>
+        </g>
+        <text x="280" y="172" font-size="11" fill="#4a5655">in each color: row r 0–15, column s 0–15</text>
+        <!-- arrow to the 768 values -->
+        <line x1="448" y1="114" x2="496" y2="114" stroke="#111414" stroke-width="1.5"/>
+        <path d="M490,108 L500,114 L490,120 z" fill="#111414"/>
+        <text x="472" y="104" font-size="11" text-anchor="middle">reshape</text>
+        <!-- Panel C: the 768 values of one patch -->
+        <text x="510" y="78" font-weight="600">one patch: row n of the patches (1, 196, 768)</text>
+        <rect x="510" y="96" width="140" height="36" fill="#e8b4aa" stroke="#4a5655"/>
+        <rect x="650" y="96" width="140" height="36" fill="#b7d9b0" stroke="#4a5655"/>
+        <rect x="790" y="96" width="140" height="36" fill="#b3c7e6" stroke="#4a5655"/>
+        <text x="580" y="119" text-anchor="middle">R: 16 rows × 16</text>
+        <text x="720" y="119" text-anchor="middle">G: 16 rows × 16</text>
+        <text x="860" y="119" text-anchor="middle">B: 16 rows × 16</text>
+        <g font-size="11" fill="#4a5655">
+          <text x="510" y="148">0</text><text x="650" y="148" text-anchor="middle">256</text><text x="790" y="148" text-anchor="middle">512</text><text x="930" y="148" text-anchor="end">767</text>
+        </g>
+        <text x="510" y="168" font-size="12">column index = 256 c + 16 r + s</text>
+        <!-- alignment lines -->
+        <g stroke="#4a5655" stroke-width="1" stroke-dasharray="3 4">
+          <line x1="650" y1="178" x2="650" y2="276"/><line x1="790" y1="178" x2="790" y2="276"/>
+        </g>
+        <text x="720" y="236" font-size="11" fill="#4a5655" text-anchor="middle">same column order</text>
+        <!-- weight in the file -->
+        <text x="20" y="318" font-weight="600">weight in the file</text>
+        <rect x="20" y="328" width="232" height="76" fill="#f5f8f7" stroke="#4a5655"/>
+        <text x="32" y="350" font-size="12" font-family="ui-monospace, Menlo, monospace">patch_embeddings.weight</text>
+        <text x="32" y="370" font-size="12">(384, 3, 16, 16) = (O, I, H, W)</text>
+        <text x="32" y="390" font-size="11" fill="#4a5655">output channel, color, row, column</text>
+        <line x1="252" y1="366" x2="496" y2="366" stroke="#111414" stroke-width="1.5"/>
+        <path d="M490,360 L500,366 L490,372 z" fill="#111414"/>
+        <text x="374" y="356" font-size="12" text-anchor="middle">mlx_weights: reshape, no transpose</text>
+        <!-- weight in MLX -->
+        <text x="510" y="292" font-size="12" font-weight="600">W in MLX: (384, 768), the layout (out, in) of nn.Linear</text>
+        <rect x="510" y="304" width="140" height="116" fill="#e8b4aa" fill-opacity="0.6" stroke="#4a5655"/>
+        <rect x="650" y="304" width="140" height="116" fill="#b7d9b0" fill-opacity="0.6" stroke="#4a5655"/>
+        <rect x="790" y="304" width="140" height="116" fill="#b3c7e6" fill-opacity="0.6" stroke="#4a5655"/>
+        <rect x="510" y="356" width="420" height="10" fill="none" stroke="#111414" stroke-width="2"/>
+        <text x="940" y="365" font-size="12" font-weight="600">d</text>
+                <text x="510" y="437" font-size="11" fill="#4a5655">thick frame: row d, the weights of output channel d</text>
+        <text x="510" y="452" font-size="11" fill="#4a5655">384 rows, one for each channel of a token</text>
+        <!-- the matmul -->
+        <rect x="60" y="466" width="820" height="52" fill="#f5f8f7" stroke="#057379" stroke-width="1.5"/>
+        <text x="470" y="487" text-anchor="middle" font-size="12.5">nn.Linear(768, 384): patches (1, 196, 768) @ Wᵀ (768, 384) + b (384) → patch tokens (1, 196, 384)</text>
+        <text x="470" y="506" text-anchor="middle" font-size="11.5" fill="#4a5655">value d of patch token n = (768 values of patch n) · (row d of W) + b[d]</text>
+        <line x1="466" y1="518" x2="466" y2="536" stroke="#111414" stroke-width="1.5"/>
+        <path d="M460,530 L466,540 L472,530 z" fill="#111414"/>
+        <!-- token sequence -->
+        <rect x="20" y="542" width="56" height="40" fill="#057379"/><text x="48" y="567" text-anchor="middle" fill="#ffffff">CLS</text>
+        <rect x="80" y="542" width="40" height="40" fill="#e0a336"/><text x="100" y="567" text-anchor="middle">R1</text>
+        <rect x="124" y="542" width="40" height="40" fill="#e0a336"/><text x="144" y="567" text-anchor="middle">R2</text>
+        <rect x="168" y="542" width="40" height="40" fill="#e0a336"/><text x="188" y="567" text-anchor="middle">R3</text>
+        <rect x="212" y="542" width="40" height="40" fill="#e0a336"/><text x="232" y="567" text-anchor="middle">R4</text>
+        <rect x="262" y="542" width="64" height="40" fill="#9fd3d1"/><text x="294" y="567" text-anchor="middle">P 0,0</text>
+        <rect x="330" y="542" width="64" height="40" fill="#9fd3d1"/><text x="362" y="567" text-anchor="middle">P 0,1</text>
+        <text x="414" y="567" text-anchor="middle">…</text>
+        <rect x="434" y="542" width="64" height="40" fill="#9fd3d1" stroke="#111414" stroke-width="2.5"/><text x="466" y="567" text-anchor="middle">P 3,7</text>
+        <text x="519" y="567" text-anchor="middle">…</text>
+        <rect x="540" y="542" width="72" height="40" fill="#9fd3d1"/><text x="576" y="567" text-anchor="middle">P 13,13</text>
+        <g font-size="11" fill="#4a5655" text-anchor="middle">
+          <text x="48" y="598">0</text><text x="100" y="598">1</text><text x="144" y="598">2</text><text x="188" y="598">3</text><text x="232" y="598">4</text>
+          <text x="294" y="598">5</text><text x="362" y="598">6</text><text x="466" y="598">54</text><text x="576" y="598">200</text>
+        </g>
+        <text x="632" y="558" font-weight="600">token sequence (1, 201, 384)</text>
+        <text x="632" y="576" font-size="12" fill="#4a5655">position of P i,j = 5 + 14 i + j</text>
+        <path d="M20,606 L20,612 L252,612 L252,606" fill="none" stroke="#4a5655" stroke-width="1.2"/>
+        <path d="M262,606 L262,612 L612,612 L612,606" fill="none" stroke="#4a5655" stroke-width="1.2"/>
+        <text x="136" y="628" font-size="11" fill="#4a5655" text-anchor="middle">prefix tokens: copies of parameters</text>
+        <text x="437" y="628" font-size="11" fill="#4a5655" text-anchor="middle">patch tokens: from nn.Linear, row-major</text>
+      </g>
+    </svg></div>
+    <figcaption><b>Figure 1.</b> The patch embedding of ViT-S/16 at 224 × 224 px. Top: <code>patchify</code> cuts the NCHW pixels into 196 patches. One patch (row i = 3, column j = 7, thick frame) becomes one row of 768 values in the order color, row, column. Middle: the key map reshapes the file weight (384, 3, 16, 16) to (384, 768). Its columns have the same order as the 768 values of a patch, so no transpose is necessary. Bottom: <code>nn.Linear</code> gives the patch tokens. <code>Embeddings</code> puts the CLS token (teal) and the 4 register tokens (amber) in front. The patch token of patch (3, 7) is at position 54. Pink, green and blue: the three color channels.</figcaption>
+  </figure>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Action</th><th>Code</th><th>224 × 224 px</th><th>224 × 304 px</th></tr></thead>
+      <tbody>
+        <tr><td>Stored pixels</td><td><code>read_inputs</code></td><td>(1, 3, 224, 224)</td><td>(1, 3, 224, 304)</td></tr>
+        <tr><td>Pixel cast</td><td><code>mlx_model.py</code> line 220</td><td colspan="2">fp32 to the dtype of the CLS token (fp32 in Step 4)</td></tr>
+        <tr><td>Split H and W</td><td><code>reshape</code>, line 193</td><td>(1, 3, 14, 16, 14, 16)</td><td>(1, 3, 14, 16, 19, 16)</td></tr>
+        <tr><td>Patch axes in front</td><td><code>transpose(0, 2, 4, 1, 3, 5)</code>, line 193</td><td>(1, 14, 14, 3, 16, 16)</td><td>(1, 14, 19, 3, 16, 16)</td></tr>
+        <tr><td>Patches</td><td><code>reshape</code>, line 194</td><td>(1, 196, 768)</td><td>(1, 266, 768)</td></tr>
+        <tr><td>Patch tokens</td><td><code>nn.Linear(768, 384)</code>, line 221</td><td>(1, 196, 384)</td><td>(1, 266, 384)</td></tr>
+        <tr><td>Prefix tokens</td><td><code>concatenate</code>, <code>broadcast_to</code>, lines 222–223</td><td>(1, 5, 384)</td><td>(1, 5, 384)</td></tr>
+        <tr><td>Token sequence</td><td><code>concatenate</code>, line 224</td><td>(1, 201, 384)</td><td>(1, 271, 384)</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 1.</b> Shapes of the patch embedding of ViT-S/16 for batch size 1. The line numbers refer to <code>src/dinov3_apple/mlx_model.py</code>. The patch embedding has 196 × 768 × 384 × 2 = 0.116 GFLOP at 224 px. This is 1.23 % of the 9.4 GFLOP of one image (Table 4 of <a href="03-where-the-compute-goes.html">03-where-the-compute-goes.html</a>).</p>
+  <p class="note">The FLOP share is 1.23 %. The time share on <code>torch-mps</code> is larger, but also small. In the block profile of Step 3 (<code>results/block-profile-torch-mps.md</code>, ViT-S/16, fp32, 224 px), the Hugging Face embeddings module takes 90.7 µs of a 2.74 ms forward pass at batch size 1 (3.3 %) and 330 µs of 15.5 ms at batch size 8 (2.1 %). This is 2.7 and 1.7 times the FLOP share. The profile times each part alone. At batch size 1 the parts alone take 1.61 times the forward pass, so the share inside the forward pass can be smaller than 3.3 %. The <code>qkv_proj</code> part of one block takes 78.8 µs and 233 µs, with 1.54 times the FLOPs of the patch embedding. Step 4 did not time the MLX patch embedding alone. Step 6 times it in the block profile of <code>mlx</code>.</p>
+</section>
+
+<section id="patchify">
+  <h2>3 <code>patchify</code>: from NCHW pixels to patches</h2>
+  <p><code>patchify</code> changes only the order of the values. It does no arithmetic.</p>
+  <pre class="code"><code><span class="ln">173</span>def patchify(pixels: mx.array, patch_size: int) -&gt; mx.array:
+<span class="ln">  ⋮</span>
+<span class="ln">189</span>    b, c, h, w = pixels.shape
+<span class="ln">190</span>    if h % patch_size or w % patch_size:
+<span class="ln">191</span>        raise ValueError(f&quot;input resolution {h} x {w} is not a multiple of {patch_size}&quot;)
+<span class="ln">192</span>    hp, wp = h // patch_size, w // patch_size
+<span class="ln">193</span>    x = pixels.reshape(b, c, hp, patch_size, wp, patch_size).transpose(0, 2, 4, 1, 3, 5)
+<span class="ln">194</span>    return x.reshape(b, hp * wp, c * patch_size * patch_size)</code></pre>
+  <p class="caption"><b>Listing 1.</b> <code>src/dinov3_apple/mlx_model.py</code>, lines 173 and 189–194 (without the docstring).</p>
+  <ul>
+    <li><b>Lines 190–191.</b> An input resolution that is not a multiple of 16 raises <code>ValueError</code>. Test T12 gives pixels of 224 × 230 and expects the message "multiple of 16". The glossary term input resolution says that both sides are multiples of 16.</li>
+    <li><b>Line 193, reshape.</b> The reshape splits H into (Hp, 16) and W into (Wp, 16). The order of the values in memory does not change.</li>
+    <li><b>Line 193, transpose.</b> The axes go from (B, C, Hp, 16, Wp, 16) to (B, Hp, Wp, C, 16, 16). The two patch axes (Hp, Wp) come first. The three axes inside one patch (color, row, column) come last.</li>
+    <li><b>Line 194.</b> The reshape merges (Hp, Wp) into one axis of N = Hp · Wp patches, in row-major order: patch (i, j) is row n = Wp · i + j. It merges (C, 16, 16) into 768 values: value (c, r, s) is column 256 c + 16 r + s. After the transpose the values are not in this order in memory, so MLX copies them here: 150,528 values for each image at 224 px.</li>
+  </ul>
+  <p>The Hugging Face code gets the same order in another way. The convolution gives (B, 384, Hp, Wp). Then <code>flatten(2).transpose(1, 2)</code> gives (B, Hp · Wp, 384), also row-major. The test <code>test_patchify_order</code> (added in the build) checks the order with the pixels 0, 1, 2, … of shape (2, 3, 32, 48). Patch (1, 2) of image 1 must be row 3 · 1 + 2 = 5, and its 768 values must equal <code>pixels[1, :, 16:32, 32:48]</code> in the order color, row, column. The test passes with exact values.</p>
+</section>
+
+<section id="weight">
+  <h2>4 The weight reshape of the key map</h2>
+  <p>The file stores the patch embedding weight as (384, 3, 16, 16). This is the layout OIHW of a torch convolution weight: output channel, input channel (the color), kernel row, kernel column. The key map changes it to (384, 768) with one reshape.</p>
+  <pre class="code"><code><span class="ln">121</span>    pairs = []
+<span class="ln">122</span>    for name, array in tensors.items():
+<span class="ln">123</span>        if (key := map_key(name)) is None:
+<span class="ln">124</span>            continue
+<span class="ln">125</span>        if key == PATCH_WEIGHT:
+<span class="ln">126</span>            array = array.reshape(array.shape[0], -1)
+<span class="ln">127</span>        pairs.append((key, array.astype(dtype)))
+<span class="ln">128</span>    return pairs</code></pre>
+  <p class="caption"><b>Listing 2.</b> <code>src/dinov3_apple/mlx_weights.py</code>, lines 121–128: the loop of <code>mlx_weights</code>.</p>
+  <ul>
+    <li><b>Line 126.</b> <code>array.reshape(array.shape[0], -1)</code> keeps the output axis and merges (3, 16, 16) into 768. Value (d, c, r, s) of the file goes to column 256 c + 16 r + s of row d. This is the column order of the patches of Listing 1. So the weight needs no transpose.</li>
+    <li><b>Why the layout (out, in) works.</b> <code>nn.Linear</code> of MLX stores its weight as (out, in) and computes <code>mx.addmm(bias, x, weight.T)</code>, that is x · Wᵀ + b. <code>nn.Linear</code> of torch also uses (out, in). So all other linear weights of the file load without a change. Only the patch embedding weight needs the reshape, because it is a convolution weight in the file.</li>
+    <li><b>Line 127.</b> <code>astype(dtype)</code> casts each array to the dtype of the dtype mode. In Step 4 this is fp32, the dtype of the file. The arrays from <code>mx.load</code> are lazy, and the reshape and the cast keep them lazy (Section 8).</li>
+    <li><b>The strict load checks the shape.</b> Without line 126, <code>load_weights(…, strict=True)</code> stops with "Expected shape (384, 768) but received shape (384, 3, 16, 16)".</li>
+  </ul>
+  <p>An MLX convolution would need another order. <code>nn.Conv2d</code> of MLX takes NHWC pixels and a weight of (out, kernel row, kernel column, in). This needs one transpose of the weight at the load and one transpose of the pixels at each call.</p>
+  <p>A wrong order inside a patch gives tokens with the right shape and a normal size, but with wrong values (risk R16 of <code>explore.html</code>). Our NumPy example: we take the 768 values of each patch in the order row, column, color (the NHWC order) and multiply them by the reshaped OIHW weight. With normal pixels, a weight with standard deviation 1/√768 and a bias with standard deviation 0.5 (the values of the small model in <code>tests/small_model.py</code>), the cosine similarity of each patch token to the correct token is 0.20 on average and 0.04 at the minimum. The shared bias gives almost all of this value. Without the bias, the mean is about 0. The part test T11 and the check W1 against the stored hidden states catch this error (Section 10).</p>
+</section>
+
+<section id="prefix">
+  <h2>5 The prefix tokens and the token order</h2>
+  <p><code>Embeddings</code> holds the patch embedding and the two prefix parameters. Its call gives the token sequence that block 0 reads.</p>
+  <pre class="code"><code><span class="ln">204</span>    def __init__(self, config: MlxConfig) -&gt; None:
+<span class="ln">205</span>        super().__init__()
+<span class="ln">206</span>        self.patch_size = config.patch_size
+<span class="ln">207</span>        self.cls_token = mx.zeros((1, 1, config.dim))
+<span class="ln">208</span>        self.register_tokens = mx.zeros((1, config.num_register_tokens, config.dim))
+<span class="ln">209</span>        self.patch_embeddings = nn.Linear(config.num_channels * config.patch_size**2, config.dim)
+<span class="ln">  ⋮</span>
+<span class="ln">211</span>    def __call__(self, pixels: mx.array) -&gt; mx.array:
+<span class="ln">  ⋮</span>
+<span class="ln">220</span>        pixels = pixels.astype(self.cls_token.dtype)
+<span class="ln">221</span>        patches = self.patch_embeddings(patchify(pixels, self.patch_size))
+<span class="ln">222</span>        prefix = mx.concatenate([self.cls_token, self.register_tokens], axis=1)
+<span class="ln">223</span>        prefix = mx.broadcast_to(prefix, (pixels.shape[0], *prefix.shape[1:]))
+<span class="ln">224</span>        return mx.concatenate([prefix.astype(patches.dtype), patches], axis=1)</code></pre>
+  <p class="caption"><b>Listing 3.</b> <code>src/dinov3_apple/mlx_model.py</code>, lines 204–209, 211 and 220–224: <code>Embeddings</code> (without the docstrings).</p>
+  <ul>
+    <li><b>Lines 207–208.</b> <code>cls_token</code> (1, 1, 384) and <code>register_tokens</code> (1, 4, 384) are parameters. Their names are the keys of the file: <code>embeddings.cls_token</code> and <code>embeddings.register_tokens</code>. The zeros are only start values. The load replaces them.</li>
+    <li><b>Line 209.</b> <code>nn.Linear(3 · 16², 384)</code>, that is 768 → 384. It holds the weight (384, 768) and the bias (384). Its name <code>patch_embeddings</code> keeps the key <code>embeddings.patch_embeddings.weight</code> of the file.</li>
+    <li><b>Line 220.</b> The pixel cast to the dtype of the CLS token (Section 6).</li>
+    <li><b>Line 221.</b> <code>patchify</code>, then the matmul: the patch tokens (B, N, 384).</li>
+    <li><b>Line 222.</b> The CLS token comes first, then the 4 register tokens: positions 0 to 4.</li>
+    <li><b>Line 223.</b> <code>broadcast_to</code> gives the prefix to each image of the batch. A broadcast copies no memory.</li>
+    <li><b>Line 224.</b> The prefix tokens come before the patch tokens: positions 5 to 4 + N. <code>astype(patches.dtype)</code> keeps one dtype in the token sequence.</li>
+  </ul>
+  <p>The prefix rows are copies of the parameters, with no arithmetic. So they are bit-exact: the part test T11 and the check W1 find no difference in rows 0 to 4. DINOv3 has no learned position embedding: the patch tokens get their position only from RoPE in each block. The RoPE tables have identity rows (cos 1, sin 0) at positions 0 to 4, so RoPE does not change the prefix tokens (<a href="04-2-rope.html">page 2</a>). The RoPE tables use the same row-major order as <code>patchify</code>. A different order in one of the two moves each patch token to the angles of another patch.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Token</th><th>Position</th><th class="num">224 × 224 px (14 × 14)</th><th class="num">224 × 304 px (14 × 19)</th><th class="num">304 × 224 px (19 × 14)</th></tr></thead>
+      <tbody>
+        <tr><td>CLS token</td><td>0</td><td class="num">0</td><td class="num">0</td><td class="num">0</td></tr>
+        <tr><td>Register tokens R1 to R4</td><td>1 to 4</td><td class="num">1 to 4</td><td class="num">1 to 4</td><td class="num">1 to 4</td></tr>
+        <tr><td>Patch (0, 0)</td><td>5</td><td class="num">5</td><td class="num">5</td><td class="num">5</td></tr>
+        <tr><td>Patch (1, 0), first patch of row 1</td><td>5 + Wp</td><td class="num">19</td><td class="num">24</td><td class="num">19</td></tr>
+        <tr><td>Patch (3, 7)</td><td>5 + 3 Wp + 7</td><td class="num">54</td><td class="num">69</td><td class="num">54</td></tr>
+        <tr><td>Last patch</td><td>4 + Hp · Wp</td><td class="num">200</td><td class="num">270</td><td class="num">270</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 2.</b> Positions in the token sequence. Hp and Wp are the numbers of patch rows and patch columns. The inputs of 224 × 304 px and 304 × 224 px have the same number of tokens, but patch (1, 0) has another position. So the part tests use both shapes: a swap of height and width fails them. <a href="02-tokens-and-outputs.html">02-tokens-and-outputs.html</a> shows which rows give the frame embedding and the patch embeddings.</p>
+  <p><b>The mask token.</b> The Hugging Face module <code>DINOv3ViTEmbeddings</code> also has a parameter <code>mask_token</code> (1, 1, 384). It replaces the patch tokens of masked patches when the call gives <code>bool_masked_pos</code>. Only training uses it, for the iBOT loss. The file contains it, but the inference never reads it. Our <code>Embeddings</code> has no mask token, and the key map drops it (Section 8).</p>
+</section>
+
+<section id="cast">
+  <h2>6 The pixel cast</h2>
+  <p>The stored pixels are fp32. The weights can have another dtype: Step 5 adds fp16 and bf16. The Hugging Face code casts the pixels to the dtype of the patch embedding weight, two times:</p>
+  <pre class="code"><code><span class="ln"> 77</span>        target_dtype = self.patch_embeddings.weight.dtype
+<span class="ln">  ⋮</span>
+<span class="ln"> 80</span>        patch_embeddings = self.patch_embeddings(pixel_values.to(dtype=target_dtype))
+<span class="ln"> 81</span>        patch_embeddings = patch_embeddings.flatten(2).transpose(1, 2)
+<span class="ln">  ⋮</span>
+<span class="ln"> 88</span>        cls_token = self.cls_token.expand(batch_size, -1, -1)
+<span class="ln"> 89</span>        register_tokens = self.register_tokens.expand(batch_size, -1, -1)
+<span class="ln"> 90</span>        embeddings = torch.cat([cls_token, register_tokens, patch_embeddings], dim=1)
+<span class="ln">  ⋮</span>
+<span class="ln">541</span>        pixel_values = pixel_values.to(self.embeddings.patch_embeddings.weight.dtype)</code></pre>
+  <p class="caption"><b>Listing 4.</b> Hugging Face transformers 5.22.1, <code>models/dinov3_vit/modeling_dinov3_vit.py</code> (Apache-2.0), lines 77, 80–81 and 88–90 (<code>DINOv3ViTEmbeddings.forward</code>) and line 541 (<code>DINOv3ViTModel.forward</code>).</p>
+  <p>Line 220 of <code>mlx_model.py</code> casts the pixels to the dtype of the model weights too, but it reads this dtype from another array: <code>pixels = pixels.astype(self.cls_token.dtype)</code>. Without quantized weights, the CLS token and the patch embedding weight have the same dtype, so the result is the same as in Hugging Face. In MLX, an operation on an fp32 array and a bf16 array gives an fp32 array. Without the cast, fp32 pixels and bf16 weights give fp32 patch tokens. Then every block runs on an fp32 residual stream, and no message shows it. The code of Section 5 of the plan had no cast. The build added the cast and the test <code>test_mlx_forward_casts_the_pixels_to_the_weight_dtype</code>. The test sets the small model to bf16 with <code>set_dtype</code> and gives fp32 pixels. The token sequence must be bf16 and equal to the result with bf16 pixels. The output of the full small model must be bf16. <code>set_dtype</code> also casts the CLS token, so the test stays green with the new source of the dtype.</p>
+  <p><b>Why the CLS token and not the patch embedding weight.</b> The build took the dtype from <code>self.patch_embeddings.weight</code>, as Hugging Face does. The verification found that this cast breaks after <code>nn.quantize</code> (F1 of <code>specs/04-mlx-port/verify.html</code>, Section 11, last surprise). <code>nn.quantize</code> replaces the patch embedding with a <code>QuantizedLinear</code>, and its weight holds packed <code>uint32</code> values. <code>nn.quantize</code> replaces only modules, so the CLS token, an array of <code>Embeddings</code>, keeps its float dtype.</p>
+  <p>Two more casts touch the pixels. <code>run_mlx</code> casts the stored pixels to the dtype of the dtype mode (line 366), and <code>run_mlx_hidden_states</code> casts them to the dtype of the final layer norm weight (line 384). <a href="04-5-mlp.html">Page 5</a> explains these functions. In Step 4 the only dtype mode is fp32, so no cast changes a value on this page.</p>
+</section>
+
+<section id="config">
+  <h2>7 <code>MlxConfig</code></h2>
+  <p><code>MlxConfig</code> is a frozen dataclass with the shape of one model size. <code>MlxConfig.from_hf</code> reads 16 values of <code>config.json</code> in the Hugging Face folder. Every module of the MLX backbone gets its sizes from this config.</p>
+  <pre class="code"><code><span class="ln"> 90</span>    @property
+<span class="ln"> 91</span>    def head_dim(self) -&gt; int:
+<span class="ln"> 92</span>        &quot;&quot;&quot;The number of values of one head.&quot;&quot;&quot;
+<span class="ln"> 93</span>        return self.dim // self.heads
+<span class="ln">  ⋮</span>
+<span class="ln"> 95</span>    @classmethod
+<span class="ln"> 96</span>    def from_hf(cls, config: Mapping[str, Any]) -&gt; &quot;MlxConfig&quot;:
+<span class="ln"> 97</span>        &quot;&quot;&quot;Return the config from the values of a Hugging Face config.json (or its to_dict).&quot;&quot;&quot;
+<span class="ln"> 98</span>        return cls(
+<span class="ln"> 99</span>            dim=config[&quot;hidden_size&quot;],
+<span class="ln">100</span>            heads=config[&quot;num_attention_heads&quot;],
+<span class="ln">101</span>            blocks=config[&quot;num_hidden_layers&quot;],
+<span class="ln">102</span>            ff=config[&quot;intermediate_size&quot;],
+<span class="ln">103</span>            patch_size=config[&quot;patch_size&quot;],
+<span class="ln">104</span>            num_channels=config[&quot;num_channels&quot;],
+<span class="ln">  ⋮</span>
+<span class="ln">113</span>            gated=config[&quot;use_gated_mlp&quot;],
+<span class="ln">114</span>            hidden_act=config[&quot;hidden_act&quot;],
+<span class="ln">115</span>        )</code></pre>
+  <p class="caption"><b>Listing 5.</b> <code>src/dinov3_apple/mlx_model.py</code>, lines 90–93, 95–104 and 113–115.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Field</th><th>Key in config.json</th><th>ViT-S/16</th><th>Used by</th></tr></thead>
+      <tbody>
+        <tr><td><code>dim</code></td><td><code>hidden_size</code></td><td class="num">384</td><td>every part: the embedding dimension</td></tr>
+        <tr><td><code>heads</code></td><td><code>num_attention_heads</code></td><td class="num">6</td><td><code>Attention</code></td></tr>
+        <tr><td><code>head_dim</code> (property)</td><td>–</td><td class="num">64</td><td><code>Attention</code>, <code>rope_tables</code>: 384 / 6</td></tr>
+        <tr><td><code>blocks</code></td><td><code>num_hidden_layers</code></td><td class="num">12</td><td><code>MlxBackbone</code></td></tr>
+        <tr><td><code>ff</code></td><td><code>intermediate_size</code></td><td class="num">1536</td><td><code>MLP</code></td></tr>
+        <tr><td><code>patch_size</code></td><td><code>patch_size</code></td><td class="num">16</td><td><code>Embeddings</code>, <code>patchify</code>, the patch grid of <code>MlxBackbone</code></td></tr>
+        <tr><td><code>num_channels</code></td><td><code>num_channels</code></td><td class="num">3</td><td><code>Embeddings</code>: 3 · 16² = 768 inputs</td></tr>
+        <tr><td><code>num_register_tokens</code></td><td><code>num_register_tokens</code></td><td class="num">4</td><td><code>Embeddings</code></td></tr>
+        <tr><td><code>eps</code></td><td><code>layer_norm_eps</code></td><td class="num">1e-5</td><td>the layer norms</td></tr>
+        <tr><td><code>rope_theta</code></td><td><code>rope_theta</code></td><td class="num">100.0</td><td><code>rope_tables</code></td></tr>
+        <tr><td><code>query_bias</code>, <code>key_bias</code>, <code>value_bias</code>, <code>proj_bias</code></td><td>the same names</td><td class="num">True, False, True, True</td><td><code>Attention</code>: no bias on <code>k_proj</code></td></tr>
+        <tr><td><code>mlp_bias</code></td><td><code>mlp_bias</code></td><td class="num">True</td><td><code>MLP</code></td></tr>
+        <tr><td><code>gated</code></td><td><code>use_gated_mlp</code></td><td class="num">False</td><td><code>Block</code>: True raises <code>NotImplementedError</code> until Step 5 (SwiGLU)</td></tr>
+        <tr><td><code>hidden_act</code></td><td><code>hidden_act</code></td><td class="num">"gelu"</td><td><code>MLP</code>: another value raises <code>NotImplementedError</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 3.</b> The fields of <code>MlxConfig</code> and the ViT-S/16 values of <code>config.json</code> (snapshot 114c137 of the Hub repo). Test T5 checks these values except <code>num_channels</code> and <code>hidden_act</code>, and the <code>NotImplementedError</code> of a gated config. <code>from_hf</code> does not read <code>image_size</code>, <code>layerscale_value</code>, <code>drop_path_rate</code>, <code>attention_dropout</code> and <code>pos_embed_rescale</code>. The inference does not need them: <code>pos_embed_rescale</code> is the RoPE-box jittering of training. The number of prefix tokens (5) in <code>rope_tables</code> and <code>split_tokens</code> comes from <code>NUM_PREFIX_TOKENS</code> in <code>outputs.py</code>, not from the config. All six model sizes have 4 register tokens.</p>
+</section>
+
+<section id="load">
+  <h2>8 The key map and the load</h2>
+  <h3>8.1 <code>map_key</code> and <code>UnknownWeightError</code></h3>
+  <p>The parameter names of the MLX backbone are the keys of the safetensors file (D1). So the key map is almost the identity. <code>map_key</code> has three rules and one error.</p>
+  <pre class="code"><code><span class="ln"> 27</span>DROPPED_KEYS = frozenset({&quot;embeddings.mask_token&quot;})  # training only (bool_masked_pos)
+<span class="ln"> 28</span>PATCH_WEIGHT = &quot;embeddings.patch_embeddings.weight&quot;
+<span class="ln"> 29</span>OUTER_KEYS = frozenset(
+<span class="ln"> 30</span>    {
+<span class="ln"> 31</span>        &quot;embeddings.cls_token&quot;,
+<span class="ln"> 32</span>        &quot;embeddings.register_tokens&quot;,
+<span class="ln"> 33</span>        PATCH_WEIGHT,
+<span class="ln"> 34</span>        &quot;embeddings.patch_embeddings.bias&quot;,
+<span class="ln"> 35</span>        &quot;norm.weight&quot;,
+<span class="ln"> 36</span>        &quot;norm.bias&quot;,
+<span class="ln"> 37</span>    }
+<span class="ln"> 38</span>)
+<span class="ln"> 39</span># layer.{i}.{parameter} in the safetensors file, model.layer.{i}.{parameter} in a transformers 5
+<span class="ln"> 40</span># model in memory. {parameter} must be a parameter name of the MLX block (block_parameter_names).
+<span class="ln"> 41</span>BLOCK_KEY = re.compile(r&quot;(?:model\.)?(layer\.\d+\.(?P&lt;parameter&gt;.+))&quot;)
+<span class="ln">  ⋮</span>
+<span class="ln"> 48</span>@cache
+<span class="ln"> 49</span>def block_parameter_names() -&gt; frozenset[str]:
+<span class="ln">  ⋮</span>
+<span class="ln"> 56</span>    config = MlxConfig(
+<span class="ln"> 57</span>        dim=8,
+<span class="ln"> 58</span>        heads=1,
+<span class="ln"> 59</span>        blocks=1,
+<span class="ln"> 60</span>        ff=8,
+<span class="ln"> 61</span>        patch_size=1,
+<span class="ln"> 62</span>        num_channels=1,
+<span class="ln"> 63</span>        num_register_tokens=0,
+<span class="ln"> 64</span>        eps=1e-6,
+<span class="ln"> 65</span>        rope_theta=100.0,
+<span class="ln"> 66</span>        query_bias=True,
+<span class="ln"> 67</span>        key_bias=True,
+<span class="ln"> 68</span>        value_bias=True,
+<span class="ln"> 69</span>        proj_bias=True,
+<span class="ln"> 70</span>        mlp_bias=True,
+<span class="ln"> 71</span>        gated=False,
+<span class="ln"> 72</span>        hidden_act=&quot;gelu&quot;,
+<span class="ln"> 73</span>    )
+<span class="ln"> 74</span>    return frozenset(name for name, _ in tree_flatten(Block(config).parameters()))
+<span class="ln">  ⋮</span>
+<span class="ln"> 95</span>    if name in DROPPED_KEYS:
+<span class="ln"> 96</span>        return None
+<span class="ln"> 97</span>    if name in OUTER_KEYS:
+<span class="ln"> 98</span>        return name
+<span class="ln"> 99</span>    if (match := BLOCK_KEY.fullmatch(name)) and match.group(&quot;parameter&quot;) in block_parameter_names():
+<span class="ln">100</span>        return match.group(1)
+<span class="ln">101</span>    raise UnknownWeightError(name)</code></pre>
+  <p class="caption"><b>Listing 6.</b> <code>src/dinov3_apple/mlx_weights.py</code>, lines 27–41, 48–49 and 56–74 (<code>block_parameter_names</code>, without the docstring) and 95–101 (the body of <code>map_key</code>). The fix of F4 after the verification added <code>block_parameter_names</code> and the parameter check of line 99 (commit <code>ea82d58</code>).</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Rule</th><th>Hugging Face name</th><th>Result of <code>map_key</code></th><th class="num">Tensors in the ViT-S/16 file</th></tr></thead>
+      <tbody>
+        <tr><td>1, line 95</td><td><code>embeddings.mask_token</code> (<code>DROPPED_KEYS</code>)</td><td><code>None</code>: dropped</td><td class="num">1</td></tr>
+        <tr><td>2, line 97</td><td>the 6 names of <code>OUTER_KEYS</code>: CLS token, register tokens, patch embedding weight and bias, final norm weight and bias</td><td>the same name</td><td class="num">6</td></tr>
+        <tr><td>3, line 99</td><td><code>layer.{i}.{parameter}</code> or <code>model.layer.{i}.{parameter}</code> (<code>BLOCK_KEY</code>), with <code>{parameter}</code> one of the 18 names of <code>block_parameter_names()</code></td><td><code>layer.{i}.{parameter}</code>: the prefix <code>model.</code> goes away</td><td class="num">12 × 17 = 204</td></tr>
+        <tr><td>Error, line 101</td><td>any other name, for example <code>rope_embeddings.inv_freq</code>, <code>pooler.dense.weight</code> or <code>layer.0.foo.weight</code></td><td><code>UnknownWeightError</code></td><td class="num">0</td></tr>
+        <tr><td></td><td><b>Sum</b></td><td>210 MLX parameters</td><td class="num">211</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 4.</b> The rules of <code>map_key</code>. Each block has 17 tensors: 2 layer norms with weight and bias, 4 projections with weight and bias except <code>k_proj</code> (no bias), 2 LayerScale factors, and <code>up_proj</code> and <code>down_proj</code> with weight and bias. Test T3 reads the header of the ViT-S/16 file and confirms the counts.</p>
+  <ul>
+    <li><b>Two spellings.</b> The file uses <code>layer.{i}.…</code>. transformers 5 renames the tree in memory to <code>model.layer.{i}.…</code> (<code>conversion_mapping.py</code>, line 1135). The small model of the part tests gives its state dict in the second spelling, with the mask token. So every part test also runs the key map.</li>
+    <li><b><code>UnknownWeightError</code></b> is a <code>KeyError</code>. A name that has no place in the MLX backbone stops the load at once, with the name in the message. <code>rope_embeddings.inv_freq</code> is a buffer with <code>persistent=False</code>, so it is not in the file and not in the state dict. The rule guards against a future file that contains it.</li>
+    <li><b><code>block_parameter_names</code>, lines 48–74.</b> The function builds one <code>Block</code> from a small <code>MlxConfig</code> with every bias on (embedding dimension 8). <code>tree_flatten</code> of its parameters gives 18 names, for example <code>norm1.weight</code>, <code>attention.k_proj.bias</code> and <code>layer_scale1.lambda1</code>. The names come from the <code>Block</code> module itself, so the key map and the module cannot differ. The arrays of the small block stay lazy, and MLX never computes them. <code>@cache</code> builds the block one time for each process. Its random start values advance the global key of <code>mx.random</code> one time, as each <code>MlxBackbone</code> does.</li>
+    <li><b>Line 99, the parameter check.</b> <code>BLOCK_KEY</code> cuts a block key into the block index and the parameter name. The name must be in <code>block_parameter_names()</code>, or <code>map_key</code> raises <code>UnknownWeightError</code>. Before this fix, the pattern accepted any lower-case path, for example <code>layer.0.foo.weight</code> (F4 of <code>specs/04-mlx-port/verify.html</code>). The test <code>test_map_key_rejects_a_block_name_that_is_not_a_parameter</code> gives five wrong names, for example <code>layer.3.attention.q_proj.base_layer.weight</code> (the name of a PEFT LoRA wrapper) and <code>layer.3.layer_scale1.gamma</code>. Each raises <code>UnknownWeightError</code>. The test also sends each of the 18 names through <code>map_key</code> as <code>model.layer.7.{parameter}</code> and expects <code>layer.7.{parameter}</code>.</li>
+    <li><b>The block index and the biases go to the strict load.</b> <code>map_key</code> does not know the number of blocks or the bias settings of the config. So <code>layer.12.norm1.weight</code> passes <code>map_key</code>, and so does <code>attention.k_proj.bias</code>, which ViT-S/16 does not have. <code>load_weights(strict=True)</code> then stops these names with a <code>ValueError</code>. The test <code>test_map_key_leaves_the_block_index_to_the_strict_load</code> adds <code>layer.2.norm1.weight</code> to the state dict of the small model (blocks 0 and 1) and expects this <code>ValueError</code>.</li>
+    <li><b>Step 5.</b> <code>block_parameter_names</code> builds a block with <code>gated=False</code>. So <code>mlp.gate_proj.weight</code> of SwiGLU now raises <code>UnknownWeightError</code>. When Step 5 adds SwiGLU to <code>Block</code>, <code>block_parameter_names</code> must also give the names of a gated block.</li>
+  </ul>
+  <h3>8.2 <code>mlx_weights</code></h3>
+  <p><code>mlx_weights(tensors, dtype)</code> applies <code>map_key</code> to each tensor, skips the dropped tensor, reshapes the patch embedding weight and casts each array to <code>dtype</code> (Listing 2). It returns a list of (name, array) pairs, not a dict and not a path. <code>Module.load_weights</code> of MLX reads only a <code>str</code> as a path. A <code>pathlib.Path</code> fails (risk R18).</p>
+  <h3>8.3 <code>required_mlx_load_bytes</code></h3>
+  <p>The memory check asks for the memory of the load before the load starts. The formula is the formula of the torch loader of Step 2:</p>
+  <pre class="code"><code><span class="ln">148</span>    return load_bytes(parameter_count(model_size) * MLX_DTYPE_MODES[dtype_mode].size, ratio)</code></pre>
+  <p class="caption"><b>Listing 7.</b> <code>src/dinov3_apple/mlx_weights.py</code>, line 148. <code>load_bytes</code> in <code>memory.py</code> gives round(ratio × weight bytes) + <code>LOAD_RESERVE_BYTES</code>.</p>
+  <p>For ViT-S/16 in fp32: <code>parameter_count</code> reads 21,596,544 values from the safetensors header, the mask token included. 4 bytes each give 86,386,176 bytes (86.4 MB). The need is round(1.2 × 86,386,176) + 4,000,000,000 = 4,103,663,411 bytes, 4.10 GB. Test T7b checks this exact value.</p>
+  <h3>8.4 <code>load_mlx_backbone</code></h3>
+  <pre class="code"><code><span class="ln">172</span>    dtype = MLX_DTYPE_MODES[dtype_mode]
+<span class="ln">173</span>    if dtype == mx.float32 and tf32_enabled() != tf32:
+<span class="ln">174</span>        raise TF32ModeError(f&quot;set MLX_ENABLE_TF32={int(tf32)} before the first use of mlx&quot;)
+<span class="ln">175</span>    need = required_mlx_load_bytes(model_size, dtype_mode, ratio)
+<span class="ln">176</span>    check_free_memory(need, f&quot;{model_size} mlx {dtype_mode}&quot;)
+<span class="ln">177</span>    mx.set_memory_limit(need)
+<span class="ln">178</span>    folder = weights_dir(model_size)
+<span class="ln">179</span>    model = MlxBackbone(MlxConfig.from_hf(json.loads((folder / &quot;config.json&quot;).read_text())))
+<span class="ln">180</span>    tensors: dict[str, mx.array] = {}
+<span class="ln">181</span>    for file in sorted(folder.glob(&quot;*.safetensors&quot;)):
+<span class="ln">182</span>        tensors |= mx.load(str(file))  # lazy; a str, not a Path (R18)
+<span class="ln">183</span>    model.load_weights(mlx_weights(tensors, dtype), strict=True)
+<span class="ln">184</span>    mx.eval(model.parameters())  # the load cost stays out of the first forward pass (R14)
+<span class="ln">185</span>    return model</code></pre>
+  <p class="caption"><b>Listing 8.</b> <code>src/dinov3_apple/mlx_weights.py</code>, lines 172–185: the body of <code>load_mlx_backbone</code>.</p>
+  <figure>
+    <div class="fig"><svg viewBox="0 0 960 330" role="img" aria-labelledby="fig2-title" font-family="-apple-system, Helvetica Neue, Arial, sans-serif">
+      <title id="fig2-title">The eight actions of load_mlx_backbone in order, with the error that stops each check</title>
+      <rect width="960" height="330" fill="#ffffff"/>
+      <g font-size="11" fill="#111414">
+        <text x="15" y="22" font-size="13" font-weight="600">load_mlx_backbone("ViT-S/16", "fp32"): the actions in order</text>
+        <!-- row 1 -->
+        <rect x="15" y="38" width="210" height="96" rx="4" fill="#f5f8f7" stroke="#4a5655" stroke-width="1.2"/>
+        <text x="27" y="58" font-size="13" font-weight="600">1 TF32 check</text>
+        <text x="27" y="80" font-family="ui-monospace, Menlo, monospace">tf32_enabled() == tf32</text>
+        <text x="27" y="98" fill="#4a5655">only for the fp32 dtype mode</text>
+        <text x="27" y="120" fill="#b03a2e">else TF32ModeError</text>
+        <rect x="255" y="38" width="210" height="96" rx="4" fill="#f5f8f7" stroke="#4a5655" stroke-width="1.2"/>
+        <text x="267" y="58" font-size="13" font-weight="600">2 Need</text>
+        <text x="267" y="80" font-family="ui-monospace, Menlo, monospace">required_mlx_load_bytes</text>
+        <text x="267" y="98">1.2 × 86.4 MB + 4 GB = 4.10 GB</text>
+        <text x="267" y="120" fill="#b03a2e">else WeightsNotFoundError</text>
+        <rect x="495" y="38" width="210" height="96" rx="4" fill="#f5f8f7" stroke="#4a5655" stroke-width="1.2"/>
+        <text x="507" y="58" font-size="13" font-weight="600">3 Memory check</text>
+        <text x="507" y="80" font-family="ui-monospace, Menlo, monospace">check_free_memory(need, …)</text>
+        <text x="507" y="98" fill="#4a5655">one log line "ViT-S/16 mlx fp32"</text>
+        <text x="507" y="120" fill="#b03a2e">else InsufficientMemoryError</text>
+        <rect x="735" y="38" width="210" height="96" rx="4" fill="#f5f8f7" stroke="#4a5655" stroke-width="1.2"/>
+        <text x="747" y="58" font-size="13" font-weight="600">4 MLX memory limit</text>
+        <text x="747" y="80" font-family="ui-monospace, Menlo, monospace">mx.set_memory_limit(need)</text>
+        <text x="747" y="98">4,103,663,411 bytes</text>
+        <text x="747" y="120" fill="#4a5655">a soft limit (R13)</text>
+        <g stroke="#111414" stroke-width="1.5">
+          <line x1="225" y1="86" x2="250" y2="86"/><line x1="465" y1="86" x2="490" y2="86"/><line x1="705" y1="86" x2="730" y2="86"/>
+        </g>
+        <g fill="#111414"><path d="M246,81 L254,86 L246,91 z"/><path d="M486,81 L494,86 L486,91 z"/><path d="M726,81 L734,86 L726,91 z"/></g>
+        <path d="M840,134 V160 H120 V182" fill="none" stroke="#111414" stroke-width="1.5"/>
+        <path d="M115,178 L120,187 L125,178 z" fill="#111414"/>
+        <!-- row 2 -->
+        <rect x="15" y="190" width="210" height="96" rx="4" fill="#ffffff" stroke="#057379" stroke-width="1.5" stroke-dasharray="5 3"/>
+        <text x="27" y="210" font-size="13" font-weight="600">5 Config and tree</text>
+        <text x="27" y="232" font-family="ui-monospace, Menlo, monospace">MlxConfig.from_hf(…)</text>
+        <text x="27" y="250" font-family="ui-monospace, Menlo, monospace">MlxBackbone(config)</text>
+        <text x="27" y="272" fill="#b03a2e">SwiGLU: NotImplementedError</text>
+        <rect x="255" y="190" width="210" height="96" rx="4" fill="#ffffff" stroke="#057379" stroke-width="1.5" stroke-dasharray="5 3"/>
+        <text x="267" y="210" font-size="13" font-weight="600">6 Read the files</text>
+        <text x="267" y="232" font-family="ui-monospace, Menlo, monospace">mx.load(str(file))</text>
+        <text x="267" y="250">for each *.safetensors file</text>
+        <text x="267" y="272" fill="#4a5655">211 lazy arrays, no data read</text>
+        <rect x="495" y="190" width="210" height="96" rx="4" fill="#ffffff" stroke="#057379" stroke-width="1.5" stroke-dasharray="5 3"/>
+        <text x="507" y="210" font-size="13" font-weight="600">7 Key map, strict load</text>
+        <text x="507" y="232" font-family="ui-monospace, Menlo, monospace">mlx_weights(tensors, dtype)</text>
+        <text x="507" y="250" font-family="ui-monospace, Menlo, monospace">load_weights(…, strict=True)</text>
+        <text x="507" y="272" fill="#b03a2e">UnknownWeightError, ValueError</text>
+        <rect x="735" y="190" width="210" height="96" rx="4" fill="#f5f8f7" stroke="#057379" stroke-width="2.2"/>
+        <text x="747" y="210" font-size="13" font-weight="600">8 Evaluate</text>
+        <text x="747" y="232" font-family="ui-monospace, Menlo, monospace">mx.eval(model.parameters())</text>
+        <text x="747" y="250">210 parameters, 86.4 MB</text>
+        <text x="747" y="272" fill="#4a5655">MLX reads the data here (R14)</text>
+        <g stroke="#111414" stroke-width="1.5">
+          <line x1="225" y1="238" x2="250" y2="238"/><line x1="465" y1="238" x2="490" y2="238"/><line x1="705" y1="238" x2="730" y2="238"/>
+        </g>
+        <g fill="#111414"><path d="M246,233 L254,238 L246,243 z"/><path d="M486,233 L494,238 L486,243 z"/><path d="M726,233 L734,238 L726,243 z"/></g>
+        <text x="15" y="314" fill="#4a5655">Grey frame: the actions before the read of the weights. Dashed teal frame: lazy, MLX computes nothing yet. Thick teal frame: the evaluation. Red: the error that stops the load.</text>
+      </g>
+    </svg></div>
+    <figcaption><b>Figure 2.</b> The eight actions of <code>load_mlx_backbone</code>, in the order of Section 3.3 of the plan. The two checks and the memory limit come before the read of the weights. Action 2 reads only the safetensors headers (<code>parameter_count</code>). <code>weights_dir</code> gives the folder: the Hugging Face cache first, the converted folder second. A model size with SwiGLU raises <code>NotImplementedError</code> in action 5 (Step 5 adds SwiGLU). The test fixture skips a test on <code>WeightsNotFoundError</code> and <code>InsufficientMemoryError</code>, the same as for the torch loader.</figcaption>
+  </figure>
+  <ul>
+    <li><b>Lines 173–174, the TF32 check.</b> It comes first, so a wrong environment stops the load before the memory check and before any file read (test T6). <a href="04-3-attention.html">Page 3</a> explains TF32.</li>
+    <li><b>Lines 175–176, the memory check.</b> It writes one log line, for example "memory check: ViT-S/16 mlx fp32: needs 4.1 GB, 45.9 GB available, ok". In a test session, <code>tests/conftest.py</code> sends this line to <code>memory-checks.log</code>. In a benchmark worker, the driver writes it to <code>driver.log</code> (Listing 9 below). Test T7 gives 0 bytes of free memory and expects <code>InsufficientMemoryError</code> and this label.</li>
+    <li><b>Line 177, the MLX memory limit.</b> <code>mx.set_memory_limit(need)</code> sets the limit of the MLX allocations to the need. The limit is soft: MLX can go above it during the evaluation (R13). So the memory check stays the main guard. <code>tests/conftest.py</code> sets 4 GB at the start of a test session. Each load then sets its own need.</li>
+    <li><b>Line 179, the tree.</b> <code>MlxBackbone(config)</code> builds all modules. The start values of <code>nn.Linear</code> are random, but lazy. The load replaces them before anything evaluates them, so MLX never computes them.</li>
+    <li><b>Lines 181–182, the read.</b> <code>mx.load</code> gives lazy arrays: it reads the header, not the data. The loop reads every shard and joins the dicts with <code>|=</code>. ViT-S/16 has one file. ViT-7B/16 has six (Step 5).</li>
+    <li><b>Line 183, the strict load.</b> <code>strict=True</code> compares the set of names with the parameter tree and checks every shape. It does not check the dtype; <code>mlx_weights</code> casts each array.</li>
+    <li><b>Line 184, the evaluation.</b> Without <code>mx.eval</code>, the first forward pass reads the weights and pays the load (R14).</li>
+  </ul>
+  <p><b>The memory-check line of a benchmark worker.</b> Each benchmark worker runs in its own subprocess, and its load calls <code>check_free_memory</code>. Before the fix of F6, <code>worker_main</code> of <code>scripts/bench_mlx_port.py</code> configured no logging, so Python dropped this line (F6 of <code>specs/04-mlx-port/verify.html</code>). Two functions of <code>memory.py</code> now carry the line from the worker to the driver:</p>
+  <pre class="code"><code><span class="ln">110</span>    handler = logging.StreamHandler(stream)
+<span class="ln">111</span>    handler.setFormatter(logging.Formatter(f&quot;{FORWARD_PREFIX} %(created).6f %(name)s %(message)s&quot;))
+<span class="ln">112</span>    logger.addHandler(handler)
+<span class="ln">113</span>    logger.setLevel(logging.INFO)
+<span class="ln">  ⋮</span>
+<span class="ln">130</span>    for line in text.splitlines():
+<span class="ln">131</span>        prefix, _, rest = line.partition(&quot; &quot;)
+<span class="ln">132</span>        fields = rest.split(&quot; &quot;, 2)
+<span class="ln">133</span>        if prefix != FORWARD_PREFIX or len(fields) != 3:
+<span class="ln">134</span>            continue
+<span class="ln">135</span>        created, name, message = float(fields[0]), fields[1], fields[2]
+<span class="ln">  ⋮</span>
+<span class="ln">146</span>        logging.getLogger(name).handle(record)</code></pre>
+  <p class="caption"><b>Listing 9.</b> <code>src/dinov3_apple/memory.py</code>, lines 110–113 (the body of <code>send_checks_to</code>, without the return) and lines 130–135 and 146 (the loop of <code>replay_checks</code>). <code>FORWARD_PREFIX</code> (line 17) is <code>"memory-check-record"</code>.</p>
+  <ul>
+    <li><b>The worker: <code>send_checks_to(stream)</code>.</b> <code>worker_main</code> calls <code>send_checks_to(sys.stderr)</code> first, before the model load, for the <code>mlx</code> worker and the <code>torch-mps</code> worker. Lines 110–113 give the logger <code>dinov3_apple.memory</code> a handler on stderr. Each memory check then writes one line: the prefix, the time of the check in seconds since 1970, the logger name and the message.</li>
+    <li><b>The driver: <code>replay_checks(text)</code>.</b> <code>run_worker_subprocess</code> gives the stderr of each worker to <code>replay_checks</code>, also after an error or a timeout of the worker. Line 133 skips each line without the prefix. Line 135 splits the line into three fields. Lines 136–145 (not shown) make a log record with the time of the worker. Line 146 gives the record to the handlers of the driver, so <code>driver.log</code> gets it in the format of the driver.</li>
+    <li><b>Why a log record and not a copy of the text.</b> The driver reads the stderr only after the worker ends. The record keeps the time of the check in the worker, so the line in <code>driver.log</code> has the correct time.</li>
+    <li><b>The result.</b> In the benchmark run after the fix (2026-11-07, 01:38 to 01:41 UTC), <code>driver.log</code> has this line for each of the 6 <code>mlx</code> workers and each of the 6 <code>torch-mps</code> workers. An example, in local time: "2026-11-07 02:41:10,712 dinov3_apple.memory memory check: ViT-S/16 mlx fp32: needs 4.1 GB, 38.4 GB available, ok". The test <code>test_mlx_worker_memory_check_reaches_the_driver_log</code> runs a real <code>mlx</code> worker up to the memory check and stops it before the read of the weights. Then it gives the stderr of this worker to <code>run_worker_subprocess</code>. It expects one record with the label "ViT-S/16 mlx fp32" and a time between the start and the end of the worker.</li>
+  </ul>
+</section>
+
+<section id="stored">
+  <h2>9 The readers of the stored files</h2>
+  <p><code>stored.py</code> holds the readers of the stored pixels and of the reference files. The build moved these names without a change from <code>reference.py</code> and <code>preprocess.py</code>. Both old modules re-export them, so the imports of Steps 2 and 3 keep working (test T23). The reason for the move: <code>reference.py</code> imports torch. <code>stored.py</code> imports NumPy, Pillow, <code>safetensors</code> and modules of the repo without torch. So an <code>mlx</code> process can read the stored files without torch in its process footprint (D6).</p>
+  <h3>9.1 <code>read_inputs</code> and <code>read_reference</code></h3>
+  <pre class="code"><code><span class="ln"> 93</span>def read_inputs(path: Path = INPUTS_FILE) -&gt; dict[str, np.ndarray]:
+<span class="ln"> 94</span>    &quot;&quot;&quot;Return the stored pixels with shape (1, 3, H, W), keyed by configuration id.&quot;&quot;&quot;
+<span class="ln"> 95</span>    with safe_open(path, &quot;np&quot;) as tensors:
+<span class="ln"> 96</span>        keys = tensors.keys()
+<span class="ln"> 97</span>        return {key.removesuffix(&quot;/pixels&quot;): tensors.get_tensor(key) for key in keys}
+<span class="ln"> 98</span>
+<span class="ln"> 99</span>
+<span class="ln">100</span>def read_reference(model_size: str) -&gt; tuple[dict[str, np.ndarray], dict]:
+<span class="ln">101</span>    &quot;&quot;&quot;Return the reference tokens and the metadata of one model size.
+<span class="ln">102</span>
+<span class="ln">103</span>    Returns:
+<span class="ln">104</span>        The tensors keyed by configuration id (tokens with shape (1 + 4 + N, D)), plus the key
+<span class="ln">105</span>        &quot;{HIDDEN_STATES_CONFIG}/hidden_states&quot;, and the metadata as a dict.
+<span class="ln">106</span>    &quot;&quot;&quot;
+<span class="ln">107</span>    with safe_open(reference_path(model_size), &quot;np&quot;) as tensors:
+<span class="ln">108</span>        metadata = json.loads(tensors.metadata()[&quot;reference&quot;])
+<span class="ln">109</span>        keys = tensors.keys()
+<span class="ln">110</span>        data = {key.removesuffix(&quot;/tokens&quot;): tensors.get_tensor(key) for key in keys}
+<span class="ln">111</span>    return data, metadata</code></pre>
+  <p class="caption"><b>Listing 10.</b> <code>src/dinov3_apple/stored.py</code>, lines 93–111: the two readers.</p>
+  <ul>
+    <li><b>Line 95.</b> <code>safe_open(path, "np")</code> reads the safetensors file into NumPy arrays. torch is not necessary.</li>
+    <li><b>Line 97.</b> The keys in <code>inputs.safetensors</code> are <code>{configuration id}/pixels</code>. The reader removes the suffix, so the dict key is the configuration id, for example <code>forest/224x304</code>. Each value is the stored pixels (1, 3, H, W) in fp32.</li>
+    <li><b>Lines 108–110.</b> The reference file holds the tokens after the final layer norm, (1 + 4 + N, D), for each configuration, and the hidden states (13, 201, 384) of <code>iss-kibo-lab/224x224</code>. Its metadata is one JSON string under the key <code>reference</code>.</li>
+  </ul>
+  <h3>9.2 <code>own_aspect_size</code> and the 12 configurations</h3>
+  <p>Table 5 gives all names of <code>stored.py</code>. Listing 11 shows the code of the names that Listing 10 does not show.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Name in <code>stored.py</code></th><th>Job</th></tr></thead>
+      <tbody>
+        <tr><td><code>REPO_ROOT</code>, <code>IMAGES_DIR</code>, <code>REFERENCE_DIR</code>, <code>INPUTS_FILE</code></td><td>The paths of the test images, the reference files and <code>inputs.safetensors</code>. <code>REFERENCE_DIR</code> is <code>tests/fixtures/generated/reference/</code>, which git ignores.</td></tr>
+        <tr><td><code>SQUARE_SIZES</code>, <code>HIDDEN_STATES_CONFIG</code></td><td>[224, 448, 512] and <code>"iss-kibo-lab/224x224"</code>, the configuration with the stored hidden states.</td></tr>
+        <tr><td><code>own_aspect_size</code></td><td>The input resolution that keeps the aspect ratio: short side 224 px, long side rounded to the nearest multiple of 16. Moved from <code>preprocess.py</code>. Listing 11.</td></tr>
+        <tr><td><code>Configuration</code>, <code>configurations</code></td><td>One test image at one input resolution, with its <code>id</code>, <code>image_path</code> and <code>num_patches</code>. <code>configurations()</code> gives the 12 configurations of Step 2. Listing 11.</td></tr>
+        <tr><td><code>model_slug</code>, <code>reference_path</code></td><td><code>vits16</code> from the Hugging Face id, and the path <code>reference-vits16.safetensors</code>. Listing 11.</td></tr>
+        <tr><td><code>read_inputs</code>, <code>read_reference</code></td><td>Listing 10.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 5.</b> The names of <code>stored.py</code>. <a href="02-tokens-and-outputs.html">02-tokens-and-outputs.html</a> explains the 12 configurations and the stored pixels. Test T22 imports <code>stored</code>, <code>mlx_model</code> and <code>mlx_weights</code> in a subprocess and finds neither torch nor transformers in <code>sys.modules</code>.</p>
+  <pre class="code"><code><span class="ln"> 43</span>    long_side = round(max(height, width) / min(height, width) * short_side / PATCH_SIZE)
+<span class="ln"> 44</span>    long_side *= PATCH_SIZE
+<span class="ln"> 45</span>    return (short_side, long_side) if height &lt;= width else (long_side, short_side)
+<span class="ln"> ⋮</span>
+<span class="ln"> 56</span>    @property
+<span class="ln"> 57</span>    def id(self) -&gt; str:
+<span class="ln"> 58</span>        &quot;&quot;&quot;The key in the stored files, for example &quot;forest/224x304&quot;.&quot;&quot;&quot;
+<span class="ln"> 59</span>        return f&quot;{self.image}/{self.height}x{self.width}&quot;
+<span class="ln"> ⋮</span>
+<span class="ln"> 66</span>    @cached_property
+<span class="ln"> 67</span>    def num_patches(self) -&gt; int:
+<span class="ln"> 68</span>        &quot;&quot;&quot;The number of patch tokens.&quot;&quot;&quot;
+<span class="ln"> 69</span>        return (self.height // PATCH_SIZE) * (self.width // PATCH_SIZE)
+<span class="ln"> ⋮</span>
+<span class="ln"> 74</span>    configs = []
+<span class="ln"> 75</span>    for image in TEST_IMAGES:
+<span class="ln"> 76</span>        with Image.open(IMAGES_DIR / f&quot;{image}.jpg&quot;) as file:
+<span class="ln"> 77</span>            width, height = file.size
+<span class="ln"> 78</span>        sizes = [(size, size) for size in SQUARE_SIZES] + [own_aspect_size(height, width)]
+<span class="ln"> 79</span>        configs += [Configuration(image, h, w) for h, w in sizes]
+<span class="ln"> 80</span>    return configs
+<span class="ln"> ⋮</span>
+<span class="ln"> 85</span>    return MODEL_IDS[model_size].split(&quot;dinov3-&quot;, 1)[1].split(&quot;-pretrain&quot;, 1)[0]
+<span class="ln"> ⋮</span>
+<span class="ln"> 90</span>    return REFERENCE_DIR / f&quot;reference-{model_slug(model_size)}.safetensors&quot;</code></pre>
+  <p class="caption"><b>Listing 11.</b> <code>src/dinov3_apple/stored.py</code>, lines 43–45 (<code>own_aspect_size</code>), 56–59 and 66–69 (<code>Configuration</code>), 74–80 (<code>configurations</code>), 85 (<code>model_slug</code>) and 90 (<code>reference_path</code>), without the docstrings of the functions.</p>
+  <ul>
+    <li><b>Line 43.</b> The long side in patches is long / short × 224 / 16, rounded to the nearest integer. 224 / 16 = 14, so the short side always has 14 patches.</li>
+    <li><b>Line 44.</b> The multiplication by 16 gives the long side in pixels. So the long side is always a multiple of 16, and <code>patchify</code> accepts the input resolution.</li>
+    <li><b>Line 45.</b> A landscape image (height ≤ width) gets (224, long side). A portrait image gets (long side, 224). The result is (height, width), the order of NCHW.</li>
+    <li><b>Lines 57–59.</b> The id is the key of the configuration in both stored files: <code>{id}/pixels</code> in <code>inputs.safetensors</code> and <code>{id}/tokens</code> in the reference file. The readers of Listing 10 remove the suffix again.</li>
+    <li><b>Lines 66–69.</b> <code>num_patches</code> is Hp · Wp, for example 14 · 19 = 266 for <code>forest/224x304</code>.</li>
+    <li><b>Lines 76–77.</b> <code>configurations()</code> opens each test image only to read its size. Pillow gives (width, height); line 77 keeps both names in that order.</li>
+    <li><b>Lines 78–79.</b> Each test image gets the 3 square sizes of <code>SQUARE_SIZES</code> and its own aspect size: 3 test images × 4 input resolutions = 12 configurations. The order is the order of <code>TEST_IMAGES</code>: <code>iss-kibo-lab</code>, <code>forest</code>, <code>iss-conference</code>.</li>
+    <li><b>Lines 85 and 90.</b> <code>model_slug("ViT-S/16")</code> cuts <code>vits16</code> out of <code>facebook/dinov3-vits16-pretrain-lvd1689m</code>. <code>reference_path</code> adds it to the file name: <code>tests/fixtures/generated/reference/reference-vits16.safetensors</code>. The benchmark worker of <code>mlx</code> also puts the slug into the name of its file of batch times, for example <code>vits16_fp32_224_b8_r0.json</code>.</li>
+  </ul>
+  <p>The three test images give these own aspect sizes (our Python computation with Listing 11 and the image sizes of <code>tests/fixtures/images/</code>):</p>
+  <ul>
+    <li><code>iss-kibo-lab</code>, 576 × 1024 px (height × width): 1024 / 576 × 14 = 24.9, rounded 25 patches. The input resolution is 224 × 400 px, the patch grid 14 × 25, with 350 patch tokens.</li>
+    <li><code>forest</code>, 768 × 1024 px: 1024 / 768 × 14 = 18.7, rounded 19 patches. The input resolution is 224 × 304 px, the patch grid 14 × 19, with 266 patch tokens.</li>
+    <li><code>iss-conference</code>, 1024 × 768 px, a portrait image: the same ratio gives 304 × 224 px, the patch grid 19 × 14, with 266 patch tokens. Its patch grid is the transpose of the <code>forest</code> grid, so the RoPE tables differ (<a href="04-2-rope.html">page 2</a>, Table 2).</li>
+  </ul>
+  <p><b>Why the function moved.</b> <code>configurations()</code> calls <code>own_aspect_size</code>, and its old module <code>preprocess.py</code> imports torch. So the build moved the function to <code>stored.py</code> without a change. <code>preprocess.py</code> imports it from <code>stored.py</code> and lists it in <code>__all__</code>, so <code>preprocess.own_aspect_size</code> and <code>stored.own_aspect_size</code> are the same object. Test T23 checks this. <code>test_own_aspect_size</code> in <code>tests/test_preprocess.py</code> imports the function from <code>preprocess.py</code> and checks four sizes: the three test images above and 500 × 500 px, which gives 224 × 224 px. <code>reference.py</code> no longer gives <code>own_aspect_size</code>. No file of the repo used it there (F10 of <code>specs/04-mlx-port/verify.html</code>).</p>
+
+  <h3>9.3 <code>reference_tokens</code> of <code>bench.py</code></h3>
+  <p>Each benchmark worker checks its first output against the reference file. This is the validity check of Step 3 (<code>check_validity</code> in <code>bench.py</code>). In Step 3 the reader of the reference tokens was the private function <code>_reference_tokens</code> in <code>torch_bench.py</code>, which imports torch. The review of the Step 4 build moved it to <code>bench.py</code> as the public function <code>reference_tokens</code> (review fix R6 in <code>specs/04-mlx-port/verify.html</code>). <code>bench.py</code> imports no torch. So the <code>mlx</code> worker of <code>scripts/bench_mlx_port.py</code> and the <code>torch-mps</code> worker of <code>torch_bench.py</code> (line 141) use the same reader.</p>
+  <pre class="code"><code><span class="ln">263</span>def reference_tokens(model_size: str, side: int) -&gt; np.ndarray | None:
+<span class="ln">264</span>    &quot;&quot;&quot;Return the reference tokens of image 0 at side x side px. None if the file is missing.&quot;&quot;&quot;
+<span class="ln">265</span>    path = reference_path(model_size)
+<span class="ln">266</span>    if not path.exists():
+<span class="ln">267</span>        return None
+<span class="ln">268</span>    with safe_open(path, &quot;np&quot;) as tensors:
+<span class="ln">269</span>        return tensors.get_tensor(f&quot;{TEST_IMAGES[0]}/{side}x{side}/tokens&quot;)</code></pre>
+  <p class="caption"><b>Listing 12.</b> <code>src/dinov3_apple/bench.py</code>, lines 263–269.</p>
+  <ul>
+    <li><b>Line 265.</b> <code>reference_path</code> of <code>stored.py</code> (Listing 11) gives the reference file of the model size.</li>
+    <li><b>Lines 266–267.</b> Without a reference file the function gives <code>None</code>. <code>check_validity</code> then checks only that the output is finite, with the note "finite only: no reference file". The reference files are in <code>tests/fixtures/generated/</code>, which git ignores. So a new clone of the repo has no reference file until <code>scripts/make_reference.py</code> runs.</li>
+    <li><b>Lines 268–269.</b> The function reads one tensor: image 0 of <code>TEST_IMAGES</code> (<code>iss-kibo-lab</code>) at side × side px, for example the key <code>iss-kibo-lab/224x224/tokens</code>. The shape is (1 + 4 + N, D). <code>safe_open</code> reads only this tensor, not the whole file.</li>
+    <li><b>The use.</b> <code>check_validity</code> joins the frame embedding and the patch embeddings of image 0 of the first batch with the 4 register rows of the reference. Then <code>measure_parity</code> compares this token sequence with the reference tokens, against the thresholds of the dtype mode. In the Step 4 benchmark all 12 workers (6 <code>mlx</code>, 6 <code>torch-mps</code>) gave "parity passes". The smallest of their parity values was 1 − 1.6e-11 (<code>mlx</code>, batch size 1), from <code>results/bench-mlx-port.jsonl</code>.</li>
+    <li><b>The test.</b> <code>test_reference_tokens_read_image_0_or_none</code> in <code>tests/test_bench.py</code> writes a small file with three keys. It expects the tokens of image 0 at 224 px and at 448 px, and <code>None</code> for a missing file.</li>
+  </ul>
+</section>
+
+<section id="measured">
+  <h2>10 The measured values of Step 4</h2>
+  <p>Table 6 gives the tests of this part with their targets from the plan and the values of the build run on 2026-11-07 (mlx 0.32.4, GPU, TF32 off). <code>specs/04-mlx-port/verify.html</code> measured each value again. The last four rows are tests of the fixes after the verification.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Test</th><th>What it checks</th><th>Target</th><th>Measured</th></tr></thead>
+      <tbody>
+        <tr><td>T11 <code>test_mlx_part_patch_embedding</code>, (2, 3, 224, 224)</td><td><code>Embeddings</code> against <code>DINOv3ViTEmbeddings</code> of the small model on torch-cpu</td><td>patch rows ≤ 1e-5; prefix rows exact</td><td>8.8e-6; exact</td></tr>
+        <tr><td>T11, (1, 3, 224, 304)</td><td>the same, 14 × 19 patches</td><td>the same</td><td>6.0e-6; exact</td></tr>
+        <tr><td>T11, (1, 3, 304, 224)</td><td>the same, 19 × 14 patches</td><td>the same</td><td>5.7e-6; exact</td></tr>
+        <tr><td>T12 <code>test_patchify_rejects_bad_size</code></td><td>224 × 230 px</td><td><code>ValueError</code></td><td>pass</td></tr>
+        <tr><td><code>test_patchify_order</code> (added in the build)</td><td>token order and the order inside one patch</td><td>exact</td><td>pass</td></tr>
+        <tr><td><code>test_mlx_forward_casts_the_pixels_to_the_weight_dtype</code> (added in the build)</td><td>fp32 pixels and bf16 weights give bf16 tokens</td><td>exact</td><td>pass</td></tr>
+        <tr><td>T1 <code>test_map_key_both_spellings</code></td><td>both spellings, the dropped mask token, two unknown names</td><td>exact</td><td>pass</td></tr>
+        <tr><td>T2 <code>test_mlx_weights_load_small_model</code></td><td>the state dict of the small model through <code>mlx_weights</code> and a strict load</td><td>difference 0</td><td>0 (equal arrays)</td></tr>
+        <tr><td>T3 <code>test_key_map_covers_vits16_file</code></td><td>the header of the ViT-S/16 file against the lazy parameter tree</td><td>211 → 210; 1 dropped; 0 unknown, 0 missing, 0 shape differences</td><td>met; patch weight (384, 768)</td></tr>
+        <tr><td>T5 <code>test_mlx_config_from_hf</code></td><td>Table 3 without <code>num_channels</code> and <code>hidden_act</code></td><td>exact</td><td>pass</td></tr>
+        <tr><td>T6 <code>test_load_mlx_backbone_refuses_tf32_mismatch</code></td><td><code>TF32ModeError</code> before the memory check and any file read</td><td>exact</td><td>pass</td></tr>
+        <tr><td>T7 <code>test_load_mlx_backbone_checks_memory_first</code></td><td><code>InsufficientMemoryError</code>; one log line with "ViT-S/16 mlx fp32" and "needs 4.1 GB"</td><td>exact</td><td>pass</td></tr>
+        <tr><td>T7b <code>test_load_mlx_backbone_sets_memory_limit_to_need</code></td><td>the value given to <code>mx.set_memory_limit</code></td><td>4,103,663,411 bytes</td><td>4,103,663,411 bytes</td></tr>
+        <tr><td>T22 <code>test_mlx_modules_do_not_import_torch</code></td><td><code>sys.modules</code> after the import of the three modules</td><td>no torch, no transformers</td><td>pass</td></tr>
+        <tr><td>T23 <code>test_stored_readers_are_reexported</code></td><td>the old names are the new objects; the 12 configuration ids</td><td>exact</td><td>pass</td></tr>
+        <tr><td><code>test_own_aspect_size</code> (Step 2, <code>tests/test_preprocess.py</code>)</td><td>four image sizes through the re-export in <code>preprocess.py</code> (Section 9.2)</td><td>exact</td><td>pass</td></tr>
+        <tr><td><code>test_reference_tokens_read_image_0_or_none</code> (added in the build, <code>tests/test_bench.py</code>)</td><td>image 0 at 224 px and 448 px; <code>None</code> for a missing file (Section 9.3)</td><td>exact</td><td>pass</td></tr>
+        <tr><td>W1 <code>test_mlx_embeddings_match_stored</code></td><td>ViT-S/16 weights, stored pixels of <code>iss-kibo-lab/224x224</code>, against stored hidden state 0</td><td>prefix rows exact; minimum token cosine ≥ 0.99999</td><td>exact; 1 − cosine = 9.46e-13; largest difference 1.24e-5 (1.16e-6 of the largest value)</td></tr>
+        <tr><td>W5 <code>test_parity</code> (AC1, end to end)</td><td>12 configurations against the reference files</td><td>frame, patch mean, patch 1st percentile ≥ 0.9999</td><td>1.000000 in all 12</td></tr>
+        <tr><td><code>test_mlx_quantized_patch_embedding_gets_float_pixels</code> (F1, added after Verify)</td><td>small model after <code>nn.quantize(bits=8)</code>: the pixels that reach <code>patchify</code> are float32; minimum token cosine of the patch tokens against the unquantized model, for the embeddings and for <code>run_mlx</code></td><td>≥ 0.999</td><td>0.999986 (embeddings); 0.999983 (<code>run_mlx</code>)</td></tr>
+        <tr><td><code>test_map_key_rejects_a_block_name_that_is_not_a_parameter</code> (F4, added after Verify)</td><td>5 wrong block names; the 18 names of <code>block_parameter_names()</code></td><td><code>UnknownWeightError</code>; exact</td><td>pass</td></tr>
+        <tr><td><code>test_map_key_leaves_the_block_index_to_the_strict_load</code> (F4, added after Verify)</td><td><code>layer.12.norm1.weight</code> passes <code>map_key</code>; <code>layer.2.norm1.weight</code> in the small model</td><td><code>ValueError</code> of the strict load</td><td>pass</td></tr>
+        <tr><td><code>test_mlx_worker_memory_check_reaches_the_driver_log</code> (F6, added after Verify)</td><td>the memory check of a real <code>mlx</code> worker, through <code>replay_checks</code></td><td>one record with the time of the worker</td><td>pass</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 6.</b> Tests of the patch embedding, the key map, the load and the readers. Measured values: the test report of the build for T11, the test report of the fix session for the quantized patch embedding, and <code>results/parity-mlx.md</code> for W1 (Table 4, row <code>stored-embeddings</code>) and W5 (Table 1). "pass" means that the test was green in the build run. The plan numbers the tests in Table 6 (T) and Table 8 (W).</p>
+  <p>The benchmark of Step 4 (<code>scripts/bench_mlx_port.py</code>) ran 6 <code>mlx</code> workers and 6 <code>torch-mps</code> workers of ViT-S/16 in fp32, one after the other, each in its own subprocess. Each worker timed its load. Table 7 gives the values of the load. <a href="04-5-mlp.html">Page 5</a> gives the throughput and the paired ratios.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Value, 6 workers each</th><th class="num">mlx</th><th class="num">torch-mps</th></tr></thead>
+      <tbody>
+        <tr><td>Load time: the whole load function, memory check included (median, range)</td><td class="num">12.0 ms (11.5–13.6)</td><td class="num">131 ms (117–164)</td></tr>
+        <tr><td>First call after the load, batch size 1</td><td class="num">16.0–18.4 ms</td><td class="num">98–110 ms</td></tr>
+        <tr><td>First call after the load, batch size 8</td><td class="num">25.9–30.1 ms</td><td class="num">113–114 ms</td></tr>
+        <tr><td>Process footprint before the load</td><td class="num">47.8 MB</td><td class="num">300 MB</td></tr>
+        <tr><td>Load peak: the lifetime maximum of the process footprint after the load</td><td class="num">138.2 MB</td><td class="num">522.4 MB</td></tr>
+        <tr><td>(Load peak − footprint before the load) / weight bytes (86.4 MB)</td><td class="num">1.05</td><td class="num">2.57</td></tr>
+        <tr><td>MLX memory limit of the load (<code>mlx_memory_limit_bytes</code>)</td><td class="num">4,103,663,411 bytes</td><td class="num">–</td></tr>
+        <tr><td>torch in <code>sys.modules</code> at the end of the worker</td><td class="num">false in 6 of 6</td><td class="num">true</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 7.</b> The load in the benchmark of Step 4, from <code>results/bench-mlx-port.jsonl</code> (2026-11-07, 00:44 to 00:47 UTC, mlx 0.32.4, torch 2.15.0, macOS 26.5.2). Footprints are medians, in MB of 10⁶ bytes. The 12 workers read the same file one after the other, so macOS probably kept it in its file cache.</p>
+</section>
+
+<section id="surprises">
+  <h2>11 Surprises</h2>
+  <ol>
+    <li class="note"><b>A convolution with stride = kernel is one matmul, and its weight needs only a reshape.</b> The prior ports use <code>nn.Conv2d</code> of MLX and transpose the weight to (out, 16, 16, in). The OIHW layout of the file, flattened, already has the order color, row, column of <code>patchify</code>. So the port needs no convolution kernel and no transpose (Sections 2 and 4).</li>
+    <li class="note"><b>The file holds a tensor that the inference never reads.</b> <code>embeddings.mask_token</code> serves only the masked patches of the iBOT loss in training. The file has 211 tensors and the MLX backbone has 210 parameters. Without the drop in the key map, the strict load stops with "Received 1 parameters not in model".</li>
+    <li class="note"><b>The load is lazy until <code>mx.eval</code>.</b> <code>mx.load</code> reads only the header, and the random start values of <code>nn.Linear</code> are lazy too. Test T3 sends the 211 names of the file through the key map and compares the 210 results and their shapes with the parameter tree. MLX computes no array. <code>mx.eval(model.parameters())</code> puts the read into the load. The whole load takes 12 ms. Without it, the first forward pass would pay the read (R14).</li>
+    <li class="note"><b>The code of the plan had no pixel cast.</b> In MLX, fp32 pixels and bf16 weights give fp32 patch tokens. A bf16 model would then run its whole residual stream in fp32, without a message. The Hugging Face code casts the pixels two times (Listing 4). The build added the cast and a test (Section 6). After the verification, the cast takes the dtype of the CLS token (line 220, last surprise).</li>
+    <li class="note"><b>The memory need of ViT-S/16 is 47.5 times its weights.</b> The need is 4.10 GB for 86.4 MB of weights, because the reserve of 4 GB holds for every model size. The <code>mlx</code> load used only 1.05 times the weight bytes above the footprint before the load. So <code>LOAD_RATIO</code> = 1.2 holds for <code>mlx</code>. The <code>torch-mps</code> load used 2.57 times.</li>
+    <li class="note"><b>The margin of the part test T11 is small, but its value is normal.</b> The largest difference is 8.8e-6 against a target of 1e-5. The CPU-stream probe of <code>explore.html</code> gave 1.4e-6 to 1.9e-6 on other values. Our NumPy computation on the same shapes and similar values (largest output 5.4) gives 5.3e-6 between an fp32 matmul and float64. T11 compares two fp32 results, each with its own rounding, so a difference up to about two times this value is normal. With TF32 on, the difference would be about 100 times larger (Table 7 of the plan).</li>
+    <li class="note"><b>Verify found a fault of the pixel cast with quantized weights (F1).</b> The cast of the build took the pixel dtype from <code>patch_embeddings.weight</code>. With its default predicate, <code>nn.quantize</code> of mlx 0.32.4 quantizes every module that has <code>to_quantized</code>, so every <code>nn.Linear</code>, the patch embedding too (768 inputs, a multiple of the group size 64). <code>QuantizedLinear</code> stores its weight as packed <code>uint32</code> values. So the cast turned the pixels into unsigned integers, and no error message came. The verification of Step 4 found this fault (F1 of <code>specs/04-mlx-port/verify.html</code>). It measured ViT-S/16 with 8-bit weights: the patch tokens of the patch embedding have a minimum cosine of 0.268 with the old cast and 0.99984 without it. The fix (commit <code>ea82d58</code>) casts the pixels to the dtype of the CLS token (line 220). <code>nn.quantize</code> does not change this array. The test <code>test_mlx_quantized_patch_embedding_gets_float_pixels</code> quantizes the small model with 8 bits and the default predicate. The minimum token cosine of the patch tokens against the unquantized model is 0.999986 for the embeddings and 0.999983 for <code>run_mlx</code> (target ≥ 0.999). With the old cast, the small model gives about 0.63.</li>
+  </ol>
+</section>
+
+<section id="sources">
+  <h2>12 Sources</h2>
+  <ul>
+    <li>Hugging Face transformers 5.22.1 (Apache-2.0, Copyright 2025 Meta AI and The HuggingFace Inc. team): <code>models/dinov3_vit/modeling_dinov3_vit.py</code> (<code>DINOv3ViTEmbeddings</code>, <code>DINOv3ViTRopePositionEmbedding</code>, <code>DINOv3ViTModel</code>) and <code>conversion_mapping.py</code>. github.com/huggingface/transformers. Read in the installed package.</li>
+    <li>MLX 0.32.4: <code>mlx/nn/layers/linear.py</code> (<code>nn.Linear</code>, <code>to_quantized</code>), <code>mlx/nn/layers/base.py</code> (<code>Module.load_weights</code>), <code>mlx/nn/layers/quantized.py</code> (<code>nn.quantize</code>, <code>QuantizedLinear</code>). github.com/ml-explore/mlx. Read in the installed package.</li>
+    <li>Weights: huggingface.co/facebook/dinov3-vits16-pretrain-lvd1689m (gated repo), snapshot 114c137: <code>config.json</code> and the header of <code>model.safetensors</code>.</li>
+    <li>DINOv3 paper: Siméoni et al., arXiv 2508.10104 (August 2025): the iBOT loss with masked patches.</li>
+    <li>Repo: <code>specs/04-mlx-port/explore.html</code> (D1, D2, D4, D6; Tables 5 and 9; risks R13, R14, R16, R18) and <code>specs/04-mlx-port/plan.html</code> (Tables 1, 3, 6, 7 and 8; Sections 3.3, 3.5 and 5). <code>src/dinov3_apple/mlx_model.py</code>, <code>mlx_weights.py</code>, <code>stored.py</code>, <code>memory.py</code>, <code>hub.py</code>, <code>bench.py</code>, <code>preprocess.py</code>, <code>reference.py</code>, <code>torch_bench.py</code> (commit <code>c212226</code>, and commit <code>ea82d58</code> for the fixes of F1, F4, F5, F6 and F7). <code>scripts/bench_mlx_port.py</code>. <code>tests/test_mlx_weights.py</code>, <code>test_mlx_parts.py</code>, <code>test_mlx_parity.py</code>, <code>test_mlx_environment.py</code>, <code>test_bench.py</code>, <code>test_preprocess.py</code>, <code>small_model.py</code>, <code>conftest.py</code>. <code>specs/04-mlx-port/verify.html</code> (review fix R6, findings F1, F4, F6 and F10, Section 11 "Fixed after Verify").</li>
+    <li>Results: <code>results/parity-mlx.md</code>, <code>results/bench-mlx-port.jsonl</code>, <code>results/block-profile-torch-mps.md</code>, the test report and the memory check log of the build and of the fix session, and <code>driver.log</code> of the benchmark run after the fix of F6 (<code>tests/fixtures/generated/</code>, not in git).</li>
+    <li>Our NumPy computations for this page (NumPy, CPU, no model load): the equivalence of the convolution and the matmul (Section 2), the wrong order inside a patch (Section 4), the own aspect sizes of the three test images (Section 9.2) and the fp32 matmul error (Section 11).</li>
+  </ul>
+</section>
+
+<footer class="steps">Previous: <a href="03-where-the-compute-goes.html">Where the compute goes</a> (step 3) · Next: <a href="04-2-rope.html">2 RoPE tables and rotation</a></footer>
+</main>
+</body>
+</html>
