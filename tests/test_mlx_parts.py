@@ -36,9 +36,11 @@ from dinov3_apple.mlx_model import (
     MlxBackbone,
     MlxConfig,
     SwiGLU,
+    TokenRange,
     apply_rope,
     linear_parameter_names,
     patchify,
+    rope_tables,
     run_mlx,
     run_mlx_hidden_states,
     run_mlx_token_range,
@@ -501,8 +503,13 @@ def _expected_dtypes(dtype_mode: str) -> tuple[mx.Dtype, mx.Dtype]:
         for mode in DTYPE_MODES
     ],
 )
-def test_mlx_dtype_flow(model: str, dtype_mode: str) -> None:
-    """T22: the dtype of each part in each dtype mode (Table 3 of the plan)."""
+def test_mlx_dtype_flow(model: str, dtype_mode: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """T22: the dtype of each part in each dtype mode (Table 3 of the plan).
+
+    The attention branch of each block calls apply_rope twice, with q and k in the matmul dtype
+    and the fp32 RoPE tables. So a cast of the tables or a rotation outside apply_rope fails here
+    (F7 of specs/05-all-sizes/verify.html).
+    """
     matmul, stream = _expected_dtypes(dtype_mode)
     mlx = small_mlx_model(small_hf_model(seed=0, name=model), dtype_mode)
     assert mlx.dtype_mode == dtype_mode
@@ -514,8 +521,18 @@ def test_mlx_dtype_flow(model: str, dtype_mode: str) -> None:
     assert x.dtype == stream
     cos, sin = mlx.rope(14, 14)
     assert cos.dtype == sin.dtype == mx.float32
+    rotations: list[tuple[mx.Dtype, mx.Dtype, mx.Dtype]] = []
+
+    def record_rope(values: mx.array, cos: mx.array, sin: mx.array) -> mx.array:
+        rotations.append((values.dtype, cos.dtype, sin.dtype))
+        return apply_rope(values, cos, sin)
+
     for block in mlx.layer:
-        assert block.attention_branch(x, cos, sin).dtype == matmul
+        rotations.clear()
+        with monkeypatch.context() as patch:
+            patch.setattr(mlx_model_module, "apply_rope", record_rope)
+            assert block.attention_branch(x, cos, sin).dtype == matmul
+        assert rotations == [(matmul, mx.float32, mx.float32)] * 2
         assert block.ff_hidden(x).dtype == matmul
         x = block(x, cos, sin)
         assert x.dtype == stream
@@ -611,21 +628,125 @@ def test_run_mlx_rejects_a_mode_mismatch(hf_model: DINOv3ViTModel) -> None:
         for mode in DTYPE_MODES
     ],
 )
-def test_token_range_matches_hidden_states(model: str, dtype_mode: str) -> None:
-    """T26: the token range and run_mlx_hidden_states agree exactly."""
+def test_token_range_matches_hidden_states(
+    model: str, dtype_mode: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """T26: the token range and run_mlx_hidden_states agree exactly.
+
+    The branch values equal the largest absolute values of Block.attention_branch, Block.ff_hidden
+    and mlp.down_proj, computed apart from run_mlx_token_range: the outputs of the two methods in
+    the forward pass of run_mlx_hidden_states, and mlp.down_proj of each recorded ff_hidden output
+    (F6 of specs/05-all-sizes/verify.html).
+    """
     mlx = small_mlx_model(small_hf_model(seed=0, name=model), dtype_mode)
     pixels = small_pixels((1, 3, 224, 304))
     token_range = run_mlx_token_range(mlx, pixels)
-    hidden = run_mlx_hidden_states(mlx, pixels)
+    outputs: dict[str, list[mx.array]] = {"attention": [], "ff_hidden": []}
+    attention_branch, ff_hidden = Block.attention_branch, Block.ff_hidden
+
+    def record_attention(block: Block, x: mx.array, cos: mx.array, sin: mx.array) -> mx.array:
+        outputs["attention"].append(output := attention_branch(block, x, cos, sin))
+        return output
+
+    def record_ff_hidden(block: Block, x: mx.array) -> mx.array:
+        outputs["ff_hidden"].append(output := ff_hidden(block, x))
+        return output
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Block, "attention_branch", record_attention)
+        patch.setattr(Block, "ff_hidden", record_ff_hidden)
+        hidden = run_mlx_hidden_states(mlx, pixels)
+    ff_out = [
+        block.mlp.down_proj(h) for block, h in zip(mlx.layer, outputs["ff_hidden"], strict=True)
+    ]
     blocks = len(mlx.layer)
     assert token_range.tokens.shape == (blocks + 1,)
     assert token_range.tokens_where.shape == (blocks + 1,)
     assert token_range.tokens_finite.shape == (blocks + 1,)
     for values in (token_range.attention, token_range.ff_hidden, token_range.ff_out):
         assert values.shape == (blocks,)
+        assert values.dtype == np.float32
     assert token_range.last_state.dtype == np.float32
     assert np.array_equal(token_range.last_state, hidden[-1])
     for i, state in enumerate(hidden):
         assert token_range.tokens[i] == np.abs(state).max(), i
         assert token_range.tokens_where[i] == np.abs(state).max(-1).argmax(), i
         assert bool(token_range.tokens_finite[i]) == bool(np.isfinite(state).all()), i
+
+    def largest(values: list[mx.array]) -> list[float]:
+        return [mx.abs(v.astype(mx.float32)).max().item() for v in values]
+
+    assert token_range.attention.tolist() == largest(outputs["attention"])
+    assert token_range.ff_hidden.tolist() == largest(outputs["ff_hidden"])
+    assert token_range.ff_out.tolist() == largest(ff_out)
+    assert token_range.finite
+
+
+def test_token_range_finite_sees_each_inf() -> None:
+    """TokenRange.finite is False if one token value or one branch value is not finite. It sets
+    the status of each W7 line (F6 of specs/05-all-sizes/verify.html)."""
+    blocks = 2
+    finite = {
+        "tokens": np.ones(blocks + 1, np.float32),
+        "tokens_where": np.zeros(blocks + 1, np.int64),
+        "tokens_finite": np.ones(blocks + 1, bool),
+        "attention": np.ones(blocks, np.float32),
+        "ff_hidden": np.ones(blocks, np.float32),
+        "ff_out": np.ones(blocks, np.float32),
+        "last_state": np.zeros((5, 4), np.float32),
+    }
+    assert TokenRange(**finite).finite
+    assert not TokenRange(**finite | {"tokens_finite": np.array([True, False, True])}).finite
+    for name in ("tokens", "attention", "ff_hidden", "ff_out"):
+        values = finite[name].copy()
+        values[1] = np.inf
+        assert not TokenRange(**finite | {name: values}).finite, name
+
+    # An inf in the down_proj bias of block 1 of a small model: the feed-forward branch output of
+    # block 1 and the token sequence after it are not finite.
+    mlx = small_mlx_model(small_hf_model(seed=0), "fp32")
+    down_proj = mlx.layer[1].mlp.down_proj
+    down_proj.bias = mx.where(mx.arange(down_proj.bias.shape[0]) == 0, np.inf, down_proj.bias)
+    token_range = run_mlx_token_range(mlx, small_pixels((1, 3, 224, 224)))
+    assert token_range.tokens_finite.tolist() == [True, True, False]
+    assert np.isfinite(token_range.ff_out[0])
+    assert np.isinf(token_range.ff_out[1])
+    assert not token_range.finite
+
+
+@pytest.mark.parametrize("dtype", list(HALF_DTYPES))
+def test_mlx_rope_rotation_rounds_once(dtype: str, report: Callable[..., None]) -> None:
+    """The RoPE rotation of half queries and keys runs in fp32 and rounds once to the half dtype
+    (row "RoPE tables and rotation" of Table 3 of the plan; F7 of specs/05-all-sizes/verify.html).
+
+    The oracle is the rotation in NumPy fp32, rounded once by torch. A rotation in the half dtype,
+    with the tables cast to half as in the Hugging Face code, misses this target.
+    """
+    mx_half, half = HALF_DTYPES[dtype]
+    head_dim = 64
+    cos, sin = rope_tables(14, 19, head_dim, 100.0)
+    cos_mlx, sin_mlx = mx.array(cos), mx.array(sin)
+    rng = np.random.default_rng(0)
+    shape = (2, 6, NUM_PREFIX_TOKENS + 14 * 19, head_dim)
+    for name in ("q", "k"):
+        x = mx.array(rng.standard_normal(shape).astype(np.float32)).astype(mx_half)
+        output = apply_rope(x, cos_mlx, sin_mlx)
+        assert output.dtype == mx_half
+        x32 = np.array(x.astype(mx.float32))
+        rotated = np.concatenate([-x32[..., head_dim // 2 :], x32[..., : head_dim // 2]], axis=-1)
+        oracle = torch.from_numpy(x32 * cos + rotated * sin).to(half)
+        in_half = x * cos_mlx.astype(mx_half) + mlx_model_module.rotate_half(x) * sin_mlx.astype(
+            mx_half
+        )
+        share = float((_to_torch(output, half) != oracle).float().mean())
+        half_share = float((_to_torch(in_half, half) != oracle).float().mean())
+        report(
+            "test_mlx_rope_rotation_rounds_once",
+            dtype=dtype,
+            tensor=name,
+            share=share,
+            half_share=half_share,
+            target_share=0.0,
+        )
+        assert share == 0.0, name
+        assert half_share > 0.01, name

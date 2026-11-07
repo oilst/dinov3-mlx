@@ -207,19 +207,26 @@ def load_ratio(runs_log: Path = RUNS_LOG) -> float:
 def run_all(model_sizes: list[str]) -> None:
     """Run each model size in its own subprocess, one after the other.
 
-    Each model size first passes the run rule, then the memory check. A skip goes to runs.jsonl
-    with its reason.
+    The run rule of every requested model size comes first, before load_ratio reads runs.jsonl
+    and the headers of earlier model sizes (F11 of specs/05-all-sizes/verify.html). A refused
+    model size gets its skip line at once, without a load ratio. Each other model size then
+    passes the memory check. A skip goes to runs.jsonl with its reason.
     """
-    ratio = load_ratio()
-    logger.info(f"the memory check uses the load ratio {ratio:.2f}")
+    allowed = []
     for model_size in model_sizes:
         try:
             check_run_rule(model_size, 4, f"{model_size} torch-cpu fp32 (make_reference.py)")
         except RunRuleError as error:
-            line = {"model_size": model_size, "time": _now(), "ratio": round(ratio, 3)}
+            line = {"model_size": model_size, "time": _now()}
             _append_run(line | {"status": "skipped", "reason": str(error)})
             logger.warning(f"{model_size}: skipped. {error}")
             continue
+        allowed.append(model_size)
+    if not allowed:
+        return
+    ratio = load_ratio()
+    logger.info(f"the memory check uses the load ratio {ratio:.2f}")
+    for model_size in allowed:
         fp32_bytes = parameter_count(model_size) * 4
         line = {
             "model_size": model_size,

@@ -10,11 +10,12 @@ tests/fixtures/generated/cross-check/. Then a separate mlx worker loads the MLX 
 same configurations and compares its tokens with the stored torch tokens. It appends one line of
 kind "cross-check" for each configuration to tests/fixtures/generated/parity/mlx.jsonl.
 
-Before the workers, the driver checks the run rules of CLAUDE.md for both workers. Before each
-worker, it checks the free memory. Each worker checks the run rule and the free memory again at
-its load and sends its memory-check and load-peak lines to the driver, which writes them to
-driver.log. The torch worker runs with the MPS watermarks 0.8 and 0.6. The mlx worker runs with
-MLX_ENABLE_TF32=0 and imports no torch.
+Before the workers and before any read of the free memory or of a header, the driver checks the
+run rules of CLAUDE.md for both workers. A refused run writes the refusal to driver.log. Before
+each worker, the driver checks the free memory. Each worker checks the run rule and the free
+memory again at its load and sends its memory-check and load-peak lines to the driver, which
+writes them to driver.log. The torch worker runs with the MPS watermarks 0.8 and 0.6. The mlx
+worker runs with MLX_ENABLE_TF32=0 and imports no torch.
 
 Usage:
     uv run python scripts/cross_check.py --model-size ViT-7B/16 --dtype-mode bf16-cast \
@@ -29,7 +30,6 @@ import argparse
 import json
 import logging
 import os
-import subprocess
 import sys
 import time
 from dataclasses import asdict
@@ -40,7 +40,7 @@ import numpy as np
 from bench_mlx_port import worker_env
 from safetensors import safe_open
 
-from dinov3_apple.bench import DTYPE_MODE_NAMES, WEIGHT_BYTES
+from dinov3_apple.bench import DTYPE_MODE_NAMES, bytes_per_weight, run_worker_subprocess
 from dinov3_apple.footprint import read_footprint
 from dinov3_apple.hub import MODEL_IDS, parameter_count
 from dinov3_apple.memory import (
@@ -49,7 +49,6 @@ from dinov3_apple.memory import (
     available_memory_bytes,
     check_run_rule,
     load_bytes,
-    replay_checks,
     send_checks_to,
 )
 from dinov3_apple.parity import measure_parity
@@ -70,13 +69,6 @@ def tokens_path(model_size: str, dtype_mode: str, torch_device: str) -> Path:
     return CROSS_DIR / f"{model_slug(model_size)}-{dtype_mode}-torch-{torch_device}.safetensors"
 
 
-def mlx_bytes_per_weight(dtype_mode: str) -> int:
-    """Return the bytes of each weight of the mlx worker: the size of the matmul dtype."""
-    from dinov3_apple.mlx_model import MLX_DTYPE_MODES  # the driver needs mlx only here
-
-    return MLX_DTYPE_MODES[dtype_mode].matmul.size
-
-
 def worker_environment(backend: str, base: dict[str, str]) -> dict[str, str]:
     """Return the environment of one worker: the MPS watermarks for torch (also on torch-cpu),
     MLX_ENABLE_TF32=0 for mlx (worker_env of scripts/bench_mlx_port.py)."""
@@ -94,24 +86,28 @@ def worker_plan(
     Raises:
         RunRuleError: If one of the two loads breaks a run rule.
     """
-    torch_backend = f"torch-{torch_device}"
-    sizes = {torch_backend: WEIGHT_BYTES[dtype_mode], "mlx": mlx_bytes_per_weight(dtype_mode)}
-    for backend, bytes_per_weight in sizes.items():
-        check_run_rule(model_size, bytes_per_weight, f"{model_size} {backend} {dtype_mode}")
+    sizes = {
+        backend: bytes_per_weight(backend, dtype_mode)
+        for backend in (f"torch-{torch_device}", "mlx")
+    }
+    for backend, size in sizes.items():
+        check_run_rule(model_size, size, f"{model_size} {backend} {dtype_mode}")
     count = parameter_count(model_size)
     return [
-        (backend, load_bytes(count * bytes_per_weight), worker_environment(backend, {}))
-        for backend, bytes_per_weight in sizes.items()
+        (backend, load_bytes(count * size), worker_environment(backend, {}))
+        for backend, size in sizes.items()
     ]
 
 
 def dry_run(model_size: str, dtype_mode: str, torch_device: str, configs: list[str]) -> None:
-    """Print the two workers, their needs and their environments. Load no model."""
+    """Print the two workers, their needs and their environments. Load no model.
+
+    The run-rule guard of worker_plan comes before the read of the free memory.
+    """
+    plan = worker_plan(model_size, dtype_mode, torch_device)
     available = available_memory_bytes()
     print(f"available memory: {available / GB:.1f} GB")
-    for index, (backend, need, env) in enumerate(
-        worker_plan(model_size, dtype_mode, torch_device), start=1
-    ):
+    for index, (backend, need, env) in enumerate(plan, start=1):
         fits = "fits" if need <= available else "does not fit"
         variables = " ".join(f"{key}={value}" for key, value in sorted(env.items()))
         print(
@@ -228,31 +224,13 @@ def worker_main(backend: str, spec_json: str) -> None:
     print(json.dumps(result))
 
 
-def run_worker_subprocess(backend: str, spec: dict) -> dict:
+def run_worker(backend: str, spec: dict) -> dict:
     """Run one worker in a new subprocess and return its result. The memory-check and load-peak
-    lines of the worker go to the log of the driver."""
+    lines of the worker go to the log of the driver (run_worker_subprocess)."""
     worker = "mlx" if backend == "mlx" else "torch"
     command = [sys.executable, __file__, "--worker", worker, "--spec", json.dumps(spec)]
-    try:
-        done = subprocess.run(
-            command,
-            check=False,
-            env=worker_environment(backend, dict(os.environ)),
-            capture_output=True,
-            text=True,
-            timeout=WORKER_TIMEOUT_S,
-        )
-    except subprocess.TimeoutExpired as error:
-        stderr = error.stderr or ""
-        replay_checks(stderr.decode() if isinstance(stderr, bytes) else stderr)
-        return {"status": "error", "reason": f"timeout after {error.timeout} s"}
-    replay_checks(done.stderr)
-    if done.returncode == 0:
-        for text in reversed(done.stdout.splitlines()):
-            if text.startswith("{"):
-                return json.loads(text)
-    tail = "\n".join(done.stderr.splitlines()[-STDERR_LINES:])
-    return {"status": "error", "reason": f"exit code {done.returncode}: {tail}"}
+    env = worker_environment(backend, dict(os.environ))
+    return run_worker_subprocess(command, env, WORKER_TIMEOUT_S, STDERR_LINES)
 
 
 def run(model_size: str, dtype_mode: str, torch_device: str, configs: list[str]) -> int:
@@ -279,7 +257,7 @@ def run(model_size: str, dtype_mode: str, torch_device: str, configs: list[str])
             logger.warning(f"{backend}: skipped. The cross-check stops.")
             return 1
         start = time.perf_counter()
-        result = run_worker_subprocess(backend, spec)
+        result = run_worker(backend, spec)
         logger.info(
             f"{backend}: {result['status']} in {time.perf_counter() - start:.1f} s: "
             f"{json.dumps({k: v for k, v in result.items() if k != 'status'})}"
@@ -310,21 +288,22 @@ def main(argv: list[str] | None = None) -> None:
         return
     if args.model_size is None:
         parser.error("the following arguments are required: --model-size")
-    try:
-        if args.dry_run:
+    if args.dry_run:
+        try:
             dry_run(args.model_size, args.dtype_mode, args.torch_device, args.configs)
-            return
-        CROSS_DIR.mkdir(parents=True, exist_ok=True)
-        logging.basicConfig(
-            level=logging.INFO,
-            format=LOG_FORMAT,
-            handlers=[
-                logging.StreamHandler(sys.stderr),
-                logging.FileHandler(CROSS_DIR / "driver.log"),
-            ],
-        )
+        except RunRuleError as error:
+            raise SystemExit(str(error)) from error
+        return
+    CROSS_DIR.mkdir(parents=True, exist_ok=True)
+    logging.basicConfig(
+        level=logging.INFO,
+        format=LOG_FORMAT,
+        handlers=[logging.StreamHandler(sys.stderr), logging.FileHandler(CROSS_DIR / "driver.log")],
+    )
+    try:
         code = run(args.model_size, args.dtype_mode, args.torch_device, args.configs)
     except RunRuleError as error:
+        logger.error(f"refused: {error}")  # the refusal goes to driver.log
         raise SystemExit(str(error)) from error
     sys.exit(code)
 

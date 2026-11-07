@@ -76,7 +76,8 @@ class _BackboneSlot:
 
     A load that breaks a run rule skips with the reason, as a second guard. After each mlx load
     the slot checks the load report: a load peak above its target of Table 5 of
-    specs/05-all-sizes/plan.html, or a cache above 0 bytes, fails the test.
+    specs/05-all-sizes/plan.html, a load peak below the bytes of the mapped tensors (F1 of
+    specs/05-all-sizes/verify.html), or a cache above 0 bytes fails the test.
     """
 
     def __init__(self) -> None:
@@ -115,15 +116,21 @@ class _BackboneSlot:
         return self.model
 
     def check_load_report(self, model_size: str, dtype_mode: str) -> None:
-        """Fail the test if the load peak is above its target or the MLX cache is not empty."""
-        from parity_checks import load_peak_target
+        """Fail the test if the load peak is outside its range or the MLX cache is not empty.
+
+        The range: at least the bytes of the mapped tensors (a load that does not evaluate the
+        tensors stays below), at most the target of Table 5.
+        """
+        from parity_checks import load_peak_lower_bound, load_peak_target
 
         report = self.model.load_report
         target = load_peak_target(model_size, dtype_mode)
-        if report.peak_bytes > target or report.cache_bytes > 0:
+        lower_bound = load_peak_lower_bound(model_size, self.model)
+        if not lower_bound <= report.peak_bytes <= target or report.cache_bytes > 0:
             pytest.fail(
                 f"load of {model_size} mlx {dtype_mode}: load peak {report.peak_bytes / GB:.4f} GB "
-                f"(target {target / GB:.4f} GB), cache {report.cache_bytes} bytes after the load"
+                f"(lower bound {lower_bound / GB:.4f} GB, target {target / GB:.4f} GB), "
+                f"cache {report.cache_bytes} bytes after the load"
             )
 
 

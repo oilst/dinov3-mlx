@@ -42,7 +42,7 @@ a { color: var(--accent); }
   <h1>MLP, Outputs and Speed</h1>
   <p>Explainer for roadmap step 4. Date: 2026-11-07.</p>
   <p class="steps">Step 4 explainers: <a href="04-1-patch-embedding.html">1 Patch embedding</a> · <a href="04-2-rope.html">2 RoPE</a> · <a href="04-3-attention.html">3 Attention</a> · <a href="04-4-layerscale.html">4 LayerScale and the block</a> · 5 MLP, outputs and speed (this page)</p>
-  <p class="steps">Previous: <a href="04-4-layerscale.html">4 LayerScale and the block</a> · Next: none. This is the last explainer of step 4.</p>
+  <p class="steps">Previous: <a href="04-4-layerscale.html">4 LayerScale and the block</a> · Next: <a href="05-1-swiglu.html">05-1 SwiGLU and one rounding</a> (Step 5). This is the last explainer of step 4.</p>
 </header>
 
 <nav>
@@ -593,6 +593,7 @@ return np.array(hidden)</code></pre>
 
 <section id="swiglu">
   <h2>8 Step 5: SwiGLU</h2>
+  <p class="note">Step 5 built SwiGLU. <a href="05-1-swiglu.html">05-1 SwiGLU and one rounding</a> explains the class <code>SwiGLU</code>, the new methods <code>MLP.activation</code>, <code>MLP.hidden</code> and <code>Block.ff_hidden</code>, and the union of <code>block_parameter_names</code>. This section keeps the state of Step 4.</p>
   <p>ViT-S/16, ViT-B/16 and ViT-L/16 have the MLP of this page. ViT-S+/16, ViT-H+/16 and ViT-7B/16 have SwiGLU, a gated feed-forward network: <code>down_proj(silu(gate_proj(x)) * up_proj(x))</code> (<code>DINOv3ViTGatedMLP</code>, lines 367 to 380 of <code>modeling_dinov3_vit.py</code>). It has three matrices instead of two. For ViT-S+/16, <code>gate_proj</code> and <code>up_proj</code> have the shape (1536, 384), and <code>down_proj</code> has the shape (384, 1536). So at the same hidden width, SwiGLU has 1.5 times the FLOPs of the MLP.</p>
   <p>Step 4 stops at SwiGLU on purpose, with a message:</p>
   <pre><code># src/dinov3_apple/mlx_model.py, lines 305 and 306 (Block.__init__)
@@ -648,7 +649,7 @@ if config.gated:                                   # use_gated_mlp of config.jso
   </ul>
 </section>
 
-<footer class="steps">Previous: <a href="04-4-layerscale.html">4 LayerScale and the block</a> · Next: none. This is the last explainer of step 4. First page: <a href="04-1-patch-embedding.html">1 Patch embedding and MLX weights</a>.</footer>
+<footer class="steps">Previous: <a href="04-4-layerscale.html">4 LayerScale and the block</a> · Next: <a href="05-1-swiglu.html">05-1 SwiGLU and one rounding</a> (Step 5). This is the last explainer of step 4. First page: <a href="04-1-patch-embedding.html">1 Patch embedding and MLX weights</a>.</footer>
 </main>
 </body>
 </html>

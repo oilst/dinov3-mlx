@@ -8,6 +8,7 @@ stored file or loads a model. W1 to W4 assert in fp32 and record the values in t
 bf16 dtype modes (D8).
 """
 
+import math
 from collections.abc import Callable
 
 import mlx.core as mx
@@ -44,6 +45,10 @@ HIDDEN_STATES_KEY = f"{HIDDEN_STATES_CONFIG}/hidden_states"
 PART_COSINE = 0.99999
 # W8: the token range in fp32 against the stored hidden states, relative difference.
 TOKEN_RANGE_RELATIVE = 1e-4
+# The fields of a token-range line: L + 1 values each for the token sequence, L values each for
+# the branches.
+TOKEN_FIELDS = ["tokens", "tokens_where", "tokens_finite"]
+BRANCH_FIELDS = ["attention", "ff_hidden", "ff_out"]
 
 MODEL_PARAMS = [
     pytest.param(model_size, dtype_mode, id=f"{BACKEND}-{model_size}-{dtype_mode}")
@@ -265,14 +270,19 @@ def test_mlx_token_range(
     record: Callable[..., None],
 ) -> None:
     """W7: the token range of the 12 configurations. Report only: a non-finite value is a result.
-    Needs no reference file."""
+    Needs no reference file.
+
+    Each line holds L + 1 token values and 3 x L branch values, and its status agrees with its
+    values (F6 of specs/05-all-sizes/verify.html).
+    """
     _skip_run_rule(record, "token-range", model_size, dtype_mode, "all")
     with record_skip(record, "token-range", model_size, dtype_mode, "all", backend=BACKEND):
         model = backbone(model_size, BACKEND, dtype_mode)
-    lines = 0
+    lines: dict[str, tuple[str, dict[str, list]]] = {}
     for config in CONFIG_IDS:
         token_range = run_mlx_token_range(model, inputs[config])
         status = "measured" if token_range.finite else "non-finite"
+        values = token_range.report_values()
         record(
             "token-range",
             model_size,
@@ -281,10 +291,21 @@ def test_mlx_token_range(
             None,
             status,
             backend=BACKEND,
-            values=token_range.report_values(),
+            values=values,
         )
-        lines += 1
-    assert lines == len(CONFIG_IDS) == 12
+        lines[config] = (status, values)
+    assert len(CONFIG_IDS) == 12
+    assert list(lines) == CONFIG_IDS
+    blocks = model.config.blocks
+    for config, (status, values) in lines.items():
+        for name in TOKEN_FIELDS:
+            assert len(values[name]) == blocks + 1, (config, name)
+        for name in BRANCH_FIELDS:
+            assert len(values[name]) == blocks, (config, name)
+        finite = all(values["tokens_finite"]) and all(
+            math.isfinite(value) for name in ("tokens", *BRANCH_FIELDS) for value in values[name]
+        )
+        assert status == ("measured" if finite else "non-finite"), config
 
 
 @pytest.mark.parametrize(("model_size", "dtype_mode"), FP32_PARAMS)

@@ -2,16 +2,33 @@
 run-rule guard, the comparison and the worker command line of the script."""
 
 import json
+import os
+import re
 import subprocess
+import sys
+from pathlib import Path
 
 import numpy as np
 import pytest
+from fakes import VIT7B16_PARAMETER_COUNT, fail_if_called, fail_load
 
-VIT7B16_PARAMETER_COUNT = 6_716_035_072
+REPO_ROOT = Path(__file__).parents[1]
 
+# A driver run of scripts/cross_check.py with its folder in a temporary place. The memory read and
+# the header read fail if the driver calls them before the run-rule guard. The test puts tests/ on
+# PYTHONPATH for the import of fakes.
+REFUSED_DRIVER = """
+import sys
+from pathlib import Path
 
-def _fail_load(*args: object, **kwargs: object) -> None:
-    raise AssertionError("the dry run loaded a model")
+import cross_check
+from fakes import fail_if_called
+
+cross_check.CROSS_DIR = Path(sys.argv[1])
+cross_check.available_memory_bytes = fail_if_called("available_memory_bytes")
+cross_check.parameter_count = fail_if_called("parameter_count")
+cross_check.main(sys.argv[2:])
+"""
 
 
 def test_cross_check_dry_run(
@@ -22,8 +39,8 @@ def test_cross_check_dry_run(
     import cross_check
 
     monkeypatch.setattr(cross_check, "parameter_count", lambda model_size: VIT7B16_PARAMETER_COUNT)
-    monkeypatch.setattr("dinov3_apple.reference.load_torch_backbone", _fail_load)
-    monkeypatch.setattr("dinov3_apple.mlx_weights.load_mlx_backbone", _fail_load)
+    monkeypatch.setattr("dinov3_apple.reference.load_torch_backbone", fail_load)
+    monkeypatch.setattr("dinov3_apple.mlx_weights.load_mlx_backbone", fail_load)
     cross_check.main(
         [
             "--model-size",
@@ -52,14 +69,47 @@ def test_cross_check_dry_run(
 
 def test_cross_check_refuses_7b_autocast_on_torch(monkeypatch: pytest.MonkeyPatch) -> None:
     """The torch worker of ViT-7B/16 in an autocast mode has fp32 weights: the run rule stops the
-    cross-check before any worker and before parameter_count."""
+    dry run before any worker, before the memory read and before parameter_count (F10 of
+    specs/05-all-sizes/verify.html)."""
     import cross_check
 
-    monkeypatch.setattr(cross_check, "parameter_count", _fail_load)
+    monkeypatch.setattr(cross_check, "parameter_count", fail_if_called("parameter_count"))
+    monkeypatch.setattr(
+        cross_check, "available_memory_bytes", fail_if_called("available_memory_bytes")
+    )
     with pytest.raises(SystemExit, match="CLAUDE.md run rules"):
         cross_check.main(
             ["--model-size", "ViT-7B/16", "--dtype-mode", "bf16-autocast", "--dry-run"]
         )
+
+
+def test_cross_check_refusal_reaches_the_driver_log(tmp_path: Path) -> None:
+    """A refused run writes the refusal to driver.log, before the memory read and before
+    parameter_count (F10). The driver runs in a subprocess, so its log handlers stay out of the
+    test session."""
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            REFUSED_DRIVER,
+            str(tmp_path),
+            "--model-size",
+            "ViT-7B/16",
+            "--dtype-mode",
+            "bf16-autocast",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        cwd=REPO_ROOT / "scripts",
+        env=os.environ | {"PYTHONPATH": str(REPO_ROOT / "tests")},
+        timeout=120,
+    )
+    assert result.returncode == 1, result.stderr
+    assert "AssertionError" not in result.stderr
+    assert result.stderr.rstrip().endswith("(CLAUDE.md run rules)")
+    log = (tmp_path / "driver.log").read_text()
+    assert re.search(r"cross_check refused: ViT-7B/16 torch-mps bf16-autocast: .+ run rules", log)
 
 
 def test_cross_check_compare_tokens() -> None:
@@ -91,9 +141,9 @@ def test_cross_check_worker_command_parses(monkeypatch: pytest.MonkeyPatch) -> N
         commands.append(command)
         return subprocess.CompletedProcess(command, 0, stdout='{"status": "done"}\n', stderr="")
 
-    monkeypatch.setattr(cross_check.subprocess, "run", fake_run)
+    monkeypatch.setattr(subprocess, "run", fake_run)
     spec = {"model_size": "ViT-7B/16", "dtype_mode": "bf16-cast", "torch_device": "mps"}
-    assert cross_check.run_worker_subprocess("torch-mps", spec) == {"status": "done"}
+    assert cross_check.run_worker("torch-mps", spec) == {"status": "done"}
     calls: list[tuple[str, str]] = []
     monkeypatch.setattr(
         cross_check, "worker_main", lambda backend, spec_json: calls.append((backend, spec_json))

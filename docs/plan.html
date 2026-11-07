@@ -497,20 +497,20 @@ figcaption { font-size: 0.88rem; color: var(--muted); max-width: 52rem; }
       <p>Table 3 gives the six model sizes. The parameter counts come from the official README. The other values come from the official model definitions in <code>dinov3/hub/backbones.py</code>.</p>
       <div class="table-wrap">
         <table class="wide">
-          <thead><tr><th>Model size</th><th class="num">Parameters</th><th class="num">D</th><th class="num">Blocks</th><th class="num">Heads</th><th class="num">Head dimension</th><th>Feed-forward network</th><th class="num">Feed-forward size</th></tr></thead>
+          <thead><tr><th>Model size</th><th class="num">Parameters</th><th class="num">D</th><th class="num">Blocks</th><th class="num">Heads</th><th class="num">Head dimension</th><th>Feed-forward network</th><th class="num">Feed-forward size</th><th>q and v biases</th></tr></thead>
           <tbody>
-            <tr><td>ViT-S/16</td><td class="num">21M</td><td class="num">384</td><td class="num">12</td><td class="num">6</td><td class="num">64</td><td>MLP, GELU</td><td class="num">1536</td></tr>
-            <tr><td>ViT-S+/16</td><td class="num">29M</td><td class="num">384</td><td class="num">12</td><td class="num">6</td><td class="num">64</td><td>SwiGLU</td><td class="num">1536</td></tr>
-            <tr><td>ViT-B/16</td><td class="num">86M</td><td class="num">768</td><td class="num">12</td><td class="num">12</td><td class="num">64</td><td>MLP, GELU</td><td class="num">3072</td></tr>
-            <tr><td>ViT-L/16</td><td class="num">300M</td><td class="num">1024</td><td class="num">24</td><td class="num">16</td><td class="num">64</td><td>MLP, GELU</td><td class="num">4096</td></tr>
-            <tr><td>ViT-H+/16</td><td class="num">840M</td><td class="num">1280</td><td class="num">32</td><td class="num">20</td><td class="num">64</td><td>SwiGLU</td><td class="num">5120</td></tr>
-            <tr><td>ViT-7B/16</td><td class="num">6,716M</td><td class="num">4096</td><td class="num">40</td><td class="num">32</td><td class="num">128</td><td>SwiGLU</td><td class="num">8192</td></tr>
+            <tr><td>ViT-S/16</td><td class="num">21M</td><td class="num">384</td><td class="num">12</td><td class="num">6</td><td class="num">64</td><td>MLP, GELU</td><td class="num">1536</td><td>Yes</td></tr>
+            <tr><td>ViT-S+/16</td><td class="num">29M</td><td class="num">384</td><td class="num">12</td><td class="num">6</td><td class="num">64</td><td>SwiGLU</td><td class="num">1536</td><td>Yes</td></tr>
+            <tr><td>ViT-B/16</td><td class="num">86M</td><td class="num">768</td><td class="num">12</td><td class="num">12</td><td class="num">64</td><td>MLP, GELU</td><td class="num">3072</td><td>Yes</td></tr>
+            <tr><td>ViT-L/16</td><td class="num">300M</td><td class="num">1024</td><td class="num">24</td><td class="num">16</td><td class="num">64</td><td>MLP, GELU</td><td class="num">4096</td><td>Yes</td></tr>
+            <tr><td>ViT-H+/16</td><td class="num">840M</td><td class="num">1280</td><td class="num">32</td><td class="num">20</td><td class="num">64</td><td>SwiGLU</td><td class="num">5120</td><td>Yes</td></tr>
+            <tr><td>ViT-7B/16</td><td class="num">6,716M</td><td class="num">4096</td><td class="num">40</td><td class="num">32</td><td class="num">128</td><td>SwiGLU</td><td class="num">8192</td><td>No</td></tr>
           </tbody>
         </table>
       </div>
-      <p><b>Table 3.</b> DINOv3 ViT model sizes. D is the embedding dimension.</p>
+      <p><b>Table 3.</b> DINOv3 ViT model sizes. D is the embedding dimension. The column "q and v biases" comes from <code>query_bias</code> and <code>value_bias</code> in the <code>config.json</code> of each Hub repo (added in Step 5).</p>
       <p>The feed-forward size is the length of the inner vector of the feed-forward network. For SwiGLU, the code takes two thirds of D times the feed-forward ratio. Then it rounds up to a multiple of 8, or 64 for ViT-7B/16.</p>
-      <p>All six model sizes share the patch size 16, the 4 register tokens, LayerScale, RoPE and layer norms with eps 1e-5. The key projection has no bias. The query and value projections have biases. ViT-7B/16 has one more layer norm for local crops, and only training uses it. DINOv3 also has four ConvNeXt backbones, but they are not in the scope of this repo.</p>
+      <p>All six model sizes share the patch size 16, the 4 register tokens, LayerScale, RoPE and layer norms with eps 1e-5. The key projection has no bias. The query and value projections have biases in five model sizes. ViT-7B/16 has no query bias and no value bias. ViT-7B/16 has one more layer norm for local crops, and only training uses it. DINOv3 also has four ConvNeXt backbones, but they are not in the scope of this repo.</p>
     </div>
 
     <div class="cols">
@@ -699,18 +699,18 @@ figcaption { font-size: 0.88rem; color: var(--muted); max-width: 52rem; }
         <thead><tr><th>Step</th><th>Goal</th><th>DINOv3 topic of the explainer</th><th>Status</th></tr></thead>
         <tbody>
           <tr><td>0 Workflow</td><td>Steering files, glossary, spec template, this report</td><td>Model family and training method (this report)</td><td>Done</td></tr>
-          <tr class="sel"><td>1 Scope</td><td>Prior work, license, Python project, access to the weights</td><td>What the other ports cover</td><td>Next</td></tr>
-          <tr><td>2 Reference</td><td>Reference outputs and parity tests for all model sizes</td><td>Tokens and outputs</td><td>Open</td></tr>
-          <tr><td>3 Baseline</td><td>Benchmark harness and the baseline on <code>torch-mps</code></td><td>Where the compute goes</td><td>Open</td></tr>
-          <tr><td>4 MLX port</td><td>ViT-S/16 in MLX and the weight converter</td><td>Patch embedding, RoPE, attention, LayerScale, MLP</td><td>Open</td></tr>
-          <tr><td>5 All sizes</td><td>All model sizes in fp32, fp16 and bf16</td><td>SwiGLU, model scaling, numeric range</td><td>Open</td></tr>
-          <tr><td>6 Speed</td><td>Compiled graphs, batch sizes, quantized weights</td><td>Attention cost at high input resolution</td><td>Open</td></tr>
+          <tr><td>1 Scope</td><td>Prior work, license, Python project, access to the weights</td><td>What the other ports cover</td><td>Done</td></tr>
+          <tr><td>2 Reference</td><td>Reference outputs and parity tests for all model sizes</td><td>Tokens and outputs</td><td>Done</td></tr>
+          <tr><td>3 Baseline</td><td>Benchmark harness and the baseline on <code>torch-mps</code></td><td>Where the compute goes</td><td>Done</td></tr>
+          <tr><td>4 MLX port</td><td>ViT-S/16 in MLX and the weight converter</td><td>Patch embedding, RoPE, attention, LayerScale, MLP</td><td>Done</td></tr>
+          <tr><td>5 All sizes</td><td>All model sizes in fp32, fp16 and bf16</td><td>SwiGLU, model scaling, numeric range</td><td>Done</td></tr>
+          <tr class="sel"><td>6 Speed</td><td>Compiled graphs, batch sizes, quantized weights</td><td>Attention cost at high input resolution</td><td>Next</td></tr>
           <tr><td>7 Release</td><td>Public API, README with results, CI, first public push</td><td>None</td><td>Open</td></tr>
           <tr><td>8 Fine-tuning</td><td>8a: reference fine-tuning setup in MLX. 8b: DoRA and other adapters</td><td>DINO loss, iBOT loss, KoLeo regularizer, Gram anchoring</td><td>Open</td></tr>
         </tbody>
       </table>
     </div>
-    <p><b>Table 8.</b> Steps of the plan. The highlighted row is the next step.</p>
+    <p><b>Table 8.</b> Steps of the plan. The highlighted row is the next step. <code>roadmap.md</code> holds the current status of each step.</p>
 
     <div class="sub" id="step-0">
       <h3>Step 0. Workflow</h3>
@@ -856,8 +856,8 @@ figcaption { font-size: 0.88rem; color: var(--muted); max-width: 52rem; }
           </tbody>
         </table>
       </div>
-      <p><b>Table 9.</b> Parity tests. Step 2 confirmed the fp32 and fp16 thresholds and set the patch thresholds. On 2026-11-06 the user gave bf16 its own thresholds (ADR 0003, <code>specs/02-reference/verify.html</code>). They hold for fp16 and bf16 in cast mode and in autocast mode.</p>
-      <p>ViT-S/16 and ViT-B/16 run by default. The other model sizes run when the variable <code>DINOV3_SLOW</code> is 1. Each test name includes the model size, the backend, the dtype and the input resolution.</p>
+      <p><b>Table 9.</b> Parity tests. Step 2 confirmed the fp32 and fp16 thresholds and set the patch thresholds. On 2026-11-06 the user gave bf16 its own thresholds (ADR 0003, <code>specs/02-reference/verify.html</code>). They hold for fp16 and bf16 in cast mode and in autocast mode. Default model sizes: ViT-S/16 and ViT-B/16 on <code>torch-cpu</code> and <code>torch-mps</code>; ViT-S/16, ViT-S+/16 and ViT-B/16 on <code>mlx</code> (changed in Step 5, decision D7 of <code>specs/05-all-sizes/explore.html</code>). The slow session runs all six model sizes, with ViT-7B/16 last.</p>
+      <p>The default session runs the default model sizes of the caption of Table 9. The other model sizes run when the variable <code>DINOV3_SLOW</code> is 1. On <code>mlx</code>, the default session also runs SwiGLU with the real weights (ViT-S+/16). Each test name includes the model size, the backend, the dtype and the input resolution.</p>
     </div>
 
     <div class="sub" id="m-parity">

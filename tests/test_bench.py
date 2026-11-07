@@ -1,5 +1,11 @@
+import json
+import logging
+import os
+import subprocess
 import sys
+from dataclasses import asdict
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
@@ -7,6 +13,7 @@ from safetensors.numpy import save_file
 
 from dinov3_apple import bench
 from dinov3_apple.bench import (
+    DTYPE_MODE_NAMES,
     TIMED,
     WARM_UP,
     BenchConfig,
@@ -14,12 +21,14 @@ from dinov3_apple.bench import (
     add_rounds,
     baseline_rows,
     bench_configurations,
+    bytes_per_weight,
     check_validity,
     keep_going,
     make_batch,
     reference_tokens,
     required_bench_bytes,
     result_line,
+    run_worker_subprocess,
     summarize,
 )
 from dinov3_apple.hub import WeightsNotFoundError
@@ -296,3 +305,95 @@ def test_add_rounds_rotates_and_numbers_repeats() -> None:
     rounds = add_rounds(configs, lines, rounds=2)
     assert [(c.batch_size, c.repeat) for c in rounds] == [(1, 0), (8, 2), (1, 1), (8, 3)]
     assert add_rounds(configs, lines, rounds=0) == configs
+
+
+def test_bytes_per_weight_of_each_backend() -> None:
+    """F20 of specs/05-all-sizes/verify.html: one rule for the bytes of each weight. mlx loads
+    half weights also in the autocast modes; torch keeps fp32 weights in the autocast modes."""
+    assert [bytes_per_weight("mlx", mode) for mode in DTYPE_MODE_NAMES] == [4, 2, 2, 2, 2]
+    for backend in ("torch-mps", "torch-cpu"):
+        assert [bytes_per_weight(backend, mode) for mode in DTYPE_MODE_NAMES] == [4, 2, 2, 4, 4]
+    with pytest.raises(ValueError, match="cuda"):
+        bytes_per_weight("cuda", "fp32")
+
+
+# A worker: one memory-check line for the driver, one other line on each stream, then its result.
+WORKER = """
+import json, os, sys
+print("memory-check-record 1700000000.250000 dinov3_apple.memory memory check: x: ok", file=sys.stderr)
+print("a line that is not a check", file=sys.stderr)
+print("a line that is not the result")
+print(json.dumps({"status": "done", "argument": sys.argv[1], "env": os.environ["WORKER_VALUE"]}))
+"""
+
+
+def test_run_worker_subprocess(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """F20: the shared runner of scripts/bench_mlx_port.py and scripts/cross_check.py. It gives
+    the last JSON line of the worker and replays its memory-check lines in the driver. A worker
+    that exits with an error or runs too long gives the status "error"."""
+    # The replayed record must not reach memory-checks.log of the test session.
+    monkeypatch.setattr(logging.getLogger("dinov3_apple.memory"), "handlers", [])
+    env = os.environ | {"WORKER_VALUE": "from the driver"}
+    with caplog.at_level(logging.INFO):
+        result = run_worker_subprocess([sys.executable, "-c", WORKER, "7"], env, timeout_s=60)
+    assert result == {"status": "done", "argument": "7", "env": "from the driver"}
+    records = [record for record in caplog.records if record.name == "dinov3_apple.memory"]
+    assert [record.getMessage() for record in records] == ["memory check: x: ok"]
+    assert records[0].created == 1700000000.25
+
+    failing = "import sys; print('first'); print('last', file=sys.stderr); sys.exit(3)"
+    result = run_worker_subprocess([sys.executable, "-c", failing], env, timeout_s=60)
+    assert result == {"status": "error", "reason": "exit code 3: last"}
+    slow = "import time; time.sleep(30)"
+    result = run_worker_subprocess([sys.executable, "-c", slow], env, timeout_s=0.5)
+    assert result == {"status": "error", "reason": "timeout after 0.5 s"}
+
+
+def test_benchmark_worker_runs_through_the_shared_runner(monkeypatch: pytest.MonkeyPatch) -> None:
+    """F20: scripts/benchmark.py of Step 3 runs its torch-mps worker through the shared runner.
+    The command line, the watermarks, the time limit of 3600 s, the 20 stderr lines and the
+    results stay as in Step 3. A fake subprocess.run records each call, so no worker starts."""
+    import benchmark
+
+    # The test session sets the watermarks (conftest.py). Here the driver must add them.
+    monkeypatch.delenv("PYTORCH_MPS_HIGH_WATERMARK_RATIO", raising=False)
+    monkeypatch.delenv("PYTORCH_MPS_LOW_WATERMARK_RATIO", raising=False)
+    stderr = "\n".join(f"line {i}" for i in range(25))
+    outcomes = [
+        subprocess.CompletedProcess(
+            [], 0, stdout='not the result\n{"status": "done"}\n', stderr=""
+        ),
+        subprocess.CompletedProcess([], 1, stdout="", stderr=stderr),
+        "timeout",
+    ]
+    calls: list[tuple[list[str], dict[str, Any]]] = []
+
+    def fake_run(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess:
+        calls.append((command, kwargs))
+        outcome = outcomes.pop(0)
+        if outcome == "timeout":
+            raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+        return outcome
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    config = BenchConfig("B1", "ViT-S/16", "fp32", 224, 8)
+    assert benchmark.run_worker_subprocess(config) == {"status": "done"}
+    tail = "\n".join(f"line {i}" for i in range(5, 25))
+    assert benchmark.run_worker_subprocess(config) == {
+        "status": "error",
+        "reason": f"exit code 1: {tail}",
+    }
+    assert benchmark.run_worker_subprocess(config) == {
+        "status": "error",
+        "reason": "timeout after 3600 s",
+    }
+    worker = [sys.executable, benchmark.__file__, "--worker", json.dumps(asdict(config))]
+    assert len(calls) == 3
+    for command, kwargs in calls:
+        assert command == worker
+        assert kwargs["timeout"] == 3600
+        assert kwargs["env"]["PYTORCH_MPS_HIGH_WATERMARK_RATIO"] == "0.8"
+        assert kwargs["env"]["PYTORCH_MPS_LOW_WATERMARK_RATIO"] == "0.6"
+        assert kwargs["capture_output"] and kwargs["text"] and not kwargs["check"]

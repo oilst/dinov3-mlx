@@ -1,0 +1,849 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Numeric Range of the Tokens</title>
+<style>
+/* Explainer page. White page, black text, no dark mode. */
+:root { --bg: #ffffff; --fg: #111414; --muted: #4a5655; --rule: #d6dedd; --panel: #f5f8f7; --accent: #057379; --cls: #057379; --patch: #9fd3d1; --reg: #e0a336; --red: #b03a2e; color-scheme: light; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif; }
+main { max-width: 62rem; margin: 0 auto; padding: 40px 16px 64px; display: grid; gap: 1.75rem; }
+main > *, section > * { min-width: 0; }
+h1 { font-size: 1.9rem; line-height: 1.15; margin: 0; }
+h2 { font-size: 1.3rem; margin: 0; }
+h3 { font-size: 1.05rem; margin: 0; }
+section { display: grid; gap: 0.8rem; }
+p, ul, ol { margin: 0; max-width: 46rem; }
+li + li { margin-top: 0.25rem; }
+code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.86em; }
+p code, li code, td code { overflow-wrap: anywhere; }
+pre { margin: 0; background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 0.8rem 1rem; overflow-x: auto; }
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 0.92rem; }
+th, td { text-align: left; vertical-align: top; padding: 0.45rem 0.7rem 0.45rem 0; border-bottom: 1px solid var(--rule); }
+th { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); border-bottom: 1.5px solid var(--fg); }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+tr.group td { background: var(--panel); font-weight: 600; }
+td.over { color: var(--red); font-weight: 600; }
+td.name { white-space: nowrap; }
+td.name code { overflow-wrap: normal; }
+.caption, figcaption { font-size: 0.88rem; color: var(--muted); }
+figure { margin: 0; display: grid; gap: 0.4rem; }
+.fig { border: 1px solid var(--rule); border-radius: 6px; padding: 0.5rem; overflow-x: auto; }
+.fig svg { display: block; width: 100%; height: auto; min-width: 640px; }
+.note { border-left: 3px solid var(--accent); padding: 0.3rem 0 0.3rem 0.9rem; }
+nav ol { columns: 2; }
+.steps { font-size: 0.92rem; color: var(--muted); }
+a { color: var(--accent); }
+@media (max-width: 640px) { nav ol { columns: 1; } h1 { font-size: 1.6rem; } }
+</style>
+</head>
+<body>
+<main>
+<header>
+  <h1>Numeric Range of the Tokens</h1>
+  <p>Explainer for roadmap Step 5. Date: 2026-11-07.</p>
+  <p class="steps">Step 5 explainers: <a href="05-1-swiglu.html">1 SwiGLU</a> · <a href="05-2-model-scaling.html">2 Model scaling, dtype modes and loading</a> · 3 Numeric range of the tokens (this page). Step 2: <a href="02-tokens-and-outputs.html">Tokens and outputs</a>.</p>
+  <p class="steps">Previous: <a href="05-2-model-scaling.html">2 Model scaling, dtype modes and loading</a> · Next: none. This is the last explainer of Step 5.</p>
+</header>
+
+<nav>
+  <h2>Contents</h2>
+  <ol>
+    <li><a href="#why">Why this explainer</a></li>
+    <li><a href="#dtypes">fp16, bf16 and the dtype of each tensor</a></li>
+    <li><a href="#tokenrange">The token range of one block</a></li>
+    <li><a href="#hidden">The change in run_mlx_hidden_states</a></li>
+    <li><a href="#measured">The measured token range</a></li>
+    <li><a href="#layerscale">LayerScale makes a branch output large</a></li>
+    <li><a href="#resolution">ViT-H+/16: the input resolution decides</a></li>
+    <li><a href="#margins">ViT-7B/16 and the fp16 margins</a></li>
+    <li><a href="#expected">Expected failures in the tests</a></li>
+    <li><a href="#finalnorm">After the final layer norm</a></li>
+    <li><a href="#results">The measured results of Step 5</a></li>
+    <li><a href="#surprises">Surprises</a></li>
+    <li><a href="#sources">Sources</a></li>
+  </ol>
+</nav>
+
+<section id="why">
+  <h2>1 Why this explainer</h2>
+  <p>The largest fp16 value is 65,504. A larger value becomes infinite (inf). Some register tokens of DINOv3 go above this value inside the backbone (<a href="02-tokens-and-outputs.html#registers">02, Section 5</a>). So the dtype mode decides if a model size gives a finite output. Step 5 records the <b>token range</b>: the largest absolute value in the token sequence before block 1 and after each block. It also records the largest value of three tensors inside each block: the attention branch output, the feed-forward hidden values and the feed-forward branch output. The record covers 6 model sizes, the 5 dtype modes and the 12 configurations of each model size, on <code>mlx</code>.</p>
+  <p>This page explains the code of the record, the code that turns an fp16 overflow into an expected failure, and the measured values. The values come from <code>results/token-range-mlx.md</code> (test W7, 2026-11-07, mlx 0.32.4), from <code>specs/05-all-sizes/verify.html</code> and from <code>explore.html</code>. The values after one block come from the token-range lines in <code>tests/fixtures/generated/parity/mlx.jsonl</code>, which git ignores; <code>results/token-range-mlx.md</code> is made from the same lines. The agent that wrote this page ran no test, no model and no GPU work.</p>
+  <p>The result in five numbers:</p>
+  <ul>
+    <li>A register token of ViT-L/16 reaches 157,130 in fp32 (<code>iss-kibo-lab</code>, 224 × 224 px, after block 23). That is 239.9 % of the fp16 maximum. Over the 12 configurations the largest value is 158,433.</li>
+    <li>ViT-H+/16 goes above 65,504 only when the short side of the input is 224 px: 116,642 to 149,750. At 448 and 512 px it stays at 52,206 to 59,863.</li>
+    <li>The largest finite fp16 value is 59,776: 91.3 % of the fp16 maximum (ViT-H+/16, fp16-cast, <code>iss-conference</code> at 448 × 448 px).</li>
+    <li>In fp16-autocast the largest fp16 tensor value is 52,128: 79.6 % of the fp16 maximum (the feed-forward branch output of ViT-L/16 in block 1).</li>
+    <li>ViT-7B/16 reaches only 13,582: 20.7 % of the fp16 maximum. No ViT-7B/16 pair joined the list of expected failures.</li>
+  </ul>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Name</th><th>File and lines</th><th>New or changed</th><th>Job</th><th>Tests</th></tr></thead>
+      <tbody>
+        <tr><td class="name"><code>TokenRange</code></td><td><code>mlx_model.py</code> 511–549</td><td>new</td><td>The largest absolute values of one configuration, block by block. <code>finite</code> sets the status of a line; <code>report_values</code> gives the JSON values.</td><td>T26, <code>test_token_range_finite_sees_each_inf</code>, W7</td></tr>
+        <tr><td class="name"><code>_largest</code>, <code>_token_values</code></td><td><code>mlx_model.py</code> 552–559</td><td>new (private helpers)</td><td>The largest |value| of one tensor; for a token sequence also its token and the finite flag.</td><td>T26</td></tr>
+        <tr><td class="name"><code>run_mlx_token_range</code></td><td><code>mlx_model.py</code> 562–602</td><td>new</td><td>Runs image 0 block by block and keeps only the largest values.</td><td>T26, W7, W8</td></tr>
+        <tr><td class="name"><code>run_mlx_hidden_states</code></td><td><code>mlx_model.py</code> 487–508</td><td>changed</td><td>The token sequence before block 1 and after each block. The model now casts the pixels.</td><td>W4, T26</td></tr>
+        <tr><td class="name"><code>FP16_OVERFLOW</code></td><td><code>parity.py</code> 36–38</td><td>new</td><td>The xfail reason of an expected fp16 overflow.</td><td>T14</td></tr>
+        <tr><td class="name"><code>EXPECTED_FP16_OVERFLOW</code></td><td><code>parity.py</code> 39–43</td><td>new</td><td>The (model size, dtype mode) pairs with evidence of an fp16 overflow.</td><td>T14</td></tr>
+        <tr><td class="name"><code>check_finite</code></td><td><code>tests/parity_checks.py</code> 61–77</td><td>new</td><td>Records a non-finite output. Then it xfails a listed pair and fails any other pair.</td><td>T14, W5, W6, the <code>torch-mps</code> parity tests</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 1.</b> The Step 5 code of this page, from row 05-3 of Table 1 of <code>specs/05-all-sizes/plan.html</code>. The files in <code>src/dinov3_apple/</code> have the line numbers of commit <code>7c30a3e</code>; the fixes in the working tree after the Verify stage did not change them. <code>tests/parity_checks.py</code> has the line numbers of the working tree: the fixes added 3 lines above <code>check_finite</code> (lines 58–74 at <code>HEAD</code>). The test numbers are those of the plan.</p>
+</section>
+
+<section id="dtypes">
+  <h2>2 fp16, bf16 and the dtype of each tensor</h2>
+  <p>fp16 and bf16 both use 16 bits. They split the bits in a different way:</p>
+  <ul>
+    <li><b>fp16</b> has more significant bits but a small range. The largest finite value is 65,504. A matmul output or a sum above it becomes inf. The next layer norm or softmax then gives NaN (Section 3.3 of <code>explore.html</code>).</li>
+    <li><b>bf16</b> has the range of fp32, so it does not overflow. But it has only 8 significant bits. Near 131,072 the spacing of bf16 values is 1,024 (<a href="02-tokens-and-outputs.html#half">02, Section 6</a>).</li>
+  </ul>
+  <p>So the fp16 overflow is a question of where a dtype mode keeps fp16. Each dtype mode of <code>mlx</code> is a pair of dtypes: the matmul dtype and the stream dtype (<a href="05-2-model-scaling.html">05-2</a>). Table 2 gives the dtype of the four tensors of the token range, from Table 3 of the plan.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Tensor</th><th>Field of <code>TokenRange</code></th><th>fp32</th><th>fp16-cast, bf16-cast</th><th>fp16-autocast, bf16-autocast</th></tr></thead>
+      <tbody>
+        <tr><td>Token sequence (residual stream)</td><td><code>tokens</code></td><td>fp32</td><td>half</td><td>fp32</td></tr>
+        <tr><td>Attention branch output (o_proj, before LayerScale)</td><td><code>attention</code></td><td>fp32</td><td>half</td><td>half</td></tr>
+        <tr><td>Feed-forward hidden values</td><td><code>ff_hidden</code></td><td>fp32</td><td>half: computed in fp32, rounded once</td><td>half: computed in fp32, rounded once</td></tr>
+        <tr><td>Feed-forward branch output (down_proj, before LayerScale)</td><td><code>ff_out</code></td><td>fp32</td><td>half</td><td>half</td></tr>
+        <tr><td>LayerScale λ, λ · branch output, residual add</td><td>not recorded</td><td>fp32</td><td>half</td><td>fp32: a half branch output × fp32 λ gives fp32</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 2.</b> The dtype of each tensor of the token range. "half" is fp16 or bf16. So in fp16-cast all four tensors must stay below 65,504. In fp16-autocast only the three branch tensors must stay below it; the token sequence is fp32.</p>
+  <p class="note">The attention inside the branch has one measured difference to the plan. Table 3 of the plan says that the half SDPA kernel computes the scores, the softmax and P · V in fp32. On this Mac (M5 Max, mlx 0.32.4) it does not. MLX uses another kernel when the inputs are half, the head dimension is 64 or 128 and the sequence has more than 8 tokens. This kernel has the option <code>relaxed_precision</code>. It computes with about 11 bits of internal precision (finding F3 of <code>verify.html</code>; <a href="05-2-model-scaling.html#sdpa">05-2</a> explains it). This changes the rounding of the attention branch output, not its range. An analysis of the fp16 overflow must not assume an fp32 P · V.</p>
+</section>
+
+<section id="tokenrange">
+  <h2>3 The token range of one block</h2>
+  <p><code>run_mlx_token_range</code> runs image 0 of a pixel batch block by block. In each block it makes the same calls as <code>Block.__call__</code>, in the same order. It keeps only the largest absolute values, not the tensors. Figure 1 shows one block.</p>
+  <figure>
+    <div class="fig"><svg viewBox="0 0 960 400" role="img" aria-labelledby="fig1-title" font-family="-apple-system, Helvetica Neue, Arial, sans-serif">
+      <title id="fig1-title">One block in run_mlx_token_range: the five calls of Block.__call__, the four recorded tensors and the TokenRange that collects them</title>
+      <defs><marker id="arrow1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#4a5655"/></marker></defs>
+      <rect width="960" height="400" fill="#ffffff"/>
+      <g font-size="12" fill="#111414">
+        <text x="20" y="22" font-weight="600" font-size="13">One block in run_mlx_token_range (lines 581 to 589 of mlx_model.py)</text>
+
+        <path d="M60,92 V58 H396 V106" fill="none" stroke="#9aa5a4" stroke-width="1.5" marker-end="url(#arrow1)"/>
+        <path d="M431,104 V64 H876 V106" fill="none" stroke="#9aa5a4" stroke-width="1.5" marker-end="url(#arrow1)"/>
+        <text x="226" y="52" text-anchor="middle" font-size="10.5" fill="#4a5655">residual connection</text>
+        <text x="650" y="58" text-anchor="middle" font-size="10.5" fill="#4a5655">residual connection</text>
+
+        <rect x="20" y="92" width="80" height="56" rx="5" fill="#ffffff" stroke="#057379" stroke-width="2"/>
+        <text x="60" y="112" text-anchor="middle" font-weight="600">x</text>
+        <text x="60" y="127" text-anchor="middle" font-size="10.5">token sequence</text>
+        <text x="60" y="140" text-anchor="middle" font-size="10.5" fill="#4a5655">stream dtype</text>
+
+        <rect x="118" y="96" width="132" height="48" rx="5" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="184" y="114" text-anchor="middle" font-weight="600" font-size="11.5">attention_branch</text>
+        <text x="184" y="130" text-anchor="middle" font-size="10.5">norm1, cast, Attention</text>
+        <text x="184" y="160" text-anchor="middle" font-size="10" fill="#4a5655">line 582</text>
+
+        <rect x="264" y="104" width="30" height="32" rx="4" fill="#fdf3e1" stroke="#e0a336" stroke-width="2"/>
+        <text x="279" y="125" text-anchor="middle" font-weight="600">a</text>
+
+        <rect x="304" y="100" width="72" height="40" rx="5" fill="#f5f8f7" stroke="#4a5655"/>
+        <text x="340" y="117" text-anchor="middle" font-size="10" font-weight="600">layer_scale1</text>
+        <text x="340" y="131" text-anchor="middle" font-size="10.5">× λ1</text>
+
+        <circle cx="396" cy="120" r="12" fill="#ffffff" stroke="#4a5655" stroke-width="1.5"/>
+        <text x="396" y="125" text-anchor="middle" font-size="15">+</text>
+        <text x="396" y="160" text-anchor="middle" font-size="10" fill="#4a5655">line 583</text>
+
+        <rect x="416" y="104" width="30" height="32" rx="4" fill="#ffffff" stroke="#057379" stroke-width="2"/>
+        <text x="431" y="125" text-anchor="middle" font-weight="600">x</text>
+
+        <rect x="458" y="96" width="122" height="48" rx="5" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="519" y="114" text-anchor="middle" font-weight="600" font-size="11.5">ff_hidden</text>
+        <text x="519" y="130" text-anchor="middle" font-size="10.5">norm2, cast, hidden</text>
+        <text x="519" y="160" text-anchor="middle" font-size="10" fill="#4a5655">line 584</text>
+
+        <rect x="596" y="104" width="30" height="32" rx="4" fill="#fdf3e1" stroke="#e0a336" stroke-width="2"/>
+        <text x="611" y="125" text-anchor="middle" font-weight="600">h</text>
+
+        <rect x="642" y="100" width="86" height="40" rx="5" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="685" y="117" text-anchor="middle" font-size="11" font-weight="600">mlp.down_proj</text>
+        <text x="685" y="131" text-anchor="middle" font-size="10.5">matmul</text>
+        <text x="685" y="160" text-anchor="middle" font-size="10" fill="#4a5655">line 585</text>
+
+        <rect x="744" y="104" width="30" height="32" rx="4" fill="#fdf3e1" stroke="#e0a336" stroke-width="2"/>
+        <text x="759" y="125" text-anchor="middle" font-weight="600">f</text>
+
+        <rect x="786" y="100" width="72" height="40" rx="5" fill="#f5f8f7" stroke="#4a5655"/>
+        <text x="822" y="117" text-anchor="middle" font-size="10" font-weight="600">layer_scale2</text>
+        <text x="822" y="131" text-anchor="middle" font-size="10.5">× λ2</text>
+
+        <circle cx="876" cy="120" r="12" fill="#ffffff" stroke="#4a5655" stroke-width="1.5"/>
+        <text x="876" y="125" text-anchor="middle" font-size="15">+</text>
+        <text x="876" y="160" text-anchor="middle" font-size="10" fill="#4a5655">line 586</text>
+
+        <rect x="900" y="104" width="44" height="32" rx="4" fill="#ffffff" stroke="#057379" stroke-width="2"/>
+        <text x="922" y="125" text-anchor="middle" font-weight="600">x</text>
+
+        <g font-size="10.5">
+          <rect x="226" y="190" width="106" height="40" rx="5" fill="#ffffff" stroke="#4a5655" stroke-dasharray="3 2"/>
+          <text x="279" y="206" text-anchor="middle" font-weight="600">_largest(a)</text>
+          <text x="279" y="221" text-anchor="middle">→ attention</text>
+          <rect x="558" y="190" width="106" height="40" rx="5" fill="#ffffff" stroke="#4a5655" stroke-dasharray="3 2"/>
+          <text x="611" y="206" text-anchor="middle" font-weight="600">_largest(h)</text>
+          <text x="611" y="221" text-anchor="middle">→ ff_hidden</text>
+          <rect x="706" y="190" width="106" height="40" rx="5" fill="#ffffff" stroke="#4a5655" stroke-dasharray="3 2"/>
+          <text x="759" y="206" text-anchor="middle" font-weight="600">_largest(f)</text>
+          <text x="759" y="221" text-anchor="middle">→ ff_out</text>
+          <rect x="826" y="190" width="126" height="54" rx="5" fill="#ffffff" stroke="#4a5655" stroke-dasharray="3 2"/>
+          <text x="889" y="206" text-anchor="middle" font-weight="600">_token_values(x)</text>
+          <text x="889" y="221" text-anchor="middle">→ tokens, tokens_where,</text>
+          <text x="889" y="235" text-anchor="middle">tokens_finite</text>
+          <rect x="20" y="190" width="126" height="54" rx="5" fill="#ffffff" stroke="#4a5655" stroke-dasharray="3 2"/>
+          <text x="83" y="206" text-anchor="middle" font-weight="600">_token_values(x)</text>
+          <text x="83" y="221" text-anchor="middle">state 0, before the loop</text>
+          <text x="83" y="235" text-anchor="middle" fill="#4a5655">lines 578 and 579</text>
+        </g>
+
+        <rect x="20" y="262" width="932" height="28" rx="5" fill="#f5f8f7" stroke="#d6dedd"/>
+        <text x="486" y="280" text-anchor="middle" font-size="11.5">line 589: mx.eval(x, states[-1], branches[-1]) after each block. Only x and six scalars stay referenced; a, h and f can go.</text>
+
+        <rect x="20" y="306" width="540" height="82" rx="5" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="32" y="324" font-weight="600">TokenRange (lines 511 to 549): one for each configuration</text>
+        <g font-size="11">
+          <text x="32" y="344">tokens, tokens_where, tokens_finite: L + 1 values each</text>
+          <text x="32" y="360">attention, ff_hidden, ff_out: L values each, fp32</text>
+          <text x="32" y="376">last_state: the token sequence after block L, (5 + N, D), fp32</text>
+        </g>
+
+        <rect x="580" y="306" width="372" height="38" rx="5" fill="#ffffff" stroke="#4a5655"/>
+        <text x="592" y="321" font-size="11">W7: one JSON line (kind "token-range") for each configuration;</text>
+        <text x="592" y="336" font-size="11">token_range_table.py → results/token-range-mlx.md</text>
+        <rect x="580" y="350" width="372" height="38" rx="5" fill="#ffffff" stroke="#4a5655"/>
+        <text x="592" y="365" font-size="11">T26: equal to run_mlx_hidden_states, bit for bit</text>
+        <text x="592" y="380" font-size="11">W8: fp32 against the stored hidden states, ≤ 1e-4</text>
+      </g>
+      <g stroke="#4a5655" stroke-width="1.5" fill="none">
+        <path d="M100,120 H114" marker-end="url(#arrow1)"/>
+        <path d="M250,120 H260" marker-end="url(#arrow1)"/>
+        <path d="M294,120 H300" marker-end="url(#arrow1)"/>
+        <path d="M376,120 H380" marker-end="url(#arrow1)"/>
+        <path d="M408,120 H412" marker-end="url(#arrow1)"/>
+        <path d="M446,120 H454" marker-end="url(#arrow1)"/>
+        <path d="M580,120 H592" marker-end="url(#arrow1)"/>
+        <path d="M626,120 H638" marker-end="url(#arrow1)"/>
+        <path d="M728,120 H740" marker-end="url(#arrow1)"/>
+        <path d="M774,120 H782" marker-end="url(#arrow1)"/>
+        <path d="M858,120 H860" marker-end="url(#arrow1)"/>
+        <path d="M888,120 H896" marker-end="url(#arrow1)"/>
+      </g>
+      <g stroke="#4a5655" stroke-width="1.2" fill="none" stroke-dasharray="3 3">
+        <path d="M279,136 V186" marker-end="url(#arrow1)"/>
+        <path d="M611,136 V186" marker-end="url(#arrow1)"/>
+        <path d="M759,136 V186" marker-end="url(#arrow1)"/>
+        <path d="M922,136 V186" marker-end="url(#arrow1)"/>
+        <path d="M60,148 V186" marker-end="url(#arrow1)"/>
+        <path d="M290,290 V302" marker-end="url(#arrow1)"/>
+        <path d="M560,326 H576" marker-end="url(#arrow1)"/>
+      </g>
+    </svg></div>
+    <figcaption><b>Figure 1.</b> One block in <code>run_mlx_token_range</code>. The teal boxes are the methods of <code>Block</code>; <code>Block.__call__</code> (lines 407 and 408) makes the same five calls in two lines. Amber frame: a tensor in the matmul dtype, so fp16 in both fp16 dtype modes. Teal frame: the token sequence in the stream dtype, so fp16 only in fp16-cast (Table 2). The dashed boxes reduce each recorded tensor to one value. The function keeps no full tensor of a block, only <code>last_state</code> after the last block.</figcaption>
+  </figure>
+
+  <h3>3.1 TokenRange</h3>
+  <pre><code># src/dinov3_apple/mlx_model.py, lines 511 to 549
+@dataclass(frozen=True)
+class TokenRange:
+    """The largest absolute values of one configuration, block by block (D6). Report only.
+
+    Attributes:
+        tokens: (L + 1,) fp32: the token sequence before block 1 and after each block.
+        tokens_where: (L + 1,): the token index of each value of tokens. 0 is the CLS token; 1 to 4
+            are the register tokens.
+        tokens_finite: (L + 1,): True if every value of the token sequence is finite.
+        attention: (L,) fp32: the attention branch output before LayerScale.
+        ff_hidden: (L,) fp32: the feed-forward hidden values.
+        ff_out: (L,) fp32: the feed-forward branch output before LayerScale.
+        last_state: (5 + N, D) fp32: the token sequence after the last block.
+    """
+
+    tokens: np.ndarray
+    tokens_where: np.ndarray
+    tokens_finite: np.ndarray
+    attention: np.ndarray
+    ff_hidden: np.ndarray
+    ff_out: np.ndarray
+    last_state: np.ndarray
+
+    @property
+    def finite(self) -> bool:
+        """True if every token sequence and every branch value is finite."""
+        values = (self.tokens, self.attention, self.ff_hidden, self.ff_out)
+        return bool(self.tokens_finite.all() and all(np.isfinite(v).all() for v in values))
+
+    def report_values(self) -> dict[str, list]:
+        """Return all fields except last_state as lists, for one JSON line."""
+        return {
+            "tokens": self.tokens.tolist(),
+            "tokens_where": self.tokens_where.tolist(),
+            "tokens_finite": self.tokens_finite.tolist(),
+            "attention": self.attention.tolist(),
+            "ff_hidden": self.ff_hidden.tolist(),
+            "ff_out": self.ff_out.tolist(),
+        }</code></pre>
+  <ul>
+    <li><b>Lines 526 to 528.</b> The token fields have L + 1 values: index 0 is the token sequence before block 1, index i the sequence after block i. This is the numbering of the hidden states of Step 2. The three branch fields have L values: index i − 1 belongs to block i.</li>
+    <li><b>Line 527, <code>tokens_where</code>.</b> The token index of the largest value: 0 is the CLS token, 1 to 4 are the register tokens R1 to R4, 5 and up are the patch tokens. <code>scripts/token_range_table.py</code> prints it as "R2" or "patch 622".</li>
+    <li><b>Lines 534 to 538, <code>finite</code>.</b> False if one token sequence has one non-finite value, or if one recorded value is inf or NaN. W7 writes the status "measured" or "non-finite" from it. Before the fix of finding F6, no test checked this property. Now <code>test_token_range_finite_sees_each_inf</code> puts an inf into each field and checks that <code>finite</code> becomes False.</li>
+    <li><b>Lines 540 to 549, <code>report_values</code>.</b> The values of one JSON line. <code>last_state</code> stays out: it has (5 + N) × D values, and only T26 uses it.</li>
+  </ul>
+
+  <h3>3.2 The two helpers</h3>
+  <pre><code># src/dinov3_apple/mlx_model.py, lines 552 to 559
+def _largest(t: mx.array) -&gt; mx.array:
+    return mx.abs(t.astype(mx.float32)).max()  # inf stays inf
+
+
+def _token_values(x: mx.array) -&gt; tuple[mx.array, mx.array, mx.array]:
+    """The largest absolute value of a token sequence (1, T, D), its token and the finite flag."""
+    magnitude = mx.abs(x[0].astype(mx.float32)).max(axis=-1)
+    return magnitude.max(), mx.argmax(magnitude), mx.isfinite(x).all()</code></pre>
+  <ul>
+    <li><b>Line 553.</b> The cast to fp32 comes first, so the record has one dtype in all five dtype modes. The cast does not change a value: fp32 holds each fp16 and each bf16 value exactly. An inf stays inf after the cast and after <code>mx.abs</code>. A NaN gives a NaN maximum.</li>
+    <li><b>Line 558.</b> <code>magnitude</code> holds the largest |value| of each of the T tokens of image 0. Its maximum is the value of <code>tokens</code>, and its <code>argmax</code> is the value of <code>tokens_where</code>.</li>
+    <li><b>Line 559.</b> <code>mx.isfinite(x).all()</code> checks every value of the sequence, not only the largest. The three results stay lazy MLX scalars until line 589 evaluates them.</li>
+    <li><b>After a NaN.</b> When the sequence holds a NaN, the maximum is NaN and <code>argmax</code> gives 0. So after a NaN, <code>tokens_where</code> holds 0, and this 0 does not mean the CLS token. The lines of ViT-L/16 in fp16-cast show it: R2 (index 2) after block 1, where the value is inf, then 0 after block 2, where it is NaN.</li>
+  </ul>
+
+  <h3>3.3 run_mlx_token_range</h3>
+  <pre><code># src/dinov3_apple/mlx_model.py, lines 562 to 602 (docstring shortened)
+def run_mlx_token_range(model: MlxBackbone, pixels: np.ndarray) -&gt; TokenRange:
+    """Run image 0 block by block and keep only the largest absolute values (D6). Report only.
+
+    The calls and their order are the calls of Block.__call__, so the last token sequence equals
+    the last state of run_mlx_hidden_states. The function evaluates one block at a time.
+    ...
+    """
+    x = model.embeddings(mx.array(pixels[:1]))
+    p = model.config.patch_size
+    cos, sin = model.rope(pixels.shape[2] // p, pixels.shape[3] // p)
+    states = [_token_values(x)]
+    mx.eval(x, states[-1])
+    branches = []
+    for block in model.layer:
+        a = block.attention_branch(x, cos, sin)
+        x = block.layer_scale1(a) + x
+        h = block.ff_hidden(x)
+        f = block.mlp.down_proj(h)
+        x = block.layer_scale2(f) + x
+        states.append(_token_values(x))
+        branches.append((_largest(a), _largest(h), _largest(f)))
+        mx.eval(x, states[-1], branches[-1])  # one block at a time
+    largest, where, finite = (np.array([s[i].item() for s in states]) for i in range(3))
+    attention, ff_hidden, ff_out = (
+        np.array([b[i].item() for b in branches], np.float32) for i in range(3)
+    )
+    return TokenRange(
+        tokens=largest.astype(np.float32),
+        tokens_where=where.astype(np.int64),
+        tokens_finite=finite.astype(bool),
+        attention=attention,
+        ff_hidden=ff_hidden,
+        ff_out=ff_out,
+        last_state=np.array(x[0].astype(mx.float32)),
+    )</code></pre>
+  <ul>
+    <li><b>Line 575.</b> <code>pixels[:1]</code> keeps image 0. The function does not cast the fp32 pixels: <code>Embeddings.__call__</code> casts them to the matmul dtype (line 256), and it returns the token sequence in the stream dtype (Section 4).</li>
+    <li><b>Line 577.</b> The RoPE tables of the patch grid come from the cache of the backbone (<a href="04-2-rope.html">04-2</a>).</li>
+    <li><b>Lines 582 to 586.</b> <code>Block.__call__</code> has two lines: <code>x = self.layer_scale1(self.attention_branch(x, cos, sin)) + x</code> and <code>return self.layer_scale2(self.mlp.down_proj(self.ff_hidden(x))) + x</code>. The five lines here are the same calls in the same order, with a name for each intermediate tensor. Step 5 added <code>attention_branch</code> and <code>ff_hidden</code> to <code>Block</code> for this reason (<a href="05-1-swiglu.html">05-1</a>, <a href="05-2-model-scaling.html">05-2</a>). So MLX builds the same graph, and T26 finds the same bits as <code>run_mlx_hidden_states</code>.</li>
+    <li><b>Line 585.</b> <code>f</code> is the feed-forward branch output before LayerScale. <code>Block.ff_hidden</code> gives <code>h</code>, the input of <code>down_proj</code>: the GELU output of an MLP or <code>silu(gate) · up</code> of SwiGLU.</li>
+    <li><b>Line 589.</b> MLX is lazy. Without this line, the graph of all L blocks would run at the first <code>.item()</code> call, and MLX would keep the tensors of all blocks for it. With this line, each block runs on an evaluated <code>x</code>, and MLX can free <code>a</code>, <code>h</code> and <code>f</code> of the block. ViT-7B/16 has 40 blocks.</li>
+    <li><b>Lines 590 to 593.</b> <code>.item()</code> moves each evaluated scalar to Python. The branch fields become fp32 NumPy arrays.</li>
+    <li><b>Line 601.</b> <code>last_state</code> is the token sequence after the last block, without the final layer norm, in fp32.</li>
+  </ul>
+  <p>Why a new function, and not <code>run_mlx_hidden_states</code> with a maximum on top? <code>run_mlx_hidden_states</code> returns the token sequence only. It cannot give the three branch tensors, and the fp16 tensors of fp16-autocast are branch tensors (Table 2). It also returns all L + 1 states: for ViT-7B/16 at 512 × 512 px this is 41 × 1,029 × 4,096 fp32 values, about 0.69 GB (our computation). <code>run_mlx_token_range</code> keeps 6 values for each block.</p>
+</section>
+
+<section id="hidden">
+  <h2>4 The change in run_mlx_hidden_states</h2>
+  <p><code>run_mlx_hidden_states</code> came in Step 4 (<a href="04-5-mlp.html#outputs">04-5, Section 5</a>). Step 5 changed one line of code and the "Returns" line of the docstring:</p>
+  <pre><code># Step 4, commit ea82d58
+x = model.embeddings(mx.array(pixels[:1]).astype(model.norm.weight.dtype))
+
+# Step 5, src/dinov3_apple/mlx_model.py, lines 487 to 508 (docstring shortened)
+def run_mlx_hidden_states(model: MlxBackbone, pixels: np.ndarray) -&gt; np.ndarray:
+    """Return the token sequence before block 1 and after each block, before the final layer norm.
+    ...
+    Returns:
+        The hidden states with shape (L + 1, 1 + 4 + N, D), cast to fp32.
+    """
+    x = model.embeddings(mx.array(pixels[:1]))  # the model casts the fp32 pixels
+    p = model.config.patch_size
+    cos, sin = model.rope(pixels.shape[2] // p, pixels.shape[3] // p)
+    states = [x[0]]
+    for block in model.layer:
+        x = block(x, cos, sin)
+        states.append(x[0])
+    hidden = mx.stack(states).astype(mx.float32)
+    mx.eval(hidden)
+    return np.array(hidden)</code></pre>
+  <ul>
+    <li><b>Line 499.</b> Step 4 read a dtype from a weight: the weight of the final layer norm. Step 4 had only fp32, so this gave fp32. In an autocast mode this weight has the stream dtype fp32, but the patch embedding needs the matmul dtype. Now <code>Embeddings</code> casts the pixels with its plain attribute <code>dtypes</code> (line 256), and <code>run_mlx</code>, <code>run_mlx_hidden_states</code> and <code>run_mlx_token_range</code> give it fp32 pixels. Finding F1 of <code>specs/04-mlx-port/verify.html</code> showed why a dtype from a weight is a risk: <code>nn.quantize</code> packs a weight into uint32.</li>
+    <li><b>Line 504.</b> The line did not change, but <code>Block.__call__</code> did: it now calls <code>attention_branch</code> and <code>ff_hidden</code>. So this loop and the loop of <code>run_mlx_token_range</code> run the same methods.</li>
+    <li><b>Line 506 and the docstring.</b> In a half dtype mode the states are fp16 or bf16. <code>astype(mx.float32)</code> is necessary because NumPy has no bf16 dtype. The docstring now says "cast to fp32", not "in fp32": the values keep their half precision.</li>
+  </ul>
+  <p>Two tests tie the two functions together. T26 (<code>test_token_range_matches_hidden_states</code>) runs both functions on the small models <code>vits16</code> and <code>vits16plus</code> in the five dtype modes. Each token value equals the largest |value| of its hidden state. <code>last_state</code> equals the last hidden state. The three branch fields equal the maxima of the method outputs in the forward pass of <code>run_mlx_hidden_states</code>. W8 (<code>test_mlx_token_range_matches_stored</code>) compares the fp32 token range with the stored hidden states of Step 2, <code>iss-kibo-lab</code> at 224 × 224 px.</p>
+</section>
+
+<section id="measured">
+  <h2>5 The measured token range</h2>
+  <p>Test W7 ran <code>run_mlx_token_range</code> on the 12 configurations of each model size in each dtype mode: 29 tests, because the run rule skips ViT-7B/16 in fp32. Figure 2 shows the largest value of each tensor in fp16-autocast, over the 12 configurations and all blocks. In fp16-autocast the token sequence is fp32, so its values are the full values. The three branch tensors are fp16.</p>
+  <figure>
+    <div class="fig"><svg viewBox="0 0 960 352" role="img" aria-labelledby="fig2-title" font-family="-apple-system, Helvetica Neue, Arial, sans-serif">
+<title id="fig2-title">Largest absolute value of four tensors of each model size in fp16-autocast, log scale, with the largest fp16 value</title>
+<rect width="960" height="352" fill="#ffffff"/>
+<circle cx="26.0" cy="24.0" r="6" fill="#057379"><title>token sequence (fp32 stream)</title></circle>
+<text x="36" y="28" font-size="11.5" fill="#111414">token sequence (fp32 stream)</text>
+<path d="M242.0,18.0 L248.0,29.0 L236.0,29.0 Z" fill="#ffffff" stroke="#4a5655" stroke-width="1.8"><title>attention branch output (half)</title></path>
+<text x="252" y="28" font-size="11.5" fill="#111414">attention branch output (half)</text>
+<rect x="466.0" y="19.0" width="10" height="10" fill="#e0a336"><title>feed-forward hidden values (half)</title></rect>
+<text x="481" y="28" font-size="11.5" fill="#111414">feed-forward hidden values (half)</text>
+<path d="M718.0,17.5 L724.5,24.0 L718.0,30.5 L711.5,24.0 Z" fill="#111414"><title>feed-forward branch output (half)</title></path>
+<text x="728" y="28" font-size="11.5" fill="#111414">feed-forward branch output (half)</text>
+<line x1="170.0" x2="170.0" y1="52" y2="302" stroke="#e3e8e7"/>
+<text x="170.0" y="318" text-anchor="middle" font-size="11" fill="#4a5655">10</text>
+<line x1="300.0" x2="300.0" y1="52" y2="302" stroke="#e3e8e7"/>
+<text x="300.0" y="318" text-anchor="middle" font-size="11" fill="#4a5655">100</text>
+<line x1="430.0" x2="430.0" y1="52" y2="302" stroke="#e3e8e7"/>
+<text x="430.0" y="318" text-anchor="middle" font-size="11" fill="#4a5655">1,000</text>
+<line x1="560.0" x2="560.0" y1="52" y2="302" stroke="#e3e8e7"/>
+<text x="560.0" y="318" text-anchor="middle" font-size="11" fill="#4a5655">10,000</text>
+<line x1="690.0" x2="690.0" y1="52" y2="302" stroke="#e3e8e7"/>
+<text x="690.0" y="318" text-anchor="middle" font-size="11" fill="#4a5655">100,000</text>
+<line x1="820.0" x2="820.0" y1="52" y2="302" stroke="#e3e8e7"/>
+<text x="820.0" y="318" text-anchor="middle" font-size="11" fill="#4a5655">1,000,000</text>
+<rect x="666.1" y="52" width="153.9" height="250" fill="#b03a2e" fill-opacity="0.06"/>
+<line x1="666.1" x2="666.1" y1="48" y2="302" stroke="#b03a2e" stroke-width="1.8"/>
+<text x="670.1" y="296" font-size="10.5" fill="#b03a2e">above 65,504: inf in fp16</text>
+<text x="495" y="336" text-anchor="middle" font-size="11" fill="#4a5655">Largest absolute value over the 12 configurations and all blocks (log scale)</text>
+<text x="852" y="62" font-size="10.5" font-weight="600" fill="#111414">largest half value</text>
+<text x="852" y="74" font-size="10.5" font-weight="600" fill="#111414">/ 65,504</text>
+<text x="20" y="90" font-size="12.5" font-weight="600" fill="#111414">ViT-S/16</text>
+<line x1="170.0" x2="820.0" y1="86" y2="86" stroke="#d6dedd" stroke-dasharray="2 3"/>
+<circle cx="461.5" cy="86.0" r="6" fill="#057379"><title>ViT-S/16, fp16-autocast, token sequence (fp32 stream): 1,748 (2.7% of 65,504), iss-kibo-lab/512x512, block 11</title></circle>
+<path d="M267.1,80.0 L273.1,91.0 L261.1,91.0 Z" fill="#ffffff" stroke="#4a5655" stroke-width="1.8"><title>ViT-S/16, fp16-autocast, attention branch output (half): 55.8 (0.1% of 65,504), iss-kibo-lab/448x448, block 1</title></path>
+<rect x="357.1" y="81.0" width="10" height="10" fill="#e0a336"><title>ViT-S/16, fp16-autocast, feed-forward hidden values (half): 300 (0.5% of 65,504), iss-kibo-lab/224x400, block 7</title></rect>
+<path d="M387.5,79.5 L394.0,86.0 L387.5,92.5 L381.0,86.0 Z" fill="#111414"><title>ViT-S/16, fp16-autocast, feed-forward branch output (half): 471 (0.7% of 65,504), iss-kibo-lab/224x400, block 7</title></path>
+<text x="461.5" y="76" text-anchor="middle" font-size="10.5" fill="#057379" font-weight="600">1,748</text>
+<text x="852" y="90" font-size="11.5" fill="#111414">0.7% <tspan fill="#4a5655" font-size="10.5">ff_out</tspan></text>
+<text x="20" y="130" font-size="12.5" font-weight="600" fill="#111414">ViT-S+/16</text>
+<line x1="170.0" x2="820.0" y1="126" y2="126" stroke="#d6dedd" stroke-dasharray="2 3"/>
+<circle cx="523.9" cy="126.0" r="6" fill="#057379"><title>ViT-S+/16, fp16-autocast, token sequence (fp32 stream): 5,276 (8.1% of 65,504), forest/224x224, block 11</title></circle>
+<path d="M237.4,120.0 L243.4,131.0 L231.4,131.0 Z" fill="#ffffff" stroke="#4a5655" stroke-width="1.8"><title>ViT-S+/16, fp16-autocast, attention branch output (half): 33.0 (0.1% of 65,504), iss-kibo-lab/512x512, block 1</title></path>
+<rect x="537.0" y="121.0" width="10" height="10" fill="#e0a336"><title>ViT-S+/16, fp16-autocast, feed-forward hidden values (half): 7,268 (11.1% of 65,504), iss-kibo-lab/224x400, block 3</title></rect>
+<path d="M486.0,119.5 L492.5,126.0 L486.0,132.5 L479.5,126.0 Z" fill="#111414"><title>ViT-S+/16, fp16-autocast, feed-forward branch output (half): 2,698 (4.1% of 65,504), iss-kibo-lab/224x400, block 3</title></path>
+<text x="523.9" y="116" text-anchor="middle" font-size="10.5" fill="#057379" font-weight="600">5,276</text>
+<text x="852" y="130" font-size="11.5" fill="#111414">11.1% <tspan fill="#4a5655" font-size="10.5">ff_hidden</tspan></text>
+<text x="20" y="170" font-size="12.5" font-weight="600" fill="#111414">ViT-B/16</text>
+<line x1="170.0" x2="820.0" y1="166" y2="166" stroke="#d6dedd" stroke-dasharray="2 3"/>
+<circle cx="582.6" cy="166.0" r="6" fill="#057379"><title>ViT-B/16, fp16-autocast, token sequence (fp32 stream): 14,922 (22.8% of 65,504), iss-kibo-lab/224x224, block 11</title></circle>
+<path d="M232.3,160.0 L238.3,171.0 L226.3,171.0 Z" fill="#ffffff" stroke="#4a5655" stroke-width="1.8"><title>ViT-B/16, fp16-autocast, attention branch output (half): 30.2 (0.0% of 65,504), iss-kibo-lab/512x512, block 3</title></path>
+<rect x="436.9" y="161.0" width="10" height="10" fill="#e0a336"><title>ViT-B/16, fp16-autocast, feed-forward hidden values (half): 1,235 (1.9% of 65,504), iss-conference/224x224, block 3</title></rect>
+<path d="M489.4,159.5 L495.9,166.0 L489.4,172.5 L482.9,166.0 Z" fill="#111414"><title>ViT-B/16, fp16-autocast, feed-forward branch output (half): 2,862 (4.4% of 65,504), iss-conference/224x224, block 3</title></path>
+<text x="582.6" y="156" text-anchor="middle" font-size="10.5" fill="#057379" font-weight="600">14,922</text>
+<text x="852" y="170" font-size="11.5" fill="#111414">4.4% <tspan fill="#4a5655" font-size="10.5">ff_out</tspan></text>
+<text x="20" y="210" font-size="12.5" font-weight="600" fill="#111414">ViT-L/16</text>
+<line x1="170.0" x2="820.0" y1="206" y2="206" stroke="#d6dedd" stroke-dasharray="2 3"/>
+<circle cx="716.0" cy="206.0" r="6" fill="#057379"><title>ViT-L/16, fp16-autocast, token sequence (fp32 stream): 158,383 (241.8% of 65,504), forest/448x448, block 23</title></circle>
+<path d="M249.1,200.0 L255.1,211.0 L243.1,211.0 Z" fill="#ffffff" stroke="#4a5655" stroke-width="1.8"><title>ViT-L/16, fp16-autocast, attention branch output (half): 40.6 (0.1% of 65,504), forest/224x224, block 2</title></path>
+<rect x="463.9" y="201.0" width="10" height="10" fill="#e0a336"><title>ViT-L/16, fp16-autocast, feed-forward hidden values (half): 1,993 (3.0% of 65,504), forest/448x448, block 1</title></rect>
+<path d="M653.2,199.5 L659.7,206.0 L653.2,212.5 L646.7,206.0 Z" fill="#111414"><title>ViT-L/16, fp16-autocast, feed-forward branch output (half): 52,128 (79.6% of 65,504), forest/448x448, block 1</title></path>
+<text x="716.0" y="196" text-anchor="middle" font-size="10.5" fill="#057379" font-weight="600">158,383</text>
+<text x="852" y="210" font-size="11.5" fill="#111414">79.6% <tspan fill="#4a5655" font-size="10.5">ff_out</tspan></text>
+<text x="644.2" y="224" text-anchor="end" font-size="10.5" fill="#111414" font-weight="600">52,128</text>
+<text x="20" y="250" font-size="12.5" font-weight="600" fill="#111414">ViT-H+/16</text>
+<line x1="170.0" x2="820.0" y1="246" y2="246" stroke="#d6dedd" stroke-dasharray="2 3"/>
+<circle cx="712.8" cy="246.0" r="6" fill="#057379"><title>ViT-H+/16, fp16-autocast, token sequence (fp32 stream): 149,665 (228.5% of 65,504), iss-conference/304x224, block 30</title></circle>
+<path d="M271.8,240.0 L277.8,251.0 L265.8,251.0 Z" fill="#ffffff" stroke="#4a5655" stroke-width="1.8"><title>ViT-H+/16, fp16-autocast, attention branch output (half): 60.7 (0.1% of 65,504), iss-conference/448x448, block 32</title></path>
+<rect x="529.9" y="241.0" width="10" height="10" fill="#e0a336"><title>ViT-H+/16, fp16-autocast, feed-forward hidden values (half): 6,412 (9.8% of 65,504), iss-conference/304x224, block 23</title></rect>
+<path d="M572.6,239.5 L579.1,246.0 L572.6,252.5 L566.1,246.0 Z" fill="#111414"><title>ViT-H+/16, fp16-autocast, feed-forward branch output (half): 12,504 (19.1% of 65,504), iss-conference/304x224, block 23</title></path>
+<text x="712.8" y="236" text-anchor="middle" font-size="10.5" fill="#057379" font-weight="600">149,665</text>
+<text x="852" y="250" font-size="11.5" fill="#111414">19.1% <tspan fill="#4a5655" font-size="10.5">ff_out</tspan></text>
+<text x="20" y="290" font-size="12.5" font-weight="600" fill="#111414">ViT-7B/16</text>
+<line x1="170.0" x2="820.0" y1="286" y2="286" stroke="#d6dedd" stroke-dasharray="2 3"/>
+<circle cx="577.3" cy="286.0" r="6" fill="#057379"><title>ViT-7B/16, fp16-autocast, token sequence (fp32 stream): 13,574 (20.7% of 65,504), forest/224x224, block 40</title></circle>
+<path d="M341.7,280.0 L347.7,291.0 L335.7,291.0 Z" fill="#ffffff" stroke="#4a5655" stroke-width="1.8"><title>ViT-7B/16, fp16-autocast, attention branch output (half): 209 (0.3% of 65,504), iss-kibo-lab/224x224, block 1</title></path>
+<rect x="395.6" y="281.0" width="10" height="10" fill="#e0a336"><title>ViT-7B/16, fp16-autocast, feed-forward hidden values (half): 594 (0.9% of 65,504), iss-kibo-lab/512x512, block 1</title></rect>
+<path d="M444.0,279.5 L450.5,286.0 L444.0,292.5 L437.5,286.0 Z" fill="#111414"><title>ViT-7B/16, fp16-autocast, feed-forward branch output (half): 1,282 (2.0% of 65,504), iss-kibo-lab/512x512, block 1</title></path>
+<text x="577.3" y="276" text-anchor="middle" font-size="10.5" fill="#057379" font-weight="600">13,574</text>
+<text x="852" y="290" font-size="11.5" fill="#111414">2.0% <tspan fill="#4a5655" font-size="10.5">ff_out</tspan></text>
+</svg></div>
+    <figcaption><b>Figure 2.</b> The largest absolute value of four tensors for each model size, in fp16-autocast on <code>mlx</code> (log scale). The red line is the largest fp16 value, 65,504. Only the token sequence of ViT-L/16 and ViT-H+/16 is above it, and fp16-autocast keeps the token sequence in fp32. The right column gives the largest value of the three fp16 tensors as a share of 65,504. Hover over a marker for the configuration and the block. Source: Table 2 of <code>results/token-range-mlx.md</code>.</figcaption>
+  </figure>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Model size</th><th class="num">fp32</th><th class="num">Share of 65,504</th><th>Where (fp32)</th><th>fp16-cast</th><th class="num">bf16-cast</th><th class="num">fp16-autocast</th><th class="num">bf16-autocast</th></tr></thead>
+      <tbody>
+        <tr><td class="name">ViT-S/16</td><td class="num">1,747.8</td><td class="num">2.7 %</td><td>iss-kibo-lab/512x512, block 11, R1</td><td>1,748.0; 0 of 12 non-finite</td><td class="num">1,744.0</td><td class="num">1,747.8</td><td class="num">1,746.2</td></tr>
+        <tr><td class="name">ViT-S+/16</td><td class="num">5,273.6</td><td class="num">8.1 %</td><td>forest/224x224, block 11, R3</td><td>5,264.0; 0 of 12</td><td class="num">5,248.0</td><td class="num">5,275.8</td><td class="num">5,266.6</td></tr>
+        <tr><td class="name">ViT-B/16</td><td class="num">14,926.0</td><td class="num">22.8 %</td><td>iss-kibo-lab/224x224, block 11, R1</td><td>14,920.0; 0 of 12</td><td class="num">14,976.0</td><td class="num">14,922.3</td><td class="num">14,880.5</td></tr>
+        <tr><td class="name">ViT-L/16</td><td class="num">158,433.0</td><td class="num over">241.9 %</td><td>forest/448x448, block 23, R2</td><td class="over">12 of 12 non-finite from block 1</td><td class="num">157,696.0</td><td class="num">158,383.3</td><td class="num">157,852.7</td></tr>
+        <tr><td class="name">ViT-H+/16</td><td class="num">149,750.0</td><td class="num over">228.6 %</td><td>iss-conference/304x224, block 30, R2</td><td class="over">6 of 12 non-finite from block 23; the other 6 reach 59,776.0</td><td class="num">147,456.0</td><td class="num">149,664.6</td><td class="num">149,759.6</td></tr>
+        <tr><td class="name">ViT-7B/16</td><td class="num">–</td><td class="num">20.7 %</td><td>skipped: run rule</td><td>13,568.0; 0 of 12</td><td class="num">13,568.0</td><td class="num">13,573.7</td><td class="num">13,581.9</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 3.</b> The largest finite token value of each model size and dtype mode, over the 12 configurations and all blocks, from Table 1 of <code>results/token-range-mlx.md</code>. "Where" gives the configuration, the block after which the value occurs and the token. The share of ViT-7B/16 uses its largest value, 13,581.9 in bf16-autocast (<code>forest/224x224</code>, block 40, R2). A non-finite configuration counts if one token value is inf or NaN.</p>
+  <p>What the record shows:</p>
+  <ul>
+    <li><b>A register token holds the largest value.</b> In every finite row of Table 3 the token is R1, R2 or R3. In ViT-7B/16, R2 holds the largest value after every block, in all four dtype modes.</li>
+    <li><b>The dtype modes agree where the values are finite.</b> At the same configuration, the finite values of the dtype modes differ by less than 2 %. The fp16-cast cell of ViT-H+/16 is lower only because it covers the 448 and 512 px configurations. At these configurations, fp32 and fp16-cast differ by less than 0.4 %. The large values are a property of the weights, not of the dtype mode.</li>
+    <li><b>The large values come from the feed-forward branch.</b> The attention branch output stays at or below 60.7 in the five students and reaches 209.4 in ViT-7B/16 (block 1). The feed-forward branch output reaches 52,128 in ViT-L/16 (block 1) and 12,506 in ViT-H+/16 (block 23). The feed-forward hidden values of ViT-S+/16 reach 7,272 (block 3).</li>
+    <li><b>bf16 rounds the large values to its spacing.</b> In bf16-cast, the largest value of ViT-L/16 is 157,696.0 in 10 configurations and 156,672.0 in 2. The two values are one bf16 spacing (1,024) apart.</li>
+    <li><b>W8 agrees with Step 2.</b> In fp32, the token range of <code>iss-kibo-lab</code> at 224 × 224 px differs from the stored hidden states by at most 3.0e-7 to 2.5e-6 (relative), depending on the model size. The fp32 value of ViT-L/16 there is 157,130.5, the value of Step 2.</li>
+  </ul>
+</section>
+
+<section id="layerscale">
+  <h2>6 LayerScale makes a branch output large</h2>
+  <p>Each branch of a block ends with LayerScale and the residual add: x + λ ⊙ branch output. λ has one learned factor for each channel. The factors change from block to block and from channel to channel (<a href="04-4-layerscale.html">04-4, Figure 2</a>). |λ| reaches 62 in ViT-H+/16, 51 in ViT-L/16 and 25 in ViT-7B/16 (risk R20 of <code>explore.html</code>). So a branch output that fits in fp16 can give a residual value far above 65,504.</p>
+  <p>Block 1 of ViT-L/16 shows it. Before block 1, the largest token value is only 15.2. The largest feed-forward branch output of block 1 is 51,716 (fp32, <code>iss-kibo-lab</code> at 224 × 224 px). After block 1, the register token R2 holds 155,923: three times as large. Figure 3 follows this value in the two fp16 dtype modes.</p>
+  <figure>
+    <div class="fig"><svg viewBox="0 0 960 300" role="img" aria-labelledby="fig3-title" font-family="-apple-system, Helvetica Neue, Arial, sans-serif">
+      <title id="fig3-title">Block 1 of ViT-L/16 in fp16-cast and in fp16-autocast: the feed-forward branch output fits in fp16, the residual value after LayerScale does not</title>
+      <defs><marker id="arrow3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#4a5655"/></marker></defs>
+      <rect width="960" height="300" fill="#ffffff"/>
+      <g font-size="12" fill="#111414">
+        <text x="20" y="22" font-weight="600" font-size="13">Block 1 of ViT-L/16, iss-kibo-lab at 224 × 224 px: largest |value| of each tensor</text>
+        <text x="20" y="40" font-size="11" fill="#4a5655">Amber: fp16. Teal: fp32. Red: above 65,504, so inf in fp16.</text>
+
+        <text x="20" y="96" font-weight="600">fp16-cast</text>
+        <text x="20" y="112" font-size="10.5" fill="#4a5655">λ2 and the stream</text>
+        <text x="20" y="126" font-size="10.5" fill="#4a5655">in fp16</text>
+
+        <text x="20" y="206" font-weight="600">fp16-autocast</text>
+        <text x="20" y="222" font-size="10.5" fill="#4a5655">λ2 and the stream</text>
+        <text x="20" y="236" font-size="10.5" fill="#4a5655">in fp32</text>
+
+        <g font-size="11" text-anchor="middle">
+          <rect x="140" y="82" width="100" height="44" rx="5" fill="#fdf3e1" stroke="#e0a336" stroke-width="1.5"/>
+          <text x="190" y="99" font-weight="600">h</text><text x="190" y="116">1,978.0</text>
+          <rect x="140" y="192" width="100" height="44" rx="5" fill="#fdf3e1" stroke="#e0a336" stroke-width="1.5"/>
+          <text x="190" y="209" font-weight="600">h</text><text x="190" y="226">1,979.0</text>
+
+          <rect x="268" y="86" width="84" height="36" rx="5" fill="#e6f2f2" stroke="#057379"/>
+          <text x="310" y="108">down_proj</text>
+          <rect x="268" y="196" width="84" height="36" rx="5" fill="#e6f2f2" stroke="#057379"/>
+          <text x="310" y="218">down_proj</text>
+
+          <rect x="380" y="82" width="110" height="44" rx="5" fill="#fdf3e1" stroke="#e0a336" stroke-width="1.5"/>
+          <text x="435" y="99" font-weight="600">f</text><text x="435" y="116">51,712.0</text>
+          <rect x="380" y="192" width="110" height="44" rx="5" fill="#fdf3e1" stroke="#e0a336" stroke-width="1.5"/>
+          <text x="435" y="209" font-weight="600">f</text><text x="435" y="226">51,744.0</text>
+
+          <rect x="518" y="86" width="96" height="36" rx="5" fill="#fdf3e1" stroke="#e0a336"/>
+          <text x="566" y="102">× λ2, + x</text><text x="566" y="116" font-size="10">in fp16</text>
+          <rect x="518" y="196" width="96" height="36" rx="5" fill="#e6f2f2" stroke="#057379"/>
+          <text x="566" y="212">× λ2, + x</text><text x="566" y="226" font-size="10">in fp32</text>
+
+          <rect x="642" y="82" width="120" height="44" rx="5" fill="#f8e5e2" stroke="#b03a2e" stroke-width="2"/>
+          <text x="702" y="99" font-weight="600">after block 1</text><text x="702" y="116" fill="#b03a2e" font-weight="600">inf (R2)</text>
+          <rect x="642" y="192" width="120" height="44" rx="5" fill="#e6f2f2" stroke="#057379" stroke-width="2"/>
+          <text x="702" y="209" font-weight="600">after block 1</text><text x="702" y="226">155,938.5 (R2)</text>
+
+          <rect x="790" y="82" width="150" height="44" rx="5" fill="#f8e5e2" stroke="#b03a2e" stroke-width="2"/>
+          <text x="865" y="99" font-weight="600">after block 2</text><text x="865" y="116" fill="#b03a2e" font-weight="600">NaN: norm1 of inf</text>
+          <rect x="790" y="192" width="150" height="44" rx="5" fill="#e6f2f2" stroke="#057379" stroke-width="2"/>
+          <text x="865" y="209" font-weight="600">after block 2</text><text x="865" y="226">155,909.8 (R2)</text>
+        </g>
+        <line x1="380" x2="940" y1="156" y2="156" stroke="#d6dedd"/>
+        <text x="435" y="148" text-anchor="middle" font-size="10.5" fill="#4a5655">below 65,504: f fits in fp16</text>
+        <text x="702" y="148" text-anchor="middle" font-size="10.5" fill="#b03a2e">above 65,504</text>
+        <text x="20" y="276" font-size="11" fill="#4a5655">fp32 reference on mlx: f = 51,715.5 and 155,923.5 after block 1. The attention branch output of block 1 is only 25.4. Before block 1 the largest value is 15.2.</text>
+      </g>
+      <g stroke="#4a5655" stroke-width="1.5" fill="none">
+        <path d="M240,104 H264" marker-end="url(#arrow3)"/>
+        <path d="M352,104 H376" marker-end="url(#arrow3)"/>
+        <path d="M490,104 H514" marker-end="url(#arrow3)"/>
+        <path d="M614,104 H638" marker-end="url(#arrow3)"/>
+        <path d="M762,104 H786" marker-end="url(#arrow3)"/>
+        <path d="M240,214 H264" marker-end="url(#arrow3)"/>
+        <path d="M352,214 H376" marker-end="url(#arrow3)"/>
+        <path d="M490,214 H514" marker-end="url(#arrow3)"/>
+        <path d="M614,214 H638" marker-end="url(#arrow3)"/>
+        <path d="M762,214 H786" marker-end="url(#arrow3)"/>
+      </g>
+    </svg></div>
+    <figcaption><b>Figure 3.</b> Block 1 of ViT-L/16 in the two fp16 dtype modes, from the token-range lines of <code>iss-kibo-lab/224x224</code>. h is the feed-forward hidden values, f the feed-forward branch output before LayerScale. In both modes f fits in fp16. In fp16-cast, λ2, the product and the residual add are fp16, so R2 becomes inf. The layer norm of block 2 subtracts the mean of a token with an inf channel: inf − inf gives NaN. In fp16-autocast, the fp16 branch output times the fp32 λ2 gives fp32, and the residual add is fp32 (Table 2).</figcaption>
+  </figure>
+  <ul>
+    <li><b>The overflow of ViT-L/16 does not depend on the image.</b> In all 12 configurations, the feed-forward branch output of block 1 is 51,691 to 52,117 (fp32), and R2 holds 155,848 to 157,132 after block 1. So fp16-cast fails at every input resolution, as on <code>torch-mps</code>.</li>
+    <li><b>fp16-autocast needs only the branch output in fp16.</b> Its largest fp16 value over all model sizes is this branch output of ViT-L/16: 52,128 (<code>forest/448x448</code>, block 1), 79.6 % of 65,504 (Section 8).</li>
+    <li><b>Small λ values lose precision in fp16-cast.</b> 0.1 to 0.5 % of the λ values are below the smallest normal fp16 value, 6.1e-5. The smallest λ is 3.6e-8 (ViT-L/16). <code>explore.html</code> rates the effect small (risk R28). The autocast modes keep λ in fp32.</li>
+  </ul>
+</section>
+
+<section id="resolution">
+  <h2>7 ViT-H+/16: the input resolution decides</h2>
+  <p>ViT-H+/16 overflows in fp16-cast at 6 of its 12 configurations: the 6 configurations with a short side of 224 px. Figure 4 shows why. Up to block 22, all 12 configurations are almost the same. The largest value is in R1, at 3,619 to 3,854 after block 22. In block 23 the feed-forward branch puts a large value into R2, in all 12 configurations. The size of this branch output depends on the input resolution.</p>
+  <figure>
+    <div class="fig"><svg viewBox="0 0 960 372" role="img" aria-labelledby="fig4-title" font-family="-apple-system, Helvetica Neue, Arial, sans-serif">
+<title id="fig4-title">ViT-H+/16 in fp32 on mlx: the token range of the 12 configurations, and the token value after block 23 against the feed-forward branch output of block 23</title>
+<rect width="960" height="372" fill="#ffffff"/>
+<text x="20" y="24" font-size="13" font-weight="600" fill="#111414">(a) Largest |value| before block 1 and after each block (log scale)</text>
+<text x="540" y="24" font-size="13" font-weight="600" fill="#111414">(b) Block 23: branch output and token value</text>
+<line x1="72" x2="470" y1="290.0" y2="290.0" stroke="#e3e8e7"/>
+<text x="66" y="294.0" text-anchor="end" font-size="11" fill="#4a5655">10</text>
+<line x1="72" x2="470" y1="242.0" y2="242.0" stroke="#e3e8e7"/>
+<text x="66" y="246.0" text-anchor="end" font-size="11" fill="#4a5655">100</text>
+<line x1="72" x2="470" y1="194.0" y2="194.0" stroke="#e3e8e7"/>
+<text x="66" y="198.0" text-anchor="end" font-size="11" fill="#4a5655">1,000</text>
+<line x1="72" x2="470" y1="146.0" y2="146.0" stroke="#e3e8e7"/>
+<text x="66" y="150.0" text-anchor="end" font-size="11" fill="#4a5655">10,000</text>
+<line x1="72" x2="470" y1="98.0" y2="98.0" stroke="#e3e8e7"/>
+<text x="66" y="102.0" text-anchor="end" font-size="11" fill="#4a5655">100,000</text>
+<line x1="72" x2="470" y1="50.0" y2="50.0" stroke="#e3e8e7"/>
+<text x="66" y="54.0" text-anchor="end" font-size="11" fill="#4a5655">1,000,000</text>
+<text x="72.0" y="306" text-anchor="middle" font-size="11" fill="#4a5655">0</text>
+<line x1="72.0" x2="72.0" y1="290" y2="294" stroke="#4a5655"/>
+<text x="171.5" y="306" text-anchor="middle" font-size="11" fill="#4a5655">8</text>
+<line x1="171.5" x2="171.5" y1="290" y2="294" stroke="#4a5655"/>
+<text x="271.0" y="306" text-anchor="middle" font-size="11" fill="#4a5655">16</text>
+<line x1="271.0" x2="271.0" y1="290" y2="294" stroke="#4a5655"/>
+<text x="358.1" y="306" text-anchor="middle" font-size="11" fill="#4a5655">23</text>
+<line x1="358.1" x2="358.1" y1="290" y2="294" stroke="#4a5655"/>
+<text x="470.0" y="306" text-anchor="middle" font-size="11" fill="#4a5655">32</text>
+<line x1="470.0" x2="470.0" y1="290" y2="294" stroke="#4a5655"/>
+<line x1="358.1" x2="358.1" y1="50" y2="290" stroke="#4a5655" stroke-dasharray="3 3"/>
+<text x="354.1" y="60" text-anchor="end" font-size="10.5" fill="#4a5655">block 23</text>
+<line x1="72" x2="470" y1="106.8" y2="106.8" stroke="#b03a2e" stroke-width="1.5"/>
+<text x="76" y="102.8" font-size="10.5" fill="#b03a2e">fp16 maximum 65,504</text>
+<polyline points="72.0,280.7 84.4,248.5 96.9,235.1 109.3,221.7 121.8,220.9 134.2,223.5 146.6,204.6 159.1,204.2 171.5,204.4 183.9,204.5 196.4,206.5 208.8,207.5 221.2,164.5 233.7,164.6 246.1,164.5 258.6,164.5 271.0,164.5 283.4,164.4 295.9,164.4 308.3,164.7 320.8,165.1 333.2,165.8 345.6,166.7 358.1,92.4 370.5,92.3 382.9,92.3 395.4,92.3 407.8,92.3 420.2,92.3 432.7,92.3 445.1,92.3 457.6,92.3 470.0,92.3" fill="none" stroke="#057379" stroke-width="1.5" stroke-linejoin="round" stroke-opacity="0.85"><title>iss-kibo-lab/224x224: largest value 131,448</title></polyline>
+<polyline points="72.0,275.1 84.4,247.7 96.9,234.3 109.3,221.4 121.8,220.6 134.2,222.7 146.6,204.7 159.1,204.3 171.5,204.5 183.9,204.5 196.4,206.6 208.8,207.5 221.2,165.0 233.7,165.0 246.1,164.9 258.6,164.9 271.0,164.9 283.4,164.6 295.9,164.7 308.3,164.8 320.8,165.2 333.2,165.7 345.6,166.6 358.1,113.3 370.5,113.1 382.9,113.1 395.4,113.2 407.8,113.1 420.2,112.9 432.7,111.9 445.1,110.9 457.6,109.5 470.0,110.9" fill="none" stroke="#e0a336" stroke-width="1.5" stroke-linejoin="round" stroke-opacity="0.85"><title>iss-kibo-lab/448x448: largest value 57,542</title></polyline>
+<polyline points="72.0,275.9 84.4,249.6 96.9,234.7 109.3,221.8 121.8,220.9 134.2,222.9 146.6,204.8 159.1,204.4 171.5,204.6 183.9,204.6 196.4,206.6 208.8,207.5 221.2,165.2 233.7,165.2 246.1,165.1 258.6,165.0 271.0,165.0 283.4,164.8 295.9,164.8 308.3,164.9 320.8,165.3 333.2,165.8 345.6,166.7 358.1,117.1 370.5,116.9 382.9,116.9 395.4,116.9 407.8,116.9 420.2,115.1 432.7,114.1 445.1,113.1 457.6,111.5 470.0,113.1" fill="none" stroke="#e0a336" stroke-width="1.5" stroke-linejoin="round" stroke-opacity="0.85"><title>iss-kibo-lab/512x512: largest value 52,206</title></polyline>
+<polyline points="72.0,277.5 84.4,246.2 96.9,234.1 109.3,221.3 121.8,220.6 134.2,222.9 146.6,204.6 159.1,204.3 171.5,204.4 183.9,204.5 196.4,206.6 208.8,207.6 221.2,164.0 233.7,164.1 246.1,164.0 258.6,164.0 271.0,164.0 283.4,163.8 295.9,163.9 308.3,164.1 320.8,164.5 333.2,165.2 345.6,166.1 358.1,91.2 370.5,91.2 382.9,91.2 395.4,91.2 407.8,91.2 420.2,91.2 432.7,91.2 445.1,91.2 457.6,91.2 470.0,91.2" fill="none" stroke="#057379" stroke-width="1.5" stroke-linejoin="round" stroke-opacity="0.85"><title>iss-kibo-lab/224x400: largest value 138,824</title></polyline>
+<polyline points="72.0,277.5 84.4,244.1 96.9,234.1 109.3,221.4 121.8,221.1 134.2,223.4 146.6,204.7 159.1,204.4 171.5,204.5 183.9,204.5 196.4,206.4 208.8,207.5 221.2,164.8 233.7,164.9 246.1,164.8 258.6,164.8 271.0,164.9 283.4,164.7 295.9,164.9 308.3,165.1 320.8,165.5 333.2,166.1 345.6,167.0 358.1,94.8 370.5,94.8 382.9,94.8 395.4,94.8 407.8,94.8 420.2,94.8 432.7,94.8 445.1,94.8 457.6,94.8 470.0,94.8" fill="none" stroke="#057379" stroke-width="1.5" stroke-linejoin="round" stroke-opacity="0.85"><title>forest/224x224: largest value 116,642</title></polyline>
+<polyline points="72.0,272.7 84.4,247.4 96.9,233.3 109.3,221.5 121.8,220.9 134.2,222.6 146.6,205.2 159.1,204.8 171.5,205.0 183.9,204.9 196.4,206.8 208.8,207.8 221.2,165.7 233.7,165.7 246.1,165.6 258.6,165.6 271.0,165.6 283.4,165.3 295.9,165.4 308.3,165.6 320.8,165.9 333.2,166.3 345.6,167.2 358.1,115.8 370.5,115.6 382.9,115.6 395.4,115.6 407.8,115.2 420.2,113.3 432.7,112.4 445.1,111.5 457.6,110.2 470.0,111.7" fill="none" stroke="#e0a336" stroke-width="1.5" stroke-linejoin="round" stroke-opacity="0.85"><title>forest/448x448: largest value 55,666</title></polyline>
+<polyline points="72.0,274.2 84.4,248.4 96.9,233.8 109.3,221.8 121.8,221.2 134.2,222.7 146.6,205.2 159.1,204.8 171.5,205.0 183.9,204.8 196.4,206.7 208.8,207.7 221.2,165.8 233.7,165.9 246.1,165.7 258.6,165.7 271.0,165.7 283.4,165.4 295.9,165.5 308.3,165.7 320.8,165.9 333.2,166.4 345.6,167.2 358.1,118.0 370.5,117.7 382.9,117.8 395.4,117.8 407.8,116.5 420.2,114.6 432.7,113.7 445.1,112.7 457.6,111.4 470.0,113.0" fill="none" stroke="#e0a336" stroke-width="1.5" stroke-linejoin="round" stroke-opacity="0.85"><title>forest/512x512: largest value 52,564</title></polyline>
+<polyline points="72.0,275.7 84.4,245.7 96.9,234.0 109.3,221.5 121.8,221.0 134.2,223.3 146.6,204.9 159.1,204.5 171.5,204.6 183.9,204.7 196.4,206.6 208.8,207.7 221.2,164.7 233.7,164.8 246.1,164.8 258.6,164.7 271.0,164.8 283.4,164.6 295.9,164.8 308.3,165.0 320.8,165.4 333.2,166.0 345.6,166.9 358.1,93.5 370.5,93.5 382.9,93.5 395.4,93.5 407.8,93.5 420.2,93.5 432.7,93.5 445.1,93.5 457.6,93.5 470.0,93.5" fill="none" stroke="#057379" stroke-width="1.5" stroke-linejoin="round" stroke-opacity="0.85"><title>forest/224x304: largest value 124,229</title></polyline>
+<polyline points="72.0,277.1 84.4,247.9 96.9,234.8 109.3,221.6 121.8,220.9 134.2,223.3 146.6,204.5 159.1,204.2 171.5,204.3 183.9,204.4 196.4,206.5 208.8,207.7 221.2,164.1 233.7,164.2 246.1,164.2 258.6,164.1 271.0,164.2 283.4,164.1 295.9,164.2 308.3,164.4 320.8,164.8 333.2,165.5 345.6,166.4 358.1,90.6 370.5,90.6 382.9,90.6 395.4,90.6 407.8,90.6 420.2,90.6 432.7,90.6 445.1,90.6 457.6,90.6 470.0,90.6" fill="none" stroke="#057379" stroke-width="1.5" stroke-linejoin="round" stroke-opacity="0.85"><title>iss-conference/224x224: largest value 142,796</title></polyline>
+<polyline points="72.0,270.3 84.4,249.0 96.9,233.8 109.3,221.4 121.8,220.7 134.2,222.5 146.6,204.9 159.1,204.5 171.5,204.6 183.9,204.7 196.4,206.7 208.8,207.9 221.2,164.8 233.7,164.9 246.1,164.8 258.6,164.8 271.0,164.8 283.4,164.6 295.9,164.6 308.3,164.8 320.8,165.1 333.2,165.6 345.6,166.4 358.1,112.9 370.5,112.7 382.9,112.7 395.4,112.8 407.8,112.7 420.2,112.0 432.7,111.1 445.1,110.0 457.6,108.7 470.0,109.9" fill="none" stroke="#e0a336" stroke-width="1.5" stroke-linejoin="round" stroke-opacity="0.85"><title>iss-conference/448x448: largest value 59,863</title></polyline>
+<polyline points="72.0,270.6 84.4,246.8 96.9,233.5 109.3,221.3 121.8,220.6 134.2,222.3 146.6,204.7 159.1,204.3 171.5,204.5 183.9,204.5 196.4,206.5 208.8,207.6 221.2,164.8 233.7,164.9 246.1,164.8 258.6,164.8 271.0,164.8 283.4,164.5 295.9,164.6 308.3,164.7 320.8,165.0 333.2,165.5 345.6,166.3 358.1,114.1 370.5,113.8 382.9,113.8 395.4,113.8 407.8,113.8 420.2,112.6 432.7,111.7 445.1,110.7 457.6,109.3 470.0,110.6" fill="none" stroke="#e0a336" stroke-width="1.5" stroke-linejoin="round" stroke-opacity="0.85"><title>iss-conference/512x512: largest value 58,066</title></polyline>
+<polyline points="72.0,270.2 84.4,245.7 96.9,234.0 109.3,221.3 121.8,220.7 134.2,222.9 146.6,204.7 159.1,204.3 171.5,204.5 183.9,204.6 196.4,206.7 208.8,207.9 221.2,163.8 233.7,163.9 246.1,163.8 258.6,163.8 271.0,163.9 283.4,163.7 295.9,163.8 308.3,164.0 320.8,164.4 333.2,165.0 345.6,165.9 358.1,89.6 370.5,89.6 382.9,89.6 395.4,89.6 407.8,89.6 420.2,89.6 432.7,89.6 445.1,89.6 457.6,89.6 470.0,89.6" fill="none" stroke="#057379" stroke-width="1.5" stroke-linejoin="round" stroke-opacity="0.85"><title>iss-conference/304x224: largest value 149,750</title></polyline>
+<text x="370.5" y="66.2" font-size="10.5" font-weight="600" fill="#057379">short side 224 px (6)</text>
+<text x="370.5" y="137.5" font-size="10.5" font-weight="600" fill="#a0711a">448 and 512 px (6)</text>
+<text x="271" y="324" text-anchor="middle" font-size="11" fill="#4a5655">Block (0 = before block 1)</text>
+<line x1="600" x2="930" y1="290.0" y2="290.0" stroke="#e3e8e7"/>
+<text x="594" y="294.0" text-anchor="end" font-size="11" fill="#4a5655">0</text>
+<line x1="600" x2="930" y1="230.0" y2="230.0" stroke="#e3e8e7"/>
+<text x="594" y="234.0" text-anchor="end" font-size="11" fill="#4a5655">40,000</text>
+<line x1="600" x2="930" y1="170.0" y2="170.0" stroke="#e3e8e7"/>
+<text x="594" y="174.0" text-anchor="end" font-size="11" fill="#4a5655">80,000</text>
+<line x1="600" x2="930" y1="110.0" y2="110.0" stroke="#e3e8e7"/>
+<text x="594" y="114.0" text-anchor="end" font-size="11" fill="#4a5655">120,000</text>
+<line x1="600" x2="930" y1="50.0" y2="50.0" stroke="#e3e8e7"/>
+<text x="594" y="54.0" text-anchor="end" font-size="11" fill="#4a5655">160,000</text>
+<text x="600.0" y="306" text-anchor="middle" font-size="11" fill="#4a5655">0</text>
+<line x1="600.0" x2="600.0" y1="290" y2="294" stroke="#4a5655"/>
+<text x="647.1" y="306" text-anchor="middle" font-size="11" fill="#4a5655">2,000</text>
+<line x1="647.1" x2="647.1" y1="290" y2="294" stroke="#4a5655"/>
+<text x="694.3" y="306" text-anchor="middle" font-size="11" fill="#4a5655">4,000</text>
+<line x1="694.3" x2="694.3" y1="290" y2="294" stroke="#4a5655"/>
+<text x="741.4" y="306" text-anchor="middle" font-size="11" fill="#4a5655">6,000</text>
+<line x1="741.4" x2="741.4" y1="290" y2="294" stroke="#4a5655"/>
+<text x="788.6" y="306" text-anchor="middle" font-size="11" fill="#4a5655">8,000</text>
+<line x1="788.6" x2="788.6" y1="290" y2="294" stroke="#4a5655"/>
+<text x="835.7" y="306" text-anchor="middle" font-size="11" fill="#4a5655">10,000</text>
+<line x1="835.7" x2="835.7" y1="290" y2="294" stroke="#4a5655"/>
+<text x="882.9" y="306" text-anchor="middle" font-size="11" fill="#4a5655">12,000</text>
+<line x1="882.9" x2="882.9" y1="290" y2="294" stroke="#4a5655"/>
+<text x="930.0" y="306" text-anchor="middle" font-size="11" fill="#4a5655">14,000</text>
+<line x1="930.0" x2="930.0" y1="290" y2="294" stroke="#4a5655"/>
+<line x1="600" x2="930" y1="191.7" y2="191.7" stroke="#b03a2e" stroke-width="1.5"/>
+<text x="604" y="187.7" font-size="10.5" fill="#b03a2e">65,504</text>
+<circle cx="856.9" cy="93.3" r="5.5" fill="#057379" stroke="#ffffff" stroke-width="1.2"><title>iss-kibo-lab/224x224: feed-forward branch output 10,901, token value after block 23 131,121</title></circle>
+<circle cx="725.2" cy="218.1" r="5.5" fill="#e0a336" stroke="#ffffff" stroke-width="1.2"><title>iss-kibo-lab/448x448: feed-forward branch output 5,313, token value after block 23 47,907</title></circle>
+<circle cx="715.2" cy="230.1" r="5.5" fill="#e0a336" stroke="#ffffff" stroke-width="1.2"><title>iss-kibo-lab/512x512: feed-forward branch output 4,885, token value after block 23 39,942</title></circle>
+<circle cx="873.0" cy="82.2" r="5.5" fill="#057379" stroke="#ffffff" stroke-width="1.2"><title>iss-kibo-lab/224x400: feed-forward branch output 11,583, token value after block 23 138,521</title></circle>
+<circle cx="834.3" cy="115.4" r="5.5" fill="#057379" stroke="#ffffff" stroke-width="1.2"><title>forest/224x224: feed-forward branch output 9,941, token value after block 23 116,368</title></circle>
+<circle cx="717.7" cy="226.2" r="5.5" fill="#e0a336" stroke="#ffffff" stroke-width="1.2"><title>forest/448x448: feed-forward branch output 4,994, token value after block 23 42,524</title></circle>
+<circle cx="709.4" cy="232.5" r="5.5" fill="#e0a336" stroke="#ffffff" stroke-width="1.2"><title>forest/512x512: feed-forward branch output 4,639, token value after block 23 38,304</title></circle>
+<circle cx="850.5" cy="104.1" r="5.5" fill="#057379" stroke="#ffffff" stroke-width="1.2"><title>forest/224x304: feed-forward branch output 10,629, token value after block 23 123,954</title></circle>
+<circle cx="879.9" cy="76.3" r="5.5" fill="#057379" stroke="#ffffff" stroke-width="1.2"><title>iss-conference/224x224: feed-forward branch output 11,874, token value after block 23 142,474</title></circle>
+<circle cx="741.5" cy="216.8" r="5.5" fill="#e0a336" stroke="#ffffff" stroke-width="1.2"><title>iss-conference/448x448: feed-forward branch output 6,003, token value after block 23 48,818</title></circle>
+<circle cx="735.7" cy="220.6" r="5.5" fill="#e0a336" stroke="#ffffff" stroke-width="1.2"><title>iss-conference/512x512: feed-forward branch output 5,757, token value after block 23 46,298</title></circle>
+<circle cx="894.8" cy="65.9" r="5.5" fill="#057379" stroke="#ffffff" stroke-width="1.2"><title>iss-conference/304x224: feed-forward branch output 12,506, token value after block 23 149,432</title></circle>
+<text x="826.3" y="65.0" text-anchor="end" font-size="10.5" font-weight="600" fill="#057379">224 px: inf in fp16-cast</text>
+<text x="750.9" y="245.0" font-size="10.5" font-weight="600" fill="#a0711a">448 and 512 px: finite</text>
+<text x="765" y="324" text-anchor="middle" font-size="11" fill="#4a5655">Largest feed-forward branch output of block 23</text>
+<text x="548" y="170" font-size="11" fill="#4a5655" transform="rotate(-90 548 170)" text-anchor="middle">Largest token value after block 23</text>
+</svg></div>
+    <figcaption><b>Figure 4.</b> ViT-H+/16 in fp32 on <code>mlx</code>, the 12 configurations. Teal: short side 224 px (224 × 224, 224 × 400, 224 × 304 and 304 × 224). Amber: 448 × 448 and 512 × 512 px. (a) The token range, log scale. (b) Each configuration as one point: the largest feed-forward branch output of block 23 and the largest token value after block 23. The 6 points above the red line are the 6 configurations that give inf after block 23 in fp16-cast. Hover over a line or a point for its values.</figcaption>
+  </figure>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Configuration</th><th class="num">tokens, after block 22</th><th class="num"><code>ff_out</code>, block 23</th><th class="num">tokens, after block 23</th><th class="num">Largest (block)</th><th>fp16-cast</th></tr></thead>
+      <tbody>
+        <tr class="group"><td colspan="6">Short side 224 px</td></tr>
+        <tr><td class="name">iss-kibo-lab/224x224</td><td class="num">3,702.6</td><td class="num">10,900.6</td><td class="num">131,120.8</td><td class="num">131,447.6 (30)</td><td class="over">inf after block 23</td></tr>
+        <tr><td class="name">iss-kibo-lab/224x400</td><td class="num">3,810.9</td><td class="num">11,582.6</td><td class="num">138,520.8</td><td class="num">138,824.2 (30)</td><td class="over">inf after block 23</td></tr>
+        <tr><td class="name">forest/224x224</td><td class="num">3,645.3</td><td class="num">9,940.9</td><td class="num">116,367.5</td><td class="num">116,642.0 (30)</td><td class="over">inf after block 23</td></tr>
+        <tr><td class="name">forest/224x304</td><td class="num">3,670.4</td><td class="num">10,629.1</td><td class="num">123,953.9</td><td class="num">124,229.4 (30)</td><td class="over">inf after block 23</td></tr>
+        <tr><td class="name">iss-conference/224x224</td><td class="num">3,762.0</td><td class="num">11,874.3</td><td class="num">142,473.6</td><td class="num">142,796.0 (30)</td><td class="over">inf after block 23</td></tr>
+        <tr><td class="name">iss-conference/304x224</td><td class="num">3,853.8</td><td class="num">12,506.2</td><td class="num">149,432.4</td><td class="num">149,750.0 (30)</td><td class="over">inf after block 23</td></tr>
+        <tr class="group"><td colspan="6">448 and 512 px</td></tr>
+        <tr><td class="name">iss-kibo-lab/448x448</td><td class="num">3,727.2</td><td class="num">5,313.2</td><td class="num">47,907.1</td><td class="num">57,542.1 (31)</td><td>finite; largest 57,376.0</td></tr>
+        <tr><td class="name">iss-kibo-lab/512x512</td><td class="num">3,709.7</td><td class="num">4,885.2</td><td class="num">39,942.3</td><td class="num">52,205.9 (31)</td><td>finite; largest 52,256.0</td></tr>
+        <tr><td class="name">forest/448x448</td><td class="num">3,623.0</td><td class="num">4,993.7</td><td class="num">42,524.5</td><td class="num">55,666.3 (31)</td><td>finite; largest 55,776.0</td></tr>
+        <tr><td class="name">forest/512x512</td><td class="num">3,619.3</td><td class="num">4,639.1</td><td class="num">38,303.6</td><td class="num">52,563.8 (31)</td><td>finite; largest 52,640.0</td></tr>
+        <tr><td class="name">iss-conference/448x448</td><td class="num">3,750.7</td><td class="num">6,002.8</td><td class="num">48,818.0</td><td class="num">59,863.1 (31)</td><td>finite; largest 59,776.0 (91.3 %)</td></tr>
+        <tr><td class="name">iss-conference/512x512</td><td class="num">3,770.7</td><td class="num">5,757.4</td><td class="num">46,298.3</td><td class="num">58,065.9 (31)</td><td>finite; largest 58,112.0</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 4.</b> ViT-H+/16 in fp32 on <code>mlx</code>: the largest token value after blocks 22 and 23, the largest feed-forward branch output of block 23 and the largest value of all blocks. The token after block 22 is R1, after block 23 and later R2, in all 12 configurations. Block 23 also has the largest feed-forward branch output of each configuration (Table 2 of <code>results/token-range-mlx.md</code>). The values after blocks 22 and 23 come from the token-range lines. Last column: the fp16-cast run of the same configuration.</p>
+  <ul>
+    <li><b>Block 23 decides.</b> With a 224 px short side, the feed-forward branch output of block 23 is 9,941 to 12,506, and R2 reaches 116,368 to 149,432. At 448 and 512 px the branch output is 4,639 to 6,003, about half, and R2 reaches 38,304 to 48,818. The record does not show why the branch output depends on the input resolution.</li>
+    <li><b>After block 23 the value still grows a little.</b> At 448 and 512 px, R2 grows from 38,304 to 48,818 after block 23 to 52,206 to 59,863 at block 31. So the margin of the finite configurations is small: 59,776 in fp16-cast is 91.3 % of 65,504.</li>
+    <li><b>Why the xfail is at runtime.</b> A static mark for each configuration would fail when one more rounding moves a configuration across 65,504 (way M3 in Table 10 of <code>explore.html</code>). With 8.7 % headroom at <code>iss-conference/448x448</code>, the plan chose way M2: the test marks the pair, and only a non-finite output xfails (Section 9).</li>
+  </ul>
+</section>
+
+<section id="margins">
+  <h2>8 ViT-7B/16 and the fp16 margins</h2>
+  <p>ViT-7B/16 has no fp32 run: the run rule forbids its fp32 weights. So its token range comes from the four half dtype modes. In each of the 48 lines (4 dtype modes × 12 configurations), the largest token value is between 13,248 and 13,582. The largest is 13,581.9 (bf16-autocast, <code>forest/224x224</code>, after block 40, R2): 20.7 % of 65,504. Its largest branch value is 1,296 (feed-forward branch output, bf16-cast, <code>iss-kibo-lab/512x512</code>, block 1). The teacher has much smaller register values than ViT-L/16 and ViT-H+/16. Its value also grows in a different way. For <code>iss-kibo-lab</code> at 224 × 224 px in bf16-autocast, block 1 lifts the largest value from 119 to 2,919. After that, R2 grows in every block, to 13,544 after block 40, without a later jump (<a href="02-tokens-and-outputs.html#registers">02, Figure 2</a>).</p>
+  <p>Risk R20 of <code>explore.html</code> asked for the margins of the tensors that a dtype mode keeps in fp16. Table 5 gives them.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Dtype mode</th><th>Tensor in fp16</th><th class="num">Largest finite value</th><th>Model size, configuration, block</th><th class="num">Share of 65,504</th></tr></thead>
+      <tbody>
+        <tr><td>fp16-cast</td><td>token sequence, finite configurations</td><td class="num">59,776.0</td><td>ViT-H+/16, iss-conference/448x448, after block 31</td><td class="num"><b>91.3 %</b></td></tr>
+        <tr><td>fp16-cast</td><td>token sequence</td><td class="num">13,568.0</td><td>ViT-7B/16, forest/224x224, after block 40</td><td class="num">20.7 %</td></tr>
+        <tr><td>fp16-autocast</td><td>feed-forward branch output</td><td class="num">52,128.0</td><td>ViT-L/16, forest/448x448, block 1</td><td class="num"><b>79.6 %</b></td></tr>
+        <tr><td>fp16-autocast</td><td>feed-forward branch output</td><td class="num">12,504.0</td><td>ViT-H+/16, iss-conference/304x224, block 23</td><td class="num">19.1 %</td></tr>
+        <tr><td>fp16-autocast</td><td>feed-forward hidden values</td><td class="num">7,268.0</td><td>ViT-S+/16, iss-kibo-lab/224x400, block 3</td><td class="num">11.1 %</td></tr>
+        <tr><td>fp16-autocast</td><td>attention branch output</td><td class="num">209.2</td><td>ViT-7B/16, iss-kibo-lab/224x224, block 1</td><td class="num">0.3 %</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 5.</b> The fp16 margins, from Table 2 of <code>results/token-range-mlx.md</code> and Section 4.2 of <code>verify.html</code> (R20). The two bold rows are the smallest margins of Step 5. All values outside the two pairs of <code>EXPECTED_FP16_OVERFLOW</code> are finite.</p>
+  <p>So no ViT-7B/16 pair joined <code>EXPECTED_FP16_OVERFLOW</code>: no value of ViT-7B/16 is non-finite or above 65,504.</p>
+</section>
+
+<section id="expected">
+  <h2>9 Expected failures in the tests</h2>
+  <p>A parity test with a non-finite output must not pass, and it must not hide a bug. Step 2 marked any non-finite fp16-cast output as an xfail (way M1 of <code>explore.html</code>). Then a bug that gives NaN in ViT-S/16 would also xfail. Step 5 uses way M2: a list of pairs with evidence, and one helper for both backends.</p>
+  <pre><code># src/dinov3_apple/parity.py, lines 36 to 43
+FP16_OVERFLOW = (
+    "fp16 overflow: a register token is above 65,504 (Table 3 of specs/05-all-sizes/explore.html)"
+)
+# The pairs with a token range above 65,504 in a tensor that the dtype mode keeps in fp16. A pair
+# joins only with the evidence of a token-range line (D3, way M2 of specs/05-all-sizes/explore.html).
+EXPECTED_FP16_OVERFLOW: frozenset[tuple[str, str]] = frozenset(
+    {("ViT-L/16", "fp16-cast"), ("ViT-H+/16", "fp16-cast")}
+)
+
+# tests/parity_checks.py, lines 61 to 77 (working tree)
+def check_finite(
+    tokens: np.ndarray, model_size: str, dtype_mode: str, note: Callable[[], None]
+) -&gt; None:
+    """Record and xfail an expected fp16 overflow. Fail any other non-finite output (way M2).
+
+    Args:
+        tokens: The output of the backend under test.
+        model_size: A key of MODEL_IDS.
+        dtype_mode: A key of THRESHOLDS.
+        note: Writes the result line with the status "non-finite".
+    """
+    if np.isfinite(tokens).all():
+        return
+    note()
+    if (model_size, dtype_mode) in EXPECTED_FP16_OVERFLOW:
+        pytest.xfail(FP16_OVERFLOW)
+    pytest.fail(f"non-finite output: ({model_size}, {dtype_mode}) is not an expected failure")</code></pre>
+  <ul>
+    <li><b><code>FP16_OVERFLOW</code> and <code>EXPECTED_FP16_OVERFLOW</code> live in <code>src/</code>.</b> The tests read both. <code>scripts/parity_table.py</code> reads only <code>EXPECTED_FP16_OVERFLOW</code>. <code>parity.py</code> needs only NumPy, so <code>mlx</code> code and <code>torch</code> code can both use it.</li>
+    <li><b>The list is a <code>frozenset</code> of pairs.</b> The pair holds the model size and the dtype mode, not the backend: <code>mlx</code> and <code>torch-mps</code> give the same non-finite set. The comment states the rule of the plan: a pair joins only with the evidence of a token-range line, a non-finite value or a value above 65,504 in a tensor that the dtype mode keeps in fp16.</li>
+    <li><b>Line 72.</b> A finite output returns at once. Then the normal threshold check runs, also for a listed pair. So the 6 finite configurations of ViT-H+/16 in fp16-cast must pass the fp16 thresholds, and they do.</li>
+    <li><b>Line 74, <code>note()</code>.</b> The caller gives a function that writes the result line with the status "non-finite". The helper calls it before the xfail or the fail, so the record exists in both cases. <code>scripts/parity_table.py</code> compares the non-finite lines of the two backends.</li>
+    <li><b>Lines 75 to 77.</b> A listed pair xfails with the reason. Any other pair fails with its name.</li>
+  </ul>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Pair</th><th>Token range on <code>mlx</code></th><th>Parity W5 on <code>mlx</code></th><th>Batch W6</th><th><code>torch-mps</code></th></tr></thead>
+      <tbody>
+        <tr><td>(ViT-L/16, fp16-cast)</td><td>12 of 12 non-finite; inf after block 1</td><td>12 of 12 non-finite: xfail</td><td>non-finite: xfail</td><td>the same 12 and the batch</td></tr>
+        <tr><td>(ViT-H+/16, fp16-cast)</td><td>6 of 12 non-finite; inf after block 23</td><td>6 xfail; 6 pass (0.999999 / 0.999998 / 0.999993)</td><td>non-finite: xfail</td><td>the same 6 and the batch</td></tr>
+        <tr><td>(ViT-7B/16, fp16-cast)</td><td>0 of 12 non-finite; at most 13,568.0</td><td>skipped: reference file missing (path D4-N)</td><td>passes</td><td>batch passes</td></tr>
+        <tr><td>all other pairs</td><td>0 non-finite</td><td>no non-finite output</td><td>pass</td><td>no non-finite output</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 6.</b> The non-finite results of Step 5 (AC3, AC7, AC8 and AC16 of <code>verify.html</code>). The non-finite set of <code>mlx</code> equals the set of <code>torch-mps</code>: 18 of the 60 fp16-cast parity configurations and 2 batch rows. Section 6 of <code>results/parity-mlx.md</code> ends with "equal". Of the 29 batch rows, 27 pass and 2 are expected failures. The parity values of the 6 finite ViT-H+/16 configurations are frame, patch mean and patch 1st percentile.</p>
+  <p class="note">Finding F8 of <code>verify.html</code>: at first, T14 checked only three cases. With mutation M11, which added (ViT-B/16, fp16-cast) to the list, T14 stayed green. So the rule "a pair joins only with evidence" existed only as text. The fix: T14 now asserts the exact set <code>{("ViT-L/16", "fp16-cast"), ("ViT-H+/16", "fp16-cast")}</code>. A change of the list now needs a change of the test, with its evidence.</p>
+</section>
+
+<section id="finalnorm">
+  <h2>10 After the final layer norm</h2>
+  <p>The large values stay inside the backbone. For ViT-S/16 to ViT-H+/16 in fp32 on <code>torch-cpu</code>, no output value after the final layer norm is above 18. The largest output values over the 12 configurations are 9.2 (ViT-S/16), 11.0 (ViT-S+/16), 17.9 (ViT-B/16), 15.7 (ViT-L/16) and 12.3 (ViT-H+/16) (Table 2 of <a href="02-tokens-and-outputs.html#registers">02</a>). Nobody measured the output values of ViT-7B/16.</p>
+  <ul>
+    <li>The layer norm divides each token by its own standard deviation over the D channels. The large values sit in 3 to 14 channels of one register token. So the large channels set the standard deviation of that token, and the normalized values are small. For any token, a normalized value is at most √(D − 1) in size before the learned scale (our derivation).</li>
+    <li>The frame embedding and the patch embeddings do not include the register tokens. But the attention of each block reads the register tokens. So an inf or a NaN in one register token reaches the outputs in the next block.</li>
+    <li>So fp16 is a risk only inside the backbone. For ViT-S/16 to ViT-H+/16 on the 12 configurations, a head after the backbone sees values below 18.</li>
+  </ul>
+</section>
+
+<section id="results">
+  <h2>11 The measured results of Step 5</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Criterion or test</th><th>What it checks</th><th>Measured</th><th>Target</th><th>Result</th></tr></thead>
+      <tbody>
+        <tr><td>AC16, W7 <code>test_mlx_token_range</code></td><td>One line for each configuration, model size and dtype mode</td><td>348 lines (29 tests × 12): 330 measured, 18 non-finite; one skip line for ViT-7B/16 in fp32. <code>results/token-range-mlx.md</code> made again is byte-equal</td><td>348 lines, report only</td><td>pass</td></tr>
+        <tr><td>AC16, W8 <code>test_mlx_token_range_matches_stored</code></td><td>fp32 token range against the stored hidden states, relative difference</td><td>ViT-S/16 8.3e-7, ViT-S+/16 2.4e-6, ViT-B/16 2.5e-6, ViT-L/16 3.0e-7, ViT-H+/16 1.3e-6</td><td class="num">≤ 1e-4</td><td>pass</td></tr>
+        <tr><td>AC16, T26 <code>test_token_range_matches_hidden_states</code></td><td>Token range against <code>run_mlx_hidden_states</code>, small models, 5 dtype modes</td><td>exact; <code>last_state</code> bit for bit equal to the last hidden state in all five modes</td><td>exact</td><td>pass</td></tr>
+        <tr><td>F6 fix, <code>test_token_range_finite_sees_each_inf</code></td><td>An inf in each field gives <code>finite</code> False; an inf in a <code>down_proj</code> bias gives <code>tokens_finite</code> [true, true, false]</td><td>as expected; the mutations M5, M5b, M6 and MW7 now fail</td><td>exact</td><td>pass</td></tr>
+        <tr><td>T14 <code>test_check_finite_marks_only_listed_pairs</code></td><td>xfail only for a listed pair; the exact list</td><td>as expected; the mutations M11 and M11b now fail</td><td>exact</td><td>pass</td></tr>
+        <tr><td>AC3, W5 in fp16-cast</td><td>Parity of the finite outputs; expected failures</td><td>xfail: ViT-L/16 12 of 12, ViT-H+/16 6; the 6 finite ViT-H+/16 configurations pass</td><td>Table 6 of the plan</td><td>pass</td></tr>
+        <tr><td>AC8</td><td>The non-finite set of <code>mlx</code> against <code>torch-mps</code></td><td>18 parity configurations and 2 batch rows on both backends</td><td>equal</td><td>pass</td></tr>
+        <tr><td>AC9, W4 <code>test_mlx_hidden_states</code></td><td><code>run_mlx_hidden_states</code> against the stored hidden states</td><td>fp32: each state passes, smallest patch 1st percentile 0.9999999991 (ViT-H+/16). fp16-cast: non-finite blocks ViT-L/16 24 of 24, ViT-H+/16 10 of 32 (report only)</td><td><code>THRESHOLDS["fp32"]</code></td><td>pass</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 7.</b> The Step 5 results for the code of this page, from Table 3 and Section 9 of <code>specs/05-all-sizes/verify.html</code>. The rows of F6 and F8 describe the fix session after the Verify stage. The 10 non-finite blocks of ViT-H+/16 are blocks 23 to 32.</p>
+</section>
+
+<section id="surprises">
+  <h2>12 Surprises</h2>
+  <ol>
+    <li class="note"><b>ViT-L/16 overflows in block 1, for every image.</b> A register token of ViT-L/16 reaches 157,130 in fp32. The value is already 155,848 to 157,132 after block 1, in all 12 configurations. The feed-forward branch output of block 1 is nearly the same for each input: 51,691 to 52,117.</li>
+    <li class="note"><b>The overflow of ViT-H+/16 depends on the input resolution.</b> The same block 23 gives 116,368 to 149,432 with a 224 px short side and 38,304 to 48,818 at 448 and 512 px. The cause is a feed-forward branch output of about half the size. The record does not show why.</li>
+    <li class="note"><b>|λ| reaches 62.</b> So a branch output that fits in fp16 can give a residual value far above 65,504. In block 1 of ViT-L/16 the residual value is three times the largest branch output. fp16-autocast works only because λ and the residual add stay in fp32.</li>
+    <li class="note"><b>The finite fp16 values come close to the limit.</b> The fp16-autocast branch output of ViT-L/16 reaches 79.6 % of 65,504. The finite fp16-cast configuration <code>iss-conference/448x448</code> of ViT-H+/16 reaches 91.3 %.</li>
+    <li class="note"><b>The teacher has small register values.</b> ViT-7B/16 reaches 13,582: 20.7 % of the fp16 maximum, less than ViT-B/16 (22.8 %). After block 1, its value grows a little in each of the other 39 blocks. ViT-S/16, ViT-S+/16, ViT-B/16 and ViT-H+/16 have later jumps. ViT-L/16 jumps only in block 1.</li>
+    <li class="note"><b>No measured output value is above 18.</b> For ViT-S/16 to ViT-H+/16 in fp32 on <code>torch-cpu</code>, no output value after the final layer norm is above 18. The values of 150,000 inside the backbone do not reach the outputs. Nobody measured the output values of ViT-7B/16.</li>
+    <li class="note"><b>The attention branch never makes the large values.</b> Its output stays at or below 60.7 in the students and 209.4 in ViT-7B/16. All large values come from the feed-forward branch.</li>
+    <li class="note"><b>bf16 shows its spacing.</b> In bf16-cast, the largest value of ViT-L/16 is 157,696 or 156,672 in all 12 configurations: one bf16 spacing (1,024) apart.</li>
+    <li class="note"><b>A test that could not fail.</b> At first, no test checked the branch values or <code>TokenRange.finite</code>. Three mutations stayed green (finding F6). The fix session added the checks.</li>
+  </ol>
+</section>
+
+<section id="sources">
+  <h2>13 Sources</h2>
+  <ul>
+    <li>Repo code: <code>src/dinov3_apple/mlx_model.py</code> (commit <code>7c30a3e</code>), <code>src/dinov3_apple/parity.py</code>, <code>tests/parity_checks.py</code>, <code>tests/test_mlx_parity.py</code> (W4, W5, W6, W7, W8), <code>tests/test_mlx_parts.py</code> (T26), <code>tests/test_run_rules.py</code> (T14), <code>scripts/token_range_table.py</code>. Step 4 version: commit <code>ea82d58</code>.</li>
+    <li>Results: <code>results/token-range-mlx.md</code> (Tables 1 and 2), <code>results/parity-mlx.md</code> (Section 6), and the token-range lines in <code>tests/fixtures/generated/parity/mlx.jsonl</code> (not in git; the latest line of each configuration counts, as in <code>scripts/token_range_table.py</code>).</li>
+    <li>Spec: <code>specs/05-all-sizes/explore.html</code> (Table 3, Section 3.3 with Tables 9 and 10, Section 3.6, risks R20 and R28), <code>specs/05-all-sizes/plan.html</code> (Table 1, Table 3, Sections 3.6 and 3.7, Table 6), <code>specs/05-all-sizes/verify.html</code> (Table 3, Section 4.2, findings F3, F6 and F8, Section 9).</li>
+    <li>Earlier explainers: <a href="02-tokens-and-outputs.html">02</a> (Table 2, Figure 2, Section 6), <a href="04-4-layerscale.html">04-4</a>, <a href="04-5-mlp.html">04-5</a>.</li>
+    <li>DINOv3 paper: Siméoni et al., arXiv 2508.10104 (August 2025), Appendix A.1 (high-norm outliers and registers).</li>
+    <li>Computations of the agent for this page: the memory of all hidden states of ViT-7B/16 in Section 3.3 and the bound √(D − 1) in Section 10.</li>
+  </ul>
+</section>
+
+<footer class="steps">Previous: <a href="05-2-model-scaling.html">2 Model scaling, dtype modes and loading</a> · Next: none. This is the last explainer of Step 5. First page: <a href="05-1-swiglu.html">1 SwiGLU</a>.</footer>
+</main>
+</body>
+</html>

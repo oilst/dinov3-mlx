@@ -1,24 +1,28 @@
 """Tests of the key map, the MLX config and the load: T1 to T7b of specs/04-mlx-port/plan.html, and
-T1 to T10, T34, H1 and H2 of specs/05-all-sizes/plan.html."""
+T1 to T10, T34, H1 and H2 of specs/05-all-sizes/plan.html. Also the range check of the load
+report in the backbone slot (F1 and F5 of specs/05-all-sizes/verify.html)."""
 
 import dataclasses
 import json
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import mlx.core as mx
 import numpy as np
+import parity_checks
 import pytest
 import torch
+from fakes import VIT7B16_PARAMETER_COUNT, fail_if_called
 from mlx.utils import tree_flatten
-from parity_checks import load_peak_target
+from parity_checks import load_peak_lower_bound, load_peak_target
 from safetensors import safe_open
 from safetensors.torch import save_file
 from small_model import small_hf_model
 
-from dinov3_apple.bench import DTYPE_OF_MODE
+from dinov3_apple.bench import DTYPE_OF_MODE, bytes_per_weight
 from dinov3_apple.hub import MODEL_IDS, WeightsNotFoundError, weights_dir
 from dinov3_apple.memory import InsufficientMemoryError, RunRuleError
 from dinov3_apple.mlx_model import (
@@ -33,6 +37,7 @@ from dinov3_apple.mlx_model import (
 )
 from dinov3_apple.mlx_weights import (
     PATCH_WEIGHT,
+    LoadReport,
     UnknownWeightError,
     block_parameter_names,
     load_mlx_backbone,
@@ -45,7 +50,6 @@ from dinov3_apple.parity import THRESHOLDS
 pytestmark = pytest.mark.mlx
 
 VITS16_PARAMETER_COUNT = 21_596_544
-VIT7B16_PARAMETER_COUNT = 6_716_035_072
 HALF_MODES = ["fp16-cast", "bf16-cast", "fp16-autocast", "bf16-autocast"]
 TORCH_DTYPES = {mx.float32: torch.float32, mx.float16: torch.float16, mx.bfloat16: torch.bfloat16}
 
@@ -113,13 +117,6 @@ KEY_MAPS = {
     "ViT-H+/16": KeyMap(1, 615, 614, 418, 196, True, True),
     "ViT-7B/16": KeyMap(6, 687, 686, 442, 244, True, False),
 }
-
-
-def _fail(name: str) -> Callable[..., None]:
-    def fail(*args: object, **kwargs: object) -> None:
-        raise AssertionError(f"{name} was called")
-
-    return fail
 
 
 def _torch_tensors(hf_model: torch.nn.Module) -> dict[str, mx.array]:
@@ -246,6 +243,8 @@ def test_mlx_dtype_modes_are_known() -> None:
     names = {mx.float32: "fp32", mx.float16: "fp16", mx.bfloat16: "bf16"}
     for dtype_mode, dtypes in MLX_DTYPE_MODES.items():
         assert names[dtypes.matmul] == DTYPE_OF_MODE[dtype_mode]
+        # The bytes of each weight of the run rule and of the needs (F20 of verify.html).
+        assert bytes_per_weight("mlx", dtype_mode) == dtypes.matmul.size
         if dtype_mode.endswith("-autocast"):
             assert dtypes.stream == mx.float32
         else:
@@ -290,9 +289,13 @@ def test_mlx_config_from_hf() -> None:
 
 def test_load_mlx_backbone_refuses_tf32_mismatch(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MLX_ENABLE_TF32", "1")
-    monkeypatch.setattr("dinov3_apple.mlx_weights.parameter_count", _fail("parameter_count"))
-    monkeypatch.setattr("dinov3_apple.mlx_weights.weights_dir", _fail("weights_dir"))
-    monkeypatch.setattr("dinov3_apple.memory.available_memory_bytes", _fail("memory check"))
+    monkeypatch.setattr(
+        "dinov3_apple.mlx_weights.parameter_count", fail_if_called("parameter_count")
+    )
+    monkeypatch.setattr("dinov3_apple.mlx_weights.weights_dir", fail_if_called("weights_dir"))
+    monkeypatch.setattr(
+        "dinov3_apple.memory.available_memory_bytes", fail_if_called("memory check")
+    )
     with pytest.raises(TF32ModeError):
         load_mlx_backbone("ViT-S/16", "fp32", tf32=False)
 
@@ -304,10 +307,14 @@ def test_load_mlx_backbone_refuses_7b_fp32(
     The four fp16 and bf16 dtype modes pass the run rule and stop at the memory check."""
     # The lines of a monkeypatched memory check must not reach memory-checks.log of the session.
     monkeypatch.setattr(logging.getLogger("dinov3_apple.memory"), "handlers", [])
-    monkeypatch.setattr("dinov3_apple.mlx_weights.parameter_count", _fail("parameter_count"))
-    monkeypatch.setattr("dinov3_apple.mlx_weights.weights_dir", _fail("weights_dir"))
-    monkeypatch.setattr("dinov3_apple.memory.available_memory_bytes", _fail("memory check"))
-    monkeypatch.setattr("dinov3_apple.mlx_weights.tf32_enabled", _fail("tf32_enabled"))
+    monkeypatch.setattr(
+        "dinov3_apple.mlx_weights.parameter_count", fail_if_called("parameter_count")
+    )
+    monkeypatch.setattr("dinov3_apple.mlx_weights.weights_dir", fail_if_called("weights_dir"))
+    monkeypatch.setattr(
+        "dinov3_apple.memory.available_memory_bytes", fail_if_called("memory check")
+    )
+    monkeypatch.setattr("dinov3_apple.mlx_weights.tf32_enabled", fail_if_called("tf32_enabled"))
     with pytest.raises(RunRuleError, match="ViT-7B/16"):
         load_mlx_backbone("ViT-7B/16", "fp32")
     monkeypatch.setattr(
@@ -344,7 +351,7 @@ def test_load_mlx_backbone_checks_memory_first(
     monkeypatch.setattr(
         "dinov3_apple.mlx_weights.parameter_count", lambda model_size: VITS16_PARAMETER_COUNT
     )
-    monkeypatch.setattr("dinov3_apple.mlx_weights.weights_dir", _fail("weights_dir"))
+    monkeypatch.setattr("dinov3_apple.mlx_weights.weights_dir", fail_if_called("weights_dir"))
     monkeypatch.setattr("dinov3_apple.memory.available_memory_bytes", lambda: 0)
     caplog.set_level(logging.INFO, logger="dinov3_apple.memory")
     for dtype_mode in ("fp32", "bf16-autocast"):
@@ -374,7 +381,7 @@ def test_load_mlx_backbone_sets_memory_limit_to_need(monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(
         "dinov3_apple.mlx_weights.parameter_count", lambda model_size: VITS16_PARAMETER_COUNT
     )
-    monkeypatch.setattr("dinov3_apple.mlx_weights.weights_dir", _fail("weights_dir"))
+    monkeypatch.setattr("dinov3_apple.mlx_weights.weights_dir", fail_if_called("weights_dir"))
     monkeypatch.setattr("dinov3_apple.memory.available_memory_bytes", lambda: 10**12)
     monkeypatch.setattr(mx, "set_memory_limit", recorder)
     for dtype_mode in ("fp32", "bf16-cast"):
@@ -415,7 +422,12 @@ def test_load_mlx_backbone_reads_two_files(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, report: Callable[..., None]
 ) -> None:
     """T34: the load of two files and an index gives the parameters of the load of one file, with
-    a load peak within the formula of Table 5 and an empty cache."""
+    a load peak within the formula of Table 5 and an empty cache.
+
+    The load peak is also at least the bytes of the mapped tensors in bf16, without the mask
+    token: a load that does not evaluate the tensors stays below this bound (F1 of
+    specs/05-all-sizes/verify.html).
+    """
     hf_model = small_hf_model(seed=3, name="vit7b16-shape")
     _save_small_model(hf_model, tmp_path / "one", files=1)
     _save_small_model(hf_model, tmp_path / "two", files=2)
@@ -447,14 +459,18 @@ def test_load_mlx_backbone_reads_two_files(
     count = sum(t.numel() for t in hf_model.state_dict().values())
     largest = max(4 * t.numel() for t in hf_model.state_dict().values())
     target = round(1.2 * count * 2) + largest
+    state = hf_model.state_dict()
+    mapped = sum(state[name].numel() for name in state if map_key(name) is not None)
+    lower_bound = 2 * mapped  # bf16-cast: each mapped tensor in bf16
     load_report = models["two"].load_report
     report(
         "test_load_mlx_backbone_reads_two_files",
         peak_bytes=load_report.peak_bytes,
         cache_bytes=load_report.cache_bytes,
+        lower_bound=lower_bound,
         target=target,
     )
-    assert load_report.peak_bytes <= target
+    assert lower_bound <= load_report.peak_bytes <= target
     assert load_report.cache_bytes == 0
 
 
@@ -542,10 +558,12 @@ def test_mlx_load_peak(
     report: Callable[..., None],
 ) -> None:
     """H2: the load of one tensor at a time keeps the load peak of ViT-S/16 in bf16-cast within
-    1.2 x 43.2 MB + 2.36 MB, and the cache is empty after the load."""
+    1.2 x 43.2 MB + 2.36 MB, and the cache is empty after the load. The load peak is at least the
+    bytes of the mapped tensors in bf16 (F1 of specs/05-all-sizes/verify.html)."""
     model = backbone(model_size, "mlx", dtype_mode)
     load_report = model.load_report
     target = load_peak_target(model_size, dtype_mode)
+    lower_bound = load_peak_lower_bound(model_size, model)
     report(
         "test_mlx_load_peak",
         model_size=model_size,
@@ -554,9 +572,77 @@ def test_mlx_load_peak(
         peak_bytes=load_report.peak_bytes,
         cache_bytes=load_report.cache_bytes,
         footprint_bytes=load_report.footprint_bytes,
+        lower_bound=lower_bound,
         target=target,
     )
     assert round(target / 1e5) == 542  # 54.2 MB (Table 5)
-    assert load_report.peak_bytes <= target
+    assert lower_bound == 2 * (VITS16_PARAMETER_COUNT - 384)  # without the mask token
+    assert lower_bound <= load_report.peak_bytes <= target
     assert load_report.cache_bytes == 0
     assert load_report.need_bytes == 4_051_831_706
+
+
+@pytest.fixture
+def lone_slot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[Callable[[str, str, str], Any]]:
+    """Return the loader of a new backbone slot with its own memory log in tmp_path. The slot of
+    the test session keeps its model and its memory-checks.log."""
+    import conftest
+
+    monkeypatch.setattr(conftest, "MEMORY_LOG", tmp_path / "memory-checks.log")
+    slot = conftest._BackboneSlot()
+    yield slot.get
+    slot.free()
+    logging.getLogger("dinov3_apple.memory").removeHandler(slot.handler)
+    slot.handler.close()
+
+
+@pytest.mark.parametrize(
+    ("peak_bytes", "cache_bytes", "fails"),
+    [
+        pytest.param(1_000, 0, False, id="at-the-target"),
+        pytest.param(100, 0, False, id="at-the-lower-bound"),
+        pytest.param(1_001, 0, True, id="above-the-target"),
+        pytest.param(99, 0, True, id="below-the-lower-bound"),
+        pytest.param(500, 1, True, id="cache-above-0"),
+    ],
+)
+def test_backbone_slot_checks_the_load_report(
+    peak_bytes: int,
+    cache_bytes: int,
+    fails: bool,
+    lone_slot: Callable[[str, str, str], Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """After each mlx load the backbone slot fails the test if the load peak is above its target
+    or below the bytes of the mapped tensors, or if the cache is above 0 bytes (F1 and F5 of
+    specs/05-all-sizes/verify.html). A fake load gives the load report, so the test reads no
+    weights."""
+    load_report = LoadReport(
+        need_bytes=1, peak_bytes=peak_bytes, cache_bytes=cache_bytes, footprint_bytes=1
+    )
+    model = SimpleNamespace(load_report=load_report)
+    monkeypatch.setattr(
+        "dinov3_apple.mlx_weights.load_mlx_backbone", lambda model_size, dtype_mode: model
+    )
+    monkeypatch.setattr(parity_checks, "load_peak_target", lambda model_size, dtype_mode: 1_000)
+    monkeypatch.setattr(parity_checks, "load_peak_lower_bound", lambda model_size, model: 100)
+    if not fails:
+        assert lone_slot("ViT-S/16", "mlx", "bf16-cast") is model
+        return
+    with pytest.raises(pytest.fail.Exception, match="load of ViT-S/16 mlx bf16-cast: load peak"):
+        lone_slot("ViT-S/16", "mlx", "bf16-cast")
+
+
+def test_load_peak_target_of_an_autocast_pair(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The target counts the bytes of the matmul dtype, also in an autocast mode with the stream
+    dtype fp32: 1.2 x 2 bytes x 6,716,035,072 + 134,217,728 bytes for ViT-7B/16 (Table 5 of the
+    plan; F5 of specs/05-all-sizes/verify.html). The test gives the parameter count and the
+    largest tensor, so it reads no header."""
+    monkeypatch.setattr(
+        parity_checks, "parameter_count", lambda model_size: VIT7B16_PARAMETER_COUNT
+    )
+    monkeypatch.setattr(parity_checks, "largest_tensor_bytes", lambda model_size: 134_217_728)
+    for dtype_mode in ("fp16-autocast", "bf16-autocast"):
+        assert load_peak_target("ViT-7B/16", dtype_mode) == 16_252_701_901

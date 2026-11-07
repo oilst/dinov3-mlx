@@ -1,7 +1,7 @@
 """The parity table of scripts/parity_table.py for the backends torch-mps and mlx (T31 of
 specs/05-all-sizes/plan.html)."""
 
-from parity_table import results_path, write_table
+from parity_table import results_path, table_order, write_table
 
 
 def _line(backend: str, package: str, kind: str = "parity", **extra: object) -> dict:
@@ -50,7 +50,8 @@ def test_results_path_of_each_backend() -> None:
 
 def test_parity_table_uses_the_expected_failure_list() -> None:
     """T31: the expected failures come from EXPECTED_FP16_OVERFLOW; the stored checks of two model
-    sizes are sorted; the non-finite configurations of both backends are compared."""
+    sizes are sorted; the non-finite configurations of both backends are compared, the parity
+    lines and the batch lines (F9 of specs/05-all-sizes/verify.html)."""
     non_finite = {"status": "non-finite", "parity": None, "dtype_mode": "fp16-cast"}
     lines = [
         _line("mlx", "mlx", model_size="ViT-L/16", **non_finite),
@@ -101,3 +102,32 @@ def test_parity_table_uses_the_expected_failure_list() -> None:
     assert last.startswith("differences:")
     assert "ViT-B/16 fp16-cast forest/512x512" in last
     assert title not in write_table(mlx, "mlx")
+
+    batch = {"kind": "batch", "model_size": "ViT-L/16", "config": "batch-8-224x224"}
+    mlx_batch = _line("mlx", "mlx", **non_finite | batch)
+    torch_batch = _line("torch-mps", "torch", **non_finite | batch)
+    text = write_table([*mlx, mlx_batch], "mlx", [*torch_mps, torch_batch])
+    assert "| batch | ViT-L/16 | fp16-cast | batch-8-224x224 | non-finite | non-finite |" in text
+    assert text.rstrip().endswith("equal")
+    text = write_table([*mlx, mlx_batch], "mlx", torch_mps)
+    assert "| batch | ViT-L/16 | fp16-cast | batch-8-224x224 | non-finite | – |" in text
+    assert text.rstrip().splitlines()[-1] == (
+        "differences: ViT-L/16 fp16-cast batch-8-224x224 (batch): mlx only"
+    )
+    text = write_table(mlx, "mlx", [*torch_mps, torch_batch])
+    assert text.rstrip().splitlines()[-1] == (
+        "differences: ViT-L/16 fp16-cast batch-8-224x224 (batch): torch-mps only"
+    )
+
+
+def test_table_order_follows_model_ids_and_thresholds() -> None:
+    """One sort key of model size and dtype mode for the tables of scripts/parity_table.py and
+    scripts/token_range_table.py (F22 of specs/05-all-sizes/verify.html)."""
+    assert table_order("ViT-S/16", "fp32") == (0, 0)
+    assert table_order("ViT-7B/16", "bf16-autocast") == (5, 4)
+    pairs = [("ViT-B/16", "fp32"), ("ViT-S+/16", "bf16-cast"), ("ViT-S+/16", "fp32")]
+    assert sorted(pairs, key=lambda pair: table_order(*pair)) == [
+        ("ViT-S+/16", "fp32"),
+        ("ViT-S+/16", "bf16-cast"),
+        ("ViT-B/16", "fp32"),
+    ]

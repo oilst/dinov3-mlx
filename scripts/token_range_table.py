@@ -14,10 +14,8 @@ import math
 from datetime import date
 from pathlib import Path
 
-from parity_table import latest_lines, parity_log
+from parity_table import latest_lines, parity_log, table_order
 
-from dinov3_apple.hub import MODEL_IDS
-from dinov3_apple.parity import THRESHOLDS
 from dinov3_apple.stored import configurations
 
 REPO_ROOT = Path(__file__).parents[1]
@@ -78,12 +76,7 @@ def _sorted(lines: list[dict]) -> list[dict]:
     def key(line: dict) -> tuple[int, int, int, str]:
         config = line["config"]
         position = config_order.index(config) if config in config_order else len(config_order)
-        return (
-            list(MODEL_IDS).index(line["model_size"]),
-            list(THRESHOLDS).index(line["dtype_mode"]),
-            position,
-            config,
-        )
+        return (*table_order(line["model_size"], line["dtype_mode"]), position, config)
 
     return sorted(lines, key=key)
 

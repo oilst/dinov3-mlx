@@ -1,0 +1,700 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SwiGLU and One Rounding</title>
+<style>
+/* Explainer page. White page, black text, no dark mode. */
+:root { --bg: #ffffff; --fg: #111414; --muted: #4a5655; --rule: #d6dedd; --panel: #f5f8f7; --accent: #057379; --cls: #057379; --patch: #9fd3d1; --reg: #e0a336; color-scheme: light; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif; }
+main { max-width: 62rem; margin: 0 auto; padding: 40px 20px 64px; display: grid; gap: 1.75rem; }
+main > *, section > * { min-width: 0; }
+h1 { font-size: 1.9rem; line-height: 1.15; margin: 0; }
+h2 { font-size: 1.3rem; margin: 0; }
+h3 { font-size: 1.05rem; margin: 0; }
+section { display: grid; gap: 0.8rem; }
+p, ul, ol { margin: 0; max-width: 46rem; }
+li + li { margin-top: 0.25rem; }
+code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.86em; }
+p code, li code, td code { overflow-wrap: anywhere; }
+pre { margin: 0; background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 0.8rem 1rem; overflow-x: auto; }
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 0.92rem; }
+th, td { text-align: left; vertical-align: top; padding: 0.45rem 0.7rem 0.45rem 0; border-bottom: 1px solid var(--rule); }
+th { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); border-bottom: 1.5px solid var(--fg); }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+tr.group td { background: var(--panel); font-weight: 600; }
+table.first-nowrap td:first-child { white-space: nowrap; }
+.caption, figcaption { font-size: 0.88rem; color: var(--muted); }
+figure { margin: 0; display: grid; gap: 0.4rem; }
+.fig { border: 1px solid var(--rule); border-radius: 6px; padding: 0.5rem; overflow-x: auto; }
+.fig svg { display: block; width: 100%; height: auto; min-width: 640px; }
+.note { border-left: 3px solid var(--accent); padding: 0.3rem 0 0.3rem 0.9rem; }
+nav ol { columns: 2; }
+.steps { font-size: 0.92rem; color: var(--muted); }
+a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+<header>
+  <h1>SwiGLU and One Rounding</h1>
+  <p>Explainer for roadmap Step 5. Date: 2026-11-07.</p>
+  <p class="steps">Step 5 explainers: 1 SwiGLU (this page) · <a href="05-2-model-scaling.html">2 Model scaling, dtype modes and loading</a> · <a href="05-3-numeric-range.html">3 Numeric range of the tokens</a>. Step 4: <a href="04-5-mlp.html">5 MLP, outputs and speed</a>.</p>
+  <p class="steps">Previous: <a href="04-5-mlp.html">04-5 MLP, outputs and speed</a> · Next: <a href="05-2-model-scaling.html">05-2 Model scaling, dtype modes and loading</a></p>
+</header>
+
+<nav>
+  <h2>Contents</h2>
+  <ol>
+    <li><a href="#why">Why this explainer</a></li>
+    <li><a href="#picture">SwiGLU in one picture</a></li>
+    <li><a href="#gate">Only gate_proj gets the activation</a></li>
+    <li><a href="#width">The hidden width: the 2/3 rule</a></li>
+    <li><a href="#code">The code</a></li>
+    <li><a href="#rounding">One rounding in half precision</a></li>
+    <li><a href="#keymap">The key map for gate_proj</a></li>
+    <li><a href="#measured">The measured values of Step 5</a></li>
+    <li><a href="#surprises">Surprises</a></li>
+    <li><a href="#sources">Sources</a></li>
+  </ol>
+</nav>
+
+<section id="why">
+  <h2>1 Why this explainer</h2>
+  <p>Step 5 extends the MLX backbone to all six model sizes. Three model sizes use SwiGLU as their feed-forward network: ViT-S+/16, ViT-H+/16 and ViT-7B/16. The other three use the MLP of <a href="04-5-mlp.html">04-5</a>. Step 4 stopped at SwiGLU with a <code>NotImplementedError</code> (<a href="04-5-mlp.html#swiglu">04-5, Section 8</a>). Step 5 adds the class <code>SwiGLU</code>. It gives the MLP and SwiGLU the same three methods. It also extends the key map, so that <code>map_key</code> accepts <code>gate_proj</code>.</p>
+  <p>This page covers the functions of row <code>05-1-swiglu.html</code> in Table 1 of <code>specs/05-all-sizes/plan.html</code>. Table 1 below lists them. Each section quotes the code with its line numbers. The line numbers are those of the working tree after the fixes of the Verify stage (Sections 9 and 10 of <code>specs/05-all-sizes/verify.html</code>). The fixes did not change <code>mlx_model.py</code>, so its line numbers equal commit <code>01cc631</code>. In <code>mlx_weights.py</code> the fixes added one line to the module docstring (F4), so each line number after the docstring is 1 higher than in commit <code>01cc631</code>. For example, <code>block_parameter_names</code> starts at line 79 here and at line 78 in <code>01cc631</code>. Some comments in the quotes are annotations of this page.</p>
+  <p>The agent that wrote this page ran no test, no model and no GPU work. It computed the FLOP counts with <code>flops.py</code> of Step 3 on the CPU. It took all other values from the files of Section 10.</p>
+  <p>The result in three numbers:</p>
+  <ul>
+    <li><code>SwiGLU</code> matches <code>DINOv3ViTGatedMLP</code> within 9.1e-6 (small model <code>vits16plus</code>) and 5.5e-6 (small model <code>vit7b16-shape</code>). The target is 2e-5.</li>
+    <li>In fp16 and bf16 the activation computes in fp32 and rounds once. For SwiGLU, and for GELU at x ≥ −2.5, at most 0.082 % of the T23 values then differ from the float64 value rounded once, each by at most 1 unit in the last place. At x &lt; −2.5 the GELU output equals <code>nn.gelu</code> in fp32, rounded once (Section 6). The MLX activation in the half dtype differs in 32 to 36 % of the values.</li>
+    <li>ViT-S+/16 and ViT-H+/16 pass the parity tests on <code>mlx</code> in all five dtype modes. In fp16-cast, 6 configurations of ViT-H+/16 are expected failures (fp16 overflow).</li>
+  </ul>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Name</th><th>File, lines</th><th>Job</th><th>Tests (numbers of the plan)</th><th>Section</th></tr></thead>
+      <tbody>
+        <tr class="group"><td colspan="5"><code>src/dinov3_apple/mlx_model.py</code></td></tr>
+        <tr><td><code>SwiGLU.__init__(config)</code> (new)</td><td class="num">353–359</td><td>Makes <code>gate_proj</code> and <code>up_proj</code> (D → FF) and <code>down_proj</code> (FF → D). Raises <code>NotImplementedError</code> for an activation other than "silu".</td><td>T6 <code>test_mlx_config_from_hf</code></td><td>2, 5.1</td></tr>
+        <tr><td><code>SwiGLU.activation(gate, up)</code> (new)</td><td class="num">361–364</td><td>Returns silu(gate) · up. Computes in fp32 and rounds once to the dtype of gate.</td><td>T16 part <code>activation</code>, T23</td><td>3, 6</td></tr>
+        <tr><td><code>SwiGLU.hidden(x)</code> (new)</td><td class="num">366–368</td><td>Returns the feed-forward hidden values silu(gate_proj(x)) · up_proj(x).</td><td>Through <code>Block.ff_hidden</code>: T22, T26</td><td>5.1</td></tr>
+        <tr><td><code>SwiGLU.__call__(x)</code> (new)</td><td class="num">370–372</td><td>Returns down_proj(hidden(x)), as <code>DINOv3ViTGatedMLP</code>.</td><td>T17 <code>test_mlx_part_swiglu</code></td><td>5.1</td></tr>
+        <tr><td><code>MLP.activation(up)</code> (new)</td><td class="num">331–338</td><td>Returns gelu(up), with the exact (erf) GELU. Computes in fp32 and rounds once to the dtype of up.</td><td><code>test_mlx_block_part</code>, part <code>activation</code> of <code>vits16</code>; T23</td><td>5.2, 6</td></tr>
+        <tr><td><code>MLP.hidden(x)</code> (new)</td><td class="num">340–342</td><td>Returns the feed-forward hidden values gelu(up_proj(x)).</td><td>Through <code>Block.ff_hidden</code>: T22, T26</td><td>5.2</td></tr>
+        <tr><td><code>MLP.__call__(x)</code> (changed)</td><td class="num">344–346</td><td>Returns down_proj(hidden(x)), as <code>DINOv3ViTMLP</code>.</td><td><code>test_mlx_part_mlp</code> (Step 4)</td><td>5.2</td></tr>
+        <tr><td><code>Block.__init__</code> (changed)</td><td class="num">384–392</td><td>Line 391 makes <code>SwiGLU</code> if <code>config.gated</code> is true, else <code>MLP</code>. The <code>NotImplementedError</code> of Step 4 is gone.</td><td>T6</td><td>5.3</td></tr>
+        <tr><td><code>Block.ff_hidden(x)</code> (new)</td><td class="num">398–400</td><td>Runs norm2, casts its output to the matmul dtype and returns <code>mlp.hidden</code> of it.</td><td>T22, T26</td><td>2, 5.3</td></tr>
+        <tr><td><code>Block.__call__</code> (changed)</td><td class="num">402–408</td><td>Line 408: <code>layer_scale2(mlp.down_proj(ff_hidden(x))) + x</code>.</td><td>T20, T21, W2</td><td>2, 5.3</td></tr>
+        <tr class="group"><td colspan="5"><code>src/dinov3_apple/mlx_weights.py</code></td></tr>
+        <tr><td><code>block_parameter_names()</code> (changed)</td><td class="num">79–109</td><td>Returns the union of the parameter names of an MLP probe block and a SwiGLU probe block: 20 names.</td><td>T1 <code>test_block_parameter_names_union</code></td><td>7</td></tr>
+        <tr><td><code>map_key(name)</code> (behaviour changed)</td><td class="num">112–136</td><td>Accepts <code>layer.{i}.mlp.gate_proj.weight</code> and <code>.bias</code>, because the union has these names. The code of the function did not change.</td><td>T2, T3, H1 <code>test_key_map_covers_file</code></td><td>7</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 1.</b> The Step 5 code that this page explains. "(new)" and "(changed)" compare with commit <code>9161cc2</code>, the last commit before the Step 5 build. The fields and <code>from_hf</code> of <code>MlxConfig</code> did not change. They already read <code>use_gated_mlp</code> into <code>gated</code> and <code>hidden_act</code> in Step 4 (lines 119, 120, 145 and 146). Step 5 changed only the docstring of <code>gated</code> and <code>hidden_act</code> (lines 100 to 102). <a href="05-2-model-scaling.html">05-2</a> explains the dtype modes, <code>Block.attention_branch</code> and the loader. <a href="05-3-numeric-range.html">05-3</a> explains <code>run_mlx_token_range</code>, which calls <code>Block.ff_hidden</code>.</p>
+</section>
+
+<section id="picture">
+  <h2>2 SwiGLU in one picture</h2>
+  <p>Figure 1 shows the feed-forward branch of one SwiGLU block. The input x2 is the residual stream after the attention branch. <code>Block.ff_hidden</code> runs norm2, casts the result to the matmul dtype and calls <code>SwiGLU.hidden</code>. <code>SwiGLU.hidden</code> runs the two input matmuls and calls <code>SwiGLU.activation</code>. Then <code>Block.__call__</code> runs <code>down_proj</code>, LayerScale and the residual add.</p>
+  <figure>
+    <div class="fig"><svg viewBox="0 0 960 470" role="img" aria-labelledby="fig1-title" font-family="-apple-system, Helvetica Neue, Arial, sans-serif">
+      <title id="fig1-title">The feed-forward branch of one SwiGLU block of ViT-S+/16 at 224 px, with the methods that compute each part</title>
+      <defs><marker id="arrow1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#4a5655"/></marker></defs>
+      <rect width="960" height="470" fill="#ffffff"/>
+      <g font-size="12" fill="#111414">
+        <text x="20" y="24" font-weight="600" font-size="13">Feed-forward branch of one SwiGLU block. ViT-S+/16 at 224 px: B images, T = 5 + 14 × 14 = 201 tokens, D = 384, FF = 1,536</text>
+
+        <!-- method brackets -->
+        <g fill="none" stroke="#057379" stroke-width="1.5">
+          <path d="M56,72 V64 H700 V72"/>
+          <path d="M262,96 V88 H700 V96"/>
+          <path d="M390,120 V112 H700 V120"/>
+          <path d="M262,352 V360 H814 V352"/>
+          <path d="M20,396 V404 H940 V396"/>
+        </g>
+        <g font-size="11.5" font-weight="600" fill="#057379" text-anchor="middle">
+          <text x="378" y="58">Block.ff_hidden, lines 398–400</text>
+          <text x="481" y="82">SwiGLU.hidden, lines 366–368</text>
+          <text x="545" y="106">SwiGLU.activation, lines 361–364</text>
+          <text x="538" y="377">SwiGLU.__call__, lines 370–372: down_proj(hidden(x)). Only the part test T17 calls it.</text>
+          <text x="480" y="421">Block.__call__, line 408: layer_scale2(mlp.down_proj(ff_hidden(x))) + x</text>
+        </g>
+
+        <!-- input -->
+        <rect x="24" y="206" width="20" height="40" fill="#9fd3d1" stroke="#057379"/>
+        <text x="34" y="198" text-anchor="middle" font-weight="600">x2</text>
+
+        <!-- norm2 and cast -->
+        <rect x="56" y="200" width="84" height="52" rx="5" fill="#f5f8f7" stroke="#4a5655" stroke-width="1.5"/>
+        <text x="98" y="222" text-anchor="middle" font-weight="600">norm2</text>
+        <text x="98" y="238" text-anchor="middle" font-size="10.5" fill="#4a5655">LayerNorm</text>
+        <rect x="152" y="200" width="84" height="52" rx="5" fill="#ffffff" stroke="#057379" stroke-width="1.5" stroke-dasharray="4 3"/>
+        <text x="194" y="222" text-anchor="middle" font-weight="600">astype</text>
+        <text x="194" y="238" text-anchor="middle" font-size="10.5">matmul dtype</text>
+        <text x="146" y="272" text-anchor="middle" font-size="10.5" fill="#4a5655">(B, 201, 384)</text>
+
+        <!-- gate_proj and up_proj -->
+        <rect x="262" y="124" width="112" height="56" rx="5" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="318" y="145" text-anchor="middle" font-weight="600">gate_proj</text>
+        <text x="318" y="160" text-anchor="middle" font-size="10.5">W (1536, 384)</text>
+        <text x="318" y="173" text-anchor="middle" font-size="10.5">b (1536)</text>
+        <text x="318" y="196" text-anchor="middle" font-size="10.5" fill="#4a5655">gate (B, 201, 1536)</text>
+        <rect x="262" y="272" width="112" height="56" rx="5" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="318" y="293" text-anchor="middle" font-weight="600">up_proj</text>
+        <text x="318" y="308" text-anchor="middle" font-size="10.5">W (1536, 384)</text>
+        <text x="318" y="321" text-anchor="middle" font-size="10.5">b (1536)</text>
+        <text x="318" y="344" text-anchor="middle" font-size="10.5" fill="#4a5655">up (B, 201, 1536)</text>
+
+        <!-- activation: casts, SiLU, product, one rounding -->
+        <rect x="390" y="134" width="64" height="36" rx="5" fill="#fbf1df" stroke="#b26b00" stroke-width="1.5"/>
+        <text x="422" y="149" text-anchor="middle" font-size="11">astype</text>
+        <text x="422" y="163" text-anchor="middle" font-size="10.5">fp32</text>
+        <rect x="390" y="282" width="64" height="36" rx="5" fill="#fbf1df" stroke="#b26b00" stroke-width="1.5"/>
+        <text x="422" y="297" text-anchor="middle" font-size="11">astype</text>
+        <text x="422" y="311" text-anchor="middle" font-size="10.5">fp32</text>
+        <rect x="470" y="130" width="78" height="44" rx="5" fill="#fbf1df" stroke="#b26b00" stroke-width="1.5"/>
+        <text x="509" y="149" text-anchor="middle" font-weight="600">SiLU</text>
+        <text x="509" y="165" text-anchor="middle" font-size="10.5">z · σ(z)</text>
+        <circle cx="600" cy="226" r="14" fill="#fbf1df" stroke="#b26b00" stroke-width="1.5"/>
+        <text x="600" y="231" text-anchor="middle" font-size="15" font-weight="600">×</text>
+        <text x="580" y="230" text-anchor="end" font-size="10.5" fill="#4a5655">element-wise</text>
+        <rect x="626" y="204" width="74" height="44" rx="5" fill="#fbf1df" stroke="#b26b00" stroke-width="1.5"/>
+        <text x="663" y="222" text-anchor="middle" font-size="11">astype</text>
+        <text x="663" y="238" text-anchor="middle" font-size="10.5">gate.dtype</text>
+        <text x="663" y="278" text-anchor="middle" font-size="10.5" fill="#b26b00" font-weight="600">one rounding</text>
+        <text x="663" y="292" text-anchor="middle" font-size="10.5" fill="#4a5655">(B, 201, 1536)</text>
+
+        <!-- down_proj and the rest of the branch -->
+        <rect x="714" y="198" width="100" height="56" rx="5" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="764" y="219" text-anchor="middle" font-weight="600">down_proj</text>
+        <text x="764" y="234" text-anchor="middle" font-size="10.5">W (384, 1536)</text>
+        <text x="764" y="247" text-anchor="middle" font-size="10.5">b (384)</text>
+        <text x="764" y="272" text-anchor="middle" font-size="10.5" fill="#4a5655">(B, 201, 384)</text>
+        <rect x="828" y="200" width="112" height="52" rx="5" fill="#f5f8f7" stroke="#4a5655" stroke-width="1.5"/>
+        <text x="884" y="222" text-anchor="middle" font-weight="600">layer_scale2</text>
+        <text x="884" y="238" text-anchor="middle" font-size="10.5">+ x2 (see 04-5)</text>
+
+        <!-- legend -->
+        <rect x="20" y="440" width="16" height="12" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="42" y="450" font-size="11.5">matmul dtype</text>
+        <rect x="150" y="440" width="16" height="12" fill="#f5f8f7" stroke="#4a5655" stroke-width="1.5"/>
+        <text x="172" y="450" font-size="11.5">stream dtype</text>
+        <rect x="276" y="440" width="16" height="12" fill="#fbf1df" stroke="#b26b00" stroke-width="1.5"/>
+        <text x="298" y="450" font-size="11.5">fp32 inside the activation, then one rounding to the matmul dtype</text>
+        <text x="698" y="450" font-size="11.5" fill="#4a5655">In fp32 mode the casts do nothing.</text>
+      </g>
+      <g stroke="#4a5655" stroke-width="1.5" fill="none">
+        <path d="M44,226 H52" marker-end="url(#arrow1)"/>
+        <path d="M140,226 H148" marker-end="url(#arrow1)"/>
+        <path d="M236,226 H248"/>
+        <path d="M248,226 V152 H258" marker-end="url(#arrow1)"/>
+        <path d="M248,226 V300 H258" marker-end="url(#arrow1)"/>
+        <path d="M374,152 H386" marker-end="url(#arrow1)"/>
+        <path d="M374,300 H386" marker-end="url(#arrow1)"/>
+        <path d="M454,152 H466" marker-end="url(#arrow1)"/>
+        <path d="M548,152 H600 V208" marker-end="url(#arrow1)"/>
+        <path d="M454,300 H600 V244" marker-end="url(#arrow1)"/>
+        <path d="M614,226 H622" marker-end="url(#arrow1)"/>
+        <path d="M700,226 H710" marker-end="url(#arrow1)"/>
+        <path d="M814,226 H824" marker-end="url(#arrow1)"/>
+      </g>
+    </svg></div>
+    <figcaption><b>Figure 1.</b> The feed-forward branch of one SwiGLU block of ViT-S+/16 at 224 px. Teal brackets: the method that computes each part. Only the gate path goes through SiLU. The up path goes to the product without an activation. In the four fp16 and bf16 dtype modes, gate and up are half values. <code>SwiGLU.activation</code> casts both to fp32, computes silu(gate) · up in fp32 and rounds once to the matmul dtype. <code>Block.__call__</code> does not call <code>SwiGLU.__call__</code>. It calls <code>ff_hidden</code> and <code>mlp.down_proj</code>, so the token range can read the feed-forward hidden values with the same calls (Section 5.3).</figcaption>
+  </figure>
+</section>
+
+<section id="gate">
+  <h2>3 Only gate_proj gets the activation</h2>
+  <p>SwiGLU has three matrices. Two of them read the same input x. Only the output of <code>gate_proj</code> goes through the activation SiLU. The output of <code>up_proj</code> stays linear. An element-wise product joins the two paths:</p>
+  <pre><code>gate = gate_proj(x)                    # (B, T, FF)
+up   = up_proj(x)                      # (B, T, FF)
+hidden = silu(gate) · up               # the feed-forward hidden values, (B, T, FF)
+out  = down_proj(hidden)               # (B, T, D)
+
+silu(z) = z · σ(z),   σ(z) = 1 / (1 + e^(−z))</code></pre>
+  <p>Hugging Face writes the same formula in one line (<code>DINOv3ViTGatedMLP.forward</code>, lines 378 to 380 of <code>modeling_dinov3_vit.py</code>, transformers 5.22.1):</p>
+  <pre><code>down_proj = self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))</code></pre>
+  <p><code>act_fn</code> is <code>ACT2FN[config.hidden_act]</code>. The <code>config.json</code> of ViT-S+/16, ViT-H+/16 and ViT-7B/16 sets <code>hidden_act</code> to "silu" and <code>use_gated_mlp</code> to true. The official DINOv3 code computes <code>F.silu(x1) * x2</code> with <code>x1 = w1(x)</code> and <code>x2 = w2(x)</code> (<code>SwiGLUFFN</code> in <code>dinov3/layers/ffn_layers.py</code>). So the Meta name <code>w1</code> is <code>gate_proj</code>, <code>w2</code> is <code>up_proj</code> and <code>w3</code> is <code>down_proj</code>. <code>scripts/convert_meta_checkpoint.py</code> maps the names in this way (lines 122 to 124).</p>
+  <p>Three facts follow:</p>
+  <ul>
+    <li><b>The order of gate and up is part of the function.</b> silu(up_proj(x)) · gate_proj(x) has the same shapes but other values. <code>gate_proj</code> and <code>up_proj</code> have the same shape, so the strict load cannot see a swap. Only a comparison of values can see it: the part test T17 compares <code>SwiGLU</code> with <code>DINOv3ViTGatedMLP</code>, whose <code>gate_proj</code> and <code>up_proj</code> have different random weights.</li>
+    <li><b>The hidden values can be large.</b> The exact GELU of the MLP is never larger in magnitude than its input. In SwiGLU, two linear outputs multiply. For large positive gate values, silu(gate) · up is about gate · up. Section 8 gives the largest measured feed-forward hidden values: 7,257 for ViT-S+/16, against 300 for ViT-S/16 with the same embedding dimension (Table 8).</li>
+    <li><b>SiLU in MLX and in torch agree in fp32.</b> The part test T18 compares <code>nn.silu</code> with <code>ACT2FN["silu"]</code> on 200,001 values in [−8, 8]. The largest difference is 9.5e-7. The target is 4e-6, four units in the last place at 8.</li>
+  </ul>
+</section>
+
+<section id="width">
+  <h2>4 The hidden width: the 2/3 rule</h2>
+  <p>The hidden width FF is <code>intermediate_size</code> in <code>config.json</code>. <code>MlxConfig.from_hf</code> reads it into <code>ff</code> (line 134). The port uses no formula for FF. But the values in the configs come from a rule in the official code, and this rule gives a surprise.</p>
+  <p>The official block computes a width from the Meta ratio <code>ffn_ratio</code>: <code>int(dim * ffn_ratio)</code> (<code>SelfAttentionBlock</code> in <code>dinov3/layers/block.py</code>). <code>SwiGLUFFN</code> then keeps 2/3 of this width and rounds it up to a multiple of <code>align_to</code>:</p>
+  <pre><code># official DINOv3 code, dinov3/layers/ffn_layers.py, SwiGLUFFN.__init__
+d = int(hidden_features * 2 / 3)
+swiglu_hidden_features = d + (-d % align_to)</code></pre>
+  <p>Shazeer (2020) uses this factor 2/3 for the GLU variants. With 2/3 of the width, three matrices have the same number of weights as the two matrices of an MLP with the full width. The hub functions of the official code set <code>ffn_ratio</code> 6 for ViT-S+/16 and ViT-H+/16, but 3 for ViT-7B/16. So FF is 4 D for ViT-S+/16 and ViT-H+/16, but only 2 D for ViT-7B/16 (Figure 2).</p>
+  <figure>
+    <div class="fig"><svg viewBox="0 0 960 336" role="img" aria-labelledby="fig2-title" font-family="-apple-system, Helvetica Neue, Arial, sans-serif">
+      <title id="fig2-title">The Meta width and the hidden width FF of each SwiGLU model size, in units of the embedding dimension D</title>
+      <rect width="960" height="336" fill="#ffffff"/>
+      <g stroke="#e3e8e7">
+        <line x1="325" x2="325" y1="44" y2="282"/><line x1="400" x2="400" y1="44" y2="282"/><line x1="475" x2="475" y1="44" y2="282"/>
+        <line x1="550" x2="550" y1="44" y2="282"/><line x1="625" x2="625" y1="44" y2="282"/><line x1="700" x2="700" y1="44" y2="282"/>
+      </g>
+      <g font-size="12" fill="#111414">
+        <text x="20" y="28" font-weight="600" font-size="13">Hidden width in units of the embedding dimension D</text>
+        <text x="940" y="28" text-anchor="end" font-weight="600">Feed-forward weights, no biases</text>
+
+        <text x="20" y="66" font-weight="600">ViT-S+/16</text><text x="20" y="82" fill="#4a5655">D = 384, SwiGLU</text>
+        <rect x="250" y="52" width="450" height="14" fill="#c3cccb"/>
+        <text x="708" y="63" font-size="11">6 D = 2,304 (ffn_ratio 6)</text>
+        <rect x="250" y="72" width="300" height="14" fill="#057379"/>
+        <text x="558" y="83" font-size="11">FF = 2/3 × 2,304 = 1,536 = 4 D</text>
+        <text x="940" y="83" text-anchor="end" font-size="11">3 × 4 D² = 12 D²</text>
+
+        <text x="20" y="126" font-weight="600">ViT-H+/16</text><text x="20" y="142" fill="#4a5655">D = 1,280, SwiGLU</text>
+        <rect x="250" y="112" width="450" height="14" fill="#c3cccb"/>
+        <text x="708" y="123" font-size="11">6 D = 7,680 (ffn_ratio 6)</text>
+        <rect x="250" y="132" width="300" height="14" fill="#057379"/>
+        <text x="558" y="143" font-size="11">FF = 2/3 × 7,680 = 5,120 = 4 D</text>
+        <text x="940" y="143" text-anchor="end" font-size="11">3 × 4 D² = 12 D²</text>
+
+        <text x="20" y="186" font-weight="600">ViT-7B/16</text><text x="20" y="202" fill="#4a5655">D = 4,096, SwiGLU</text>
+        <rect x="250" y="172" width="225" height="14" fill="#c3cccb"/>
+        <text x="483" y="183" font-size="11">3 D = 12,288 (ffn_ratio 3)</text>
+        <rect x="250" y="192" width="150" height="14" fill="#057379"/>
+        <text x="408" y="203" font-size="11">FF = 2/3 × 12,288 = 8,192 = 2 D</text>
+        <text x="940" y="203" text-anchor="end" font-size="11">3 × 2 D² = 6 D²</text>
+
+        <text x="20" y="246" font-weight="600">ViT-S/16, B/16, L/16</text><text x="20" y="262" fill="#4a5655">MLP, no 2/3 rule</text>
+        <rect x="250" y="236" width="300" height="14" fill="#9fd3d1" stroke="#057379"/>
+        <text x="558" y="247" font-size="11">FF = 4 D (ffn_ratio 4)</text>
+        <text x="940" y="247" text-anchor="end" font-size="11">2 × 4 D² = 8 D²</text>
+      </g>
+      <line x1="250" x2="700" y1="282" y2="282" stroke="#4a5655"/>
+      <line x1="250" x2="250" y1="44" y2="282" stroke="#4a5655"/>
+      <g font-size="11" fill="#4a5655" text-anchor="middle">
+        <text x="250" y="298">0</text><text x="325" y="298">1 D</text><text x="400" y="298">2 D</text><text x="475" y="298">3 D</text>
+        <text x="550" y="298">4 D</text><text x="625" y="298">5 D</text><text x="700" y="298">6 D</text>
+      </g>
+      <g font-size="11.5" fill="#111414">
+        <rect x="20" y="314" width="16" height="12" fill="#c3cccb"/><text x="42" y="324">Meta width int(D × ffn_ratio)</text>
+        <rect x="260" y="314" width="16" height="12" fill="#057379"/><text x="282" y="324">SwiGLU: FF = 2/3 of the Meta width, rounded up to a multiple of 8 (64 for ViT-7B/16)</text>
+        <rect x="790" y="314" width="16" height="12" fill="#9fd3d1" stroke="#057379"/><text x="812" y="324">MLP: FF</text>
+      </g>
+    </svg></div>
+    <figcaption><b>Figure 2.</b> The hidden width of each SwiGLU model size. The Meta ratio of ViT-7B/16 is 3, not 6, so its FF is 2 D. The rounding to a multiple of <code>align_to</code> changes no value here: 1,536, 5,120 and 8,192 are already multiples of 8 and 64. With 12 D² weights, the SwiGLU of ViT-S+/16 and ViT-H+/16 has as many weights as an MLP with ratio 6. It has 1.5 times the weights of the MLP of ViT-S/16. The SwiGLU of ViT-7B/16 has 6 D², only 0.75 times the weights of an MLP with FF = 4 D.</figcaption>
+  </figure>
+  <div class="table-wrap">
+    <table class="first-nowrap">
+      <thead><tr><th>Model size</th><th>Network</th><th class="num">D</th><th class="num"><code>ffn_ratio</code></th><th class="num">D × ratio</th><th class="num">× 2/3</th><th class="num"><code>align_to</code></th><th class="num">FF in <code>config.json</code></th><th class="num">FF / D</th><th class="num">Feed-forward weights in one block</th><th class="num">Share of the block weights</th><th class="num">Feed-forward MFLOP in one block, 224 px</th><th class="num">Share of the block FLOPs, 224 px</th></tr></thead>
+      <tbody>
+        <tr><td>ViT-S/16</td><td>MLP</td><td class="num">384</td><td class="num">4</td><td class="num">1,536</td><td class="num">–</td><td class="num">–</td><td class="num">1,536</td><td class="num">4</td><td class="num">1,181,568</td><td class="num">66.6 %</td><td class="num">474.2</td><td class="num">61.3 %</td></tr>
+        <tr><td>ViT-S+/16</td><td>SwiGLU</td><td class="num">384</td><td class="num">6</td><td class="num">2,304</td><td class="num">1,536</td><td class="num">8</td><td class="num">1,536</td><td class="num">4</td><td class="num">1,772,928</td><td class="num">74.9 %</td><td class="num">711.3</td><td class="num">70.4 %</td></tr>
+        <tr><td>ViT-B/16</td><td>MLP</td><td class="num">768</td><td class="num">4</td><td class="num">3,072</td><td class="num">–</td><td class="num">–</td><td class="num">3,072</td><td class="num">4</td><td class="num">4,722,432</td><td class="num">66.6 %</td><td class="num">1,896.9</td><td class="num">63.9 %</td></tr>
+        <tr><td>ViT-L/16</td><td>MLP</td><td class="num">1,024</td><td class="num">4</td><td class="num">4,096</td><td class="num">–</td><td class="num">–</td><td class="num">4,096</td><td class="num">4</td><td class="num">8,393,728</td><td class="num">66.6 %</td><td class="num">3,372.2</td><td class="num">64.6 %</td></tr>
+        <tr><td>ViT-H+/16</td><td>SwiGLU</td><td class="num">1,280</td><td class="num">6</td><td class="num">7,680</td><td class="num">5,120</td><td class="num">8</td><td class="num">5,120</td><td class="num">4</td><td class="num">19,672,320</td><td class="num">75.0 %</td><td class="num">7,903.6</td><td class="num">73.6 %</td></tr>
+        <tr><td>ViT-7B/16</td><td>SwiGLU</td><td class="num">4,096</td><td class="num">3</td><td class="num">12,288</td><td class="num">8,192</td><td class="num">64</td><td class="num">8,192</td><td class="num">2</td><td class="num">100,683,776</td><td class="num">60.0 %</td><td class="num">40,466.6</td><td class="num">59.4 %</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 2.</b> The feed-forward network of each model size. D, FF, <code>hidden_act</code> and <code>use_gated_mlp</code>: the <code>config.json</code> files of the six Hugging Face repos, read on 2026-11-07. <code>ffn_ratio</code> and <code>align_to</code>: the hub functions of the official DINOv3 code (<code>dinov3/hub/backbones.py</code>; ViT-7B/16 uses the layer "swiglu64"). Weights and shares of the block weights: Table 4 of <code>specs/05-all-sizes/explore.html</code>. FLOPs: <code>part_flops</code> of <code>src/dinov3_apple/flops.py</code> for one image and one block with T = 201 tokens, 2 FLOPs per multiply-add. "Feed-forward" is <code>ff_in</code> + <code>ff_out</code>; <code>ff_in</code> counts 2 matrices for SwiGLU. The share divides by the sum of all parts of <code>part_flops</code>, as in Table 3 of <a href="04-5-mlp.html#flops">04-5</a>.</p>
+</section>
+
+<section id="code">
+  <h2>5 The code</h2>
+
+  <h3>5.1 SwiGLU</h3>
+  <pre><code># src/dinov3_apple/mlx_model.py, lines 349 to 372
+class SwiGLU(nn.Module):
+    """The feed-forward network of ViT-S+/16, ViT-H+/16 and ViT-7B/16 (D1 of
+    specs/05-all-sizes/explore.html). Three nn.Linear modules with the Hugging Face names."""
+
+    def __init__(self, config: MlxConfig) -&gt; None:
+        super().__init__()
+        if config.hidden_act != "silu":                                          # line 355
+            raise NotImplementedError(f"activation {config.hidden_act!r} of SwiGLU")
+        self.gate_proj = nn.Linear(config.dim, config.ff, bias=config.mlp_bias)  # D -&gt; FF
+        self.up_proj = nn.Linear(config.dim, config.ff, bias=config.mlp_bias)    # D -&gt; FF
+        self.down_proj = nn.Linear(config.ff, config.dim, bias=config.mlp_bias)  # FF -&gt; D
+
+    def activation(self, gate: mx.array, up: mx.array) -&gt; mx.array:
+        """Return silu(gate) · up. It computes in fp32 and rounds once to the dtype of gate."""
+        product = nn.silu(gate.astype(mx.float32)) * up.astype(mx.float32)     # line 363
+        return product.astype(gate.dtype)                                       # the one rounding
+
+    def hidden(self, x: mx.array) -&gt; mx.array:
+        """Return the feed-forward hidden values silu(gate_proj(x)) · up_proj(x)."""
+        return self.activation(self.gate_proj(x), self.up_proj(x))
+
+    def __call__(self, x: mx.array) -&gt; mx.array:
+        """Return down_proj(silu(gate_proj(x)) · up_proj(x)), as DINOv3ViTGatedMLP."""
+        return self.down_proj(self.hidden(x))</code></pre>
+  <ul>
+    <li><b>Three separate <code>nn.Linear</code> modules (D1, Option A of <code>explore.html</code>).</b> The attribute names are the Hugging Face names. So the key map stays the identity, and <code>load_weights(strict=True)</code> checks each name and each shape. A fused matmul of gate and up (Option B) is a Step 6 question. With separate modules, <code>nn.quantize</code> of Step 6 and the adapters of Step 8 find each matrix by its own name.</li>
+    <li><b>Line 355.</b> <code>SwiGLU</code> accepts only "silu". <code>MLP</code> accepts only "gelu" (line 326). So a config with the wrong pair stops with <code>NotImplementedError</code>. T6 checks both directions: a gated config with "gelu" and an MLP config with "silu".</li>
+    <li><b>Lines 357 to 359.</b> <code>config.mlp_bias</code> is true for all six model sizes. ViT-7B/16 has no q, k and v biases, but it has the feed-forward biases. Each SwiGLU block of ViT-S+/16 and ViT-H+/16 has 13 parameters in the matmul dtype; each block of ViT-7B/16 has 11 (Table 4 of the plan).</li>
+    <li><b>Lines 363 and 364.</b> The activation casts gate and up to fp32, computes the SiLU and the product in fp32 and rounds once. Section 6 explains why. The method takes two arguments, so the part test can feed it the gate and up values of the Hugging Face block: <code>block_parts</code> of Step 3 gives the part <code>activation</code> the inputs (gate, up) when the module has <code>gate_proj</code>.</li>
+    <li><b><code>hidden</code> and <code>__call__</code>.</b> <code>hidden</code> gives one tensor: the feed-forward hidden values. The token range of Step 5 and the adapters of Step 8b use this tensor (Section 3.2 of the plan). <code>__call__</code> exists for the part test T17. The backbone does not call it (Section 5.3).</li>
+  </ul>
+
+  <h3>5.2 MLP.activation and MLP.hidden</h3>
+  <p>The MLP of Step 4 gets the same three methods. Its formula does not change.</p>
+  <pre><code># src/dinov3_apple/mlx_model.py, lines 331 to 346 (class MLP)
+    def activation(self, up: mx.array) -&gt; mx.array:
+        """Return gelu(up). It computes in fp32 and rounds once to the dtype of up.
+
+        nn.gelu is the erf form, not nn.gelu_approx. In half precision the MLX activations round
+        after each operation (Table 8 of specs/05-all-sizes/explore.html). In fp32 the casts do
+        nothing.
+        """
+        return nn.gelu(up.astype(mx.float32)).astype(up.dtype)                 # line 338
+
+    def hidden(self, x: mx.array) -&gt; mx.array:
+        """Return the feed-forward hidden values gelu(up_proj(x))."""
+        return self.activation(self.up_proj(x))
+
+    def __call__(self, x: mx.array) -&gt; mx.array:
+        """Return down_proj(gelu(up_proj(x))), as DINOv3ViTMLP."""
+        return self.down_proj(self.hidden(x))</code></pre>
+  <ul>
+    <li><b>Line 338.</b> In Step 4, <code>MLP.__call__</code> called <code>nn.gelu(self.up_proj(x))</code> directly. Now the GELU computes in fp32 and rounds once, as the SiLU of SwiGLU does. In fp32 mode both casts keep the dtype. The part test of the activation gives 7.2e-7 for <code>vits16</code>, the same value as in Step 4 (<a href="04-5-mlp.html#measured">04-5, Table 5</a>).</li>
+    <li><b>The same interface.</b> <code>MLP</code> and <code>SwiGLU</code> both have <code>activation</code>, <code>hidden</code>, <code>__call__</code> and <code>down_proj</code>. <code>Block</code> uses only <code>hidden</code> and <code>down_proj</code>, so it needs no branch on the type of its feed-forward network. Only <code>activation</code> differs: one argument for the MLP, two for SwiGLU.</li>
+  </ul>
+
+  <h3>5.3 Block</h3>
+  <pre><code># src/dinov3_apple/mlx_model.py, lines 391 and 398 to 408 (class Block)
+        self.mlp = SwiGLU(config) if config.gated else MLP(config)               # line 391
+
+    def ff_hidden(self, x: mx.array) -&gt; mx.array:
+        """Return the feed-forward hidden values: the GELU output, or silu(gate) · up."""
+        return self.mlp.hidden(self.norm2(x).astype(self.dtypes.matmul))         # line 400
+
+    def __call__(self, x: mx.array, cos: mx.array, sin: mx.array) -&gt; mx.array:
+        """Return the block output (B, 5 + N, D) of the tokens x and the RoPE tables.
+
+        run_mlx_token_range calls the same methods in the same order.
+        """
+        x = self.layer_scale1(self.attention_branch(x, cos, sin)) + x
+        return self.layer_scale2(self.mlp.down_proj(self.ff_hidden(x))) + x      # line 408</code></pre>
+  <ul>
+    <li><b>Line 391.</b> <code>config.gated</code> is <code>use_gated_mlp</code> of <code>config.json</code>. In Step 4 this place raised <code>NotImplementedError("SwiGLU comes in Step 5")</code>.</li>
+    <li><b>Line 400.</b> norm2 runs in the stream dtype. The cast gives the matmul dtype to the input of <code>gate_proj</code> and <code>up_proj</code>. In fp32 mode and in the cast modes the two dtypes are the same, and the cast does nothing (<a href="05-2-model-scaling.html">05-2</a>).</li>
+    <li><b>Line 408.</b> <code>Block.__call__</code> splits the feed-forward network into <code>ff_hidden</code> and <code>mlp.down_proj</code>. <code>run_mlx_token_range</code> makes the same calls (lines 584 and 585). So it reads the largest feed-forward hidden value of each block without a second implementation. T26 checks that its last token sequence equals the last hidden state of <code>run_mlx_hidden_states</code> (<a href="05-3-numeric-range.html">05-3</a>).</li>
+  </ul>
+</section>
+
+<section id="rounding">
+  <h2>6 One rounding in half precision</h2>
+  <p>In fp16 and bf16, the MLX activations round after each operation (finding 6 of <code>explore.html</code>). <code>nn.silu(x)</code> is <code>x * mx.sigmoid(x)</code>: two operations. <code>nn.gelu(x)</code> is <code>x * (1 + mx.erf(x / math.sqrt(2))) / 2</code>: five operations (<code>mlx/nn/layers/activations.py</code>, MLX 0.32.4). The SwiGLU product with up adds one more. With half inputs, each of these operations gives a half result. Figure 3 counts the roundings.</p>
+  <figure>
+    <div class="fig"><svg viewBox="0 0 960 300" role="img" aria-labelledby="fig3-title" font-family="-apple-system, Helvetica Neue, Arial, sans-serif">
+      <title id="fig3-title">The roundings of the activation in a half dtype: the MLX functions in the half dtype against the Step 5 methods</title>
+      <defs><marker id="arrow3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#4a5655"/></marker></defs>
+      <rect width="960" height="300" fill="#ffffff"/>
+      <g font-size="12" fill="#111414">
+        <text x="20" y="24" font-weight="600" font-size="13">Half inputs (fp16 or bf16). r = one rounding to the half dtype</text>
+
+        <text x="20" y="62" font-weight="600">SwiGLU, nn.silu in half</text>
+        <text x="20" y="77" font-size="10.5" fill="#4a5655">not used: Table 3, "nn.silu"</text>
+        <rect x="250" y="46" width="90" height="30" rx="4" fill="#ffffff" stroke="#4a5655"/><text x="295" y="65" text-anchor="middle">σ(g)</text>
+        <rect x="370" y="46" width="90" height="30" rx="4" fill="#ffffff" stroke="#4a5655"/><text x="415" y="65" text-anchor="middle">g · σ</text>
+        <rect x="490" y="46" width="90" height="30" rx="4" fill="#ffffff" stroke="#4a5655"/><text x="535" y="65" text-anchor="middle">· up</text>
+        <text x="700" y="66" font-weight="600" fill="#b03a2e">3 roundings</text>
+
+        <text x="20" y="122" font-weight="600">SwiGLU.activation</text>
+        <text x="20" y="137" font-size="10.5" fill="#4a5655">lines 361–364</text>
+        <rect x="250" y="106" width="90" height="30" rx="4" fill="#fbf1df" stroke="#b26b00"/><text x="295" y="125" text-anchor="middle">to fp32</text>
+        <rect x="370" y="106" width="210" height="30" rx="4" fill="#fbf1df" stroke="#b26b00"/><text x="475" y="125" text-anchor="middle">σ(g), g · σ, · up in fp32</text>
+        <rect x="610" y="106" width="60" height="30" rx="4" fill="#fbf1df" stroke="#b26b00"/><text x="640" y="125" text-anchor="middle">to half</text>
+        <text x="700" y="126" font-weight="600" fill="#057379">1 rounding</text>
+
+        <text x="20" y="192" font-weight="600">MLP, nn.gelu in half</text>
+        <text x="20" y="207" font-size="10.5" fill="#4a5655">not used: Table 3, "nn.gelu"</text>
+        <rect x="250" y="176" width="60" height="30" rx="4" fill="#ffffff" stroke="#4a5655"/><text x="280" y="195" text-anchor="middle">x / √2</text>
+        <rect x="335" y="176" width="60" height="30" rx="4" fill="#ffffff" stroke="#4a5655"/><text x="365" y="195" text-anchor="middle">erf</text>
+        <rect x="420" y="176" width="60" height="30" rx="4" fill="#ffffff" stroke="#4a5655"/><text x="450" y="195" text-anchor="middle">1 + e</text>
+        <rect x="505" y="176" width="60" height="30" rx="4" fill="#ffffff" stroke="#4a5655"/><text x="535" y="195" text-anchor="middle">x · s</text>
+        <rect x="590" y="176" width="60" height="30" rx="4" fill="#ffffff" stroke="#4a5655"/><text x="620" y="195" text-anchor="middle">/ 2</text>
+        <text x="700" y="196" font-weight="600" fill="#b03a2e">5 roundings</text>
+
+        <text x="20" y="252" font-weight="600">MLP.activation</text>
+        <text x="20" y="267" font-size="10.5" fill="#4a5655">lines 331–338</text>
+        <rect x="250" y="236" width="90" height="30" rx="4" fill="#fbf1df" stroke="#b26b00"/><text x="295" y="255" text-anchor="middle">to fp32</text>
+        <rect x="370" y="236" width="210" height="30" rx="4" fill="#fbf1df" stroke="#b26b00"/><text x="475" y="255" text-anchor="middle">nn.gelu: 5 operations in fp32</text>
+        <rect x="610" y="236" width="60" height="30" rx="4" fill="#fbf1df" stroke="#b26b00"/><text x="640" y="255" text-anchor="middle">to half</text>
+        <text x="700" y="256" font-weight="600" fill="#057379">1 rounding</text>
+      </g>
+      <g stroke="#4a5655" stroke-width="1.5" fill="none">
+        <path d="M340,61 H366" marker-end="url(#arrow3)"/><path d="M460,61 H486" marker-end="url(#arrow3)"/>
+        <path d="M340,121 H366" marker-end="url(#arrow3)"/><path d="M580,121 H606" marker-end="url(#arrow3)"/>
+        <path d="M310,191 H331" marker-end="url(#arrow3)"/><path d="M395,191 H416" marker-end="url(#arrow3)"/>
+        <path d="M480,191 H501" marker-end="url(#arrow3)"/><path d="M565,191 H586" marker-end="url(#arrow3)"/>
+        <path d="M340,251 H366" marker-end="url(#arrow3)"/><path d="M580,251 H606" marker-end="url(#arrow3)"/>
+      </g>
+      <g font-size="10.5" font-weight="600" fill="#b03a2e" text-anchor="middle">
+        <circle cx="353" cy="42" r="8" fill="#ffffff" stroke="#b03a2e"/><text x="353" y="46">r</text>
+        <circle cx="473" cy="42" r="8" fill="#ffffff" stroke="#b03a2e"/><text x="473" y="46">r</text>
+        <circle cx="593" cy="42" r="8" fill="#ffffff" stroke="#b03a2e"/><text x="593" y="46">r</text>
+        <circle cx="683" cy="102" r="8" fill="#ffffff" stroke="#057379"/><text x="683" y="106" fill="#057379">r</text>
+        <circle cx="322" cy="172" r="8" fill="#ffffff" stroke="#b03a2e"/><text x="322" y="176">r</text>
+        <circle cx="407" cy="172" r="8" fill="#ffffff" stroke="#b03a2e"/><text x="407" y="176">r</text>
+        <circle cx="492" cy="172" r="8" fill="#ffffff" stroke="#b03a2e"/><text x="492" y="176">r</text>
+        <circle cx="577" cy="172" r="8" fill="#ffffff" stroke="#b03a2e"/><text x="577" y="176">r</text>
+        <circle cx="662" cy="172" r="8" fill="#ffffff" stroke="#b03a2e"/><text x="662" y="176">r</text>
+        <circle cx="683" cy="232" r="8" fill="#ffffff" stroke="#057379"/><text x="683" y="236" fill="#057379">r</text>
+      </g>
+    </svg></div>
+    <figcaption><b>Figure 3.</b> The roundings of the activation with half inputs. Grey boxes: the MLX functions in the half dtype. Each operation rounds its result to the half dtype (r). Amber boxes: the Step 5 methods. Every fp16 and bf16 value has an exact fp32 value, so the cast up does not round. The operations run in fp32, and the cast down rounds once. In fp32 mode, both casts keep the dtype.</figcaption>
+  </figure>
+  <p>The MLX agent of the Explore stage measured the effect of the extra roundings on 100,001 evenly spaced points in [−8, 8] (Table 3). The reference is "compute in fp32, then round once".</p>
+  <div class="table-wrap">
+    <table class="first-nowrap">
+      <thead><tr><th>Function</th><th class="num">fp16: share of values that differ</th><th class="num">fp16: largest difference</th><th class="num">bf16: share of values that differ</th><th class="num">bf16: largest difference</th></tr></thead>
+      <tbody>
+        <tr><td><code>nn.silu</code> in the input dtype</td><td class="num">21 %</td><td class="num">0.0039</td><td class="num">29 %</td><td class="num">0.031</td></tr>
+        <tr><td><code>nn.gelu</code> in the input dtype</td><td class="num">35 %</td><td class="num">0.002</td><td class="num">32 %</td><td class="num">0.016</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 3.</b> Values of the MLX activation in the half dtype that differ from "compute in fp32, then round once". Source: Table 8 of <code>specs/05-all-sizes/explore.html</code>. On the 33,282 finite bf16 values in [−8, 8], the bf16 shares are only 3.7 % (silu) and 3.0 % (gelu); the largest differences stay the same. The bf16 parity thresholds have a headroom of only 1.04 to 1.29 (finding F2 of <code>specs/02-reference/verify.html</code>). So extra roundings can move a bf16 row below its threshold.</p>
+  <p>So the Step 5 methods compute in fp32 and round once (D2 of <code>explore.html</code>). The test T23 <code>test_mlx_activation_rounds_once</code> checks this for both networks in fp16 and in bf16:</p>
+  <ul>
+    <li><b>Input.</b> 100,001 evenly spaced values in [−8, 8], rounded to the half dtype. For SwiGLU, gate is these values and up is the same values in reverse order.</li>
+    <li><b>Oracle.</b> The float64 function of the same half values, rounded once to the half dtype by torch.</li>
+    <li><b>The GELU tail.</b> At x &lt; −2.5, the sum 1 + erf(x / √2) cancels in fp32: erf is near −1, so the sum loses digits. Then even a correct fp32 GELU differs from the float64 oracle. A NumPy emulation of the plan gives 7.3 % of the fp16 values (all at x ≤ −2.95) and 21.2 % of the bf16 values (all at x ≤ −4.44), and 0 differences at x ≥ −2.5. So at x &lt; −2.5 the oracle is <code>nn.gelu</code> on the fp32 values, rounded once. There the test asks for exact equality.</li>
+    <li><b>Targets.</b> At most 0.1 % of the values differ, and each by at most 1 unit in the last place of the half dtype. A second assertion shows that the activation in the half dtype misses this target, so the test can see a regression.</li>
+  </ul>
+  <div class="table-wrap">
+    <table class="first-nowrap">
+      <thead><tr><th>Function</th><th>Half dtype</th><th class="num">fp32, one rounding: share that differs</th><th class="num">Largest difference (units in the last place)</th><th class="num">GELU tail x &lt; −2.5: share that differs</th><th class="num">In the half dtype: share that differs</th><th class="num">In the half dtype: largest difference (units in the last place)</th><th>Result</th></tr></thead>
+      <tbody>
+        <tr><td><code>MLP.activation</code> (GELU)</td><td>fp16</td><td class="num">0.082 %</td><td class="num">1</td><td class="num">0 %</td><td class="num">34.6 %</td><td class="num">3,915</td><td>pass</td></tr>
+        <tr><td><code>MLP.activation</code> (GELU)</td><td>bf16</td><td class="num">0 %</td><td class="num">0</td><td class="num">0 %</td><td class="num">32.5 %</td><td class="num">15,167</td><td>pass</td></tr>
+        <tr><td><code>SwiGLU.activation</code></td><td>fp16</td><td class="num">0.048 %</td><td class="num">1</td><td class="num">–</td><td class="num">33.1 %</td><td class="num">2</td><td>pass</td></tr>
+        <tr><td><code>SwiGLU.activation</code></td><td>bf16</td><td class="num">0 %</td><td class="num">0</td><td class="num">–</td><td class="num">35.8 %</td><td class="num">2</td><td>pass</td></tr>
+        <tr class="group"><td>Target</td><td></td><td class="num">≤ 0.1 %</td><td class="num">≤ 1</td><td class="num">0 %</td><td class="num" colspan="2">&gt; 0.1 %, or &gt; 1 unit</td><td></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 4.</b> T23 in the re-run of the Verify stage, mlx 0.32.4. Source: <code>tests/fixtures/generated/mlx/report.jsonl</code> (git ignores it) and AC13 of <code>specs/05-all-sizes/verify.html</code>. For GELU, the first two columns count the values at x ≥ −2.5. The two columns "in the half dtype" count all values: <code>nn.gelu</code> or <code>nn.silu(gate) * up</code> without the casts, against the same oracle. The test does not record where the largest difference of the GELU in the half dtype sits.</p>
+  <p class="note">The T23 target holds for its own input grid only. A probe of the numerics auditor of the Verify stage used 1,000,000 values from N(0, 3²). For GELU in fp16 at x ≥ −2.5 it gave 0.117 % values that differ, above the 0.1 % of T23 (AC13 of <code>verify.html</code>). The probe did not measure the size of these differences in units in the last place.</p>
+  <p>The cost: <code>SwiGLU.activation</code> casts two (B, T, FF) tensors up and one down in each block (Table 8 of <code>explore.html</code>). <code>MLP.activation</code> casts one up and one down. The cast-down result is the one tensor in the half dtype that <code>down_proj</code> reads. Step 6 measures the time of these element-wise kernels and can fuse them with <code>mx.compile</code> (Table 6 of <code>explore.html</code>).</p>
+</section>
+
+<section id="keymap">
+  <h2>7 The key map for gate_proj</h2>
+  <p>The key map maps each Hugging Face tensor name to the MLX parameter name. A block name passes only if its part after <code>layer.{i}.</code> is a parameter name of the MLX block. In Step 4, <code>block_parameter_names</code> built one probe block without a gate. So <code>map_key</code> raised <code>UnknownWeightError</code> for <code>layer.{i}.mlp.gate_proj.weight</code> (<a href="04-5-mlp.html#swiglu">04-5, Section 8</a>). Step 5 takes the union of two probe blocks (D1 of <code>explore.html</code>).</p>
+  <figure>
+    <div class="fig"><svg viewBox="0 0 960 384" role="img" aria-labelledby="fig4-title" font-family="-apple-system, Helvetica Neue, Arial, sans-serif">
+      <title id="fig4-title">The key map for gate_proj: the union of two probe blocks, map_key and the strict load</title>
+      <defs>
+        <marker id="arrow4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#4a5655"/></marker>
+      </defs>
+      <rect width="960" height="384" fill="#ffffff"/>
+      <g font-size="12" fill="#111414">
+        <text x="20" y="24" font-weight="600" font-size="13">map_key does not know the model size. The strict load of the real backbone does.</text>
+
+        <rect x="20" y="44" width="230" height="58" rx="5" fill="#f5f8f7" stroke="#4a5655" stroke-width="1.5"/>
+        <text x="135" y="64" text-anchor="middle" font-weight="600">MLP probe block</text>
+        <text x="135" y="80" text-anchor="middle" font-size="11">gated False, "gelu", all biases</text>
+        <text x="135" y="95" text-anchor="middle" font-size="11">18 parameter names</text>
+        <rect x="20" y="118" width="230" height="58" rx="5" fill="#f5f8f7" stroke="#4a5655" stroke-width="1.5"/>
+        <text x="135" y="138" text-anchor="middle" font-weight="600">SwiGLU probe block</text>
+        <text x="135" y="154" text-anchor="middle" font-size="11">gated True, "silu", all biases</text>
+        <text x="135" y="169" text-anchor="middle" font-size="11">20 parameter names</text>
+
+        <rect x="300" y="74" width="200" height="72" rx="5" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="400" y="96" text-anchor="middle" font-weight="600">block_parameter_names()</text>
+        <text x="400" y="114" text-anchor="middle" font-size="11">the union: 20 names</text>
+        <text x="400" y="130" text-anchor="middle" font-size="11" fill="#4a5655">lines 79–109, @cache</text>
+
+        <rect x="20" y="206" width="250" height="132" rx="5" fill="#f5f8f7" stroke="#4a5655" stroke-width="1.5"/>
+        <text x="32" y="226" font-weight="600">Tensor names (T2)</text>
+        <g font-family="ui-monospace, Menlo, monospace" font-size="10.5">
+          <text x="32" y="248">1 layer.5.mlp.gate_proj.weight</text>
+          <text x="32" y="270">2 model.layer.5.mlp.gate_proj.bias</text>
+          <text x="32" y="292">3 layer.5.mlp.w3.weight</text>
+          <text x="32" y="314">4 layer.5.mlp.gate.weight</text>
+        </g>
+
+        <rect x="310" y="206" width="200" height="132" rx="5" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="410" y="228" text-anchor="middle" font-weight="600">map_key(name)</text>
+        <text x="410" y="250" text-anchor="middle" font-size="11">BLOCK_KEY: optional "model.",</text>
+        <text x="410" y="265" text-anchor="middle" font-size="11">then layer.N.(parameter)</text>
+        <text x="410" y="287" text-anchor="middle" font-size="11">Is the parameter in the union?</text>
+        <text x="410" y="324" text-anchor="middle" font-size="11" fill="#4a5655">lines 112–136</text>
+
+        <rect x="560" y="196" width="170" height="58" rx="5" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="645" y="216" text-anchor="middle" font-weight="600">yes: the MLX name</text>
+        <text x="645" y="232" text-anchor="middle" font-size="10.5" font-family="ui-monospace, Menlo, monospace">layer.5.mlp.gate_proj.…</text>
+        <text x="645" y="247" text-anchor="middle" font-size="10.5" fill="#4a5655">names 1 and 2</text>
+        <rect x="560" y="284" width="170" height="58" rx="5" fill="#ffffff" stroke="#b03a2e" stroke-width="1.5"/>
+        <text x="645" y="306" text-anchor="middle" font-weight="600" fill="#b03a2e">no: UnknownWeightError</text>
+        <text x="645" y="324" text-anchor="middle" font-size="10.5" fill="#4a5655">names 3 and 4</text>
+
+        <text x="860" y="166" text-anchor="middle" font-weight="600">load_weights(strict=True)</text>
+        <rect x="780" y="178" width="160" height="66" rx="5" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="860" y="198" text-anchor="middle" font-size="11">ViT-S+/16, ViT-H+/16,</text>
+        <text x="860" y="214" text-anchor="middle" font-size="11">ViT-7B/16: has gate_proj</text>
+        <text x="860" y="232" text-anchor="middle" font-size="11" font-weight="600">the load passes</text>
+        <rect x="780" y="262" width="160" height="66" rx="5" fill="#ffffff" stroke="#b03a2e" stroke-width="1.5"/>
+        <text x="860" y="282" text-anchor="middle" font-size="11">ViT-S/16, ViT-B/16,</text>
+        <text x="860" y="298" text-anchor="middle" font-size="11">ViT-L/16: no gate_proj</text>
+        <text x="860" y="316" text-anchor="middle" font-size="11" font-weight="600" fill="#b03a2e">ValueError (T3)</text>
+
+        <text x="20" y="370" font-size="11" fill="#4a5655">map_key checks the name only, not the block index and not the model size. load_weights(strict=True) compares each name and each shape with the backbone of the config.</text>
+      </g>
+      <g stroke="#4a5655" stroke-width="1.5" fill="none">
+        <path d="M250,73 H272 V100 H296" marker-end="url(#arrow4)"/>
+        <path d="M250,147 H272 V120 H296" marker-end="url(#arrow4)"/>
+        <path d="M400,146 V202" marker-end="url(#arrow4)"/>
+        <path d="M270,272 H306" marker-end="url(#arrow4)"/>
+        <path d="M510,256 H534 V225 H556" marker-end="url(#arrow4)"/>
+        <path d="M510,292 H534 V313 H556" marker-end="url(#arrow4)"/>
+        <path d="M730,225 H754 V211 H776" marker-end="url(#arrow4)"/>
+        <path d="M754,225 V295 H776" marker-end="url(#arrow4)"/>
+      </g>
+    </svg></div>
+    <figcaption><b>Figure 4.</b> The key map for <code>gate_proj</code>. The union of the two probe blocks has 20 names. <code>map_key</code> accepts names 1 and 2 of test T2 for every model size. It rejects the Meta name <code>w3</code> and the wrong name <code>gate</code>. The strict load of the real backbone then accepts a <code>gate_proj</code> tensor only for a SwiGLU model size. T3 adds a <code>gate_proj</code> key to the state dict of the small model <code>vits16</code>: the strict load raises <code>ValueError</code> with the name of the key.</figcaption>
+  </figure>
+  <pre><code># src/dinov3_apple/mlx_weights.py, lines 79 to 109 (the config values abbreviated)
+@cache
+def block_parameter_names() -&gt; frozenset[str]:
+    """Return the parameter names of an MLP block and of a SwiGLU block, both with all biases.
+
+    The union has 20 names. The names come from the Block module itself, so the key map and the
+    module cannot differ. map_key stays without the config; load_weights(strict=True) stops a
+    gate_proj key of an MLP model size. The probe blocks have a small width. Their arrays stay
+    lazy and are never computed; their random init advances the global key of mx.random.
+    """
+    mlp = MlxConfig(dim=8, heads=1, blocks=1, ff=8, ..., mlp_bias=True, gated=False, hidden_act="gelu")
+    gated = dataclasses.replace(mlp, gated=True, hidden_act="silu")              # line 106
+    return frozenset(
+        name for config in (mlp, gated) for name, _ in tree_flatten(Block(config).parameters())
+    )
+
+# lines 134 and 135 (map_key)
+    if (match := BLOCK_KEY.fullmatch(name)) and match.group("parameter") in block_parameter_names():
+        return match.group(1)                                                     # layer.{i}.{parameter}</code></pre>
+  <ul>
+    <li><b>Why a union and not the config.</b> <code>explore.html</code> compared three ways: the union of two probe blocks, a probe from the config of the model size, and a fixed list. A probe from the config would give <code>map_key</code> a config argument. A fixed list can differ from the module. The union keeps <code>map_key</code> without the config, and the strict load still stops a <code>gate_proj</code> key of an MLP model size.</li>
+    <li><b>Line 106.</b> The SwiGLU probe is the MLP probe with <code>gated=True</code> and "silu". The pair must be valid: <code>Block</code> raises <code>NotImplementedError</code> for a gated config with "gelu".</li>
+    <li><b>All biases.</b> Both probes set every bias flag to true. So the union also has <code>attention.k_proj.bias</code>, although no model size has a bias on <code>k_proj</code>. <code>map_key</code> asks only whether the probe has a name. It does not ask for every name of the probe. So ViT-7B/16, without q, k and v biases, needs no special code.</li>
+    <li><b><code>@cache</code>.</b> The function builds the two probe blocks once per process. Their random init advances the global key of <code>mx.random</code> at the first call.</li>
+  </ul>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Group</th><th>Parameter names in a block</th><th class="num">Count</th></tr></thead>
+      <tbody>
+        <tr><td>Both probes</td><td><code>norm1.weight</code>, <code>norm1.bias</code>, <code>attention.{q,k,v,o}_proj.weight</code>, <code>attention.{q,k,v,o}_proj.bias</code>, <code>layer_scale1.lambda1</code>, <code>norm2.weight</code>, <code>norm2.bias</code>, <code>mlp.up_proj.weight</code>, <code>mlp.up_proj.bias</code>, <code>mlp.down_proj.weight</code>, <code>mlp.down_proj.bias</code>, <code>layer_scale2.lambda1</code></td><td class="num">18</td></tr>
+        <tr><td>SwiGLU probe only</td><td><code>mlp.gate_proj.weight</code>, <code>mlp.gate_proj.bias</code></td><td class="num">2</td></tr>
+        <tr class="group"><td>Union</td><td></td><td class="num">20</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 5.</b> The 20 names of <code>block_parameter_names</code>. The 18 names of the first row are the names of Step 4. T1 <code>test_block_parameter_names_union</code> checks the count and some names. The test H1 <code>test_key_map_covers_file</code> reads the safetensors headers of all six model sizes and maps each name. For ViT-S+/16 it finds 235 tensors, 234 MLX parameters and 158 parameters in the matmul dtype; for ViT-H+/16 615, 614 and 418; for ViT-7B/16 687, 686 and 442. Each model size has 1 dropped tensor (the mask token), 0 missing, 0 extra and 0 shape differences (AC12 of <code>verify.html</code>).</p>
+</section>
+
+<section id="measured">
+  <h2>8 The measured values of Step 5</h2>
+  <p>The part tests compare each MLX part with the Hugging Face module on <code>torch-cpu</code>, in fp32, with a small model (Section 6.1 of the plan). <code>vits16plus</code> has the values of ViT-S+/16 with 2 blocks and random weights. <code>vit7b16-shape</code> has the shape of ViT-7B/16 at a small embedding dimension: D = 256, FF = 512 (2 D), head dimension 128, no q, k and v biases.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Test</th><th>What it compares</th><th class="num">Measured: largest difference</th><th class="num">Target</th><th>Result</th></tr></thead>
+      <tbody>
+        <tr><td>T16 part <code>ff_in</code>, <code>vits16plus</code></td><td><code>gate_proj</code> and <code>up_proj</code>: sums of 384 products</td><td class="num">5.2e-6</td><td class="num">≤ 1e-5</td><td>pass</td></tr>
+        <tr><td>T16 part <code>activation</code>, <code>vits16plus</code></td><td><code>SwiGLU.activation</code> on the gate and up values of block 1</td><td class="num">9.5e-7</td><td class="num">≤ 1e-5</td><td>pass</td></tr>
+        <tr><td>T16 part <code>ff_out</code>, <code>vits16plus</code></td><td><code>down_proj</code>: sums of 1,536 products</td><td class="num">8.8e-6</td><td class="num">≤ 2e-5</td><td>pass</td></tr>
+        <tr><td><code>test_mlx_block_part</code>, part <code>activation</code>, <code>vits16</code></td><td><code>MLP.activation</code> (GELU)</td><td class="num">7.2e-7</td><td class="num">≤ 2e-6</td><td>pass</td></tr>
+        <tr><td>T17 <code>test_mlx_part_swiglu</code></td><td><code>SwiGLU</code> against <code>DINOv3ViTGatedMLP</code>, <code>vits16plus</code></td><td class="num">9.1e-6</td><td class="num">≤ 2e-5</td><td>pass</td></tr>
+        <tr><td>T17 <code>test_mlx_part_swiglu</code></td><td>The same, <code>vit7b16-shape</code></td><td class="num">5.5e-6</td><td class="num">≤ 2e-5</td><td>pass</td></tr>
+        <tr><td>T18 <code>test_mlx_part_silu</code></td><td><code>nn.silu</code> against <code>ACT2FN["silu"]</code>, 200,001 values in [−8, 8]</td><td class="num">9.5e-7</td><td class="num">≤ 4e-6</td><td>pass</td></tr>
+        <tr><td>T20 <code>test_mlx_part_block</code></td><td><code>Block</code>, both small models, grids 14 × 14 and 14 × 19</td><td class="num">≤ 5.1e-6</td><td class="num">≤ 3e-5</td><td>pass</td></tr>
+        <tr><td>T21 <code>test_mlx_small_model_tokens</code></td><td><code>run_mlx</code>: tokens; <code>run_mlx_hidden_states</code>: hidden states</td><td class="num">≤ 8.8e-6; ≤ 7.4e-6</td><td class="num">≤ 5e-5</td><td>pass</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 6.</b> Part tests of SwiGLU in fp32, from AC10 of <code>specs/05-all-sizes/verify.html</code> and <code>tests/fixtures/generated/mlx/report.jsonl</code> (git ignores it), mlx 0.32.4. The targets are those of Table 13 of the plan. No target is looser than in Step 4. The other 8 parts of <code>vits16plus</code> give the same values as <code>vits16</code>. The part <code>activation</code> of <code>vits16</code> gives 7.2e-7, as in Step 4: the fp32 casts of <code>MLP.activation</code> change nothing in fp32.</p>
+  <p>The parity tests with the real weights compare <code>run_mlx</code> with the reference output of Step 2 (<code>torch-cpu</code>, fp32). Each row has 12 configurations: 3 test images × 4 input resolutions.</p>
+  <div class="table-wrap">
+    <table class="first-nowrap">
+      <thead><tr><th>Model size</th><th>Dtype mode</th><th class="num">Frame</th><th class="num">Patch mean</th><th class="num">Patch 1st percentile</th><th class="num">Thresholds</th><th>Result</th></tr></thead>
+      <tbody>
+        <tr><td>ViT-S+/16</td><td>fp32</td><td class="num">1.000000</td><td class="num">1.000000</td><td class="num">1.000000</td><td class="num">0.9999 / 0.9999 / 0.9999</td><td>12 of 12 pass</td></tr>
+        <tr><td>ViT-S+/16</td><td>fp16-cast</td><td class="num">0.999973</td><td class="num">0.999920</td><td class="num">0.999808</td><td class="num">0.999 / 0.999 / 0.99</td><td>12 of 12 pass</td></tr>
+        <tr><td>ViT-S+/16</td><td>bf16-cast</td><td class="num">0.998847</td><td class="num">0.995816</td><td class="num">0.990381</td><td class="num">0.998 / 0.995 / 0.96</td><td>12 of 12 pass</td></tr>
+        <tr><td>ViT-S+/16</td><td>fp16-autocast</td><td class="num">0.999986</td><td class="num">0.999958</td><td class="num">0.999904</td><td class="num">0.999 / 0.999 / 0.99</td><td>12 of 12 pass</td></tr>
+        <tr><td>ViT-S+/16</td><td>bf16-autocast</td><td class="num">0.998387</td><td class="num"><b>0.995136</b></td><td class="num">0.988882</td><td class="num">0.998 / 0.995 / 0.96</td><td>12 of 12 pass</td></tr>
+        <tr><td>ViT-H+/16</td><td>fp32</td><td class="num">1.000000</td><td class="num">1.000000</td><td class="num">1.000000</td><td class="num">0.9999 / 0.9999 / 0.9999</td><td>12 of 12 pass</td></tr>
+        <tr><td>ViT-H+/16</td><td>fp16-cast</td><td class="num">0.999999</td><td class="num">0.999998</td><td class="num">0.999993</td><td class="num">0.999 / 0.999 / 0.99</td><td>6 pass (448 and 512 px), 6 expected failures (fp16 overflow)</td></tr>
+        <tr><td>ViT-H+/16</td><td>bf16-cast</td><td class="num">0.999833</td><td class="num">0.999061</td><td class="num">0.986725</td><td class="num">0.998 / 0.995 / 0.96</td><td>12 of 12 pass</td></tr>
+        <tr><td>ViT-H+/16</td><td>fp16-autocast</td><td class="num">0.999999</td><td class="num">0.999981</td><td class="num">0.999679</td><td class="num">0.999 / 0.999 / 0.99</td><td>12 of 12 pass</td></tr>
+        <tr><td>ViT-H+/16</td><td>bf16-autocast</td><td class="num">0.999947</td><td class="num">0.999279</td><td class="num">0.985938</td><td class="num">0.998 / 0.995 / 0.96</td><td>12 of 12 pass</td></tr>
+        <tr><td>ViT-7B/16</td><td>bf16-cast, cross-check against <code>torch-mps</code></td><td class="num">0.999925 to 0.999954</td><td class="num">0.999505 to 0.999970</td><td class="num">0.995725 to 0.999924</td><td class="num">report only</td><td>12 measured, both backends finite</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 7.</b> Parity of the SwiGLU model sizes on <code>mlx</code>, from <code>results/parity-mlx.md</code>. Each value is the minimum over the configurations of the row. In fp32, 1 − x is at most 5.8e-10 (ViT-S+/16) and 3.8e-10 (ViT-H+/16) (AC1 of <code>verify.html</code>). ViT-7B/16 has no reference file on path D4-N, so its 48 parity rows in the four half modes skip. Its fp32 rows skip by the run rule. The last row gives the range over the 12 configurations of the cross-check (Section 5 of <code>results/parity-mlx.md</code>), which compares <code>mlx</code> with <code>torch-mps</code> in the same dtype mode. <a href="05-3-numeric-range.html">05-3</a> explains the fp16 overflow.</p>
+  <ul>
+    <li><b>The smallest margin of all parity rows is a SwiGLU row.</b> ViT-S+/16 in bf16-autocast gives a patch mean of 0.995136 against the threshold 0.995: 97.3 % of the threshold budget (Table 5 of <code>verify.html</code>). <code>torch-mps</code> gives 0.995177 for the same row. The next three rows of the ranking are also ViT-S+/16 in bf16. No row fell below its threshold, so the bf16 diagnostic of risk R23 did not start. This page does not know whether SwiGLU causes the small margin.</li>
+    <li><b>The half modes of <code>mlx</code> agree with <code>torch-cpu</code> in the same mode.</b> On the small models <code>vits16plus</code> and <code>vit7b16-shape</code> in bf16-cast, the min token cosine to the fp32 output of the Hugging Face model is 0.999977 and 0.999979 for the two backends. In bf16-autocast the two backends agree to 6 digits: 0.999993 to 0.999994 on the three small models (Section 4.2 of <code>verify.html</code>).</li>
+  </ul>
+  <p>The token range of Step 5 records the largest feed-forward hidden value of each block (<code>Block.ff_hidden</code>, Section 5.3). Table 8 gives the largest finite value of each model size.</p>
+  <div class="table-wrap">
+    <table class="first-nowrap">
+      <thead><tr><th>Model size</th><th>Network</th><th>Dtype mode</th><th class="num">Largest feed-forward hidden value</th><th>Configuration</th><th class="num">Share of 65,504</th></tr></thead>
+      <tbody>
+        <tr><td>ViT-S/16</td><td>MLP</td><td>fp32</td><td class="num">300.1</td><td>iss-kibo-lab/224x400</td><td class="num">0.5 %</td></tr>
+        <tr><td>ViT-S+/16</td><td>SwiGLU</td><td>fp32</td><td class="num">7,257.1</td><td>iss-kibo-lab/224x400</td><td class="num">11.1 %</td></tr>
+        <tr><td>ViT-B/16</td><td>MLP</td><td>fp32</td><td class="num">1,234.3</td><td>iss-conference/224x224</td><td class="num">1.9 %</td></tr>
+        <tr><td>ViT-L/16</td><td>MLP</td><td>fp32</td><td class="num">1,993.2</td><td>forest/448x448</td><td class="num">3.0 %</td></tr>
+        <tr><td>ViT-H+/16</td><td>SwiGLU</td><td>fp32</td><td class="num">6,416.3</td><td>iss-conference/304x224</td><td class="num">9.8 %</td></tr>
+        <tr><td>ViT-7B/16</td><td>SwiGLU</td><td>bf16-cast</td><td class="num">600.0</td><td>iss-kibo-lab/512x512</td><td class="num">0.9 %</td></tr>
+        <tr><td>ViT-7B/16</td><td>SwiGLU</td><td>bf16-autocast</td><td class="num">592.0</td><td>iss-kibo-lab/512x512</td><td class="num">0.9 %</td></tr>
+        <tr><td>ViT-7B/16</td><td>SwiGLU</td><td>fp16-autocast</td><td class="num">594.0</td><td>iss-kibo-lab/512x512</td><td class="num">0.9 %</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 8.</b> The largest finite feed-forward hidden value over all blocks and the 12 configurations, image 0 of each configuration. Source: Table 2 of <code>results/token-range-mlx.md</code> (column "Largest feed-forward hidden value"); our maximum over its rows. ViT-7B/16 has no fp32 row (run rule). For ViT-7B/16 the table gives bf16-cast, the largest of its four half modes, and the two autocast modes. Its fp16-cast value is 594.0. The share compares the value with the largest fp16 value, 65,504. In the fp16 modes the largest value is 7,272.0 (ViT-S+/16, fp16-cast). In the 18 fp16-cast configurations with an overflow (ViT-L/16: 12, ViT-H+/16: 6), the blocks after the first non-finite block give NaN. The table leaves them out. No finite feed-forward hidden value reached the fp16 maximum. The overflow starts in the residual stream (<a href="05-3-numeric-range.html">05-3</a>). <code>explore.html</code> lists the risk R20: silu(300) · 300 is infinite in fp16.</p>
+</section>
+
+<section id="surprises">
+  <h2>9 Surprises</h2>
+  <ol>
+    <li class="note"><b>Only <code>gate_proj</code> gets the activation.</b> <code>up_proj</code> has the same shape and the same input, but its output stays linear. The strict load cannot see a swap of the two weights; only a comparison of values can (T17 and the parity tests).</li>
+    <li class="note"><b>FF is 4 D for ViT-S+/16 and ViT-H+/16, but 2 D for ViT-7B/16.</b> SwiGLU keeps 2/3 of the Meta width. The Meta ratio is 6 for ViT-S+/16 and ViT-H+/16, but 3 for ViT-7B/16. So the feed-forward network of ViT-7B/16 has 60.0 % of the block weights, less than the 66.6 % of an MLP block. ViT-S+/16 and ViT-H+/16 have 74.9 % and 75.0 %.</li>
+    <li class="note"><b>The MLX activations round after each operation in half precision.</b> <code>nn.gelu</code> has five operations and <code>nn.silu</code> two, plus the product with up. In the half dtype 21 to 35 % of the values differ from one rounding (Table 3). The port computes the activation in fp32 and rounds once. Then, for SwiGLU and for GELU at x ≥ −2.5, at most 0.082 % of the T23 values differ from the float64 value rounded once, each by at most 1 unit in the last place. At x &lt; −2.5 the GELU output equals <code>nn.gelu</code> in fp32, rounded once.</li>
+    <li class="note"><b>A correct fp32 GELU is not correct at x &lt; −2.5.</b> The sum 1 + erf cancels in fp32. So T23 cannot use the float64 oracle there. It uses <code>nn.gelu</code> in fp32, rounded once, and asks for exact equality.</li>
+    <li class="note"><b>The T23 target holds only for its own input grid.</b> 1,000,000 values from N(0, 3²) give 0.117 % for GELU in fp16, above the 0.1 % of T23.</li>
+    <li class="note"><b>The SwiGLU hidden values are 24 times those of the MLP at the same embedding dimension.</b> ViT-S+/16 reaches 7,257.1, ViT-S/16 only 300.1 (Table 8). Two linear outputs multiply. The finite values stay at 11.1 % of the fp16 maximum or less.</li>
+    <li class="note"><b>The backbone does not call <code>SwiGLU.__call__</code>.</b> <code>Block.__call__</code> calls <code>ff_hidden</code> and <code>mlp.down_proj</code>. Only the part tests call <code>MLP.__call__</code> and <code>SwiGLU.__call__</code>. So the token range sees the hidden values with the same calls as the forward pass.</li>
+    <li class="note"><b><code>map_key</code> accepts <code>gate_proj</code> for every model size.</b> It does not know the config. The strict load stops a <code>gate_proj</code> key of an MLP model size (T3). The union also holds <code>attention.k_proj.bias</code>, a name that no model size has.</li>
+    <li class="note"><b>The official block gives <code>nn.GELU</code> to SwiGLU.</b> <code>SelfAttentionBlock</code> passes <code>act_layer=nn.GELU</code> to each feed-forward layer. <code>SwiGLUFFN</code> accepts the argument, does not use it and calls <code>F.silu</code>. <code>config.json</code> correctly says "silu".</li>
+    <li class="note"><b>The smallest parity margin of Step 5 is a SwiGLU row.</b> ViT-S+/16 in bf16-autocast uses 97.3 % of its patch-mean budget on <code>mlx</code>. <code>torch-mps</code> gives about the same value, 0.995177 against 0.995136.</li>
+  </ol>
+</section>
+
+<section id="sources">
+  <h2>10 Sources</h2>
+  <ul>
+    <li>Repo code: <code>src/dinov3_apple/mlx_model.py</code> (commit <code>01cc631</code>; the working tree has the same lines), <code>src/dinov3_apple/mlx_weights.py</code> (working tree after the Verify fixes), <code>src/dinov3_apple/flops.py</code> (<code>part_flops</code>, <code>MODEL_SHAPES</code>), <code>src/dinov3_apple/block_profile.py</code> (<code>block_parts</code>), <code>scripts/convert_meta_checkpoint.py</code> (lines 120 to 124).</li>
+    <li>Tests: <code>tests/test_mlx_parts.py</code> (T16 to T18, T20 to T23, T26), <code>tests/test_mlx_weights.py</code> (T1 to T3, T6, H1).</li>
+    <li>Spec files: <code>specs/05-all-sizes/explore.html</code> (Tables 1, 4, 5, 6, 7, 8 and 19; finding 6; D1, D2), <code>specs/05-all-sizes/plan.html</code> (Tables 1 to 4, 12 and 13; Sections 3.2 and 6.1), <code>specs/05-all-sizes/verify.html</code> (AC1 to AC5, AC10, AC12, AC13; Table 5; Sections 4.2, 9 and 10).</li>
+    <li>Results: <code>results/parity-mlx.md</code> (Tables 1 and 5), <code>results/token-range-mlx.md</code> (Table 2), and <code>tests/fixtures/generated/mlx/report.jsonl</code> (git ignores it).</li>
+    <li>Configs: <code>config.json</code> of the six Hugging Face repos (<code>hidden_size</code>, <code>intermediate_size</code>, <code>hidden_act</code>, <code>use_gated_mlp</code>, <code>mlp_bias</code>), read on 2026-11-07.</li>
+    <li>Hugging Face transformers 5.22.1: <code>models/dinov3_vit/modeling_dinov3_vit.py</code> (<code>DINOv3ViTMLP</code>, lines 353 to 364; <code>DINOv3ViTGatedMLP</code>, lines 367 to 380), Apache-2.0. Public: <a href="https://github.com/huggingface/transformers/blob/main/src/transformers/models/dinov3_vit/modeling_dinov3_vit.py">github.com/huggingface/transformers</a>.</li>
+    <li>MLX 0.32.4: <code>python/mlx/nn/layers/activations.py</code> (<code>silu</code>, <code>gelu</code>), MIT. Public: <a href="https://github.com/ml-explore/mlx/blob/main/python/mlx/nn/layers/activations.py">github.com/ml-explore/mlx</a>.</li>
+    <li>Official DINOv3 code: <code>dinov3/layers/ffn_layers.py</code> (<code>SwiGLUFFN</code>, <code>Mlp</code>), <code>dinov3/layers/block.py</code> (<code>SelfAttentionBlock</code>), <code>dinov3/models/vision_transformer.py</code> (<code>ffn_layer_dict</code>), <code>dinov3/hub/backbones.py</code> (<code>ffn_ratio</code> and <code>ffn_layer</code> of each hub function). Public: <a href="https://github.com/facebookresearch/dinov3">github.com/facebookresearch/dinov3</a>.</li>
+    <li>Shazeer, "GLU Variants Improve Transformer", arXiv 2002.05202 (2020): SwiGLU and the factor 2/3.</li>
+    <li>DINOv3 paper: Siméoni et al., arXiv 2508.10104 (August 2025).</li>
+    <li>Computation of the agent for this page: the FLOP columns of Table 2 (<code>part_flops</code> on the CPU) and the maximum over the rows of <code>results/token-range-mlx.md</code> in Table 8.</li>
+  </ul>
+</section>
+
+<footer class="steps">Previous: <a href="04-5-mlp.html">04-5 MLP, outputs and speed</a> · Next: <a href="05-2-model-scaling.html">05-2 Model scaling, dtype modes and loading</a>.</footer>
+</main>
+</body>
+</html>

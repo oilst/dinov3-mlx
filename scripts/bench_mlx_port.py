@@ -37,7 +37,6 @@ import argparse
 import json
 import logging
 import os
-import subprocess
 import sys
 import time
 from collections import Counter
@@ -62,6 +61,7 @@ from dinov3_apple.bench import (
     reference_tokens,
     required_bench_bytes,
     result_line,
+    run_worker_subprocess,
     summarize,
 )
 from dinov3_apple.footprint import read_footprint
@@ -75,7 +75,6 @@ from dinov3_apple.memory import (
     GB,
     InsufficientMemoryError,
     available_memory_bytes,
-    replay_checks,
     send_checks_to,
 )
 from dinov3_apple.outputs import NUM_PREFIX_TOKENS
@@ -132,9 +131,10 @@ def bench_dir_of(results: Path) -> Path:
 def worker_plan(
     rounds: int = 3, priority: str = "P1", dtype_modes: list[str] | None = None
 ) -> list[tuple[int, int | str, str, bool | None]]:
-    """Return (round, variant, backend, tf32) for each worker, in the order of the run.
+    """Return (round, batch size or dtype mode, backend, tf32) for each worker, in the order of the
+    run.
 
-    The variant is the batch size of P1 or the dtype mode of P2. The order of the two workers
+    The second field is the batch size of P1 or the dtype mode of P2. The order of the two workers
     alternates from round to round (finding F1): round 1 torch-mps first, round 2 mlx first,
     round 3 torch-mps first. Every mlx worker runs with TF32 off.
 
@@ -147,12 +147,14 @@ def worker_plan(
         rounds x 2 batch sizes x 2 workers entries for P1, rounds x the dtype modes x 2 workers
         entries for P2.
     """
-    variants = BATCH_SIZES if priority == "P1" else (dtype_modes or DTYPE_MODE_NAMES)
+    batch_sizes_or_dtype_modes = (
+        BATCH_SIZES if priority == "P1" else (dtype_modes or DTYPE_MODE_NAMES)
+    )
     plan = []
     for r in range(rounds):
         order = WORKERS[r % 2 :] + WORKERS[: r % 2]
-        for variant in variants:
-            plan += [(r + 1, variant, backend, tf32) for backend, tf32 in order]
+        for batch_size_or_dtype_mode in batch_sizes_or_dtype_modes:
+            plan += [(r + 1, batch_size_or_dtype_mode, backend, tf32) for backend, tf32 in order]
     return plan
 
 
@@ -174,18 +176,23 @@ def worker_env(backend: str, tf32: bool | None, base: Mapping[str, str]) -> dict
     return env | WATERMARKS
 
 
-def bench_config(round_: int, variant: int | str, priority: str = "P1") -> BenchConfig:
+def bench_config(
+    round_: int, batch_size_or_dtype_mode: int | str, priority: str = "P1"
+) -> BenchConfig:
     """Return the configuration of one worker. The repeat number is the round minus 1.
 
     Args:
         round_: The round, from 1.
-        variant: The batch size of P1 or the dtype mode of P2.
+        batch_size_or_dtype_mode: The batch size of P1 or the dtype mode of P2.
         priority: "P1" or "P2".
     """
+    repeat = round_ - 1
     if priority == "P1":
-        return BenchConfig(RUN, MODEL_SIZE, DTYPE_MODE, SIDE, variant, repeat=round_ - 1)
+        batch_size = batch_size_or_dtype_mode
+        return BenchConfig(RUN, MODEL_SIZE, DTYPE_MODE, SIDE, batch_size, repeat=repeat)
     model_size, side, batch_size, _ = PRIORITY[priority]
-    return BenchConfig(RUN_P2, model_size, variant, side, batch_size, repeat=round_ - 1)
+    dtype_mode = batch_size_or_dtype_mode
+    return BenchConfig(RUN_P2, model_size, dtype_mode, side, batch_size, repeat=repeat)
 
 
 def output_transfer(host: np.ndarray) -> str:
@@ -366,9 +373,9 @@ def worker_main(spec_json: str) -> None:
         if backend == "mlx":
             result = run_mlx_worker(config, bench_dir=bench_dir / "mlx")
         else:
-            from dinov3_apple.torch_bench import run_worker
+            from dinov3_apple.torch_bench import run_worker as run_torch_worker
 
-            result = run_worker(config, bench_dir=bench_dir / "torch-mps")
+            result = run_torch_worker(config, bench_dir=bench_dir / "torch-mps")
             result |= {"mlx_peak_bytes": None, "mlx_memory_limit_bytes": None, "tf32": None}
             result |= {"output_transfer": "native", **load_report_fields(None)}
     except InsufficientMemoryError as error:
@@ -379,10 +386,8 @@ def worker_main(spec_json: str) -> None:
     print(json.dumps(result))
 
 
-def run_worker_subprocess(
-    config: BenchConfig, backend: str, tf32: bool | None, bench_dir: Path
-) -> dict:
-    """Run one worker in a new subprocess and return its result.
+def run_worker(config: BenchConfig, backend: str, tf32: bool | None, bench_dir: Path) -> dict:
+    """Run one worker in a new subprocess and return its result (run_worker_subprocess).
 
     The memory checks of the worker go to the log of the driver, with the time of the worker.
     A worker that exits with an error gives status "error" and the last lines of its stderr.
@@ -398,34 +403,16 @@ def run_worker_subprocess(
     """
     spec = json.dumps(asdict(config) | {"backend": backend, "bench_dir": str(bench_dir)})
     command = [sys.executable, __file__, "--worker", spec]
-    try:
-        done = subprocess.run(
-            command,
-            check=False,
-            env=worker_env(backend, tf32, os.environ),
-            capture_output=True,
-            text=True,
-            timeout=WORKER_TIMEOUT_S,
-        )
-    except subprocess.TimeoutExpired as error:
-        stderr = error.stderr or ""
-        replay_checks(stderr.decode() if isinstance(stderr, bytes) else stderr)
-        return {"status": "error", "reason": f"timeout after {error.timeout} s"}
-    replay_checks(done.stderr)
-    if done.returncode == 0:
-        for text in reversed(done.stdout.splitlines()):
-            if text.startswith("{"):
-                return json.loads(text)
-    tail = "\n".join(done.stderr.splitlines()[-STDERR_LINES:])
-    return {"status": "error", "reason": f"exit code {done.returncode}: {tail}"}
+    env = worker_env(backend, tf32, os.environ)
+    return run_worker_subprocess(command, env, WORKER_TIMEOUT_S, STDERR_LINES)
 
 
 def dry_run(plan: list[tuple[int, int | str, str, bool | None]], priority: str = "P1") -> None:
     """Print each worker of the plan with its memory need. Load no model."""
     available = available_memory_bytes()
     print(f"available memory: {available / GB:.1f} GB")
-    for round_, variant, backend, tf32 in plan:
-        config = bench_config(round_, variant, priority)
+    for round_, batch_size_or_dtype_mode, backend, tf32 in plan:
+        config = bench_config(round_, batch_size_or_dtype_mode, priority)
         need = required_bench_bytes(config)
         fits = "fits" if need <= available else "does not fit"
         print(
@@ -455,8 +442,8 @@ def run_plan(
         MachineStateError: On battery power or in Low Power Mode. No line is written.
     """
     counts: Counter = Counter()
-    for index, (round_, variant, backend, tf32) in enumerate(plan, start=1):
-        config = bench_config(round_, variant, priority)
+    for index, (round_, batch_size_or_dtype_mode, backend, tf32) in enumerate(plan, start=1):
+        config = bench_config(round_, batch_size_or_dtype_mode, priority)
         machine = read_machine_state()
         check_machine_state(machine)
         need = required_bench_bytes(config)
@@ -468,12 +455,13 @@ def run_plan(
             f"{available / GB:.1f} GB available, {'ok' if fits else 'does not fit'}"
         )
         if fits:
-            worker = run_worker_subprocess(config, backend, tf32, bench_dir)
+            worker = run_worker(config, backend, tf32, bench_dir)
         else:
             reason = f"needs {need / GB:.1f} GB, {available / GB:.1f} GB available"
             worker = {"status": "skipped", "reason": reason}
         line = result_line(config, worker, need, available, machine)
-        position = 1 + [entry[2] for entry in plan if entry[:2] == (round_, variant)].index(backend)
+        pair = (round_, batch_size_or_dtype_mode)
+        position = 1 + [entry[2] for entry in plan if entry[:2] == pair].index(backend)
         line |= {
             "priority": priority,
             "backend": backend,

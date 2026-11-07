@@ -2,8 +2,9 @@
 
 The key map runs at load time; no converted file (D2 of specs/04-mlx-port/explore.html). Each
 load checks the run rule and the free memory first and raises the errors of the torch loader, so
-the test fixture skips in the same way. The load casts and evaluates one tensor at a time, so at
-most one fp32 source tensor is alive (D5 of specs/05-all-sizes/explore.html). No torch import.
+the test fixture skips in the same way. The load casts and evaluates one tensor at a time, so it
+references at most one fp32 source; MLX can release it after the next read (D5 of
+specs/05-all-sizes/explore.html; F4 of specs/05-all-sizes/verify.html). No torch import.
 """
 
 import dataclasses

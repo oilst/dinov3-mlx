@@ -1,0 +1,27 @@
+# The mlx autocast modes keep fp16 or bf16 weights
+
+The two autocast modes of `mlx`, fp16-autocast and bf16-autocast, keep the weights of the matmuls in fp16 or bf16. The load casts the weights and biases of the patch embedding and of each `nn.Linear` module once to the matmul dtype (fp16 or bf16). The residual stream, the layer norms, LayerScale, the CLS token and the register tokens stay in fp32, the stream dtype. `MLX_DTYPE_MODES` in `src/dinov3_apple/mlx_model.py` holds the pair of matmul dtype and stream dtype for each dtype mode.
+
+This differs from `torch.autocast` on torch-cpu and torch-mps. There, the weights stay in fp32, and autocast casts them to fp16 or bf16 at each matmul.
+
+Why:
+
+- Memory. fp16 and bf16 weights need 2 bytes for each weight, against 4 bytes in fp32. ViT-7B/16 has 26.9 GB of fp32 weights, and the run rule forbids a load with fp32 weights. With fp16 or bf16 weights, the memory check of ViT-7B/16 asks for 20.1 GB, and the measured load peak is 13.5 GB in bf16-cast and in bf16-autocast (13,532.7 MB and 13,534.7 MB against the target 16,252.7 MB, Table 10 of `specs/05-all-sizes/verify.html`). So ViT-7B/16 runs on `mlx` in the official dtype mode of DINOv3 (bf16-autocast: bf16 matmuls with an fp32 residual stream). At P2 (ViT-H+/16), the peak memory of `mlx` is 3.44 to 3.45 GB in the autocast modes and in the cast modes. torch-mps needs 5.00 GB in autocast mode and 4.31 GB in cast mode (Table 8 of `verify.html`).
+- Parity. The load rounds each fp32 weight to fp16 or bf16 once. `torch.autocast` rounds the same weight to the same fp16 or bf16 value at each matmul. AC2: in fp16-autocast, all 60 rows of the five model sizes ViT-S/16 to ViT-H+/16 pass. The largest share of the threshold budget is 4.2 % (ViT-S+/16, patch mean 0.999958). fp16-autocast gives valid fp16 rows for ViT-L/16 and ViT-H+/16, where fp16-cast overflows. AC5: in bf16-autocast, all 60 rows pass. The smallest margin is the ViT-S+/16 patch mean, 0.995136 against the threshold 0.995 (97.3 % of the budget). torch-mps with fp32 weights gives 0.995177 for the same row.
+- Names. The rows use the keys of `THRESHOLDS` and `DTYPE_OF_MODE`. So the parity table, the thresholds of ADR 0003 and the join with the baseline of Step 3 need no new keys. Each `mlx` row compares with the torch-mps row of the same name.
+
+We considered three other options (D2 of `specs/05-all-sizes/explore.html`):
+
+- Cast modes only (Option A). No valid fp16 row for ViT-L/16 and ViT-H+/16, because fp16-cast overflows. ViT-7B/16 does not run in the official dtype mode of DINOv3 (bf16-autocast: bf16 matmuls with an fp32 residual stream).
+- The same modes under new names, for example fp16-mixed and bf16-mixed (Option C). One name would have one meaning on all backends. But `THRESHOLDS`, `DTYPE_OF_MODE`, `parity_table.py` and the baseline join would need new keys and a map to the torch-mps names.
+- A real autocast on `mlx`: fp32 weights and a cast of each weight at each call (Option D). The weight dtype would equal torch. But ViT-7B/16 would need its 26.9 GB of fp32 weights, which breaks the run rule, and each call would cast the full weight.
+
+Consequences:
+
+- One name, two weight dtypes. fp16-autocast and bf16-autocast have fp32 weights on torch-cpu and torch-mps and fp16 or bf16 weights on `mlx`. The GLOSSARY entry "Autocast mode" gives the weights for each backend. On `mlx`, the memory check of an autocast mode has the need of the cast mode (Table 5 of `specs/05-all-sizes/plan.html`).
+- The benchmark need. `bytes_per_weight(backend, dtype_mode)` in `src/dinov3_apple/bench.py` gives 2 bytes for the `mlx` autocast modes, and the run rule uses it. But `required_bench_bytes` still reads `WEIGHT_BYTES`, which gives 4 bytes for the autocast modes. So the benchmark need of an `mlx` autocast worker is too high: 10.23 GB instead of about 8.2 GB at P2 (Section 9 of `plan.html`). Step 6 makes the benchmark need depend on the backend.
+- Speed. The casts between the matmul dtype and the stream dtype add about 4 element-wise kernels to each block. At P2, the autocast modes of `mlx` are about 3 to 5 % slower than the cast modes (Table 7 of `verify.html`). Step 6 can fuse the casts with `mx.compile`.
+- Step 6. Quantized weights replace the `nn.Linear` modules. The dtype mode is a plain attribute of the model, so packed weights do not change it.
+- SDPA with fp16 or bf16 inputs. In the autocast modes and in the cast modes, `mx.fast.scaled_dot_product_attention` gets fp16 or bf16 q, k and v, as with `torch.autocast`. On this Mac (Apple M5 Max, mlx 0.32.4), the kernel for fp16 or bf16 inputs does not compute in fp32 inside. For fp16 or bf16 inputs, head dimension 64 or 128 and more than 8 tokens, MLX runs `steel_attention_nax.h` with the option `relaxed_precision`: about 11 bits of internal precision. 48 to 57 % (fp16) and 10.5 to 13.1 % (bf16) of its outputs differ from the float64 result rounded once (finding F3 of `verify.html`). Each finite parity row of AC2 to AC5 still passes its threshold. An analysis of a small bf16 margin or of the fp16 overflow must not assume an fp32 P · V. A new mlx version or another chip can change the kernel, so a later step measures it again.
+
+Status: accepted on 2026-11-07 (Step 5, decision D2 of `specs/05-all-sizes/explore.html`; the user asked the agent to decide).

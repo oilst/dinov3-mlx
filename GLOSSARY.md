@@ -249,6 +249,9 @@ The comparison of the free memory with the need of a model load, before the load
 **Load peak**:
 The largest MLX active memory (`mx.get_peak_memory`) during one model load, minus the active memory before the load. It does not include the MLX cache.
 
+**Load report**:
+The memory record of one `mlx` load (`LoadReport`): the need of the memory check, the load peak, the MLX cache after the load and the process footprint after the load.
+
 **Run rule**:
 One rule of the section "Run rules" of `CLAUDE.md`, for example: ViT-7B/16 never loads with fp32 weights.
 

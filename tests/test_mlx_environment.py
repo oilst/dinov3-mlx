@@ -17,6 +17,7 @@ from pathlib import Path
 import mlx.core as mx
 import numpy as np
 import pytest
+from fakes import fail_load
 from small_model import small_hf_model, small_mlx_model, small_pixels
 
 from dinov3_apple import mlx_weights, preprocess, reference, stored
@@ -299,7 +300,7 @@ def test_mlx_worker_memory_check_reaches_the_driver_log(
     end = time.time()
     assert "memory check: ViT-S/16 mlx fp32" in worker.stderr, worker.stderr
 
-    # The driver side: run_worker_subprocess gets the output of this worker.
+    # The driver side: run_worker gets the output of this worker.
     commands: list[list[str]] = []
 
     def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess:
@@ -310,7 +311,7 @@ def test_mlx_worker_memory_check_reaches_the_driver_log(
     # The record must not reach memory-checks.log of the test session.
     monkeypatch.setattr(logging.getLogger("dinov3_apple.memory"), "handlers", [])
     with caplog.at_level(logging.INFO):
-        result = bench_mlx_port.run_worker_subprocess(config, "mlx", False, tmp_path)
+        result = bench_mlx_port.run_worker(config, "mlx", False, tmp_path)
     assert json.loads(commands[0][-1])["bench_dir"] == str(tmp_path)
     assert result["status"] == "error"
     assert "stop after the memory check" in result["reason"]
@@ -384,7 +385,7 @@ def test_bench_p2_worker_plan(
     assert (config.side, config.batch_size, config.repeat) == (512, 8, 1)
     # The needs read the headers of ViT-H+/16. The test gives the count, so it reads no file.
     monkeypatch.setattr("dinov3_apple.bench._parameter_count", lambda model_size: 840_592_640)
-    monkeypatch.setattr("dinov3_apple.mlx_weights.load_mlx_backbone", _fail_load)
+    monkeypatch.setattr("dinov3_apple.mlx_weights.load_mlx_backbone", fail_load)
     bench_mlx_port.dry_run(plan, "P2")
     lines = capsys.readouterr().out.strip().splitlines()
     workers = [line for line in lines if "ViT-H+/16" in line]
@@ -392,10 +393,6 @@ def test_bench_p2_worker_plan(
     for line in workers:
         cast = "-cast" in line
         assert f"need {7.12 if cast else 10.23:4.2f} GB" in line, line
-
-
-def _fail_load(*args: object, **kwargs: object) -> None:
-    raise AssertionError("the dry run loaded a model")
 
 
 def test_time_batch_mlx_moves_bf16_output() -> None:

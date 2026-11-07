@@ -1,10 +1,14 @@
 """The benchmark matrix, the time budget, the memory need, the input batch, the validity check,
-the summary statistics and the baseline rows (specs/03-baseline/plan.html).
+the summary statistics and the baseline rows (specs/03-baseline/plan.html). Also the bytes of
+each weight of a backend and the runner of one worker subprocess, which the scripts share.
 
 No torch import, so the mlx harness of Step 6 can reuse this module without the memory of torch in
 its footprint.
 """
 
+import json
+import subprocess
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from functools import cache
@@ -15,7 +19,7 @@ from safetensors import safe_open
 from dinov3_apple.flops import MODEL_SHAPES, tokens
 from dinov3_apple.hub import MODEL_IDS, parameter_count
 from dinov3_apple.machine import MachineState
-from dinov3_apple.memory import load_bytes
+from dinov3_apple.memory import load_bytes, replay_checks
 from dinov3_apple.parity import TEST_IMAGES, THRESHOLDS, Parity, measure_parity
 from dinov3_apple.stored import reference_path
 
@@ -36,6 +40,8 @@ DTYPE_OF_MODE = {
 }
 # Bytes per weight value. Autocast keeps the weights in fp32.
 WEIGHT_BYTES = {"fp32": 4, "fp16-cast": 2, "bf16-cast": 2, "fp16-autocast": 4, "bf16-autocast": 4}
+# The bytes of one value of each dtype of DTYPE_OF_MODE.
+DTYPE_BYTES = {"fp32": 4, "fp16": 2, "bf16": 2}
 
 # The factor on the activation terms of the memory need (Section 3.6). The build may only raise it.
 ACTIVATION_FACTOR = 1.0
@@ -220,6 +226,30 @@ def _parameter_count(model_size: str) -> int:
     return parameter_count(model_size)
 
 
+def bytes_per_weight(backend: str, dtype_mode: str) -> int:
+    """Return the bytes of each loaded weight of one backend in one dtype mode.
+
+    The run rule and the memory need of a load use this value (F20 of
+    specs/05-all-sizes/verify.html). mlx casts the weights to the matmul dtype at the load, so its
+    autocast modes have half weights. torch keeps fp32 weights in the autocast modes.
+
+    Args:
+        backend: "mlx", "torch-mps" or "torch-cpu".
+        dtype_mode: A key of DTYPE_OF_MODE.
+
+    Returns:
+        4 or 2.
+
+    Raises:
+        ValueError: For another backend.
+    """
+    if backend == "mlx":
+        return DTYPE_BYTES[DTYPE_OF_MODE[dtype_mode]]
+    if backend in ("torch-mps", "torch-cpu"):
+        return WEIGHT_BYTES[dtype_mode]
+    raise ValueError(f"unknown backend {backend!r}")
+
+
 def required_bench_bytes(config: BenchConfig, activation_factor: float = ACTIVATION_FACTOR) -> int:
     """Return the memory need of one configuration (Section 3.6 of the plan).
 
@@ -379,6 +409,49 @@ LINE_FIELDS = [
     "start_time",
     "time",
 ]
+
+
+def run_worker_subprocess(
+    command: list[str], env: Mapping[str, str], timeout_s: float, stderr_lines: int = 20
+) -> dict:
+    """Run one worker in a new subprocess and return its result.
+
+    The worker prints its result as a JSON line on stdout; the last JSON line counts. The
+    memory-check lines of the worker (send_checks_to) go to the log of the driver, with the time
+    of the worker, also after an error or a timeout. scripts/bench_mlx_port.py,
+    scripts/cross_check.py and scripts/benchmark.py share this runner (F20 of
+    specs/05-all-sizes/verify.html).
+
+    Args:
+        command: The command line of the worker.
+        env: The environment of the worker.
+        timeout_s: The time limit of the worker in seconds.
+        stderr_lines: The number of the last stderr lines in the reason of an error.
+
+    Returns:
+        The result of the worker. Else the status "error" with the reason: the timeout, or the
+        exit code and the last lines of the stderr of the worker.
+    """
+    try:
+        done = subprocess.run(
+            command,
+            check=False,
+            env=dict(env),
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
+        )
+    except subprocess.TimeoutExpired as error:
+        stderr = error.stderr or ""
+        replay_checks(stderr.decode() if isinstance(stderr, bytes) else stderr)
+        return {"status": "error", "reason": f"timeout after {error.timeout} s"}
+    replay_checks(done.stderr)
+    if done.returncode == 0:
+        for text in reversed(done.stdout.splitlines()):
+            if text.startswith("{"):
+                return json.loads(text)
+    tail = "\n".join(done.stderr.splitlines()[-stderr_lines:])
+    return {"status": "error", "reason": f"exit code {done.returncode}: {tail}"}
 
 
 def result_line(

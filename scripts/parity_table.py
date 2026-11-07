@@ -93,9 +93,10 @@ def summary_rows(lines: list[dict], kind: str) -> list[str]:
     return rows
 
 
-def _order(line: dict) -> tuple[int, int]:
-    """The position of the model size and the dtype mode of one line in MODEL_IDS and THRESHOLDS."""
-    return list(MODEL_IDS).index(line["model_size"]), list(THRESHOLDS).index(line["dtype_mode"])
+def table_order(model_size: str, dtype_mode: str) -> tuple[int, int]:
+    """Return the sort key of the rows of the tables: the position of the model size in MODEL_IDS
+    and of the dtype mode in THRESHOLDS. scripts/token_range_table.py uses it too."""
+    return list(MODEL_IDS).index(model_size), list(THRESHOLDS).index(dtype_mode)
 
 
 def stored_rows(lines: list[dict]) -> list[str]:
@@ -109,7 +110,12 @@ def stored_rows(lines: list[dict]) -> list[str]:
         for line in lines
         if line["kind"] in STORED_KINDS and line["status"] == "measured" and line.get("values")
     ]
-    selected.sort(key=lambda line: (*_order(line), STORED_KINDS.index(line["kind"])))
+    selected.sort(
+        key=lambda line: (
+            *table_order(line["model_size"], line["dtype_mode"]),
+            STORED_KINDS.index(line["kind"]),
+        )
+    )
     for line in selected:
         values = line["values"]
         rows.append(
@@ -123,7 +129,7 @@ def cross_check_rows(lines: list[dict]) -> list[str]:
     """Return one Markdown table row for each cross-check line (scripts/cross_check.py)."""
     selected = sorted(
         (line for line in lines if line["kind"] == "cross-check"),
-        key=lambda line: (*_order(line), line["config"]),
+        key=lambda line: (*table_order(line["model_size"], line["dtype_mode"]), line["config"]),
     )
     rows = []
     for line in selected:
@@ -155,12 +161,7 @@ def non_finite_section(mlx_lines: list[dict], torch_lines: list[dict]) -> tuple[
     mlx, torch_mps = non_finite_keys(mlx_lines), non_finite_keys(torch_lines)
     keys = sorted(
         mlx | torch_mps,
-        key=lambda key: (
-            NON_FINITE_KINDS.index(key[0]),
-            list(MODEL_IDS).index(key[1]),
-            list(THRESHOLDS).index(key[2]),
-            key[3],
-        ),
+        key=lambda key: (NON_FINITE_KINDS.index(key[0]), *table_order(key[1], key[2]), key[3]),
     )
     rows, differences = [], []
     for key in keys:

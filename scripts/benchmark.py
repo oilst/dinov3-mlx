@@ -26,7 +26,6 @@ os.environ.update(WATERMARKS)
 import argparse
 import json
 import logging
-import subprocess
 import sys
 from collections import Counter
 from dataclasses import asdict
@@ -45,6 +44,7 @@ from dinov3_apple.bench import (
     required_bench_bytes,
     result_line,
 )
+from dinov3_apple.bench import run_worker_subprocess as run_worker_command
 from dinov3_apple.hub import MODEL_IDS, WeightsNotFoundError
 from dinov3_apple.machine import (
     MachineStateError,
@@ -95,23 +95,7 @@ def run_worker_subprocess(config: BenchConfig) -> dict:
     A worker that exits with an error gives status "error" and the last lines of its stderr.
     """
     command = [sys.executable, __file__, "--worker", json.dumps(asdict(config))]
-    try:
-        done = subprocess.run(
-            command,
-            check=False,
-            env=os.environ | WATERMARKS,
-            capture_output=True,
-            text=True,
-            timeout=WORKER_TIMEOUT_S,
-        )
-    except subprocess.TimeoutExpired as error:
-        return {"status": "error", "reason": f"timeout after {error.timeout} s"}
-    if done.returncode == 0:
-        for text in reversed(done.stdout.splitlines()):
-            if text.startswith("{"):
-                return json.loads(text)
-    tail = "\n".join(done.stderr.splitlines()[-STDERR_LINES:])
-    return {"status": "error", "reason": f"exit code {done.returncode}: {tail}"}
+    return run_worker_command(command, os.environ | WATERMARKS, WORKER_TIMEOUT_S, STDERR_LINES)
 
 
 def select_configs(args: argparse.Namespace, lines: list[dict]) -> list[BenchConfig]:

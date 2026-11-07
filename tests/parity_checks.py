@@ -1,5 +1,7 @@
-"""Shared checks of the parity tests of the backends torch-mps and mlx."""
+"""Shared checks of the parity tests of the backends torch-mps and mlx, and the range of the
+load peak of one mlx load."""
 
+import math
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from functools import cache
@@ -8,10 +10,11 @@ import numpy as np
 import pytest
 from safetensors import safe_open
 
-from dinov3_apple.bench import WEIGHT_BYTES
+from dinov3_apple.bench import bytes_per_weight
 from dinov3_apple.hub import parameter_count, weights_dir
 from dinov3_apple.memory import LOAD_RATIO, RunRuleError, check_run_rule
-from dinov3_apple.mlx_model import MLX_DTYPE_MODES
+from dinov3_apple.mlx_model import MLX_DTYPE_MODES, MlxBackbone, linear_parameter_names
+from dinov3_apple.mlx_weights import map_key
 from dinov3_apple.parity import EXPECTED_FP16_OVERFLOW, FP16_OVERFLOW, THRESHOLDS, Parity
 from dinov3_apple.stored import configurations
 
@@ -85,30 +88,41 @@ def run_rule_skip(model_size: str, dtype_mode: str, backend: str) -> str | None:
         dtype_mode: A key of THRESHOLDS.
         backend: "mlx" or "torch-mps".
     """
-    if backend == "mlx":
-        bytes_per_weight = MLX_DTYPE_MODES[dtype_mode].matmul.size
-    else:
-        bytes_per_weight = WEIGHT_BYTES[dtype_mode]
     try:
-        check_run_rule(model_size, bytes_per_weight, f"{model_size} {backend} {dtype_mode}")
+        check_run_rule(
+            model_size,
+            bytes_per_weight(backend, dtype_mode),
+            f"{model_size} {backend} {dtype_mode}",
+        )
     except RunRuleError as error:
         return str(error)
     return None
 
 
 @cache
+def header_shapes(model_size: str) -> dict[str, tuple[int, ...]]:
+    """Return the shape of each tensor of one model size, from the safetensors headers.
+
+    The read takes the headers only, no tensor data. All tensors of the files are F32.
+
+    Raises:
+        WeightsNotFoundError: If the weights are not on this Mac.
+    """
+    shapes = {}
+    for file in sorted(weights_dir(model_size).glob("*.safetensors")):
+        with safe_open(file, "np") as tensors:
+            for name in tensors.keys():  # noqa: SIM118 (safe_open is not iterable)
+                shapes[name] = tuple(tensors.get_slice(name).get_shape())
+    return shapes
+
+
 def largest_tensor_bytes(model_size: str) -> int:
     """Return the bytes of the largest fp32 tensor of one model size, from the safetensors headers.
 
     Raises:
         WeightsNotFoundError: If the weights are not on this Mac.
     """
-    largest = 0
-    for file in sorted(weights_dir(model_size).glob("*.safetensors")):
-        with safe_open(file, "np") as tensors:
-            for name in tensors.keys():  # noqa: SIM118 (safe_open is not iterable)
-                largest = max(largest, 4 * int(np.prod(tensors.get_slice(name).get_shape())))
-    return largest
+    return max(4 * math.prod(shape) for shape in header_shapes(model_size).values())
 
 
 def load_peak_target(model_size: str, dtype_mode: str) -> int:
@@ -121,3 +135,28 @@ def load_peak_target(model_size: str, dtype_mode: str) -> int:
     """
     weight_bytes = parameter_count(model_size) * MLX_DTYPE_MODES[dtype_mode].matmul.size
     return round(LOAD_RATIO * weight_bytes) + largest_tensor_bytes(model_size)
+
+
+def load_peak_lower_bound(model_size: str, model: MlxBackbone) -> int:
+    """Return the lower bound of the load peak of one mlx load (F1 of
+    specs/05-all-sizes/verify.html).
+
+    The load keeps each mapped tensor, evaluated in its dtype, until load_weights. So the load peak
+    is at least the bytes of the mapped tensors of the headers, without the dropped mask token: the
+    matmul dtype for the weight and the bias of each nn.Linear, the stream dtype for the other
+    parameters. A load that does not evaluate the tensors stays below this bound.
+
+    Args:
+        model_size: A key of MODEL_IDS.
+        model: The loaded backbone. Its dtype mode and its nn.Linear modules give the dtypes.
+
+    Raises:
+        WeightsNotFoundError: If the weights are not on this Mac.
+    """
+    dtypes = MLX_DTYPE_MODES[model.dtype_mode]
+    linear = linear_parameter_names(model)
+    total = 0
+    for name, shape in header_shapes(model_size).items():
+        if (key := map_key(name)) is not None:
+            total += math.prod(shape) * (dtypes.matmul if key in linear else dtypes.stream).size
+    return total

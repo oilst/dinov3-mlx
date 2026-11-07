@@ -10,23 +10,16 @@ from typing import Any
 
 import numpy as np
 import pytest
+from fakes import VIT7B16_PARAMETER_COUNT, fail_if_called
 from parity_checks import check_finite, run_rule_skip
 
 from dinov3_apple.hub import MODEL_IDS
 from dinov3_apple.memory import InsufficientMemoryError, RunRuleError
-from dinov3_apple.parity import FP16_OVERFLOW, THRESHOLDS
-from dinov3_apple.reference import LOAD_RATIO, load_torch_backbone
+from dinov3_apple.parity import EXPECTED_FP16_OVERFLOW, FP16_OVERFLOW, THRESHOLDS
+from dinov3_apple.reference import load_torch_backbone
 
-VIT7B16_PARAMETER_COUNT = 6_716_035_072
 # The torch dtype modes with fp32 weights: the run rule refuses ViT-7B/16 in each of them.
 FP32_WEIGHT_MODES = ["fp32", "fp16-autocast", "bf16-autocast"]
-
-
-def _fail(name: str) -> Callable[..., None]:
-    def fail(*args: object, **kwargs: object) -> None:
-        raise AssertionError(f"{name} was called")
-
-    return fail
 
 
 @pytest.mark.parametrize("dtype_mode", [*FP32_WEIGHT_MODES, "bf16-cast"])
@@ -38,10 +31,12 @@ def test_load_torch_backbone_refuses_7b_fp32_weights(
     and stops at the memory check."""
     # The lines of a monkeypatched memory check must not reach memory-checks.log of the session.
     monkeypatch.setattr(logging.getLogger("dinov3_apple.memory"), "handlers", [])
-    monkeypatch.setattr("dinov3_apple.reference.parameter_count", _fail("parameter_count"))
-    monkeypatch.setattr("dinov3_apple.memory.available_memory_bytes", _fail("memory check"))
+    monkeypatch.setattr("dinov3_apple.reference.parameter_count", fail_if_called("parameter_count"))
     monkeypatch.setattr(
-        "dinov3_apple.reference.DINOv3ViTModel.from_pretrained", _fail("from_pretrained")
+        "dinov3_apple.memory.available_memory_bytes", fail_if_called("memory check")
+    )
+    monkeypatch.setattr(
+        "dinov3_apple.reference.DINOv3ViTModel.from_pretrained", fail_if_called("from_pretrained")
     )
     if dtype_mode in FP32_WEIGHT_MODES:
         with pytest.raises(RunRuleError, match="ViT-7B/16"):
@@ -56,16 +51,20 @@ def test_load_torch_backbone_refuses_7b_fp32_weights(
 
 
 def test_make_reference_refuses_7b(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """T12: make_reference.py records a skip with the run-rule reason and starts no subprocess."""
+    """T12: make_reference.py records a skip with the run-rule reason and starts no subprocess.
+
+    The run rule of each requested model size comes before load_ratio, which reads runs.jsonl and
+    the headers of earlier model sizes (F11 of specs/05-all-sizes/verify.html).
+    """
     import make_reference
 
     runs_log = tmp_path / "runs.jsonl"
     monkeypatch.setattr(make_reference, "RUNS_LOG", runs_log)
     # load_ratio binds its default RUNS_LOG when Python defines it, so the test replaces it.
-    monkeypatch.setattr(make_reference, "load_ratio", lambda: LOAD_RATIO)
-    monkeypatch.setattr(make_reference, "parameter_count", _fail("parameter_count"))
-    monkeypatch.setattr(make_reference, "check_free_memory", _fail("memory check"))
-    monkeypatch.setattr(subprocess, "run", _fail("subprocess.run"))
+    monkeypatch.setattr(make_reference, "load_ratio", fail_if_called("load_ratio"))
+    monkeypatch.setattr(make_reference, "parameter_count", fail_if_called("parameter_count"))
+    monkeypatch.setattr(make_reference, "check_free_memory", fail_if_called("memory check"))
+    monkeypatch.setattr(subprocess, "run", fail_if_called("subprocess.run"))
     make_reference.run_all(["ViT-7B/16"])
     lines = [json.loads(text) for text in runs_log.read_text().splitlines()]
     assert len(lines) == 1
@@ -73,6 +72,21 @@ def test_make_reference_refuses_7b(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     assert lines[0]["status"] == "skipped"
     assert "CLAUDE.md run rules" in lines[0]["reason"]
     assert "fp32_weight_bytes" not in lines[0]
+
+    # ViT-L/16 passes the run rule and needs the load ratio. The skip line of ViT-7B/16 is
+    # already in runs.jsonl when load_ratio runs.
+    class Stop(Exception):
+        pass
+
+    def stop() -> float:
+        raise Stop
+
+    runs_log.unlink()
+    monkeypatch.setattr(make_reference, "load_ratio", stop)
+    with pytest.raises(Stop):
+        make_reference.run_all(["ViT-L/16", "ViT-7B/16"])
+    lines = [json.loads(text) for text in runs_log.read_text().splitlines()]
+    assert [(line["model_size"], line["status"]) for line in lines] == [("ViT-7B/16", "skipped")]
 
 
 def test_run_rule_skip() -> None:
@@ -93,7 +107,10 @@ def test_run_rule_skip() -> None:
 
 
 def test_check_finite_marks_only_listed_pairs() -> None:
-    """T14: a non-finite output xfails only for a pair of EXPECTED_FP16_OVERFLOW."""
+    """T14: a non-finite output xfails only for a pair of EXPECTED_FP16_OVERFLOW. The list holds
+    the two pairs of Table 6 of the plan; a new pair needs a change of this test with its
+    evidence (F8 of specs/05-all-sizes/verify.html)."""
+    assert EXPECTED_FP16_OVERFLOW == {("ViT-L/16", "fp16-cast"), ("ViT-H+/16", "fp16-cast")}
     notes: list[tuple[str, str]] = []
 
     def note_of(*pair: str) -> Callable[[], None]:
@@ -130,8 +147,10 @@ def test_backbone_slot_skips_a_run_rule_error(
 ) -> None:
     """T15: the backbone slot skips ViT-7B/16 in fp32 on mlx with the run-rule reason, before any
     file read and without a memory-check line."""
-    monkeypatch.setattr("dinov3_apple.mlx_weights.parameter_count", _fail("parameter_count"))
-    monkeypatch.setattr("dinov3_apple.mlx_weights.weights_dir", _fail("weights_dir"))
+    monkeypatch.setattr(
+        "dinov3_apple.mlx_weights.parameter_count", fail_if_called("parameter_count")
+    )
+    monkeypatch.setattr("dinov3_apple.mlx_weights.weights_dir", fail_if_called("weights_dir"))
     caplog.set_level(logging.INFO, logger="dinov3_apple.memory")
     with pytest.raises(pytest.skip.Exception, match="CLAUDE.md run rules"):
         backbone(model_size, "mlx", dtype_mode)

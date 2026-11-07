@@ -640,18 +640,18 @@ a { color: var(--accent); }
 
   <h3>9.3 <code>reference_tokens</code> of <code>bench.py</code></h3>
   <p>Each benchmark worker checks its first output against the reference file. This is the validity check of Step 3 (<code>check_validity</code> in <code>bench.py</code>). In Step 3 the reader of the reference tokens was the private function <code>_reference_tokens</code> in <code>torch_bench.py</code>, which imports torch. The review of the Step 4 build moved it to <code>bench.py</code> as the public function <code>reference_tokens</code> (review fix R6 in <code>specs/04-mlx-port/verify.html</code>). <code>bench.py</code> imports no torch. So the <code>mlx</code> worker of <code>scripts/bench_mlx_port.py</code> and the <code>torch-mps</code> worker of <code>torch_bench.py</code> (line 141) use the same reader.</p>
-  <pre class="code"><code><span class="ln">263</span>def reference_tokens(model_size: str, side: int) -&gt; np.ndarray | None:
-<span class="ln">264</span>    &quot;&quot;&quot;Return the reference tokens of image 0 at side x side px. None if the file is missing.&quot;&quot;&quot;
-<span class="ln">265</span>    path = reference_path(model_size)
-<span class="ln">266</span>    if not path.exists():
-<span class="ln">267</span>        return None
-<span class="ln">268</span>    with safe_open(path, &quot;np&quot;) as tensors:
-<span class="ln">269</span>        return tensors.get_tensor(f&quot;{TEST_IMAGES[0]}/{side}x{side}/tokens&quot;)</code></pre>
-  <p class="caption"><b>Listing 12.</b> <code>src/dinov3_apple/bench.py</code>, lines 263–269.</p>
+  <pre class="code"><code><span class="ln">293</span>def reference_tokens(model_size: str, side: int) -&gt; np.ndarray | None:
+<span class="ln">294</span>    &quot;&quot;&quot;Return the reference tokens of image 0 at side x side px. None if the file is missing.&quot;&quot;&quot;
+<span class="ln">295</span>    path = reference_path(model_size)
+<span class="ln">296</span>    if not path.exists():
+<span class="ln">297</span>        return None
+<span class="ln">298</span>    with safe_open(path, &quot;np&quot;) as tensors:
+<span class="ln">299</span>        return tensors.get_tensor(f&quot;{TEST_IMAGES[0]}/{side}x{side}/tokens&quot;)</code></pre>
+  <p class="caption"><b>Listing 12.</b> <code>src/dinov3_apple/bench.py</code>, lines 293–299.</p>
   <ul>
-    <li><b>Line 265.</b> <code>reference_path</code> of <code>stored.py</code> (Listing 11) gives the reference file of the model size.</li>
-    <li><b>Lines 266–267.</b> Without a reference file the function gives <code>None</code>. <code>check_validity</code> then checks only that the output is finite, with the note "finite only: no reference file". The reference files are in <code>tests/fixtures/generated/</code>, which git ignores. So a new clone of the repo has no reference file until <code>scripts/make_reference.py</code> runs.</li>
-    <li><b>Lines 268–269.</b> The function reads one tensor: image 0 of <code>TEST_IMAGES</code> (<code>iss-kibo-lab</code>) at side × side px, for example the key <code>iss-kibo-lab/224x224/tokens</code>. The shape is (1 + 4 + N, D). <code>safe_open</code> reads only this tensor, not the whole file.</li>
+    <li><b>Line 295.</b> <code>reference_path</code> of <code>stored.py</code> (Listing 11) gives the reference file of the model size.</li>
+    <li><b>Lines 296–297.</b> Without a reference file the function gives <code>None</code>. <code>check_validity</code> then checks only that the output is finite, with the note "finite only: no reference file". The reference files are in <code>tests/fixtures/generated/</code>, which git ignores. So a new clone of the repo has no reference file until <code>scripts/make_reference.py</code> runs.</li>
+    <li><b>Lines 298–299.</b> The function reads one tensor: image 0 of <code>TEST_IMAGES</code> (<code>iss-kibo-lab</code>) at side × side px, for example the key <code>iss-kibo-lab/224x224/tokens</code>. The shape is (1 + 4 + N, D). <code>safe_open</code> reads only this tensor, not the whole file.</li>
     <li><b>The use.</b> <code>check_validity</code> joins the frame embedding and the patch embeddings of image 0 of the first batch with the 4 register rows of the reference. Then <code>measure_parity</code> compares this token sequence with the reference tokens, against the thresholds of the dtype mode. In the Step 4 benchmark all 12 workers (6 <code>mlx</code>, 6 <code>torch-mps</code>) gave "parity passes". The smallest of their parity values was 1 − 1.6e-11 (<code>mlx</code>, batch size 1), from <code>results/bench-mlx-port.jsonl</code>.</li>
     <li><b>The test.</b> <code>test_reference_tokens_read_image_0_or_none</code> in <code>tests/test_bench.py</code> writes a small file with three keys. It expects the tokens of image 0 at 224 px and at 448 px, and <code>None</code> for a missing file.</li>
   </ul>
