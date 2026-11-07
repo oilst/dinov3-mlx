@@ -1,0 +1,476 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Step 4 MLX port: Verify</title>
+<style>
+/* Spec page. White page, black text, no dark mode. */
+:root { --bg: #ffffff; --fg: #111414; --muted: #4a5655; --rule: #d6dedd; --panel: #f5f8f7; --accent: #057379; --pass: #1d7a3a; --fail: #b3261e; --partial: #8a5a00; --pending: #4a5655; color-scheme: light; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif; }
+main { max-width: 64rem; margin: 0 auto; padding: 40px 16px 64px; display: grid; gap: 1.75rem; }
+h1 { font-size: 1.9rem; line-height: 1.15; margin: 0; }
+h2 { font-size: 1.3rem; margin: 0; }
+h3 { font-size: 1.05rem; margin: 0; }
+section { display: grid; gap: 0.8rem; min-width: 0; }
+p, ul, ol { margin: 0; max-width: 48rem; }
+li + li { margin-top: 0.25rem; }
+code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.86em; }
+pre { margin: 0; background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 0.8rem 1rem; overflow-x: auto; }
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 0.92rem; }
+th, td { text-align: left; vertical-align: top; padding: 0.45rem 0.7rem 0.45rem 0; border-bottom: 1px solid var(--rule); }
+th { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); border-bottom: 1.5px solid var(--fg); }
+td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.caption { font-size: 0.88rem; color: var(--muted); }
+.pass { color: var(--pass); font-weight: 600; }
+.fail { color: var(--fail); font-weight: 600; }
+.partial { color: var(--partial); font-weight: 600; }
+.pending { color: var(--pending); font-weight: 600; font-style: italic; }
+figure { margin: 0; display: grid; gap: 0.5rem; }
+figure svg { width: 100%; height: auto; max-width: 760px; border: 1px solid var(--rule); border-radius: 6px; background: #ffffff; }
+a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+<header>
+  <h1>Step 4 MLX port: Verify</h1>
+  <p>Roadmap step 4. Status: verified. Date: 2026-11-07. Verifier: a separate agent, not the agent that built the step. Build commit: <code>c212226</code> ("Step 4 build: ViT-S/16 in MLX, key map and fp32 parity").</p>
+</header>
+
+<section id="summary">
+  <h2>1 Summary</h2>
+  <p>This file checks the 19 acceptance criteria of <code>specs/04-mlx-port/plan.html</code> (Table 11) against build commit <code>c212226</code>. The verifier read the spec folder, the diff and the hand-over note of the build. The verifier ran ruff and both test sessions again. It ran the benchmark again into a scratch file and did six own checks (Section 5). The verifier did not change <code>src/</code>, <code>scripts/</code>, <code>tests/</code> or <code>results/</code>.</p>
+  <p><b>Result:</b> <span id="result-line">16 rows pass, 1 row is partial (AC11), 0 rows fail, 2 rows are not in the scope of Verify (AC18, AC19).</span></p>
+  <ul>
+    <li><b>Parity.</b> On all 12 configurations, ViT-S/16 on <code>mlx</code> in fp32 with TF32 off agrees with the reference output to 1 &minus; 3.1e-11 or better. This is the worst patch 1st percentile. The own parity code of the verifier gives the same values to the last digit. Five more inputs have odd input resolutions (16 &times; 16 px to 48 &times; 800 px). These inputs and two batches of three different images agree to 1 &minus; 4.6e-10 or better.</li>
+    <li><b>Benchmark (report only).</b> Median paired ratio mlx / torch-mps over the 6 rounds of two benchmark runs: batch size 8: 1.39 (range 1.36 to 1.44); batch size 1: 3.14 (range 2.84 to 3.24). The verifier run gives the same median as the build run within 2.1 %.</li>
+    <li><b>TF32.</b> With TF32 on, 1 &minus; cosine increases by a factor of about 1e6. The parity still passes the fp32 thresholds by a factor of 4 or more (Section 5.2).</li>
+    <li><b>Findings.</b> Section 7 gives 11 findings: 1 medium, 6 low, 4 for information. F1 (medium): after <code>nn.quantize</code>, the pixel cast of <code>Embeddings</code> casts the pixels to <code>uint32</code>. This does not affect Step 4, but it breaks the quantized weights of Step 6 without an error message. A second check of the code confirmed F1 and F4 with the small model. AC11 is partial because the mlx benchmark workers do not log their memory check (F6).</li>
+  </ul>
+</section>
+
+<section id="method">
+  <h2>2 Method</h2>
+  <p>The verifier read <code>CLAUDE.md</code>, <code>GLOSSARY.md</code>, <code>explore.html</code> and <code>plan.html</code>. It also read <code>specs/03-baseline/verify.html</code> (the model for this file), the diff <code>git diff 9334058 c212226</code> and the hand-over note of the build. The range <code>9334058..c212226</code> also holds two Step 3 commits (<code>1d152f1</code>, <code>6c97c57</code>). So the verifier read the code of the build in <code>git diff 6c97c57 c212226</code> (24 files, +2,650 &minus;211 lines). The working tree was clean at <code>c212226</code> at the start. The verifier treated each number of the hand-over note as a claim and checked it (Section 8).</p>
+  <p>The verifier ran one heavy job at a time. Before each job, it read the free memory with <code>available_memory_bytes</code> and looked for other model loads or benchmarks in the process list. It saw none. Before the benchmark, it copied the git-ignored folder <code>tests/fixtures/generated/bench/mlx-port/</code> of the build to its scratch folder. After the benchmark, it put the copy back. The checksums of <code>results/bench-mlx-port.jsonl</code> and <code>results/parity-mlx.md</code> are the same before and after. Table 1 gives the order. The Mac ran on AC power with the 94 W adapter, Low Power Mode off.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>No.</th><th>Heavy job</th><th>Start (local time)</th><th>Free memory before</th><th>Wall time</th></tr></thead>
+      <tbody>
+        <tr><td>1</td><td><code>uv run pytest -v -rs</code> (default test session)</td><td>01:50:07</td><td class="num">37.5 GB</td><td class="num">19.2 s (pytest 14.7 s)</td></tr>
+        <tr><td>2</td><td><code>DINOV3_SLOW=1 uv run pytest -v -rs</code> (slow test session)</td><td>01:50:40</td><td class="num">33.8 GB</td><td class="num">51.4 s (pytest 46.8 s)</td></tr>
+        <tr><td>3</td><td>Own check (a): <code>run_mlx</code>, TF32 off, 12 configurations, batch of 8, hidden states</td><td>01:54:03</td><td class="num">38.5 GB</td><td class="num">0.2 s</td></tr>
+        <tr><td>4</td><td>Own check (b): the same with <code>MLX_ENABLE_TF32=1</code></td><td>01:54:12</td><td class="num">38.9 GB</td><td class="num">1.0 s</td></tr>
+        <tr><td>5</td><td>Own check (d), part 1: Hugging Face backbone on torch-cpu, fp32, 7 odd inputs</td><td>01:55:15</td><td class="num">38.8 GB</td><td class="num">4 s</td></tr>
+        <tr><td>6</td><td>Own check (d), part 2: <code>run_mlx</code> on the same inputs</td><td>01:55:19</td><td class="num">38.9 GB</td><td class="num">&lt; 1 s</td></tr>
+        <tr><td>7</td><td><code>bench_mlx_port.py --results &lt;scratch&gt;/bench.jsonl</code> (12 workers)</td><td>01:55:26</td><td class="num">38.9 GB</td><td class="num">2 min 57 s</td></tr>
+        <tr><td>8</td><td>Check of F1: <code>nn.quantize</code> on ViT-S/16 (two loads, one after the other)</td><td>02:02:23</td><td class="num">38.1 GB</td><td class="num">about 1 s</td></tr>
+        <tr><td>9</td><td>Check of F1: the effect of the pixel cast alone</td><td>02:02:35</td><td class="num">38.1 GB</td><td class="num">&lt; 1 s</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 1.</b> Heavy jobs of the verifier, in order. Each job started after the previous job ended. Each model load ran the memory check of its loader (need 4.1 GB). The benchmark driver also checks the memory before each worker. Light jobs do not load the gated weights. The verifier ran these light jobs: ruff, the collection of the test ids, the key-map check (header only) and the RoPE check. It also ran the TF32 parse check with 10 processes of one 3 MB matmul each. The last light jobs were the hook check with the small model and <code>write_table</code> of <code>parity_table.py</code>. The check of the code findings F1 and F4 with the small model is also a light job (Section 7).</p>
+  <p>Own checks of the verifier, in addition to the tests (Section 5):</p>
+  <ol type="a">
+    <li><code>run_mlx</code> against the stored reference files for the 12 configurations, with own parity code. The own code computes the cosine of each token in float64 and reads the safetensors files itself. Also the batch of 8 and the 13 hidden states.</li>
+    <li>The same with <code>MLX_ENABLE_TF32=1</code> and <code>load_mlx_backbone(tf32=True)</code>, report only.</li>
+    <li>The key map on the header of the real <code>model.safetensors</code>, against the parameter tree of the real <code>config.json</code>. The script reads the header as raw bytes (8-byte length, then JSON).</li>
+    <li>Five single inputs with odd input resolutions and two batches of three different images, against the Hugging Face backbone on torch-cpu in fp32.</li>
+    <li>The RoPE tables of 8 non-square and small grids, head dimension 64 and 128, against <code>DINOv3ViTRopePositionEmbedding</code>.</li>
+    <li>Extra checks. <code>tf32_enabled</code> against the measured TF32 state for 10 values of <code>MLX_ENABLE_TF32</code>. The RoPE cache with <code>set_dtype</code>, <code>nn.quantize</code>, <code>mx.compile</code> and <code>nn.value_and_grad</code>. The torch-mps test ids before and after the build. <code>parity-mlx.md</code> made again.</li>
+  </ol>
+  <p>Limits. The build is one commit, so the verifier cannot check that each test failed first (red, then green). During the verification, other agents did the Learn and Close stages. They wrote <code>docs/learn/04-*.html</code> and the ADR files <code>docs/adr/0005-*.md</code> and <code>docs/adr/0006-*.md</code>. They also changed <code>GLOSSARY.md</code> and <code>docs/plan.html</code>. The verifier read <code>GLOSSARY.md</code> only at <code>c212226</code>. It did not read the later changes and did not change these files. The two new ADR files are the reason that <code>ruff format --check</code> counts 73 files and not 71: ruff 0.17.4 also counts Markdown files.</p>
+</section>
+
+<section id="criteria">
+  <h2>3 Acceptance criteria</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>No.</th><th>Criterion</th><th>Target</th><th>Measured by the verifier</th><th>Result</th></tr></thead>
+      <tbody>
+        <tr><td>AC1</td><td>Parity of ViT-S/16 on mlx in fp32 (GPU, TF32 off), 12 configurations</td><td>frame, patch mean, patch 1st percentile &ge; 0.9999 in each of 12</td><td>12 of 12 configurations measured, 0 non-finite. Minimum over the 12: frame 1 &minus; 1.69e-11 (iss-conference/512x512), patch mean 1 &minus; 7.92e-12 (iss-kibo-lab/224x400), patch 1st percentile 1 &minus; 3.13e-11 (iss-conference/512x512). Patch minimum 1 &minus; 6.10e-10 (forest/448x448, report only). Both test sessions and the own parity code (Section 5.1) give the same values. <code>parity-mlx.md</code>, made again from the test lines, is byte-identical to the committed file.</td><td class="pass">pass</td></tr>
+        <tr><td>AC2</td><td>Batch consistency: a batch of 8 against 8 single runs</td><td>the same three thresholds</td><td>Frame 1 &minus; 2.5e-12, patch mean 1 &minus; 2.1e-12, patch 1st percentile 1 &minus; 7.7e-12; largest difference 6.9e-6. Own check: the same values; the batch against the reference output gives frame 1 &minus; 1.2e-11. Two batches of three different images: Section 5.4.</td><td class="pass">pass</td></tr>
+        <tr><td>AC3</td><td>Stored hidden states, each part alone</td><td>14 checks; min token cosine &ge; 0.99999; prefix rows of state 0 exact</td><td>14 of 14 green. Embeddings: prefix rows exact, min token cosine 1 &minus; 9.5e-13. Blocks 0 to 11 alone: worst min token cosine 1 &minus; 1.68e-11 (block 0); largest difference 1.7e-5 (block 3) to 5.5e-4 (block 11); largest relative difference &le; 3.7e-6. Final layer norm: 1 &minus; 8.8e-15.</td><td class="pass">pass</td></tr>
+        <tr><td>AC4</td><td>Stored hidden states in a chain</td><td>13 states, each &ge; THRESHOLDS["fp32"]; largest difference recorded</td><td>13 of 13 states pass. Worst frame 1 &minus; 6.8e-12 (state 12), worst patch 1st percentile 1 &minus; 5.5e-11 (state 11). Largest difference 1.2e-5 (state 0) to 1.2e-3 (state 12); largest relative difference 7.9e-6 (state 1). The register tokens reach about 1,700, so the absolute differences grow with the depth.</td><td class="pass">pass</td></tr>
+        <tr><td>AC5</td><td>RoPE tables against the Hugging Face tables</td><td>six grids: &le; 1e-6; rows 0 to 4 exact; fp32</td><td>cos 1.19e-7 and sin 5.96e-8 on each of the 6 grids; rows 0 to 4 exact; fp32; shape (5 + N, 64). Own check on 8 more grids with head dimension 64 and 128: at most 1.19e-7 (Section 5.5).</td><td class="pass">pass</td></tr>
+        <tr><td>AC6</td><td>RoPE tables against the Meta formula (report only)</td><td>6 grids recorded; angle within 5 % of 0.0079 rad (14 &times; 14) and 0.0083 rad (32 &times; 32)</td><td>Largest angle difference: 14 &times; 14: 0.00791 rad (+0.2 %); 32 &times; 32: 0.00825 rad (&minus;0.5 %); 28 &times; 28: 0.00822; 14 &times; 25: 0.00818; 14 &times; 19 and 19 &times; 14: 0.00807. cos difference up to 0.0082, sin difference up to 0.0059.</td><td class="pass">pass (report only)</td></tr>
+        <tr><td>AC7</td><td>Part tests</td><td>11 parts and 5 modules within plan Table 7; LayerScale difference 0</td><td>norm1 7.2e-7, qkv_proj 5.0e-6, rope 0, sdpa 1.9e-6, o_proj 4.3e-6, layer_scale1 0, norm2 7.2e-7, ff_in 5.0e-6, activation 7.2e-7, ff_out 8.3e-6, layer_scale2 0. Patch embedding 8.8e-6 / 6.0e-6 / 5.7e-6 (3 shapes), prefix rows exact. Attention 4.5e-6 / 3.6e-6. MLP 8.8e-6. GELU 7.2e-7 (tanh form 4.7e-4). Block 3.6e-6 / 3.6e-6. Final layer norm 9.5e-7. The values are the same in both test sessions. Smallest margin: the patch embedding, 8.8e-6 against 1e-5 (F11).</td><td class="pass">pass</td></tr>
+        <tr><td>AC8</td><td>SDPA kernel against NumPy float64</td><td>&le; 5e-6</td><td>7.8e-7 for (2, 6, 201, 64); 1.3e-6 for (1, 6, 1029, 64). Default device: GPU.</td><td class="pass">pass</td></tr>
+        <tr><td>AC9</td><td>Small model, end to end</td><td>tokens and hidden states &le; 5e-5; output contract of run_torch</td><td>Tokens 8.8e-6 / 7.1e-6 / 5.2e-6 (3 pixel shapes); hidden states 6.7e-6 / 6.4e-6 (224 &times; 304, 304 &times; 224). T19: an fp32 <code>np.ndarray</code> of shape (B, 5 + N, D); <code>split_tokens</code> gives (B, D) and (B, Hp, Wp, D); 40 parameters after a forward pass.</td><td class="pass">pass</td></tr>
+        <tr><td>AC10</td><td>The key map is complete</td><td>211 &rarr; 210; 1 dropped; 0 unknown, 0 missing, 0 shape differences; both spellings</td><td>T1, T2, T3 green. Own read of the raw header: 211 tensors, all F32, 21,596,544 values; 210 mapped names, each equal to its file name; dropped: <code>embeddings.mask_token</code>; 0 unknown, 0 missing, 0 extra, 0 shape differences; the patch weight (384, 3, 16, 16) becomes (384, 768). The key map also accepts some names that are not in a DINOv3 backbone (F4); the strict load stops them.</td><td class="pass">pass</td></tr>
+        <tr><td>AC11</td><td>Load: strict load, memory check, MLX memory limit, evaluated parameters</td><td>log line "ViT-S/16 mlx fp32" before each mlx load; limit = need = 4.10 GB; strict=True</td><td>T6, T7, T7b green. <code>memory-checks.log</code> has the line "memory check: ViT-S/16 mlx fp32: needs 4.1 GB, &hellip; ok" before each mlx load of a test session. There are 5 lines from the test sessions of the build (01:10:54, 01:15:14, 01:15:39, 01:42:02, 01:42:22). There are 2 lines from the test sessions of the verifier (01:50:13, 01:50:47). The plan checks the log line with <code>memory-checks.log</code>, and only the test sessions write this file. The mlx workers of the benchmark load the model 18 times, 6 times in each benchmark run. The three benchmark runs are build run 1, build run 2 and the verifier run. These 18 loads write no line "ViT-S/16 mlx fp32", because <code>worker_main</code> configures no logging (F6). Their memory check runs, and the driver writes its own line before each worker. Limit = need = 4,103,663,411 bytes: T7b, <code>mx.get_memory_limit()</code> in the 6 mlx lines of the committed file and of the verifier run, and own check (a). <code>strict=True</code> at <code>mlx_weights.py:144</code>; <code>mx.eval(model.parameters())</code> at <code>:145</code>. Result: the test-session loads pass; the log-line clause fails for the 18 benchmark worker loads.</td><td class="partial">partial</td></tr>
+        <tr><td>AC12</td><td>TF32: tests with TF32 off; a mismatch stops the load; the probe records both errors</td><td>T21 and T6 green; 2 values, about 1e-7 (off) and 1e-4 (on)</td><td>T21 and T6 green. Probe in both test sessions of the verifier: off 7.80e-7, on 7.17e-4 (factor 919). The values are about 8 times the "about" values of the plan (F9). Own check: <code>tf32_enabled()</code> agrees with the measured TF32 state for 10 of 10 values of <code>MLX_ENABLE_TF32</code> (Table 10).</td><td class="pass">pass</td></tr>
+        <tr><td>AC13</td><td>No torch in the mlx modules and the mlx benchmark workers</td><td>torch and transformers not in sys.modules; torch_imported false in 6 mlx lines</td><td>T22 green. <code>torch_imported</code> is false in 6 of 6 mlx lines of the committed file and of the verifier run, and true in the 12 torch-mps lines. T25 shows that the dry run imports neither torch nor mlx.core.</td><td class="pass">pass</td></tr>
+        <tr><td>AC14</td><td>The interfaces of Steps 2 and 3 stay the same</td><td>old imports work; the same torch-mps test ids</td><td>T23 green. Test ids of <code>test_torch_mps_parity.py</code> at <code>6c97c57</code> and at <code>c212226</code>: 130 = 130 (default) and 390 = 390 (<code>DINOV3_SLOW=1</code>), 0 differences. Each name that a file of the repo imports from <code>reference.py</code>, <code>preprocess.py</code>, <code>bench.py</code> or <code>torch_bench.py</code> still imports. Some incidental names are gone (F10).</td><td class="pass">pass</td></tr>
+        <tr><td>AC15</td><td>Run rules</td><td>0 violations; no overlap of the test sessions with the weights and the benchmark workers; T24 before the first model load</td><td>0 violations found. Build, local time: test sessions with the weights 01:10:00 to 01:10:56, 01:15:07 to 01:16:22 and 01:41:55 to 01:43:01; benchmark runs 01:11:48 to 01:14:45 and 01:44:40 to 01:47:37 (<code>driver.log</code>); no overlap. 0 time overlaps of the 12 workers in each benchmark run. <code>mlx_memory_limit_bytes</code> 4,103,663,411 in the 6 mlx lines; <code>mps_watermarks</code> 0.8 and 0.6 in the 6 torch-mps lines, null in the mlx lines. T24 is item 5 and the first model load is item 87, in the default test session (344 items) and in the slow test session (613 items). Verifier: Table 1.</td><td class="pass">pass</td></tr>
+        <tr><td>AC16</td><td>Benchmark (report only)</td><td>12 lines "done" or "skipped"; throughput, peak memory, validity; median paired ratio of 4 mlx rows</td><td>12 of 12 lines "done", all valid, 0 missing fields of <code>LINE_FIELDS</code> and plan Table 10. Median paired ratio of the committed file: batch size 8: frame 1.390, patch 1.390; batch size 1: frame 3.124, patch 3.118. Verifier run: 1.391, 1.391, 3.189, 3.179. Section 4.</td><td class="pass">pass (report only)</td></tr>
+        <tr><td>AC17</td><td>Tests and lint</td><td>pytest 0 failures (default and DINOV3_SLOW=1); ruff clean</td><td><code>ruff format --check</code>: 73 files already formatted. <code>ruff check</code>: all checks passed. Default: 340 passed, 4 skipped, 0 failed (14.7 s). <code>DINOV3_SLOW=1</code>: 524 passed, 69 skipped, 20 xfailed, 0 failed (46.8 s). The 85 mlx tests pass in both test sessions. The skips: 4 converter tests, ViT-7B/16 (no reference file; fp32 weights refused on torch-mps). The xfails: the known fp16-cast overflow of Step 2.</td><td class="pass">pass</td></tr>
+        <tr><td>AC18</td><td>Explainers <code>docs/learn/04-1-patch-embedding.html</code> to <code>04-5-mlp.html</code></td><td>5 explainers; cover every function that Step 4 adds to <code>src/</code></td><td>Not in the scope of Verify (Learn stage). Section 9 lists the functions that plan Table 1 does not name.</td><td class="pending">not in scope of Verify</td></tr>
+        <tr><td>AC19</td><td>Steering files and ADRs</td><td>GLOSSARY terms; docs/plan.html Table 9 and R5; ADR 0005 and ADR 0006; roadmap.md status</td><td>Not in the scope of Verify (Close stage). Section 9 gives notes for the Close stage.</td><td class="pending">not in scope of Verify</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 2.</b> The 19 acceptance criteria of plan Table 11 with the values that the verifier measured. "1 &minus; x" gives a cosine as its distance to 1. Result labels: "pass (report only)" means that the plan marks the criterion as report only and that the verifier recorded the values. "partial" means that the measured value meets one part of the target and misses another part.</p>
+</section>
+
+<section id="benchmark">
+  <h2>4 Benchmark run again</h2>
+  <p>Command: <code>uv run python scripts/bench_mlx_port.py --results &lt;scratch&gt;/bench.jsonl</code>. ViT-S/16, fp32, 224 px, the three test images; mlx with TF32 off against eager torch-mps. 3 rounds &times; 2 batch sizes &times; 2 workers = 12 workers, one after the other, each in its own subprocess. The run took 2 min 57 s, with 38.8 to 38.9 GB available. All 12 workers are "done" and valid. The committed file comes from a build run at 01:44:40 to 01:47:37 local time (F3). Table 3 compares the two benchmark runs.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Batch size</th><th>Output</th><th>Benchmark run</th><th>mlx, img/s (range)</th><th>torch-mps, img/s (range)</th><th>Paired ratios, rounds 1, 2, 3</th><th>Median paired ratio</th><th>Peak memory mlx / torch-mps</th></tr></thead>
+      <tbody>
+        <tr><td>8</td><td>frame</td><td>build</td><td class="num">846.9 (830.2 to 852.1)</td><td class="num">610.9 (589.6 to 613.2)</td><td class="num">1.390, 1.436, 1.359</td><td class="num"><b>1.390</b></td><td class="num">0.828 / 0.637 GB</td></tr>
+        <tr><td>8</td><td>frame</td><td>verifier</td><td class="num">831.6 (822.9 to 851.2)</td><td class="num">610.4 (584.2 to 612.0)</td><td class="num">1.391, 1.409, 1.362</td><td class="num"><b>1.391</b></td><td class="num">0.817 / 0.635 GB</td></tr>
+        <tr><td>8</td><td>patch</td><td>build</td><td class="num">845.9 (829.5 to 851.2)</td><td class="num">610.1 (589.0 to 612.5)</td><td class="num">1.390, 1.436, 1.360</td><td class="num"><b>1.390</b></td><td class="num">0.828 / 0.637 GB</td></tr>
+        <tr><td>8</td><td>patch</td><td>verifier</td><td class="num">830.6 (822.2 to 850.2)</td><td class="num">609.7 (583.6 to 611.3)</td><td class="num">1.391, 1.409, 1.362</td><td class="num"><b>1.391</b></td><td class="num">0.817 / 0.635 GB</td></tr>
+        <tr><td>1</td><td>frame</td><td>build</td><td class="num">357.3 (351.0 to 360.5)</td><td class="num">114.2 (112.7 to 114.4)</td><td class="num">3.155, 3.114, 3.124</td><td class="num"><b>3.124</b></td><td class="num">0.410 / 0.565 GB</td></tr>
+        <tr><td>1</td><td>frame</td><td>verifier</td><td class="num">350.7 (310.2 to 358.5)</td><td class="num">110.0 (109.3 to 110.6)</td><td class="num">3.242, 3.189, 2.837</td><td class="num"><b>3.189</b></td><td class="num">0.399 / 0.563 GB</td></tr>
+        <tr><td>1</td><td>patch</td><td>build</td><td class="num">358.6 (352.3 to 361.8)</td><td class="num">114.9 (113.4 to 115.0)</td><td class="num">3.149, 3.106, 3.118</td><td class="num"><b>3.118</b></td><td class="num">0.410 / 0.565 GB</td></tr>
+        <tr><td>1</td><td>patch</td><td>verifier</td><td class="num">352.0 (311.3 to 360.1)</td><td class="num">110.7 (110.0 to 111.2)</td><td class="num">3.238, 3.179, 2.830</td><td class="num"><b>3.179</b></td><td class="num">0.399 / 0.563 GB</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 3.</b> The paired benchmark of plan Section 7. Throughput: the median over the 3 rounds, with the range. Paired ratio r<sub>i</sub> = mlx throughput / torch-mps throughput of round i. Peak memory: the median of the lifetime maximum of the process footprint. Build: committed <code>results/bench-mlx-port.jsonl</code>, 00:44:44 to 00:47:37 UTC. Verifier: 00:55:30 to 00:58:23 UTC (local time is UTC + 1 h). The table gives a "paired ratio", not a speedup. A speedup divides by the baseline row of ADR 0004, and at P1 this row is a compile row. Step 6 measures the speedup.</p>
+  <figure>
+    <svg viewBox="0 0 720 300" role="img" aria-label="Paired ratios of the build and the verifier for batch size 8 and batch size 1">
+      <style>
+        .ax { stroke: #111414; stroke-width: 1; }
+        .tk { stroke: #111414; stroke-width: 1; }
+        .gr { stroke: #d6dedd; stroke-width: 1; }
+        .lb { font: 12px -apple-system, Helvetica, Arial, sans-serif; fill: #111414; }
+        .mt { font: 12px -apple-system, Helvetica, Arial, sans-serif; fill: #4a5655; }
+        .hd { font: 600 13px -apple-system, Helvetica, Arial, sans-serif; fill: #111414; }
+        .bd { fill: #057379; }
+        .vf { fill: #ffffff; stroke: #111414; stroke-width: 1.5; }
+        .md { stroke-width: 2.5; }
+      </style>
+      <text class="hd" x="10" y="24">Batch size 8, frame embedding: paired ratio mlx / torch-mps</text>
+      <line class="gr" x1="80" y1="45" x2="80" y2="100"/><line class="gr" x1="230" y1="45" x2="230" y2="100"/><line class="gr" x1="380" y1="45" x2="380" y2="100"/><line class="gr" x1="530" y1="45" x2="530" y2="100"/><line class="gr" x1="680" y1="45" x2="680" y2="100"/>
+      <text class="mt" x="10" y="66">build</text>
+      <text class="mt" x="10" y="86">verifier</text>
+      <circle class="bd" cx="350" cy="62" r="5"/><circle class="bd" cx="488" cy="62" r="5"/><circle class="bd" cx="257" cy="62" r="5"/>
+      <line class="md" x1="350" y1="52" x2="350" y2="72" stroke="#057379"/>
+      <circle class="vf" cx="353" cy="82" r="5"/><circle class="vf" cx="407" cy="82" r="5"/><circle class="vf" cx="266" cy="82" r="5"/>
+      <line class="md" x1="353" y1="72" x2="353" y2="92" stroke="#111414"/>
+      <line class="ax" x1="80" y1="100" x2="680" y2="100"/>
+      <line class="tk" x1="80" y1="100" x2="80" y2="105"/><line class="tk" x1="230" y1="100" x2="230" y2="105"/><line class="tk" x1="380" y1="100" x2="380" y2="105"/><line class="tk" x1="530" y1="100" x2="530" y2="105"/><line class="tk" x1="680" y1="100" x2="680" y2="105"/>
+      <text class="lb" x="80" y="120" text-anchor="middle">1.30</text><text class="lb" x="230" y="120" text-anchor="middle">1.35</text><text class="lb" x="380" y="120" text-anchor="middle">1.40</text><text class="lb" x="530" y="120" text-anchor="middle">1.45</text><text class="lb" x="680" y="120" text-anchor="middle">1.50</text>
+
+      <text class="hd" x="10" y="164">Batch size 1, frame embedding: paired ratio mlx / torch-mps</text>
+      <line class="gr" x1="80" y1="195" x2="80" y2="250"/><line class="gr" x1="200" y1="195" x2="200" y2="250"/><line class="gr" x1="320" y1="195" x2="320" y2="250"/><line class="gr" x1="440" y1="195" x2="440" y2="250"/><line class="gr" x1="560" y1="195" x2="560" y2="250"/><line class="gr" x1="680" y1="195" x2="680" y2="250"/>
+      <text class="mt" x="10" y="216">build</text>
+      <text class="mt" x="10" y="236">verifier</text>
+      <circle class="bd" cx="506" cy="212" r="5"/><circle class="bd" cx="457" cy="212" r="5"/><circle class="bd" cx="469" cy="212" r="5"/>
+      <line class="md" x1="469" y1="202" x2="469" y2="222" stroke="#057379"/>
+      <circle class="vf" cx="610" cy="232" r="5"/><circle class="vf" cx="547" cy="232" r="5"/><circle class="vf" cx="124" cy="232" r="5"/>
+      <line class="md" x1="547" y1="222" x2="547" y2="242" stroke="#111414"/>
+      <line class="ax" x1="80" y1="250" x2="680" y2="250"/>
+      <line class="tk" x1="80" y1="250" x2="80" y2="255"/><line class="tk" x1="200" y1="250" x2="200" y2="255"/><line class="tk" x1="320" y1="250" x2="320" y2="255"/><line class="tk" x1="440" y1="250" x2="440" y2="255"/><line class="tk" x1="560" y1="250" x2="560" y2="255"/><line class="tk" x1="680" y1="250" x2="680" y2="255"/>
+      <text class="lb" x="80" y="270" text-anchor="middle">2.80</text><text class="lb" x="200" y="270" text-anchor="middle">2.90</text><text class="lb" x="320" y="270" text-anchor="middle">3.00</text><text class="lb" x="440" y="270" text-anchor="middle">3.10</text><text class="lb" x="560" y="270" text-anchor="middle">3.20</text><text class="lb" x="680" y="270" text-anchor="middle">3.30</text>
+      <circle class="bd" cx="420" cy="290" r="5"/><text class="mt" x="430" y="294">build (committed file)</text>
+      <circle class="vf" cx="580" cy="290" r="5"/><text class="mt" x="590" y="294">verifier</text>
+      <line x1="300" y1="282" x2="300" y2="298" stroke="#111414" stroke-width="2.5"/><text class="mt" x="308" y="294">median</text>
+    </svg>
+    <p class="caption"><b>Figure 1.</b> The paired ratio of each round, frame embedding. Each panel has its own axis. Batch size 8: the 6 ratios lie between 1.36 and 1.44. Batch size 1: 5 ratios lie between 3.11 and 3.24. Round 3 of the verifier gives 2.84, because its mlx worker was slower from its first timed batches to its last. Its median time per batch of the frame output is 3.22 ms, against 2.79 and 2.85 ms in rounds 1 and 2. The patch embeddings give the same picture within 0.01.</p>
+  </figure>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Batch size</th><th>Output</th><th>Median of the 6 paired ratios</th><th>Range</th><th>Verifier median / build median</th></tr></thead>
+      <tbody>
+        <tr><td>8</td><td>frame</td><td class="num"><b>1.39</b></td><td class="num">1.36 to 1.44</td><td class="num">1.001</td></tr>
+        <tr><td>8</td><td>patch</td><td class="num"><b>1.39</b></td><td class="num">1.36 to 1.44</td><td class="num">1.001</td></tr>
+        <tr><td>1</td><td>frame</td><td class="num"><b>3.14</b></td><td class="num">2.84 to 3.24</td><td class="num">1.021</td></tr>
+        <tr><td>1</td><td>patch</td><td class="num"><b>3.13</b></td><td class="num">2.83 to 3.24</td><td class="num">1.020</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 4.</b> The paired ratios of both benchmark runs together (6 rounds). Section 14 of <code>specs/03-baseline/verify.html</code> found that one benchmark run on this Mac can be off by up to 1.3&times;. Here the two medians agree within 2.1 %. The paired ratios of one row stay within 1.06&times; of each other at batch size 8 and within 1.14&times; at batch size 1.</p>
+  <ul>
+    <li><b>Peak memory reproduces.</b> Ratio verifier / build: 0.97 to 1.00. At batch size 8 the mlx worker has a higher peak than the torch-mps worker (0.82 against 0.64 GB). At batch size 1 it has a lower peak (0.40 against 0.56 GB). <code>mx.get_peak_memory()</code>: 605.7 MB (batch size 8) and 190.0 MB (batch size 1) in both benchmark runs. <code>mps_driver_max_bytes</code> of torch-mps: 170.6 and 103.5 MB.</li>
+    <li><b>Validity reproduces.</b> The same parity of image 0 in both benchmark runs: worst of frame and patch 1st percentile 1 &minus; 1.2e-11 (mlx) and 1 &minus; 7.2e-12 (torch-mps).</li>
+    <li><b>Load and first call.</b> mlx load 0.012 to 0.020 s; torch-mps load 0.117 to 0.164 s. First call: mlx 0.016 to 0.030 s; torch-mps 0.098 to 0.125 s. The mlx load is lazy until <code>mx.eval</code>, and the 86 MB file stays in the page cache.</li>
+    <li><b>Time budget.</b> Timed batches: 730 to 3,618; timed time 10.0 s in each worker. The device time is at least 98.9 % (mlx) and 97.7 % (torch-mps) of the patch time, so the host copy is small.</li>
+    <li><b>Machine state.</b> All 24 lines: AC power, 94 W adapter, Low Power Mode off; mlx 0.32.4, torch 2.15.0, transformers 5.22.1, macOS 26.5.2.</li>
+  </ul>
+</section>
+
+<section id="own-checks">
+  <h2>5 Own checks</h2>
+  <h3>5.1 (a) Parity with own code, TF32 off</h3>
+  <p>The script reads the stored pixels and the reference file with <code>safetensors.numpy.load_file</code>. It runs <code>run_mlx</code> (the code under test). Then it computes the cosine of each token in float64 with own code: each token divided by its norm, then the dot product. The patch 1st percentile uses linear interpolation. The process sets <code>MLX_ENABLE_TF32=0</code> before the first import of mlx. A probe matmul in the same process gives 7.8e-7, so TF32 is off.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Configuration</th><th>Frame</th><th>Register tokens (min)</th><th>Patch mean</th><th>Patch 1st percentile</th><th>Patch minimum</th><th>Largest difference</th></tr></thead>
+      <tbody>
+        <tr><td>iss-kibo-lab/224x224</td><td class="num">1.01e-11</td><td class="num">6.53e-12</td><td class="num">5.75e-12</td><td class="num">1.22e-11</td><td class="num">1.57e-11</td><td class="num">1.24e-5</td></tr>
+        <tr><td>iss-kibo-lab/448x448</td><td class="num">8.91e-12</td><td class="num">4.63e-12</td><td class="num">3.89e-12</td><td class="num">6.68e-12</td><td class="num">1.18e-11</td><td class="num">7.21e-6</td></tr>
+        <tr><td>iss-kibo-lab/512x512</td><td class="num">9.28e-12</td><td class="num">4.53e-12</td><td class="num">3.88e-12</td><td class="num">7.03e-12</td><td class="num">1.06e-11</td><td class="num">1.36e-5</td></tr>
+        <tr><td>iss-kibo-lab/224x400</td><td class="num">1.50e-11</td><td class="num">7.86e-12</td><td class="num">7.92e-12</td><td class="num">1.92e-11</td><td class="num">3.64e-11</td><td class="num">1.12e-5</td></tr>
+        <tr><td>forest/224x224</td><td class="num">2.81e-12</td><td class="num">1.91e-12</td><td class="num">2.29e-12</td><td class="num">4.51e-12</td><td class="num">5.00e-12</td><td class="num">8.33e-6</td></tr>
+        <tr><td>forest/448x448</td><td class="num">4.71e-12</td><td class="num">2.94e-12</td><td class="num">3.88e-12</td><td class="num">2.55e-11</td><td class="num">6.10e-10</td><td class="num">4.74e-5</td></tr>
+        <tr><td>forest/512x512</td><td class="num">3.38e-12</td><td class="num">2.57e-12</td><td class="num">1.91e-12</td><td class="num">3.39e-12</td><td class="num">5.05e-12</td><td class="num">8.51e-6</td></tr>
+        <tr><td>forest/224x304</td><td class="num">4.36e-12</td><td class="num">3.28e-12</td><td class="num">2.50e-12</td><td class="num">6.82e-12</td><td class="num">7.76e-12</td><td class="num">9.54e-6</td></tr>
+        <tr><td>iss-conference/224x224</td><td class="num">1.22e-11</td><td class="num">5.27e-12</td><td class="num">5.91e-12</td><td class="num">1.39e-11</td><td class="num">1.86e-11</td><td class="num">1.01e-5</td></tr>
+        <tr><td>iss-conference/448x448</td><td class="num">1.08e-11</td><td class="num">4.18e-12</td><td class="num">3.73e-12</td><td class="num">8.76e-12</td><td class="num">9.91e-12</td><td class="num">9.33e-6</td></tr>
+        <tr><td>iss-conference/512x512</td><td class="num">1.69e-11</td><td class="num">4.48e-12</td><td class="num">5.02e-12</td><td class="num">3.13e-11</td><td class="num">2.08e-10</td><td class="num">4.47e-5</td></tr>
+        <tr><td>iss-conference/304x224</td><td class="num">1.02e-11</td><td class="num">4.77e-12</td><td class="num">5.72e-12</td><td class="num">1.22e-11</td><td class="num">2.24e-11</td><td class="num">9.01e-6</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 5.</b> Parity of <code>run_mlx</code> with TF32 off, own code. The cosine columns give 1 &minus; cosine. Each value equals the value of the test lines to the printed digits. The register tokens are not part of the outputs; the column shows that they also agree. Batch of 8 against 8 single runs: worst 1 &minus; 1.2e-11, largest difference 6.9e-6. Hidden states in a chain: worst patch 1st percentile 1 &minus; 5.5e-11, largest difference 1.2e-3.</p>
+
+  <h3>5.2 (b) Parity with TF32 on (report only)</h3>
+  <p>The same script with <code>MLX_ENABLE_TF32=1</code> and <code>load_mlx_backbone(..., tf32=True)</code>. The probe matmul gives 7.2e-4, so TF32 is on.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Configuration</th><th>Frame</th><th>Patch mean</th><th>Patch 1st percentile</th><th>Patch minimum</th><th>Largest difference</th></tr></thead>
+      <tbody>
+        <tr><td>iss-kibo-lab/224x224</td><td class="num">1.93e-5</td><td class="num">8.11e-6</td><td class="num">1.34e-5</td><td class="num">1.97e-5</td><td class="num">1.27e-2</td></tr>
+        <tr><td>iss-kibo-lab/448x448</td><td class="num">1.96e-5</td><td class="num">7.79e-6</td><td class="num">1.64e-5</td><td class="num">2.84e-5</td><td class="num">1.33e-2</td></tr>
+        <tr><td>iss-kibo-lab/512x512</td><td class="num">2.24e-5</td><td class="num">7.53e-6</td><td class="num">1.43e-5</td><td class="num">4.55e-5</td><td class="num">1.36e-2</td></tr>
+        <tr><td>iss-kibo-lab/224x400</td><td class="num">1.49e-5</td><td class="num">8.31e-6</td><td class="num">1.56e-5</td><td class="num">3.78e-5</td><td class="num">1.21e-2</td></tr>
+        <tr><td>forest/224x224</td><td class="num">5.97e-6</td><td class="num">3.45e-6</td><td class="num">9.33e-6</td><td class="num">1.74e-5</td><td class="num">9.55e-3</td></tr>
+        <tr><td>forest/448x448</td><td class="num">1.02e-5</td><td class="num">3.55e-6</td><td class="num">7.24e-6</td><td class="num">9.00e-6</td><td class="num">8.89e-3</td></tr>
+        <tr><td>forest/512x512</td><td class="num">1.17e-5</td><td class="num">3.41e-6</td><td class="num">6.05e-6</td><td class="num">1.16e-5</td><td class="num">8.92e-3</td></tr>
+        <tr><td>forest/224x304</td><td class="num">5.66e-6</td><td class="num">3.71e-6</td><td class="num">6.88e-6</td><td class="num">1.47e-5</td><td class="num">7.80e-3</td></tr>
+        <tr><td>iss-conference/224x224</td><td class="num">1.22e-5</td><td class="num">6.27e-6</td><td class="num">1.32e-5</td><td class="num">2.10e-5</td><td class="num">8.37e-3</td></tr>
+        <tr><td>iss-conference/448x448</td><td class="num">2.48e-5</td><td class="num">6.56e-6</td><td class="num">1.62e-5</td><td class="num">2.87e-5</td><td class="num">1.02e-2</td></tr>
+        <tr><td>iss-conference/512x512</td><td class="num">2.32e-5</td><td class="num">6.11e-6</td><td class="num">1.56e-5</td><td class="num">3.20e-5</td><td class="num">1.52e-2</td></tr>
+        <tr><td>iss-conference/304x224</td><td class="num">1.97e-5</td><td class="num">6.31e-6</td><td class="num">1.31e-5</td><td class="num">1.46e-5</td><td class="num">9.16e-3</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 6.</b> Parity of <code>run_mlx</code> with TF32 on (1 &minus; cosine). The fp32 threshold is 1 &minus; 1e-4. Worst frame 1 &minus; 2.48e-5 (margin 4.0&times;), worst patch mean 1 &minus; 8.3e-6 (12&times;), worst patch 1st percentile 1 &minus; 1.64e-5 (6.1&times;). The largest difference grows from about 1e-5 to about 1e-2. Batch of 8 against singles: frame 1 &minus; 4.9e-7, largest difference 2.7e-3. Hidden states in a chain: worst patch 1st percentile 1 &minus; 3.2e-5; largest difference 2.2 (TF32 off: 1.2e-3).</p>
+  <p>So TF32 increases 1 &minus; cosine by a factor of about 1e6, but ViT-S/16 with TF32 on still passes the fp32 thresholds. Step 6 can use this when it decides on an fp32 row with TF32 on (plan Section 9). The thresholds of the part tests (plan Table 7) catch TF32, as the plan says.</p>
+
+  <h3>5.3 (c) The key map on the real header</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Quantity</th><th>Value</th></tr></thead>
+      <tbody>
+        <tr><td>Tensors in the header of <code>model.safetensors</code> (ViT-S/16)</td><td>211, all F32; metadata <code>{"format": "pt"}</code></td></tr>
+        <tr><td>Values in the file / <code>parameter_count</code></td><td>21,596,544 / 21,596,544</td></tr>
+        <tr><td>Parameters of <code>MlxBackbone</code> from the real <code>config.json</code></td><td>210 names, 21,596,160 values (the file minus the mask token, 384 values)</td></tr>
+        <tr><td>Mapped / dropped / unknown</td><td>210 / 1 (<code>embeddings.mask_token</code>) / 0</td></tr>
+        <tr><td>Missing / extra / shape differences</td><td>0 / 0 / 0. The patch weight (384, 3, 16, 16) becomes (384, 768).</td></tr>
+        <tr><td>Mapped name equal to the file name</td><td>210 of 210</td></tr>
+        <tr><td>Pairs of <code>mlx_weights</code> (lazy <code>mx.load</code>)</td><td>210, all float32</td></tr>
+        <tr><td>Strict load with one extra name / one missing name / one wrong shape</td><td><code>ValueError</code> each: "Received 1 parameters not in model", "Missing 1 parameters", "Expected shape (384,) but received shape (385,)"</td></tr>
+        <tr><td>Strict load with one fp16 tensor</td><td>No error: the strict load does not check the dtype. <code>mlx_weights</code> casts every tensor, so the load is safe.</td></tr>
+        <tr><td><code>map_key</code> of odd names</td><td><code>layer.0.foo.weight</code> &rarr; <code>layer.0.foo.weight</code>; <code>layer.12.norm1.weight</code> &rarr; <code>layer.12.norm1.weight</code>; <code>model.layer.0.mlp.gate_proj.weight</code> &rarr; <code>layer.0.mlp.gate_proj.weight</code> (Step 5). <code>UnknownWeightError</code>: <code>model.embeddings.cls_token</code>, <code>model.norm.weight</code>, <code>rope_embeddings.inv_freq</code>, <code>layer.0.attention.q_proj.lora_A.weight</code>, <code>Layer.0.norm1.weight</code>.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 7.</b> The key map on the header of the real weights file. The script reads the header as raw bytes (an 8-byte length, then JSON), without the safetensors library and without the test helpers. The first two odd names pass <code>map_key</code> and fail later in the strict load (F4).</p>
+
+  <h3>5.4 (d) Odd input resolutions and batches of different images</h3>
+  <p>The verifier made the pixels with <code>preprocess</code> of Step 2 from the three test images. The reference is the Hugging Face backbone on torch-cpu in fp32, one image at a time. The mlx side runs each input once as one batch and once image by image.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Input</th><th>Patch grid</th><th>Frame</th><th>Patch mean</th><th>Patch 1st percentile</th><th>Patch minimum</th><th>Largest difference</th><th>Batch against singles</th></tr></thead>
+      <tbody>
+        <tr><td>forest, 160 &times; 480 px</td><td>10 &times; 30</td><td class="num">3.7e-12</td><td class="num">2.7e-12</td><td class="num">5.6e-12</td><td class="num">7.7e-12</td><td class="num">8.4e-6</td><td>batch size 1</td></tr>
+        <tr><td>iss-conference, 400 &times; 128 px</td><td>25 &times; 8</td><td class="num">1.6e-11</td><td class="num">1.6e-11</td><td class="num">1.3e-10</td><td class="num">4.6e-10</td><td class="num">4.4e-5</td><td>batch size 1</td></tr>
+        <tr><td>iss-kibo-lab, 48 &times; 800 px</td><td>3 &times; 50</td><td class="num">1.3e-11</td><td class="num">8.7e-12</td><td class="num">1.5e-11</td><td class="num">1.7e-11</td><td class="num">1.4e-5</td><td>batch size 1</td></tr>
+        <tr><td>forest, 16 &times; 16 px</td><td>1 &times; 1</td><td class="num">1.0e-11</td><td class="num">5.4e-12</td><td class="num">5.4e-12</td><td class="num">5.4e-12</td><td class="num">8.8e-6</td><td>batch size 1</td></tr>
+        <tr><td>forest, 272 &times; 208 px</td><td>17 &times; 13</td><td class="num">3.5e-12</td><td class="num">2.4e-12</td><td class="num">6.0e-12</td><td class="num">2.2e-11</td><td class="num">1.1e-5</td><td>batch size 1</td></tr>
+        <tr><td>Batch of 3 different images, 224 &times; 336 px</td><td>14 &times; 21</td><td class="num">9.8e-12</td><td class="num">5.4e-12</td><td class="num">1.1e-11</td><td class="num">1.4e-11</td><td class="num">1.4e-5</td><td>1 &minus; 5.8e-11; 1.6e-5</td></tr>
+        <tr><td>Batch of 3 different images, 512 &times; 512 px</td><td>32 &times; 32</td><td class="num">1.6e-11</td><td class="num">4.8e-12</td><td class="num">2.6e-11</td><td class="num">2.1e-10</td><td class="num">4.5e-5</td><td>1 &minus; 6.3e-12; 6.1e-6</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 8.</b> Odd input resolutions and batches of different images against the Hugging Face backbone on torch-cpu (1 &minus; cosine, worst image of the batch). In the two batches, the frame embeddings of the three images differ (cosine &minus;0.075 to 0.56 between images). So the batch does not repeat image 0. An input of 224 &times; 230 px raises <code>ValueError</code> ("input resolution 224 x 230 is not a multiple of 16").</p>
+
+  <h3>5.5 (e) RoPE tables of non-square grids</h3>
+  <p>The verifier compared <code>rope_tables</code> with <code>DINOv3ViTRopePositionEmbedding</code> on torch-cpu. It used 8 grids: 10 &times; 30, 30 &times; 10, 25 &times; 8, 3 &times; 50, 1 &times; 1, 2 &times; 3, 64 &times; 16 and 17 &times; 31. It used each grid with head dimension 64 (ViT-S/16) and 128 (ViT-7B/16), so the check has 16 combinations of grid and head dimension.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Check</th><th>Result</th></tr></thead>
+      <tbody>
+        <tr><td>Largest difference to the Hugging Face tables, 16 combinations</td><td>cos &le; 1.19e-7, sin &le; 5.96e-8; 1 &times; 1: 0</td></tr>
+        <tr><td>Rows 0 to 4</td><td>cos 1, sin 0, exact, in 16 of 16 combinations</td></tr>
+        <tr><td>Shape and dtype</td><td>(5 + Hp &middot; Wp, head dimension), float32</td></tr>
+        <tr><td>Swap of height and width</td><td>The tables of the transposed grid differ from the Hugging Face tables by more than 1e-3 for each non-square grid. So a swap would show.</td></tr>
+        <tr><td><code>MlxBackbone.rope(10, 30)</code></td><td>Equal to <code>rope_tables(10, 30, 64, 100)</code>. The cache holds (10, 30) and (30, 10) as separate keys. A forward pass at 160 &times; 480 px uses the key (10, 30).</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 9.</b> RoPE tables of non-square grids against the Hugging Face tables.</p>
+
+  <h3>5.6 (f) Extra checks</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>MLX_ENABLE_TF32</th><th>unset</th><th>""</th><th>0</th><th>1</th><th>true</th><th>no</th><th>" 1"</th><th>2</th><th>&minus;1</th><th>1abc</th></tr></thead>
+      <tbody>
+        <tr><td>Probe error (relative)</td><td class="num">7.2e-4</td><td class="num">7.8e-7</td><td class="num">7.8e-7</td><td class="num">7.2e-4</td><td class="num">7.8e-7</td><td class="num">7.8e-7</td><td class="num">7.2e-4</td><td class="num">7.2e-4</td><td class="num">7.2e-4</td><td class="num">7.2e-4</td></tr>
+        <tr><td>Measured TF32 state</td><td>on</td><td>off</td><td>off</td><td>on</td><td>off</td><td>off</td><td>on</td><td>on</td><td>on</td><td>on</td></tr>
+        <tr><td><code>tf32_enabled()</code></td><td>True</td><td>False</td><td>False</td><td>True</td><td>False</td><td>False</td><td>True</td><td>True</td><td>True</td><td>True</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 10.</b> <code>tf32_enabled()</code> against the measured TF32 state of MLX 0.32.4, 10 values. They agree in 10 of 10. Note: "true" turns TF32 off, because MLX reads the leading integer of the value.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Operation after a forward pass (small model, 2 blocks)</th><th>Result</th></tr></thead>
+      <tbody>
+        <tr><td><code>parameters()</code>, <code>freeze()</code>, <code>leaf_modules()</code></td><td>40 parameters; 0 trainable after <code>freeze()</code>; the RoPE cache is not a leaf module. <code>children()</code> lists <code>_rope_cache</code>, without effect.</td></tr>
+        <tr><td><code>set_dtype(mx.bfloat16)</code></td><td>The RoPE tables stay float32; the output is bfloat16.</td></tr>
+        <tr><td><code>nn.quantize(group_size=64, bits=8)</code></td><td>13 <code>QuantizedLinear</code> modules, including the patch embedding; the RoPE tables stay float32. The forward pass runs, but its output is wrong (F1).</td></tr>
+        <tr><td><code>mx.compile(model)</code></td><td>Largest difference to the eager forward pass: 0.</td></tr>
+        <tr><td><code>nn.value_and_grad</code></td><td>40 gradients, none for the RoPE cache.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 11.</b> The hooks of plan Table 5 for Steps 5, 6 and 8, checked with the small model and random weights.</p>
+</section>
+
+<section id="code">
+  <h2>6 Code against the plan</h2>
+  <p>The verifier read the new and the changed code against plan Sections 3, 5 and 6. This code is 3 new modules, a new script, a changed script, 8 new files in <code>tests/</code> and other changed files. A scan with Python <code>ast</code> finds type hints on every parameter and return value of the new code. Every public function has a docstring; only nested helpers have none. The load order of <code>load_mlx_backbone</code> (<code>mlx_weights.py:133</code> to <code>:146</code>) is the order of plan Section 3.3. Every public name of plan Table 2 exists with the planned signature. Table 12 gives the differences. None makes a criterion fail.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Place</th><th>Plan</th><th>Code</th><th>Verdict</th></tr></thead>
+      <tbody>
+        <tr><td><code>mlx_model.py:238</code> and <code>:250</code></td><td>Attention has <code>__call__</code> only</td><td>Public methods <code>qkv</code> and <code>output</code>; <code>__call__</code> uses them.</td><td>Better: the part tests of qkv_proj and o_proj test the code in <code>src/</code>. The Learn stage must cover them (Section 9).</td></tr>
+        <tr><td><code>mlx_model.py:78</code>, <code>:88</code>, <code>:287</code></td><td><code>MlxConfig</code> fields of Section 3</td><td>Extra fields <code>num_channels</code> and <code>hidden_act</code>; <code>MLP</code> raises <code>NotImplementedError</code> for an activation other than "gelu".</td><td>Fine.</td></tr>
+        <tr><td><code>mlx_model.py:218</code>, <code>:222</code></td><td>Not in the plan</td><td>Review fix R1: the pixels get the dtype of the patch embedding weight; the prefix tokens get the dtype of the patch tokens.</td><td>Correct for fp32, fp16 and bf16. Wrong after <code>nn.quantize</code> (F1).</td></tr>
+        <tr><td><code>tests/conftest.py:67</code></td><td>Sort key &minus;1 for a test without a model size</td><td>&minus;2 for an mlx test without a model size.</td><td>Needed: <code>test_block_profile.py</code> loads ViT-S/16 in the &minus;1 group. T24 is item 5, the first load item 87.</td></tr>
+        <tr><td><code>tests/test_mlx_rope.py:83</code></td><td>T9 report only</td><td>T9 also asserts the AC6 band (5 %).</td><td>Stricter than the plan. Fine.</td></tr>
+        <tr><td><code>tests/test_mlx_weights.py:99</code></td><td>T3 against the ViT-S/16 config</td><td>The config is a dict in the test, not the <code>config.json</code> of the cache.</td><td>Own check (c) used the real <code>config.json</code>: the same result.</td></tr>
+        <tr><td><code>src/dinov3_apple/bench.py:263</code>, <code>torch_bench.py:141</code></td><td>Not in plan Table 2</td><td>Review fix R6: new public <code>reference_tokens</code>; <code>torch_bench</code> calls it instead of its private copy.</td><td>Step 3 code changed as a refactor. The torch-mps validity is the same in both benchmark runs.</td></tr>
+        <tr><td><code>scripts/bench_mlx_port.py:247</code></td><td>"the value given to mx.set_memory_limit"</td><td><code>mx.get_memory_limit()</code> (review fix R10).</td><td>The same value, 4,103,663,411, in the 6 mlx lines of both runs.</td></tr>
+        <tr><td><code>scripts/bench_mlx_port.py:373</code></td><td>Options <code>--rounds</code> and <code>--dry-run</code></td><td>Also a hidden <code>--results</code>.</td><td>Helps Verify. It does not move the per-batch files (F5).</td></tr>
+        <tr><td><code>scripts/parity_table.py:88</code> and <code>:194</code></td><td><code>--backend</code></td><td>Also Section 4 "Stored hidden states" for the lines W1 to W4.</td><td>More than the plan. The table made again is byte-identical to the committed file.</td></tr>
+        <tr><td><code>tests/</code>, 9 extra tests</td><td>Tables 6 and 8</td><td><code>test_patchify_order</code>, <code>test_tf32_enabled_reads_the_environment_as_mlx_does</code>, <code>test_mlx_forward_casts_the_pixels_to_the_weight_dtype</code>, <code>test_mlx_worker_records_its_memory_limit_and_model_slug</code>, <code>test_reference_tokens_read_image_0_or_none</code> and 4 tests in <code>test_parity_table.py</code>.</td><td>More than the plan. Fine.</td></tr>
+        <tr><td><code>specs/04-mlx-port/plan.html:42</code></td><td>Section 9: "the user approves the plan"</td><td>The status line still says "draft, for the approval of the user".</td><td>See F2.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 12.</b> Differences between the code and the plan.</p>
+  <p>The timed region of the mlx worker matches the timed region of the torch-mps worker of Step 3 (<code>bench_mlx_port.py:140</code> to <code>:148</code>, <code>torch_bench.py:67</code> to <code>:76</code>). Both start with the NumPy batch and include the copy to the device. Both copy the frame embedding and the patch embeddings back to NumPy. So the paired ratio compares host-to-host times.</p>
+</section>
+
+<section id="findings">
+  <h2>7 Findings</h2>
+  <p>The verifier did not change code. Each finding gives the place and a proposed fix. The user decides. A second check read the code again for F1 and F4 and ran both with the small model (Section 10). Both faults are real.</p>
+  <ol>
+    <li id="f1"><b>F1 (medium): after <code>nn.quantize</code>, the pixel cast of <code>Embeddings</code> destroys the input.</b>
+      <ul>
+        <li>Place: <code>src/dinov3_apple/mlx_model.py:218</code> casts the pixels to <code>self.patch_embeddings.weight.dtype</code>. <code>run_mlx</code> and <code>run_mlx_hidden_states</code> both go through this cast (<code>:343</code>, <code>:382</code>).</li>
+        <li>Cause: the default predicate of <code>nn.quantize</code> replaces the patch embedding with a <code>QuantizedLinear</code>. Its input has 3 &middot; 16 &middot; 16 = 768 values, a multiple of the group size 64. The weight of a <code>QuantizedLinear</code> holds packed <code>uint32</code> values. So the cast turns the normalized pixels into unsigned integers.</li>
+        <li>Failure scenario: <code>nn.quantize(model, bits=8)</code>, then <code>run_mlx(model, pixels, "fp32")</code>. No error message comes. The tokens are float32 and finite, but wrong.</li>
+        <li>Check on ViT-S/16 with 8-bit weights: the cast pixels of forest/224x224 have 3 different values. The patch tokens of the patch embedding have a minimum cosine of 0.268 with the cast and 0.99984 without it. With all linear layers quantized, the frame embedding has the cosine 0.716 to the unquantized output. With only the blocks quantized, the cosine is 0.99986.</li>
+        <li>Check on the small model (2 blocks, random weights, mlx 0.32.4): the patch embedding becomes a <code>QuantizedLinear</code> with a <code>uint32</code> weight. The cast pixels are <code>uint32</code> with 5 different values. The minimum cosine of the patch tokens is 0.631 with the cast. With a cast to the dtype of the CLS token, it is 0.99999. <code>run_mlx</code> gives no error and returns finite float32 tokens.</li>
+        <li>Effect on Step 4: Step 4 does not quantize, so no criterion fails. But plan Table 5 names <code>nn.quantize</code> as the hook for the quantized weights of Step 6. The docstring of <code>MlxBackbone</code> (<code>mlx_model.py:321</code> to <code>:322</code>) also names <code>nn.quantize</code>. Review fix R1 added the cast after the plan.</li>
+        <li>Proposed fix: cast the pixels to the dtype of a float parameter that <code>nn.quantize</code> does not change, for example <code>pixels.astype(self.cls_token.dtype)</code>. Another option is the dtype of <code>patch_embeddings.scales</code> when this attribute exists. Add a part test in <code>tests/test_mlx_parts.py</code> that quantizes the small model with the default predicate. The test asserts that the embeddings stay floating point and stay close to the embeddings of the unquantized model.</li>
+      </ul>
+    </li>
+    <li id="f2"><b>F2 (low): the plan has no recorded approval of the user.</b> <code>specs/04-mlx-port/plan.html:42</code> still gives the status "draft, for the approval of the user". The hand-over note says that the agent approved the plan on behalf of the user. CLAUDE.md ends the Plan stage when "the user approves the plan", and plan Section 9 starts the build only after this approval. The verifier cannot see a user approval. Proposed fix: the user confirms the approval (or not), and the Close stage sets the status line of <code>plan.html</code>.</li>
+    <li id="f3"><b>F3 (low): the benchmark table of the hand-over note is not the committed file.</b> The note gives Table 7 from build run 1 at 01:11:48 to 01:14:45 local time. Examples are 840.7 img/s and the paired ratio 1.382 at batch size 8. The note also says that the benchmark did not run again after review fix R10. But <code>results/bench-mlx-port.jsonl:1</code> to <code>:12</code> come from build run 2 at 01:44:40 to 01:47:37 (<code>driver.log</code>). This run ended five seconds before the commit (01:47:42). It gives 846.9 img/s and 1.390. The two runs agree within 1 % at batch size 8 and within 2 % at batch size 1, so no conclusion changes. Proposed fix: the Learn and Close stages take the benchmark values from the committed file or from Section 4 of this file. They do not take them from the note.</li>
+    <li id="f4"><b>F4 (low): <code>map_key</code> accepts names that are not in a DINOv3 backbone, and two docstrings promise the opposite.</b>
+      <ul>
+        <li>Place: the pattern <code>BLOCK_KEY</code> (<code>src/dinov3_apple/mlx_weights.py:37</code>) accepts any lower-case path between <code>layer.{i}.</code> and the suffix, and any block index. The Raises sections of <code>map_key</code> (<code>:55</code>) and <code>mlx_weights</code> (<code>:80</code>) promise <code>UnknownWeightError</code> for each name that is not a tensor of a DINOv3 backbone. So the two docstrings are not correct.</li>
+        <li>Failure scenario: <code>map_key("layer.0.foo.weight")</code> returns <code>"layer.0.foo.weight"</code>. <code>map_key("layer.12.norm1.weight")</code> returns <code>"layer.12.norm1.weight"</code>, but ViT-S/16 has blocks 0 to 11. Neither name raises <code>UnknownWeightError</code>.</li>
+        <li>Check: own check (c) (Table 7) and the check with mlx 0.32.4 give the same result. A name with a capital letter, for example <code>layer.0.attention.q_proj.lora_A.weight</code>, raises <code>UnknownWeightError</code>. The strict load then stops the two names with a <code>ValueError</code> (Table 7), so the load stays safe. No criterion fails.</li>
+        <li>Proposed fix: name the block parts in the pattern (<code>norm1</code>, <code>norm2</code>, <code>attention.(q|k|v|o)_proj</code>, <code>layer_scale(1|2).lambda1</code>, <code>mlp.(up|down|gate)_proj</code>). The pattern does not know the number of blocks, so the strict load still finds <code>layer.12</code>. Another option: change the two Raises sections. They then say that <code>map_key</code> checks only the form of the name and that <code>load_weights(strict=True)</code> finds the other unknown names.</li>
+      </ul>
+    </li>
+    <li id="f5"><b>F5 (low): <code>--results</code> moves only the JSON lines.</b> The per-batch files and <code>driver.log</code> still go to <code>tests/fixtures/generated/bench/mlx-port/</code> (<code>scripts/bench_mlx_port.py:64</code> to <code>:65</code>, <code>:167</code>, <code>:263</code>, <code>:384</code> to <code>:389</code>). A verifier run overwrites the per-batch files of the build. The verifier had to copy the folder and put it back. Finding F7 of Step 3 is the same for <code>profile_block.py</code>. Proposed fix: when the user gives <code>--results</code>, put the per-batch files and the driver log next to the results file. Another option is a hidden <code>--bench-dir</code> option.</li>
+    <li id="f6"><b>F6 (low): the memory-check line of the load in an mlx worker goes nowhere.</b> <code>worker_main</code> (<code>scripts/bench_mlx_port.py:252</code>) configures no logging. So Python drops the INFO line of <code>check_free_memory</code> (<code>src/dinov3_apple/memory.py:75</code>). The check itself runs and can stop the load. The driver writes its own line before each worker. This line has another label ("mlx ViT-S/16 fp32 224px b8") and the benchmark need (4.17 GB), not the load need (4.10 GB). So the 18 mlx worker loads of the three benchmark runs have no line "ViT-S/16 mlx fp32", and AC11 is partial. The torch-mps workers of Step 3 have the same gap (<code>scripts/benchmark.py:80</code>). The hand-over note reports it as deviation 5. Proposed fix: in <code>worker_main</code>, send the logger <code>dinov3_apple.memory</code> to stderr, and let <code>run_worker_subprocess</code> copy these lines to <code>driver.log</code>. Another option: record the available memory of the worker check in the result line.</li>
+    <li id="f7"><b>F7 (low): the TF32 probe test accepts any error below 1.</b> <code>tests/test_mlx_environment.py:127</code> asserts <code>0 &lt;= error &lt; 1</code> for both values. If a later MLX version ignored <code>MLX_ENABLE_TF32</code>, the test would stay green. The part tests catch TF32 in the fp32 path (plan Table 7), so the risk is small. Proposed fix: assert that the value with TF32 off is at most 1e-5 (measured 7.8e-7), and keep the value with TF32 on as report only.</li>
+    <li id="f8"><b>F8 (information): TF32 on passes the fp32 thresholds for ViT-S/16.</b> Section 5.2: worst frame 1 &minus; 2.5e-5, margin 4&times;. This is input for the decision of Step 6 on an fp32 row with TF32 on. The verifier did not measure the margin of the larger model sizes.</li>
+    <li id="f9"><b>F9 (information): the probe values are about 8 times the "about" values of the plan.</b> Off 7.8e-7 against "about 1e-7"; on 7.2e-4 against "about 1e-4". The ratio is 919. The probe gives the largest difference divided by the largest reference value, so it is larger than one unit roundoff. Also, <code>MLX_ENABLE_TF32=true</code> turns TF32 off (Table 10). The explainer <code>04-3-attention.html</code> can use both facts.</li>
+    <li id="f10"><b>F10 (information): some incidental names are gone from two modules.</b> <code>reference</code> no longer gives 8 names: <code>own_aspect_size</code>, <code>PATCH_SIZE</code>, <code>MODEL_IDS</code>, <code>Image</code>, <code>Path</code>, <code>cached_property</code>, <code>json</code> and <code>safe_open</code>. <code>torch_bench</code> no longer gives <code>TEST_IMAGES</code>, <code>reference_path</code> and <code>safe_open</code>. These were imports, not part of <code>__all__</code>. No file of the repo uses them. <code>preprocess.own_aspect_size</code> and <code>stored.own_aspect_size</code> stay.</li>
+    <li id="f11"><b>F11 (information): the patch embedding part test has the smallest margin.</b> T11 measures 8.8e-6 against the target 1e-5 (88 %). The value is the same in four test sessions. Another MLX version or another GPU can change the order of the sums. Proposed: no change now; Step 5 records the value again with each new MLX version.</li>
+  </ol>
+</section>
+
+<section id="claims">
+  <h2>8 Claims of the build against the verifier values</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Claim of the hand-over note</th><th>Verifier value</th><th>Verdict</th></tr></thead>
+      <tbody>
+        <tr><td>All 17 criteria AC1 to AC17 have a green test or a benchmark result; no measured value misses a target.</td><td>16 of 17 pass. AC11 is partial: the 18 mlx worker loads of the benchmark runs have no log line (F6). The note reports this gap as deviation 5 (Table 2).</td><td class="partial">confirmed for 16 of 17</td></tr>
+        <tr><td>Each test was red first, then green at its first green run.</td><td>One commit; the verifier cannot check the order.</td><td class="pending">not checked</td></tr>
+        <tr><td>AC1: frame 1 &minus; 1.7e-11, patch mean 1 &minus; 7.9e-12, patch 1st percentile 1 &minus; 3.1e-11, patch minimum 1 &minus; 6.1e-10.</td><td>1 &minus; 1.69e-11, 1 &minus; 7.92e-12, 1 &minus; 3.13e-11, 1 &minus; 6.10e-10; own code the same.</td><td class="pass">confirmed</td></tr>
+        <tr><td>AC2, AC3, AC4 values.</td><td>The same values (Table 2).</td><td class="pass">confirmed</td></tr>
+        <tr><td>AC5: cos 1.19e-7, sin 5.96e-8 on each grid.</td><td>The same; also on 16 more combinations of grid and head dimension.</td><td class="pass">confirmed</td></tr>
+        <tr><td>AC6: 0.00791, 0.00822, 0.00825, 0.00818, 0.00807, 0.00807 rad.</td><td>The same.</td><td class="pass">confirmed</td></tr>
+        <tr><td>AC7, AC8, AC9 values; closest margin T11 at 8.8e-6.</td><td>The same values.</td><td class="pass">confirmed</td></tr>
+        <tr><td>AC10: 211 &rarr; 210, 0 unknown, 0 missing, 0 extra, 0 shape differences.</td><td>The same, also from the raw header.</td><td class="pass">confirmed</td></tr>
+        <tr><td>AC11: a log line before each of the 3 mlx loads at 01:10:54, 01:15:14, 01:15:39.</td><td>Present; also at 01:42:02 and 01:42:22 (the test sessions after the review fixes). The 18 mlx worker loads of the benchmark runs have no such line (F6).</td><td class="pass">confirmed</td></tr>
+        <tr><td>AC12: TF32 probe off 7.80e-7, on 7.17e-4.</td><td>The same in both test sessions of the verifier and in own checks (a) and (b).</td><td class="pass">confirmed</td></tr>
+        <tr><td>AC14: 130 = 130 and 390 = 390 torch-mps test ids.</td><td>The same, against <code>6c97c57</code>.</td><td class="pass">confirmed</td></tr>
+        <tr><td>AC17 after the review fixes: default 340 passed, 4 skipped; slow 524 passed, 69 skipped, 20 xfailed.</td><td>The same counts. ruff: 73 files (the note: 71; two new ADR files).</td><td class="pass">confirmed</td></tr>
+        <tr><td>Deviation 1: T24 is item 5, the first model load item 87 of 344.</td><td>The same; item 5 and 87 of 613 in the slow test session.</td><td class="pass">confirmed</td></tr>
+        <tr><td>Table 7 of the note: mlx 840.7, torch-mps 610.8, median paired ratio 1.382 (batch size 8); 359.5, 111.0, 3.176 (batch size 1). "I did not run the benchmark again."</td><td>The committed file comes from a later run: 846.9, 610.9, 1.390; 357.3, 114.2, 3.124 (F3).</td><td class="partial">not the committed file</td></tr>
+        <tr><td>R10: after a new run, the 6 mlx lines hold the measured limit, expected 4,103,663,411.</td><td>4,103,663,411 in the 6 mlx lines of the committed file and of the verifier run.</td><td class="pass">confirmed</td></tr>
+        <tr><td>R1: in the fp32 dtype mode the pixel cast does nothing.</td><td>True for fp32. After <code>nn.quantize</code> the cast breaks the input (F1).</td><td class="partial">confirmed, with F1</td></tr>
+        <tr><td>Open point 4: peak memory mlx 0.83 / torch-mps 0.64 GB (batch size 8), 0.41 / 0.56 GB (batch size 1).</td><td>Committed file 0.828 / 0.637 and 0.410 / 0.565 GB; verifier 0.817 / 0.635 and 0.399 / 0.563 GB.</td><td class="pass">confirmed</td></tr>
+        <tr><td>Other values: <code>mx.get_peak_memory</code> 606 and 190 MB; validity 1 &minus; 1.2e-11 (mlx) and 1 &minus; 7.2e-12 (torch-mps).</td><td>605.7 and 190.0 MB; the same validity.</td><td class="pass">confirmed</td></tr>
+        <tr><td>Open point 5: the probe values are about 8 times the plan values.</td><td>7.8&times; and 7.2&times;.</td><td class="pass">confirmed (F9)</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 13.</b> Claims of the hand-over note against the values of the verifier.</p>
+</section>
+
+<section id="open">
+  <h2>9 Open items for the Learn and Close stages</h2>
+  <ul>
+    <li><b>Learn (AC18).</b> Plan Table 1 does not name some functions that Step 4 added or moved to <code>src/</code>. The explainers must also cover them:
+      <ul>
+        <li><code>Attention.qkv</code> and <code>Attention.output</code> (new methods);</li>
+        <li><code>MlxConfig.from_hf</code> and <code>MlxConfig.head_dim</code> (members of a named class);</li>
+        <li><code>stored.own_aspect_size</code> (moved from Step 2; not a reader of the stored files);</li>
+        <li><code>bench.reference_tokens</code> (review fix R6).</li>
+      </ul>
+      The explainer of <code>Embeddings</code> must show the pixel cast and its limit (F1). The explainer of attention can use the probe values, the factor 919 and the parse of <code>MLX_ENABLE_TF32</code> (F9, Table 10). The RoPE explainer can use Table 9 (non-square grids, head dimension 128).</li>
+    <li><b>Close (AC19).</b> GLOSSARY: "Paired ratio" is not in <code>GLOSSARY.md</code> at <code>c212226</code>. The hand-over note also proposes "Key map", "Part test", "Small model" and "TF32 probe". ADR 0005 can cite Section 5.2 (TF32 on still passes the fp32 thresholds for ViT-S/16). The status line of <code>plan.html</code> (F2). The benchmark values come from Section 4 (F3).</li>
+    <li><b>Step 6.</b> F1 before the first <code>nn.quantize</code>; F5 and F6 for the benchmark driver; F8 for an fp32 row with TF32 on.</li>
+  </ul>
+</section>
+
+<section id="commands">
+  <h2>10 Commands</h2>
+  <p>The verifier ran these commands in the repo root, one heavy job at a time. <code>&lt;scratch&gt;</code> is a folder outside the repo. The own scripts live there, not in the repo.</p>
+<pre>uv run ruff format --check
+uv run ruff check
+uv run pytest -v -rs
+DINOV3_SLOW=1 uv run pytest -v -rs
+
+# AC14: test ids of the commit before the build, from a git archive in &lt;scratch&gt;/old
+git archive 6c97c57 src tests scripts pyproject.toml | tar -x -C &lt;scratch&gt;/old
+DINOV3_SLOW=0|1 PYTHONPATH=&lt;scratch&gt;/old/src:&lt;scratch&gt;/old/scripts python -m pytest --collect-only -q tests/test_torch_mps_parity.py
+DINOV3_SLOW=0|1 python -m pytest --collect-only -q tests/test_torch_mps_parity.py
+
+# Own checks
+uv run python &lt;scratch&gt;/a_parity.py 0 &lt;scratch&gt;/a_tf32_off.json     # (a)
+uv run python &lt;scratch&gt;/a_parity.py 1 &lt;scratch&gt;/a_tf32_on.json      # (b)
+uv run python &lt;scratch&gt;/c_keymap.py                                  # (c)
+uv run python &lt;scratch&gt;/d_ref.py &lt;scratch&gt;/d_ref.npz                 # (d), torch-cpu
+uv run python &lt;scratch&gt;/d_mlx.py &lt;scratch&gt;/d_ref.npz                 # (d), mlx
+uv run python &lt;scratch&gt;/e_rope.py                                    # (e)
+MLX_ENABLE_TF32=&lt;value&gt; python &lt;scratch&gt;/tf32_parse.py              # Table 10, 10 values
+python &lt;scratch&gt;/hooks.py                                            # Table 11
+uv run python &lt;scratch&gt;/quantize_cast.py                             # F1
+uv run python &lt;scratch&gt;/quantize_cast2.py                            # F1
+PYTHONPATH=tests uv run python &lt;scratch&gt;/repro.py                  # F1 and F4, small model
+python -c "from parity_table import ...; write_table(latest_lines(parity_log('mlx')), 'mlx')"   # in scripts/
+
+# Benchmark: copy first, put back after
+cp -Rp tests/fixtures/generated/bench/mlx-port &lt;scratch&gt;/backup/
+uv run python scripts/bench_mlx_port.py --results &lt;scratch&gt;/bench.jsonl
+uv run python &lt;scratch&gt;/bench_analysis.py results/bench-mlx-port.jsonl &lt;scratch&gt;/bench.jsonl
+rm -rf tests/fixtures/generated/bench/mlx-port &amp;&amp; cp -Rp &lt;scratch&gt;/backup/mlx-port tests/fixtures/generated/bench/
+shasum results/bench-mlx-port.jsonl results/parity-mlx.md   # equal before and after</pre>
+</section>
+
+</main>
+</body>
+</html>
