@@ -1,0 +1,826 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Step 5 All sizes: Explore</title>
+<style>
+/* Spec page. White page, black text, no dark mode. */
+:root { --bg: #ffffff; --fg: #111414; --muted: #4a5655; --rule: #d6dedd; --panel: #f5f8f7; --accent: #057379; --pass: #1d7a3a; --fail: #b3261e; color-scheme: light; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif; }
+main { max-width: 64rem; margin: 0 auto; padding: 40px 20px 64px; display: grid; gap: 1.75rem; }
+main > *, section > * { min-width: 0; }
+h1 { font-size: 1.9rem; line-height: 1.15; margin: 0; }
+h2 { font-size: 1.3rem; margin: 0; }
+h3 { font-size: 1.05rem; margin: 0; }
+h4 { font-size: 0.95rem; margin: 0; }
+section { display: grid; gap: 0.8rem; }
+p, ul, ol { margin: 0; max-width: 46rem; }
+li + li { margin-top: 0.25rem; }
+code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.86em; }
+p code, li code, td code { overflow-wrap: anywhere; }
+pre { margin: 0; background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 0.8rem 1rem; overflow-x: auto; }
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+th, td { text-align: left; vertical-align: top; padding: 0.45rem 0.7rem 0.45rem 0; border-bottom: 1px solid var(--rule); }
+th { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); border-bottom: 1.5px solid var(--fg); }
+td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+tr.group td { background: var(--panel); font-weight: 600; }
+.caption { font-size: 0.88rem; color: var(--muted); }
+.fail { color: var(--fail); font-weight: 600; }
+.pass { color: var(--pass); font-weight: 600; }
+.rec { color: var(--accent); font-weight: 600; }
+.box { border: 1.5px solid var(--accent); border-radius: 6px; padding: 0.8rem 1rem; display: grid; gap: 0.5rem; }
+figure { margin: 0; display: grid; gap: 0.4rem; }
+.fig { border: 1px solid var(--rule); border-radius: 6px; padding: 0.5rem; overflow-x: auto; }
+.fig svg { display: block; width: 100%; height: auto; min-width: 640px; }
+figcaption { font-size: 0.88rem; color: var(--muted); }
+a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+<header>
+  <h1>Step 5 All sizes: Explore</h1>
+  <p>Roadmap step 5. Status: options and recommendations. On 2026-11-06 the user asked the agent to decide. D1 to D3 and D5 to D8 are chosen. D4 waits for the user's answer to the run-rule question (Section 5.3). Date: 2026-11-07.</p>
+</header>
+
+<section id="goal">
+  <h2>1 Goal and context</h2>
+  <p>Step 5 extends the MLX backbone of Step 4 to all six model sizes and to fp16 and bf16. The step ends when all model sizes pass the parity tests on the backend <code>mlx</code>, or when <code>verify.html</code> explains each failure. Step 5 in Section 6 of <code>docs/plan.html</code> sets this condition. This page gives the decisions with real options, the trade-offs and one recommendation for each decision.</p>
+  <p>These points are fixed. They are not options:</p>
+  <ul>
+    <li>The MLX backbone of Step 4: modules with the names of the safetensors file, the key map at load time, RoPE tables from NumPy fp32, the patch embedding as one matmul, <code>mx.fast.scaled_dot_product_attention</code>, and the fp32 dtype mode with TF32 off (ADR 0005). The target of the RoPE tables is the Hugging Face tables (ADR 0006).</li>
+    <li>The reference output: the reference files of Step 2 (<code>torch-cpu</code>, fp32) for five model sizes. The thresholds of ADR 0003 hold for every backend and model size: fp32 0.9999 / 0.9999 / 0.9999, fp16 0.999 / 0.999 / 0.99, bf16 0.998 / 0.995 / 0.96 (frame embedding, patch mean, patch 1st percentile).</li>
+    <li>RoPE stays in fp32 in every dtype mode, as the official code does (Step 5 in <code>docs/plan.html</code>). <code>apply_rope</code> already rotates in fp32 and casts the result back.</li>
+    <li>The run rules of <code>CLAUDE.md</code>: one heavy job at a time, a memory check before each model load, <code>mx.set_memory_limit</code> for MLX, and ViT-7B/16 in fp16, bf16 or with quantized weights only.</li>
+    <li>Versions: mlx 0.32.4, transformers 5.22.1, torch 2.15.0. Hardware: M5 Max with 64 GB of unified memory.</li>
+    <li>Later steps: Step 6 adds <code>mx.compile</code>, the <code>mlx</code> benchmark and quantized weights. Step 8a adds LoRA on <code>q_proj</code> and <code>v_proj</code> in fp16 autocast. Step 8b adds adapters on all linear layers and on the feed-forward activations. The Step 5 design must not block these steps.</li>
+  </ul>
+
+  <h3>1.1 What the agents found</h3>
+  <p>On 2026-11-07, four agents read the files. They read the weights of the six model sizes (<code>config.json</code> and the safetensors headers only), the numeric results of Steps 2 to 4, the MLX 0.32.4 sources and this repo. They loaded no model and ran no test and no benchmark. The MLX agent ran six probes on arrays smaller than 1 MB. Table 1 gives the six model sizes.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Model size</th><th>Embedding dimension D</th><th>Blocks</th><th>Heads</th><th>Head dimension</th><th>Hidden width FF</th><th>Feed-forward network</th><th>q, k, v biases</th><th>Files</th><th>Tensors</th><th>Parameters</th><th>fp32 bytes</th></tr></thead>
+      <tbody>
+        <tr><td>ViT-S/16</td><td class="num">384</td><td class="num">12</td><td class="num">6</td><td class="num">64</td><td class="num">1,536 (4 D)</td><td>MLP, GELU (erf)</td><td>q, v</td><td class="num">1</td><td class="num">211</td><td class="num">21,596,544</td><td class="num">86.4 MB</td></tr>
+        <tr><td>ViT-S+/16</td><td class="num">384</td><td class="num">12</td><td class="num">6</td><td class="num">64</td><td class="num">1,536 (4 D)</td><td><b>SwiGLU</b>, SiLU</td><td>q, v</td><td class="num">1</td><td class="num">235</td><td class="num">28,692,864</td><td class="num">114.8 MB</td></tr>
+        <tr><td>ViT-B/16</td><td class="num">768</td><td class="num">12</td><td class="num">12</td><td class="num">64</td><td class="num">3,072 (4 D)</td><td>MLP, GELU (erf)</td><td>q, v</td><td class="num">1</td><td class="num">211</td><td class="num">85,660,416</td><td class="num">342.6 MB</td></tr>
+        <tr><td>ViT-L/16</td><td class="num">1,024</td><td class="num">24</td><td class="num">16</td><td class="num">64</td><td class="num">4,096 (4 D)</td><td>MLP, GELU (erf)</td><td>q, v</td><td class="num">1</td><td class="num">415</td><td class="num">303,129,600</td><td class="num">1.21 GB</td></tr>
+        <tr><td>ViT-H+/16</td><td class="num">1,280</td><td class="num">32</td><td class="num">20</td><td class="num">64</td><td class="num">5,120 (4 D)</td><td><b>SwiGLU</b>, SiLU</td><td>q, v</td><td class="num">1</td><td class="num">615</td><td class="num">840,592,640</td><td class="num">3.36 GB</td></tr>
+        <tr><td>ViT-7B/16</td><td class="num">4,096</td><td class="num">40</td><td class="num">32</td><td class="num"><b>128</b></td><td class="num">8,192 (<b>2 D</b>)</td><td><b>SwiGLU</b>, SiLU</td><td><b>none</b></td><td class="num"><b>6</b> + index</td><td class="num">687</td><td class="num">6,716,035,072</td><td class="num">26.86 GB</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 1.</b> The six model sizes. Source: <code>config.json</code> and the safetensors headers of the six Hub repos, read on 2026-11-07 without a tensor load. All six have <code>rope_theta</code> 100, 4 register tokens, patch size 16, layer-norm eps 1e-5 and biases on <code>o_proj</code> and on the feed-forward network. No model size has a bias on <code>k_proj</code>. All tensors in all files are F32. The tensor and parameter counts include the mask token, which the key map drops.</p>
+  <p>Nine findings shape the decisions:</p>
+  <ol>
+    <li><b>Only D and FF change the shapes.</b> All model sizes use the same tensor names. ViT-S+/16, ViT-H+/16 and ViT-7B/16 add <code>layer.N.mlp.gate_proj.weight</code> (FF, D) and <code>layer.N.mlp.gate_proj.bias</code> (FF). ViT-7B/16 has no <code>q_proj.bias</code> and no <code>v_proj.bias</code>. Its head dimension is 128, so its RoPE has 32 frequencies, not 16 (D1).</li>
+    <li><b>The SwiGLU formula.</b> <code>DINOv3ViTGatedMLP.forward</code> in transformers 5.22.1 computes <code>down_proj(act_fn(gate_proj(x)) * up_proj(x))</code>. Only <code>gate_proj</code> gets the activation. <code>act_fn</code> is SiLU: silu(z) = z · sigmoid(z), <code>nn.silu</code> in MLX. <code>gate_proj</code>, <code>up_proj</code> and <code>down_proj</code> each have a bias (D1).</li>
+    <li><b>The port stops at SwiGLU.</b> <code>Block</code> raises <code>NotImplementedError</code> for a gated config, and <code>MLP</code> raises it for <code>hidden_act</code> "silu" (<code>src/dinov3_apple/mlx_model.py</code>). <code>block_parameter_names</code> builds a probe block without a gate, so <code>map_key</code> raises <code>UnknownWeightError</code> for <code>gate_proj</code>. The hook "the key map already accepts mlp.gate_proj" in Table 5 of <code>specs/04-mlx-port/plan.html</code> is stale since the F4 fix (D1).</li>
+    <li><b>One dtype for each mode.</b> <code>MLX_DTYPE_MODES</code> maps each mode to one dtype. It cannot express fp16 or bf16 matmuls with an fp32 residual stream (D2).</li>
+    <li><b>The official precision is bf16 autocast with RoPE in fp32.</b> The official eval code runs <code>torch.autocast</code> with bf16 on fp32 weights. Every hub backbone sets <code>pos_embed_rope_dtype="fp32"</code>. The backbone path of the official code never uses fp16. The Hugging Face code casts the RoPE tables to the dtype of the pixels. So in cast mode on <code>torch-mps</code>, the rotation runs in fp16 or bf16 (D2).</li>
+    <li><b>The MLX kernels.</b> The matmul kernels accumulate in fp32 and round once. The SDPA kernel computes the scores, the softmax and P · V in fp32. The layer norm accumulates in fp32 and rounds twice. <code>nn.silu</code> and <code>nn.gelu</code> round after each operation (D2).</li>
+    <li><b>fp16 overflow.</b> In fp32, a register token of ViT-L/16 reaches 157,130 and one of ViT-H+/16 reaches 131,448. The largest fp16 value is 65,504. On <code>torch-mps</code>, fp16-cast gives non-finite output for ViT-L/16 (12 of 12 configurations) and ViT-H+/16 (the 6 configurations with a 224 px short side) (D3).</li>
+    <li><b>No ViT-7B/16 reference file.</b> The run rule forbids a full fp32 load on <code>torch-cpu</code>. Its memory check asks for 36.2 GB (<code>test_reference_is_reproducible</code>, ratio 1.2) to 36.6 GB (<code>make_reference.py</code>, ratio 1.215). The free memory reached 46.0 GB on 2026-11-07, so this check can pass. Only the run rule stops the load. So the guard of D4 must exist before a ViT-7B/16 reference file exists (D4).</li>
+    <li><b>The MLX load peak.</b> <code>load_mlx_backbone</code> keeps the dict of lazy fp32 tensors alive during <code>mx.eval</code>. In the four fp16 and bf16 dtype modes, the peak is the fp32 bytes plus the fp16 or bf16 bytes. For ViT-7B/16 in bf16 this is about 40.3 GB, against a memory check of 20.1 GB. <code>mx.set_memory_limit</code> is only a guideline (D5).</li>
+  </ol>
+
+  <h3>1.2 Results of Steps 2 to 4</h3>
+  <p>Table 2 gives the parity of <code>torch-mps</code> against the reference output for each model size and dtype mode. Table 3 gives the largest token values of Step 2. Both tables are the starting point of the <code>mlx</code> rows of Step 5.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Model size</th><th>fp32</th><th>fp16-cast</th><th>bf16-cast</th><th>fp16-autocast</th><th>bf16-autocast</th></tr></thead>
+      <tbody>
+        <tr><td>ViT-S/16</td><td class="pass">pass</td><td class="pass">pass</td><td class="pass">pass</td><td class="pass">pass</td><td class="pass">pass</td></tr>
+        <tr><td>ViT-S+/16</td><td class="pass">pass</td><td class="pass">pass</td><td class="pass">pass</td><td class="pass">pass</td><td class="pass">pass</td></tr>
+        <tr><td>ViT-B/16</td><td class="pass">pass</td><td class="pass">pass</td><td class="pass">pass</td><td class="pass">pass</td><td class="pass">pass</td></tr>
+        <tr><td>ViT-L/16</td><td class="pass">pass</td><td class="fail">non-finite, 12 of 12 (xfail)</td><td class="pass">pass</td><td class="pass">pass</td><td class="pass">pass</td></tr>
+        <tr><td>ViT-H+/16</td><td class="pass">pass</td><td><span class="pass">6 pass</span> (448 and 512 px), <span class="fail">6 non-finite</span> (224 px short side, xfail)</td><td class="pass">pass</td><td class="pass">pass</td><td class="pass">pass</td></tr>
+        <tr><td>ViT-7B/16</td><td>skipped: run rule</td><td>skipped: no reference file</td><td>skipped: no reference file</td><td>skipped: run rule (fp32 weights)</td><td>skipped: run rule (fp32 weights)</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 2.</b> Parity of <code>torch-mps</code> against the reference output, 12 configurations for each cell (<code>results/parity-torch-mps.md</code>). Worst bf16 values: frame 0.998365 and patch mean 0.995177 (ViT-S+/16, bf16-autocast), patch 1st percentile 0.968878 (ViT-H+/16, bf16-cast). Worst fp16 value: patch 1st percentile 0.999781 (ViT-H+/16, fp16-autocast). Batch consistency is 1.000000 in every pair with finite output. The latest lines of <code>parity/torch-mps.jsonl</code> (2026-11-07 01:51 UTC) also show ViT-7B/16 batch consistency in fp16-cast and bf16-cast. For the three test images at 224 × 224 px, the output is finite and the batch consistency is 1.000000. <code>results/parity-torch-mps.md</code> is older and still shows the skip of the memory check. On <code>mlx</code>, Step 4 measured only ViT-S/16 in fp32: 12 of 12 pass, 1 − 3.1e-11 or better.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Model size</th><th>Largest value</th><th>After block</th><th>Token</th><th>Share of fp16 maximum</th><th>Largest patch value</th><th>Above 65,504</th></tr></thead>
+      <tbody>
+        <tr><td>ViT-S/16</td><td class="num">1,708</td><td class="num">11</td><td>R1</td><td class="num">2.6 %</td><td class="num">429</td><td>no</td></tr>
+        <tr><td>ViT-S+/16</td><td class="num">5,262</td><td class="num">11</td><td>R3</td><td class="num">8.0 %</td><td class="num">877</td><td>no</td></tr>
+        <tr><td>ViT-B/16</td><td class="num">14,926</td><td class="num">11</td><td>R1</td><td class="num">22.8 %</td><td class="num">1,298</td><td>no</td></tr>
+        <tr><td>ViT-L/16</td><td class="num">157,130</td><td class="num">23</td><td>R2</td><td class="num">239.9 %</td><td class="num">2,649</td><td class="fail">after blocks 1 to 24 (155,923 after block 1)</td></tr>
+        <tr><td>ViT-H+/16</td><td class="num">131,448</td><td class="num">30</td><td>R2</td><td class="num">200.7 %</td><td class="num">10,834</td><td class="fail">after blocks 23 to 32 (3,703 → 131,121 at block 23)</td></tr>
+        <tr><td>ViT-7B/16</td><td colspan="6">Not measured: no reference file. On <code>torch-mps</code>, fp16-cast at 224 × 224 px gave finite output for the three test images (batch test). So at these inputs no token reached the fp16 maximum in cast mode.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 3.</b> Largest absolute value in the token sequence before the final layer norm, for <code>iss-kibo-lab</code> at 224 × 224 px, <code>torch-cpu</code>, fp32. Source: Table 2 and Figure 2 of <code>docs/learn/02-tokens-and-outputs.html</code> and Table 9 of <code>specs/02-reference/verify.html</code>. R1 to R4 are the register tokens. The large values sit in 3 to 14 channels of one register token. For ViT-H+/16 at 448 px, one Step 2 probe on <code>iss-conference</code> gave about 59,900 (91 % of the fp16 maximum). Nobody measured the other images or 512 px. After the final layer norm, no output value is above 18.</p>
+</section>
+
+<section id="ffn">
+  <h2>2 The two feed-forward networks</h2>
+  <p>Figure 1 shows the feed-forward branch of one block for the MLP and for SwiGLU, with the shapes. The colors show the dtype of each part in the recommended autocast modes of D2. Table 4 gives the shapes and the weights for each model size.</p>
+  <figure>
+    <div class="fig"><svg viewBox="0 0 960 490" role="img" aria-label="The feed-forward branch of one block. Top: the MLP with up_proj, exact GELU and down_proj. Bottom: SwiGLU with gate_proj, SiLU, up_proj, an element-wise product and down_proj. Both end with LayerScale and the residual add." font-family="-apple-system, Helvetica Neue, Arial, sans-serif">
+      <defs><marker id="arrow1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#4a5655"/></marker></defs>
+      <rect width="960" height="490" fill="#ffffff"/>
+      <g font-size="12.5" fill="#111414" text-anchor="middle">
+        <text x="20" y="40" font-weight="600" text-anchor="start">MLP: ViT-S/16, ViT-B/16 and ViT-L/16. FF = 4 D. Two matmuls of D × FF.</text>
+        <text x="34" y="104" font-weight="600">x</text>
+        <rect x="60" y="72" width="90" height="56" rx="6" fill="#f5f8f7" stroke="#4a5655" stroke-width="1.5"/>
+        <text x="105" y="96" font-weight="600">norm2</text>
+        <text x="105" y="114" font-size="11.5">LayerNorm</text>
+        <rect x="175" y="72" width="150" height="56" rx="6" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="250" y="92" font-weight="600">up_proj</text>
+        <text x="250" y="108" font-size="11.5">D → FF</text>
+        <text x="250" y="122" font-size="11.5">(B, T, FF)</text>
+        <rect x="350" y="72" width="110" height="56" rx="6" fill="#fbf1df" stroke="#b26b00" stroke-width="1.5"/>
+        <text x="405" y="96" font-weight="600">GELU</text>
+        <text x="405" y="114" font-size="11.5">exact (erf)</text>
+        <rect x="485" y="72" width="150" height="56" rx="6" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="560" y="92" font-weight="600">down_proj</text>
+        <text x="560" y="108" font-size="11.5">FF → D</text>
+        <text x="560" y="122" font-size="11.5">(B, T, D)</text>
+        <rect x="660" y="72" width="120" height="56" rx="6" fill="#f5f8f7" stroke="#4a5655" stroke-width="1.5"/>
+        <text x="720" y="96" font-weight="600">LayerScale2</text>
+        <text x="720" y="114" font-size="11.5">× λ, D values</text>
+        <circle cx="820" cy="100" r="11" fill="#ffffff" stroke="#4a5655" stroke-width="1.5"/>
+        <path d="M814,100 H826 M820,94 V106" stroke="#111414" stroke-width="1.5"/>
+        <text x="842" y="104" text-anchor="start">next block</text>
+        <text x="440" y="168" font-size="11" fill="#4a5655">residual stream</text>
+
+        <text x="20" y="210" font-weight="600" text-anchor="start">SwiGLU: ViT-S+/16 and ViT-H+/16 (FF = 4 D), ViT-7B/16 (FF = 2 D). Three matmuls of D × FF.</text>
+        <text x="34" y="314" font-weight="600">x</text>
+        <rect x="60" y="282" width="90" height="56" rx="6" fill="#f5f8f7" stroke="#4a5655" stroke-width="1.5"/>
+        <text x="105" y="306" font-weight="600">norm2</text>
+        <text x="105" y="324" font-size="11.5">LayerNorm</text>
+        <rect x="190" y="232" width="150" height="56" rx="6" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="265" y="252" font-weight="600">gate_proj</text>
+        <text x="265" y="268" font-size="11.5">D → FF</text>
+        <text x="265" y="282" font-size="11.5">(B, T, FF)</text>
+        <rect x="190" y="332" width="150" height="56" rx="6" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="265" y="352" font-weight="600">up_proj</text>
+        <text x="265" y="368" font-size="11.5">D → FF</text>
+        <text x="265" y="382" font-size="11.5">(B, T, FF)</text>
+        <rect x="365" y="232" width="100" height="56" rx="6" fill="#fbf1df" stroke="#b26b00" stroke-width="1.5"/>
+        <text x="415" y="256" font-weight="600">SiLU</text>
+        <text x="415" y="274" font-size="11.5">z · sigmoid(z)</text>
+        <circle cx="500" cy="310" r="13" fill="#fbf1df" stroke="#b26b00" stroke-width="1.5"/>
+        <text x="500" y="315" font-size="15" font-weight="600">×</text>
+        <text x="430" y="318" font-size="11" fill="#4a5655">element-wise</text>
+        <rect x="535" y="282" width="140" height="56" rx="6" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="605" y="302" font-weight="600">down_proj</text>
+        <text x="605" y="318" font-size="11.5">FF → D</text>
+        <text x="605" y="332" font-size="11.5">(B, T, D)</text>
+        <rect x="700" y="282" width="110" height="56" rx="6" fill="#f5f8f7" stroke="#4a5655" stroke-width="1.5"/>
+        <text x="755" y="306" font-weight="600">LayerScale2</text>
+        <text x="755" y="324" font-size="11.5">× λ, D values</text>
+        <circle cx="845" cy="310" r="11" fill="#ffffff" stroke="#4a5655" stroke-width="1.5"/>
+        <path d="M839,310 H851 M845,304 V316" stroke="#111414" stroke-width="1.5"/>
+        <text x="866" y="314" text-anchor="start">next block</text>
+        <text x="440" y="428" font-size="11" fill="#4a5655">residual stream</text>
+
+        <rect x="20" y="452" width="16" height="12" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="44" y="462" text-anchor="start" font-size="11.5">matmul dtype: fp16 or bf16</text>
+        <rect x="230" y="452" width="16" height="12" fill="#f5f8f7" stroke="#4a5655" stroke-width="1.5"/>
+        <text x="254" y="462" text-anchor="start" font-size="11.5">stream dtype: fp32</text>
+        <rect x="400" y="452" width="16" height="12" fill="#fbf1df" stroke="#b26b00" stroke-width="1.5"/>
+        <text x="424" y="462" text-anchor="start" font-size="11.5">activation: computed in fp32, rounded once to the matmul dtype</text>
+      </g>
+      <g stroke="#4a5655" stroke-width="1.5" fill="none">
+        <path d="M44,100 H56" marker-end="url(#arrow1)"/>
+        <path d="M150,100 H171" marker-end="url(#arrow1)"/>
+        <path d="M325,100 H346" marker-end="url(#arrow1)"/>
+        <path d="M460,100 H481" marker-end="url(#arrow1)"/>
+        <path d="M635,100 H656" marker-end="url(#arrow1)"/>
+        <path d="M780,100 H805" marker-end="url(#arrow1)"/>
+        <path d="M50,100 V152 H820 V115" marker-end="url(#arrow1)"/>
+
+        <path d="M44,310 H56" marker-end="url(#arrow1)"/>
+        <path d="M150,310 H168"/>
+        <path d="M168,310 V260 H186" marker-end="url(#arrow1)"/>
+        <path d="M168,310 V360 H186" marker-end="url(#arrow1)"/>
+        <path d="M340,260 H361" marker-end="url(#arrow1)"/>
+        <path d="M465,260 H500 V293" marker-end="url(#arrow1)"/>
+        <path d="M340,360 H500 V327" marker-end="url(#arrow1)"/>
+        <path d="M513,310 H531" marker-end="url(#arrow1)"/>
+        <path d="M675,310 H696" marker-end="url(#arrow1)"/>
+        <path d="M810,310 H830" marker-end="url(#arrow1)"/>
+        <path d="M50,310 V412 H845 V325" marker-end="url(#arrow1)"/>
+      </g>
+    </svg></div>
+    <figcaption><b>Figure 1.</b> The feed-forward branch of one block. Top: the MLP. Bottom: SwiGLU, with the gate path (SiLU) and the linear path (up_proj) joined by an element-wise product. B is the batch size and T is the number of tokens (5 + N). Colors: the dtype of each part in fp16-autocast and bf16-autocast (D2). In fp32 every part is fp32. In cast mode every part uses one half-precision dtype, but the activation still computes in fp32 and rounds once.</figcaption>
+  </figure>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Model size</th><th>Feed-forward network</th><th>D</th><th>FF</th><th>gate_proj, up_proj weight</th><th>down_proj weight</th><th>Feed-forward weights in one block</th><th>Share of the block weights</th></tr></thead>
+      <tbody>
+        <tr><td>ViT-S/16</td><td>MLP</td><td class="num">384</td><td class="num">1,536</td><td>up only: (1536, 384)</td><td>(384, 1536)</td><td class="num">1,181,568</td><td class="num">66.6 %</td></tr>
+        <tr><td>ViT-S+/16</td><td>SwiGLU</td><td class="num">384</td><td class="num">1,536</td><td>(1536, 384) each</td><td>(384, 1536)</td><td class="num">1,772,928</td><td class="num">74.9 %</td></tr>
+        <tr><td>ViT-B/16</td><td>MLP</td><td class="num">768</td><td class="num">3,072</td><td>up only: (3072, 768)</td><td>(768, 3072)</td><td class="num">4,722,432</td><td class="num">66.6 %</td></tr>
+        <tr><td>ViT-L/16</td><td>MLP</td><td class="num">1,024</td><td class="num">4,096</td><td>up only: (4096, 1024)</td><td>(1024, 4096)</td><td class="num">8,393,728</td><td class="num">66.6 %</td></tr>
+        <tr><td>ViT-H+/16</td><td>SwiGLU</td><td class="num">1,280</td><td class="num">5,120</td><td>(5120, 1280) each</td><td>(1280, 5120)</td><td class="num">19,672,320</td><td class="num">75.0 %</td></tr>
+        <tr><td>ViT-7B/16</td><td>SwiGLU</td><td class="num">4,096</td><td class="num">8,192</td><td>(8192, 4096) each</td><td>(4096, 8192)</td><td class="num">100,683,776</td><td class="num">60.0 %</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 4.</b> Shapes of the feed-forward network, in the layout (out, in) of the file and of <code>nn.Linear</code>. Our computation from the headers. The block weights are the two norms, the attention, the two LayerScales and the feed-forward network: for example 167,821,312 for ViT-7B/16 (0.671 GB in fp32). The 40 blocks and 3,182,592 weights outside the blocks give the 6,716,035,072 parameters of Table 1.</p>
+</section>
+
+<section id="decisions">
+  <h2>3 Decisions</h2>
+  <p>Eight decisions have real options. Each subsection gives the options, a table of trade-offs and a recommendation. Section 5 lists the chosen options.</p>
+
+  <h3>3.1 D1: SwiGLU</h3>
+  <p>SwiGLU needs three matmuls: <code>gate_proj</code> and <code>up_proj</code> from D to FF, and <code>down_proj</code> from FF to D. Both input matmuls read the same x.</p>
+  <p><b>Option A: three separate <code>nn.Linear</code> modules with the Hugging Face names.</b> The key map stays the identity for the new keys.</p>
+  <p><b>Option B: one fused matmul for the gate and up paths.</b> The load joins <code>gate_proj</code> and <code>up_proj</code> into one weight (2 FF, D). The block runs one matmul and splits the result.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Criterion</th><th>A: three <code>nn.Linear</code></th><th>B: fused gate and up</th></tr></thead>
+      <tbody>
+        <tr><td>Key map</td><td>Identity for the 2 new keys of each block. <code>load_weights(strict=True)</code> checks each name and shape</td><td>Two file tensors give one parameter. The key map gets a join step. The strict load checks only the joined shape</td></tr>
+        <tr><td>Matmuls in the feed-forward network</td><td>3</td><td>2: one of (2 FF, D) and <code>down_proj</code>. Fewer kernel launches</td></tr>
+        <tr><td>Part tests against <code>DINOv3ViTGatedMLP</code></td><td>Each Linear has the name of the Hugging Face module</td><td>The test needs a split view of the fused weight</td></tr>
+        <tr><td>Step 6: <code>nn.quantize</code>, <code>mx.compile</code></td><td><code>nn.quantize</code> replaces each Linear. <code>mx.compile</code> can fuse SiLU and the product</td><td>One quantized Linear of (2 FF, D)</td></tr>
+        <tr><td>Step 8: LoRA</td><td>The names stay. The reference targets are <code>q_proj</code> and <code>v_proj</code> only</td><td>An adapter on <code>gate_proj</code> or <code>up_proj</code> needs a split</td></tr>
+        <tr><td>Speed</td><td colspan="2">Not measured. A gain of B is likely only at batch size 1, where the kernel launches count. This is the same question as the fused q, k, v projections of Step 6 (Table 18 of <code>specs/04-mlx-port/explore.html</code>)</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 5.</b> Trade-offs of D1.</p>
+  <p>The key map needs the parameter names of a SwiGLU block. Today <code>block_parameter_names</code> builds one probe block without a gate and with all biases. Three ways can give the names:</p>
+  <ul>
+    <li>the union of two probe blocks (MLP and SwiGLU);</li>
+    <li>a probe from the config of the model size (then <code>map_key</code> needs the config);</li>
+    <li>a fixed list (then the module and the list can differ).</li>
+  </ul>
+  <p>The union keeps <code>map_key</code> without the config. A <code>gate_proj</code> key in an MLP model size still fails: <code>load_weights(strict=True)</code> compares the pairs with the parameters of the real model.</p>
+  <p>ViT-7B/16 needs no change for its missing q and v biases. <code>map_key</code> accepts a name only if the probe block has it. It does not ask for every name of the probe. <code>MlxConfig.from_hf</code> reads <code>query_bias</code> false, so the backbone has no <code>q_proj.bias</code>, and the strict load agrees with the file.</p>
+  <div class="box">
+    <p><b>Recommendation: Option A.</b></p>
+    <ul>
+      <li>Add a module <code>SwiGLU</code> with <code>gate_proj</code>, <code>up_proj</code> and <code>down_proj</code>, each <code>nn.Linear(bias=config.mlp_bias)</code>. <code>Block</code> builds <code>SwiGLU</code> when <code>config.gated</code> is true, else <code>MLP</code>. <code>SwiGLU</code> raises <code>NotImplementedError</code> for an activation other than "silu".</li>
+      <li><code>block_parameter_names</code> returns the union of an MLP probe block and a SwiGLU probe block, both with all biases.</li>
+      <li>Compute the activation and the product in fp32 and round once (D2, Table 8).</li>
+      <li>The part test of SwiGLU compares with <code>DINOv3ViTGatedMLP</code> on <code>torch-cpu</code>, with a new small model: the values of ViT-S+/16, 2 blocks, random weights. A second small model has the shape of ViT-7B/16 (head dimension 128, no q and v biases, FF = 2 D) at a small embedding dimension.</li>
+      <li>A fused gate and up matmul is a Step 6 question, with the fused q, k, v projections.</li>
+    </ul>
+  </div>
+  <pre><code># src/dinov3_apple/mlx_model.py (shape of the code, not final)
+class SwiGLU(nn.Module):
+    """The feed-forward network of ViT-S+/16, ViT-H+/16 and ViT-7B/16."""
+
+    def __init__(self, config: MlxConfig) -&gt; None:
+        super().__init__()
+        if config.hidden_act != "silu":
+            raise NotImplementedError(f"activation {config.hidden_act!r} of SwiGLU")
+        self.gate_proj = nn.Linear(config.dim, config.ff, bias=config.mlp_bias)
+        self.up_proj = nn.Linear(config.dim, config.ff, bias=config.mlp_bias)
+        self.down_proj = nn.Linear(config.ff, config.dim, bias=config.mlp_bias)
+
+    def __call__(self, x: mx.array) -&gt; mx.array:
+        """Return down_proj(silu(gate_proj(x)) * up_proj(x)). The product runs in fp32 (D2)."""
+        gate = self.gate_proj(x).astype(mx.float32)
+        up = self.up_proj(x).astype(mx.float32)
+        return self.down_proj((nn.silu(gate) * up).astype(x.dtype))
+
+
+# Block.__init__
+self.mlp = SwiGLU(config) if config.gated else MLP(config)</code></pre>
+
+  <h3>3.2 D2: MLX dtype modes and their names</h3>
+  <p>Step 5 must run fp16 and bf16 on <code>mlx</code>. On <code>torch-mps</code> there are two kinds of dtype mode. In cast mode, the weights, the inputs and the residual stream are in fp16 or bf16. In autocast mode, the weights and the residual stream stay in fp32, and <code>torch.autocast</code> runs the matmuls in fp16 or bf16. The question is which modes <code>mlx</code> gets, and their names.</p>
+  <p><b>Option A: cast modes only.</b> <code>fp16-cast</code> and <code>bf16-cast</code>: the weights and all activations in half precision. RoPE stays in fp32.</p>
+  <p><b>Option B: cast modes and an autocast-like mode under the names <code>fp16-autocast</code> and <code>bf16-autocast</code>.</b> The weights of the matmuls are in half precision. The residual stream, the layer norms, LayerScale, the CLS token and the register tokens stay in fp32. The SDPA kernel keeps the softmax in fp32. RoPE stays in fp32.</p>
+  <p><b>Option C: the same modes as B under new names</b>, for example <code>fp16-mixed</code> and <code>bf16-mixed</code>.</p>
+  <p><b>Option D: a real autocast on <code>mlx</code>.</b> fp32 weights, and a cast of each weight to half precision at each call.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Criterion</th><th>A: cast only</th><th>B: autocast names</th><th>C: new names</th><th>D: fp32 weights, cast at each call</th></tr></thead>
+      <tbody>
+        <tr><td>A valid fp16 row for ViT-L/16 and ViT-H+/16</td><td class="fail">No: fp16-cast overflows (D3)</td><td>Expected: fp16-autocast passes on <code>torch-mps</code></td><td>Expected</td><td>Expected</td></tr>
+        <tr><td>ViT-7B/16 in the official precision (bf16 matmuls, fp32 residual stream)</td><td class="fail">No</td><td>Yes, with 13.4 GB of bf16 weights</td><td>Yes</td><td class="fail">No: 26.9 GB of fp32 weights break the run rule</td></tr>
+        <tr><td>Numbers against <code>torch.autocast</code></td><td>—</td><td colspan="2">The same rounded weights: autocast rounds the fp32 weights at each matmul, the load rounds them once. Kernel details differ</td><td>The same as B</td></tr>
+        <tr><td><code>THRESHOLDS</code>, <code>DTYPE_OF_MODE</code>, <code>parity_table.py</code>, Step 3 baseline join</td><td>Existing keys</td><td>Existing keys. Rows compare with the <code>torch-mps</code> rows of the same name</td><td>New keys in each place. The parity table needs a map to the <code>torch-mps</code> names</td><td>Existing keys</td></tr>
+        <tr><td>GLOSSARY.md</td><td>No change</td><td>The definition of "autocast mode" changes: it names what runs in which dtype. The weights get a note for each backend</td><td>A new term</td><td>No change</td></tr>
+        <tr><td><code>bench.WEIGHT_BYTES</code> (Step 6)</td><td>2</td><td>About 2 on <code>mlx</code>, 4 on torch. The value depends on the backend</td><td>About 2</td><td>4, plus a half copy at each call</td></tr>
+        <tr><td>Speed before <code>mx.compile</code></td><td>Fewest kernels</td><td colspan="2">About 4 more element-wise kernels for each block (casts). Step 6 fuses them</td><td>A full weight cast at each call</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 6.</b> Trade-offs of D2. The official eval code runs <code>torch.autocast</code> with bf16 on fp32 weights, so the official inference precision is bf16 matmuls with an fp32 residual stream.</p>
+  <p>Table 7 gives the dtype of each part in each recommended mode. Two dtypes describe one mode: the matmul dtype and the stream dtype.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Part</th><th>fp32</th><th>fp16-cast, bf16-cast</th><th>fp16-autocast, bf16-autocast</th></tr></thead>
+      <tbody>
+        <tr><td>Stored pixels into <code>run_mlx</code></td><td>fp32</td><td>fp32. The model casts them to the matmul dtype</td><td>fp32. The model casts them to the matmul dtype</td></tr>
+        <tr><td>Patch embedding: weight and input</td><td>fp32</td><td>half</td><td>half</td></tr>
+        <tr><td>Patch tokens after the patch embedding</td><td>fp32</td><td>half</td><td>cast to fp32</td></tr>
+        <tr><td>CLS token, register tokens</td><td>fp32</td><td>half</td><td>fp32</td></tr>
+        <tr><td>Residual stream</td><td>fp32</td><td>half</td><td>fp32</td></tr>
+        <tr><td>norm1, norm2, final norm</td><td>fp32</td><td>half. The kernel accumulates in fp32 and rounds twice</td><td>fp32. The model casts the output to half before the projections</td></tr>
+        <tr><td>q, k, v, o projections and feed-forward matmuls: weights</td><td>fp32, TF32 off</td><td>half. fp32 accumulation, one rounding</td><td>half. fp32 accumulation, one rounding</td></tr>
+        <tr><td>RoPE tables and rotation</td><td>fp32</td><td>fp32, result cast to half</td><td>fp32, result cast to half</td></tr>
+        <tr><td>SDPA</td><td>fp32</td><td>half inputs. Scores, softmax and P · V in fp32 inside the kernel</td><td>the same as cast mode</td></tr>
+        <tr><td>Activation: GELU, or SiLU and the product</td><td>fp32</td><td>fp32 inside, one rounding to half</td><td>fp32 inside, one rounding to half</td></tr>
+        <tr><td>Branch output (o_proj, down_proj)</td><td>fp32</td><td>half</td><td>half</td></tr>
+        <tr><td>LayerScale λ</td><td>fp32</td><td>half</td><td>fp32. A half branch output × fp32 λ gives fp32</td></tr>
+        <tr><td>Output to NumPy</td><td>fp32</td><td>cast to fp32</td><td>fp32</td></tr>
+        <tr><td>Bytes for each weight</td><td>4</td><td>2</td><td>About 2: the norms, LayerScale and the prefix tokens stay fp32. They are below 0.2 % of the weights</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 7.</b> The dtype of each part in the recommended MLX dtype modes. "half" is fp16 or bf16. The MLX kernel facts come from the MLX 0.32.4 sources (<code>steel/gemm/transforms.h</code>, <code>gemv.h</code>, <code>steel_attention.h</code>) and from probes on arrays below 1 MB. The design keeps one difference to <code>torch-mps</code> on purpose. The Hugging Face code casts the RoPE tables to half in cast mode. But <code>mlx</code> rotates in fp32 in every mode, as the official code and Step 5 of <code>docs/plan.html</code> ask.</p>
+  <p>The activation has a second choice. <code>nn.silu</code> and <code>nn.gelu</code> in MLX round after each operation. Table 8 gives the effect on 100,001 evenly spaced points in [−8, 8], cast to the half dtype (probe of the MLX agent).</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Function</th><th>fp16: share of values that differ</th><th>fp16: largest difference</th><th>bf16: share of values that differ</th><th>bf16: largest difference</th></tr></thead>
+      <tbody>
+        <tr><td><code>nn.silu</code> in the input dtype</td><td class="num">21 %</td><td class="num">0.0039</td><td class="num">29 %</td><td class="num">0.031</td></tr>
+        <tr><td><code>nn.gelu</code> in the input dtype</td><td class="num">35 %</td><td class="num">0.002</td><td class="num">32 %</td><td class="num">0.016</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 8.</b> Values of the MLX activation in half precision that differ from "compute in fp32, then round once". On all 33,282 finite bf16 values in [−8, 8], the bf16 shares are only 3.7 % (silu) and 3.0 % (gelu). The largest differences stay the same. The bf16 thresholds have a headroom of only 1.04 to 1.29 (finding F2 of <code>specs/02-reference/verify.html</code>). So extra roundings can move a bf16 row below its threshold. The cost of the fp32 activation: two casts up and one cast down of a (B, T, FF) tensor in each block. In fp32 mode the casts allocate nothing.</p>
+  <div class="box">
+    <p><b>Recommendation: Option B, with the activation in fp32 and one rounding.</b></p>
+    <ul>
+      <li><code>MLX_DTYPE_MODES</code> gets all five keys of <code>THRESHOLDS</code>. Each value is a pair: the matmul dtype and the stream dtype (code below).</li>
+      <li>The backbone holds the two dtypes as plain attributes, set at load. It does not read them from the weight dtypes, because <code>nn.quantize</code> packs weights into uint32 (F1 of <code>specs/04-mlx-port/verify.html</code>).</li>
+      <li>The load gives the matmul dtype to the weights and biases of every <code>nn.Linear</code> module, found with <code>named_modules()</code> and <code>isinstance</code>, not with name suffixes. All other parameters get the stream dtype.</li>
+      <li><code>run_mlx</code> passes fp32 pixels. The model casts them. <code>run_mlx</code> checks that its <code>dtype_mode</code> equals the mode of the model.</li>
+      <li>The TF32 check runs only when the matmul dtype is fp32.</li>
+      <li>GLOSSARY.md: the definition of "autocast mode" changes (Section 5.2). <code>bench.WEIGHT_BYTES</code> gets a value for each backend in Step 6.</li>
+      <li>ViT-7B/16 on <code>mlx</code> can run the four fp16 and bf16 dtype modes, also the autocast modes, because its weights are in half precision.</li>
+    </ul>
+  </div>
+  <pre><code># src/dinov3_apple/mlx_model.py (shape of the code, not final)
+@dataclass(frozen=True)
+class MlxDtypeMode:
+    matmul: mx.Dtype  # weights and inputs of the matmuls, SDPA
+    stream: mx.Dtype  # residual stream, layer norms, LayerScale, CLS token and register tokens
+
+
+MLX_DTYPE_MODES: dict[str, MlxDtypeMode] = {
+    "fp32": MlxDtypeMode(mx.float32, mx.float32),
+    "fp16-cast": MlxDtypeMode(mx.float16, mx.float16),
+    "bf16-cast": MlxDtypeMode(mx.bfloat16, mx.bfloat16),
+    "fp16-autocast": MlxDtypeMode(mx.float16, mx.float32),
+    "bf16-autocast": MlxDtypeMode(mx.bfloat16, mx.float32),
+}
+
+# Embeddings.__call__
+patches = self.patch_embeddings(patchify(pixels.astype(self.matmul), p)).astype(self.stream)
+
+# Block.__call__: the casts allocate nothing in fp32 and in the cast modes
+x = self.layer_scale1(self.attention(self.norm1(x).astype(self.matmul), cos, sin)) + x
+return self.layer_scale2(self.mlp(self.norm2(x).astype(self.matmul))) + x</code></pre>
+
+  <h3>3.3 D3: fp16 overflow of ViT-L/16 and ViT-H+/16</h3>
+  <p>In fp16-cast, the residual stream is fp16. A register token of ViT-L/16 or ViT-H+/16 goes above 65,504 (Table 3). The value becomes infinite. The next layer norm or softmax then gives NaN. MLX rounds the matmul output to fp16 in the same way as <code>torch-mps</code>, so we expect the same failures: ViT-L/16 at every input resolution, ViT-H+/16 at the inputs with a 224 px short side. ViT-7B/16 is open: on <code>torch-mps</code> it gave finite fp16-cast output at 224 × 224 px for the three test images.</p>
+  <p><b>Option A: accept the overflow, as on <code>torch-mps</code>.</b> fp16-cast is "not valid" for these model sizes. fp16-autocast and the bf16 modes give their fp16 and bf16 rows. This is risk R6 of <code>docs/plan.html</code>: "Use bf16 where fp16 fails".</p>
+  <p><b>Option B: an fp32 residual stream also in fp16-cast.</b> Then fp16-cast equals fp16-autocast.</p>
+  <p><b>Option C: a scaled residual stream.</b> Divide the residual stream by a power of two s, for example 4. The load divides the CLS token, the register tokens, the patch-embedding weight and bias, and each λ by s. The layer norms use eps / s². In exact arithmetic, LN(x / s, eps / s²) = LN(x, eps), so the outputs do not change. 157,130 / 4 = 39,283 fits in fp16. This is our own derivation. Nobody measured it.</p>
+  <p><b>Option D: no fp16 rows for ViT-L/16, ViT-H+/16 and ViT-7B/16.</b> The tests skip fp16 for these model sizes.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Criterion</th><th>A: accept</th><th>B: fp32 stream in fp16-cast</th><th>C: scaled stream</th><th>D: no fp16</th></tr></thead>
+      <tbody>
+        <tr><td>Compares with the <code>torch-mps</code> fp16-cast rows</td><td>Yes: the same mode</td><td class="fail">No: the name means another mode</td><td class="fail">No: another computation</td><td>No rows</td></tr>
+        <tr><td>A valid fp16 row for ViT-L/16 and ViT-H+/16</td><td>Yes: fp16-autocast (D2)</td><td>Yes</td><td>Expected</td><td class="fail">No</td></tr>
+        <tr><td>New code</td><td>One shared test rule</td><td>None: it is D2</td><td>Load changes, eps change, a choice of s for each model size</td><td>Skips</td></tr>
+        <tr><td>Risk</td><td>None new</td><td>Confuses the dtype mode names</td><td>Lambda values below the smallest normal fp16 value (6.1e-5) lose more precision. The branch outputs before LayerScale do not change</td><td>Hides a result</td></tr>
+        <tr><td>Gain over fp16-autocast</td><td>—</td><td>—</td><td>Fewer casts. Step 6 can measure it</td><td>—</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 9.</b> Trade-offs of D3. The share of λ values below 6.1e-5 is 0.1 to 0.5 % (0.2 to 0.3 % for ViT-L/16, ViT-H+/16 and ViT-7B/16). The smallest λ is 3.6e-8 (ViT-L/16). Source: the LayerScale tensors of the safetensors files.</p>
+  <p>The tests must mark the expected failures. Step 2 uses a runtime xfail: a non-finite output in fp16-cast calls <code>pytest.xfail(FP16_OVERFLOW)</code> for any model size (<code>tests/test_torch_mps_parity.py</code>). Table 10 compares three ways.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Way</th><th>What it does</th><th>Effect</th></tr></thead>
+      <tbody>
+        <tr><td>M1: the Step 2 rule</td><td>Any non-finite fp16-cast output xfails, with the reason</td><td>A bug that gives NaN in ViT-S/16 fp16-cast also xfails. Nothing shows it</td></tr>
+        <tr><td>M2: the Step 2 rule with a list</td><td>A non-finite output xfails only for a (model size, dtype mode) pair in a list with evidence: (ViT-L/16, fp16-cast) and (ViT-H+/16, fp16-cast), from Table 3. Any other non-finite output fails</td><td>The list carries the evidence. ViT-7B/16 joins only when its token range (D6) shows a value above 65,504</td></tr>
+        <tr><td>M3: static marks for each configuration</td><td><code>pytest.mark.xfail(strict=True)</code> on the 12 + 6 configurations</td><td>An unexpected pass fails. One Step 2 probe (ViT-H+/16, <code>iss-conference</code>, 448 px) reached 91 % of the fp16 maximum. Nobody measured the other images or 512 px. So one more rounding can flip a configuration. The test can become flaky</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 10.</b> Ways to mark the expected failures.</p>
+  <div class="box">
+    <p><b>Recommendation: Option A, marked with M2.</b></p>
+    <ul>
+      <li>One helper in <code>tests/parity_checks.py</code> serves both backends. It records "non-finite" in the result line, xfails with the reason for a pair in the list, and fails for any other pair. The <code>mlx</code> batch test uses the same helper.</li>
+      <li><code>verify.html</code> compares the set of non-finite configurations of <code>mlx</code> with the set of <code>torch-mps</code>. Expected: the same 18 of 60, plus the result of ViT-7B/16.</li>
+      <li>If ViT-7B/16 overflows in fp16-cast, the Build adds it to the list only with the evidence of D6, and <code>verify.html</code> explains it.</li>
+      <li>Option C stays a Step 6 idea, if the casts of fp16-autocast cost much time.</li>
+    </ul>
+  </div>
+  <pre><code># tests/parity_checks.py (shape of the code, not final)
+FP16_OVERFLOW = "fp16 overflow: a register token is above 65,504 (specs/05-all-sizes/explore.html, Table 3)"
+# Pairs whose token range is above 65,504 in a part that the dtype mode keeps in fp16.
+EXPECTED_FP16_OVERFLOW = frozenset({("ViT-L/16", "fp16-cast"), ("ViT-H+/16", "fp16-cast")})
+
+
+def check_finite(tokens: np.ndarray, model_size: str, dtype_mode: str, note: Callable[[], None]) -&gt; None:
+    """Record and xfail an expected overflow. Fail any other non-finite output."""
+    if np.isfinite(tokens).all():
+        return
+    note()  # writes the result line with the status "non-finite"
+    if (model_size, dtype_mode) in EXPECTED_FP16_OVERFLOW:
+        pytest.xfail(FP16_OVERFLOW)
+    pytest.fail("non-finite output")</code></pre>
+
+  <h3>3.4 D4: the reference output of ViT-7B/16</h3>
+  <p>All parity tests compare with the reference output. ViT-7B/16 has no reference file. Step 2 deferred it because its memory check failed, and Step 3 deferred the ViT-7B/16 baseline (B4). Two texts disagree. <code>CLAUDE.md</code> says that ViT-7B/16 runs in fp16, bf16 or with quantized weights, because "in fp32 its weights alone need about 27 GB". <code>docs/plan.html</code> says for Step 5: "Its fp32 run gives only the reference output". Table 11 gives the sizes that the options use.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Part of ViT-7B/16</th><th>fp32</th><th>bf16</th></tr></thead>
+      <tbody>
+        <tr><td>One block (167,821,312 weights)</td><td class="num">0.671 GB</td><td class="num">0.336 GB</td></tr>
+        <tr><td>Parts outside the blocks (3,182,592 weights)</td><td class="num">12.7 MB</td><td class="num">6.4 MB</td></tr>
+        <tr><td>Whole model</td><td class="num">26.86 GB</td><td class="num">13.43 GB</td></tr>
+        <tr><td>Tokens of the 12 configurations (6,954 tokens × 4,096)</td><td class="num">114 MB</td><td>—</td></tr>
+        <tr><td>Hidden states of <code>iss-kibo-lab/224x224</code> (41 × 201 × 4,096)</td><td class="num">135 MB</td><td>—</td></tr>
+        <tr><td>One full score matrix at 512 px, batch size 1 (32 heads × 1,029 × 1,029 × 4 bytes)</td><td class="num">0.14 GB</td><td>—</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 11.</b> Memory sizes of ViT-7B/16, from the safetensors headers and the 12 configurations (201, 789 and 1,029 tokens for each test image, plus 355, 271 and 271 tokens at the own aspect ratios). Five blocks span two files: the keys <code>layer.7</code>, <code>layer.14</code>, <code>layer.22</code>, <code>layer.29</code> and <code>layer.37</code> (blocks 8, 15, 23, 30 and 38 in the 1-based numbering of this page).</p>
+  <p><b>Option A: a streamed fp32 reference on <code>torch-cpu</code>.</b> The job runs the embeddings and the RoPE tables of all configurations first. Then, for each block, the job does these actions:</p>
+  <ol>
+    <li>Read the tensors of the block by key through <code>model.safetensors.index.json</code>.</li>
+    <li>Build one Hugging Face <code>DINOv3ViTLayer</code> on the meta device.</li>
+    <li>Load the tensors into it with <code>assign=True</code>.</li>
+    <li>Push all 12 configurations through it at batch size 1.</li>
+    <li>Free the block.</li>
+  </ol>
+  <p>At the end, the job applies the final layer norm. The arithmetic is the same as in a full-model run under four conditions: the same Hugging Face classes, <code>attn_implementation</code> "sdpa", fp32 RoPE tables and batch size 1.</p>
+  <p><b>Option B: a bf16 reference on <code>torch-cpu</code></b>, with the full model in bf16, or streamed.</p>
+  <p><b>Option C: a cross-check of <code>mlx</code> bf16-cast against <code>torch-mps</code> bf16-cast</b>, with no reference output. The <code>torch-mps</code> process stores its tokens first. A later, separate <code>mlx</code> process compares.</p>
+  <p><b>Option D: defer again.</b> The ViT-7B/16 parity rows stay "deferred".</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Criterion</th><th>A: streamed fp32</th><th>B: bf16 reference</th><th>C: cross-check</th><th>D: defer</th></tr></thead>
+      <tbody>
+        <tr><td>Weights in memory</td><td>One block: 0.67 GB (1.34 GB if the load copies), plus 12.7 MB</td><td>Full: 13.4 GB. Streamed: 0.34 GB</td><td>13.4 GB in each process, one process after the other</td><td>0</td></tr>
+        <tr><td>Estimated peak</td><td>About 2 to 2.5 GB</td><td>Full: about 15 GB. Streamed: about 2 GB</td><td><code>torch-mps</code> side: about 14 to 16 GB. <code>mlx</code> side: about 13.6 GB with the D5 Option B loader; about 40.3 GB with the current loader</td><td>0</td></tr>
+        <tr><td>Memory check (1.2 × weights + 4 GB)</td><td class="num">4.8 GB</td><td>Full: 20.1 GB. Streamed: about 4.4 GB</td><td>20.1 GB in each process</td><td>—</td></tr>
+        <tr><td>Fits the free memory seen in the logs (6.4 to 46.0 GB)</td><td class="pass">Yes: 4.8 GB is below the smallest value seen</td><td>Streamed: yes. Full: only on a quiet Mac</td><td>Only on a quiet Mac</td><td>—</td></tr>
+        <tr><td>Measures parity against fp32</td><td class="pass">Yes</td><td class="fail">No: the reference has its own bf16 error (down to frame 0.998365 and patch 1st percentile 0.968878 on the other model sizes). ADR 0003 defines its thresholds against fp32</td><td class="fail">No: it shows only that two backends agree. No thresholds exist for that</td><td class="fail">No</td></tr>
+        <tr><td>Checks the bf16 thresholds of ADR 0003 for ViT-7B/16</td><td>Yes</td><td>No</td><td>No</td><td>No</td></tr>
+        <tr><td>Token range of ViT-7B/16 in fp32 (D6)</td><td>Yes: the hidden states of the reference file</td><td>bf16 only</td><td>No</td><td>No</td></tr>
+        <tr><td>Run rule</td><td>The arithmetic is fp32, but the fp32 weights of the whole model are never in memory. This reading needs an explicit yes of the user to a separate question. An approval by the agent on behalf of the user does not count</td><td>Fits</td><td>Fits</td><td>Fits</td></tr>
+        <tr><td>Time</td><td>About 96 TFLOP: about 2 minutes at about 0.9 TFLOP/s (ViT-H+/16 on <code>torch-cpu</code> in Step 2), plus one read of 26.9 GB. An estimate</td><td>We do not know the bf16 speed of <code>torch-cpu</code> on this Mac</td><td>Two loads of 13.4 GB</td><td>None</td></tr>
+        <tr><td>New code</td><td>A streamed path in <code>reference.py</code>, a guard against the full fp32 load</td><td>A bf16 path and new thresholds</td><td>A store and a compare step</td><td>None</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 12.</b> Trade-offs of D4. The full fp32 load on <code>torch-cpu</code> is not an option. The run rule forbids it. Its memory check (36.2 to 36.6 GB, finding 8) can pass on a quiet Mac: the log shows up to 46.0 GB free. So only the guard of D4 stops this load. Lazily memory-mapped fp32 weights are not an option either: all 26.9 GB enter the process footprint during the forward pass. A quantized reference is not a reference.</p>
+  <p>Two gaps in the code exist today. <code>scripts/make_reference.py ViT-7B/16</code> has no run-rule guard: only the memory check stops the fp32 load. <code>test_reference_is_reproducible[ViT-7B/16]</code> loads ViT-7B/16 in fp32 on <code>torch-cpu</code> as soon as a ViT-7B/16 reference file exists. Also, as soon as the file exists, the <code>torch-mps</code> parity tests of ViT-7B/16 in fp16-cast and bf16-cast run instead of skipping.</p>
+  <div class="box">
+    <p><b>Recommendation: Option A, only after the explicit yes of the user. Option C only as a diagnostic.</b> Until the user says yes, the default is Option D, with Option C as a diagnostic.</p>
+    <ol>
+      <li>Add a guard to <code>load_torch_backbone</code>. It refuses ViT-7B/16 with fp32 weights and raises a specific error. This step applies in every case.</li>
+      <li>Ask the user one explicit, separate question: may the streamed fp32 reference of ViT-7B/16 run? Do not include this question in the plan approval. An approval by the agent on behalf of the user does not count.</li>
+      <li>Record the user's own answer and its date in <code>plan.html</code>.</li>
+    </ol>
+    <p>Steps 4 to 9 run only after the explicit yes of the user.</p>
+    <ol start="4">
+      <li>Change <code>make_reference.py</code> so that it uses the streamed path for ViT-7B/16.</li>
+      <li>Run the streamed path for the five model sizes that have a reference file, one subprocess at a time.</li>
+      <li>Compare its output with the stored files. Target: largest difference ≤ 1e-6. Expected: 0.0.</li>
+      <li>Run the streamed reference of ViT-7B/16 alone, in its own subprocess, after its memory check (4.8 GB).</li>
+      <li>Record the peak in <code>runs.jsonl</code>.</li>
+      <li>Change <code>test_reference_is_reproducible[ViT-7B/16]</code> so that it uses the streamed path on the one configuration of the hidden states. It never loads the whole model in fp32.</li>
+    </ol>
+    <p>After step 7, the <code>torch-mps</code> parity rows of ViT-7B/16 in fp16-cast and bf16-cast run. They give the <code>torch-mps</code> side of ADR 0003 for ViT-7B/16. An ADR records the reading of the run rule in the Close stage. Without the explicit yes, Option D applies, and Option C runs as a diagnostic. Option C runs only after the D5 loader fix and its peak test.</p>
+  </div>
+
+  <h3>3.5 D5: loading all model sizes</h3>
+  <p>The load must give each model size in each dtype mode without a memory spike. All files store fp32, so a load in fp16 or bf16 reads fp32 and casts. Figure 2 shows the problem for ViT-7B/16 in bf16.</p>
+  <figure>
+    <div class="fig"><svg viewBox="0 0 960 300" role="img" aria-label="Memory of a ViT-7B/16 load in bf16 on mlx: bf16 weights 13.4 GB, Option B peak 13.6 GB, memory check need 20.1 GB, fp32 weights 26.9 GB, current loader peak 40.3 GB" font-family="-apple-system, Helvetica Neue, Arial, sans-serif">
+      <rect width="960" height="300" fill="#ffffff"/>
+      <rect x="407" y="22" width="475" height="210" fill="#eef3f2"/>
+      <path d="M571.2,30 V236" stroke="#4a5655" stroke-width="1" stroke-dasharray="5 4" fill="none"/>
+      <g font-size="12.5" fill="#111414">
+        <text x="644" y="18" text-anchor="middle" font-size="11.5" fill="#4a5655">free memory in memory-checks.log: 6.4 to 46.0 GB</text>
+        <text x="320" y="55" text-anchor="end">bf16 MLX weights</text>
+        <text x="320" y="95" text-anchor="end">Option B peak (estimate)</text>
+        <text x="320" y="135" text-anchor="end">memory check: 1.2 × 13.4 GB + 4 GB</text>
+        <text x="320" y="175" text-anchor="end">fp32 weights in the 6 files</text>
+        <text x="320" y="215" text-anchor="end">Option A peak, the current loader (estimate)</text>
+        <rect x="330" y="40" width="160.8" height="22" fill="#057379"/>
+        <rect x="330" y="80" width="163.2" height="22" fill="#057379"/>
+        <rect x="330" y="120" width="241.2" height="22" fill="#4a5655"/>
+        <rect x="330" y="160" width="322.8" height="22" fill="#9aa5a4"/>
+        <rect x="330" y="200" width="483.6" height="22" fill="#b3261e"/>
+        <text x="497" y="55">13.4 GB</text>
+        <text x="499" y="95">13.6 GB: 13.4 + one fp32 tensor (134 MB)</text>
+        <text x="577" y="135">20.1 GB</text>
+        <text x="659" y="175">26.9 GB</text>
+        <text x="820" y="215">40.3 GB</text>
+        <g font-size="11.5" fill="#4a5655" text-anchor="middle">
+          <text x="330" y="256">0</text>
+          <text x="450" y="256">10</text>
+          <text x="570" y="256">20</text>
+          <text x="690" y="256">30</text>
+          <text x="810" y="256">40</text>
+          <text x="930" y="256">50 GB</text>
+        </g>
+      </g>
+      <g stroke="#4a5655" stroke-width="1" fill="none">
+        <path d="M330,236 H930"/>
+        <path d="M330,236 V242 M450,236 V242 M570,236 V242 M690,236 V242 M810,236 V242 M930,236 V242"/>
+      </g>
+    </svg></div>
+    <figcaption><b>Figure 2.</b> Memory of a load of ViT-7B/16 in bf16 on <code>mlx</code>. The dashed line is the need of the memory check. The current loader keeps the lazy fp32 tensors alive during <code>mx.eval</code>. So its peak holds the fp32 and the bf16 copies: about 40.3 GB, twice the need. After the load, the freed fp32 buffers stay in the MLX cache until <code>mx.clear_cache()</code>. The two peaks are estimates from a probe on small arrays, not from a real load. The shaded band is the range of the free memory in the memory check log of the parity tests (662 checks on 2026-11-06 and 2026-11-07).</figcaption>
+  </figure>
+  <p><b>Option A: the current loader.</b> All tensors stay lazy. One <code>mx.eval</code> computes all casts.</p>
+  <p><b>Option B: cast one tensor at a time.</b> Pop each tensor from the dict, map its key, cast it, and evaluate it. At the end, call <code>mx.clear_cache()</code>.</p>
+  <p><b>Option C: cast one file at a time.</b> Load one safetensors file, cast and evaluate its tensors, drop it, clear the cache, then the next file.</p>
+  <p><b>Option D: a converted half-precision file in a cache folder outside the repo</b> (Option C of D2 in <code>specs/04-mlx-port/explore.html</code>).</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Criterion</th><th>A: current</th><th>B: one tensor at a time</th><th>C: one file at a time</th><th>D: converted file</th></tr></thead>
+      <tbody>
+        <tr><td>Peak, ViT-7B/16 in bf16</td><td class="fail">About 40.3 GB</td><td class="pass">About 13.6 GB</td><td>About 13.4 GB plus one fp32 file: about 18 GB</td><td>About 13.4 GB</td></tr>
+        <tr><td>Below the memory check need (20.1 GB)</td><td class="fail">No</td><td class="pass">Yes, with margin</td><td>Yes, with a small margin</td><td>Yes</td></tr>
+        <tr><td>Peak in the probe (8 tensors of 64 KB)</td><td class="num">768 KB</td><td class="num">320 KB with the cache cleared</td><td>—</td><td>—</td></tr>
+        <tr><td>Bytes read for each load</td><td colspan="3">The fp32 files: 26.9 GB for ViT-7B/16</td><td>13.4 GB, plus 13.4 GB of disk for each half dtype</td></tr>
+        <tr><td>Code</td><td>None</td><td>A loop of about 10 lines</td><td>A loop over the files</td><td>A writer, a reader, versions of old files</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 13.</b> Trade-offs of D5. The largest single tensors of ViT-7B/16 are the <code>gate_proj</code>, <code>up_proj</code> and <code>down_proj</code> weights: 8,192 × 4,096 × 4 bytes = 134 MB each.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Model size</th><th>fp32</th><th>The four fp16 and bf16 dtype modes</th></tr></thead>
+      <tbody>
+        <tr><td>ViT-S/16, ViT-S+/16</td><td class="num">4.1 GB</td><td class="num">4.1 GB</td></tr>
+        <tr><td>ViT-B/16</td><td class="num">4.4 GB</td><td class="num">4.2 GB</td></tr>
+        <tr><td>ViT-L/16</td><td class="num">5.5 GB</td><td class="num">4.7 GB</td></tr>
+        <tr><td>ViT-H+/16</td><td class="num">8.0 GB</td><td class="num">6.0 GB</td></tr>
+        <tr><td>ViT-7B/16</td><td class="fail">refused by the run rule. Its check asks 36.2 GB and can pass on this Mac</td><td class="num">20.1 GB</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 14.</b> The need of the memory check for each model size and dtype mode on <code>mlx</code>: 1.2 × the weight bytes in the matmul dtype + 4 GB. The values match <code>memory-checks.log</code>. The autocast modes have the need of the cast modes, because on <code>mlx</code> their weights are in fp16 or bf16 (D2).</p>
+  <div class="box">
+    <p><b>Recommendation: Option B.</b></p>
+    <ol>
+      <li>Refuse ViT-7B/16 in fp32 on <code>mlx</code> with a specific error, before the memory check.</li>
+      <li>Add one helper to <code>tests/parity_checks.py</code> that knows the backend. On <code>mlx</code>, it skips only the pair (ViT-7B/16, fp32), with an <code>mlx</code> reason. On <code>torch-mps</code>, it keeps the current rule of <code>_skip_7b_fp32_weights</code>. Do not reuse <code>_skip_7b_fp32_weights</code> on <code>mlx</code>: it also skips fp16-autocast and bf16-autocast, because these modes have fp32 weights on torch.</li>
+      <li>Use the new helper in the <code>mlx</code> tests.</li>
+      <li>Run the memory check with the need of Table 14.</li>
+      <li>Set <code>mx.set_memory_limit</code> to the need. The limit is only a guideline (R13 of Step 4), so the loader itself must keep the peak low.</li>
+      <li>Read every <code>*.safetensors</code> file of the folder with <code>mx.load</code> (lazy). A missing file shows as a missing key in the strict load.</li>
+    </ol>
+    <p>For each tensor, do steps 7 to 11:</p>
+    <ol start="7">
+      <li>Pop the tensor from the dict.</li>
+      <li>Map its key.</li>
+      <li>If the tensor is the patch weight, reshape it.</li>
+      <li>Cast the tensor to the matmul dtype or to the stream dtype (D2).</li>
+      <li>Evaluate the tensor.</li>
+    </ol>
+    <p>Then do steps 12 to 15:</p>
+    <ol start="12">
+      <li>Call <code>model.load_weights(pairs, strict=True)</code>.</li>
+      <li>Call <code>mx.clear_cache()</code>.</li>
+      <li>Add a test of the load peak: ViT-S/16 in bf16 with <code>mx.reset_peak_memory()</code> and <code>mx.get_peak_memory()</code>. Target: load peak ≤ 1.2 × the bf16 bytes + the largest fp32 tensor, and <code>mx.get_cache_memory()</code> = 0 after the load.</li>
+      <li>Finish this fix and its test before any load of ViT-7B/16.</li>
+    </ol>
+    <p>Option D stays a Step 6 question, together with the quantized weights.</p>
+  </div>
+  <pre><code># src/dinov3_apple/mlx_weights.py (shape of the code, not final)
+pairs = []
+for name in list(tensors):
+    array = tensors.pop(name)                       # drop the reference to the lazy fp32 source
+    if (key := map_key(name)) is None:
+        continue                                    # the mask token
+    if key == PATCH_WEIGHT:
+        array = array.reshape(array.shape[0], -1)
+    array = array.astype(mode.matmul if key in linear_keys else mode.stream)
+    mx.eval(array)                                  # reads one tensor from the file and casts it
+    pairs.append((key, array))
+model.load_weights(pairs, strict=True)
+mx.clear_cache()                                    # the freed fp32 buffers leave the MLX cache</code></pre>
+
+  <h3>3.6 D6: the token range</h3>
+  <p>Step 5 must record the largest absolute token value in each block, to see the fp16 overflow risk. Step 2 recorded it for five model sizes in fp32, for one configuration (Figure 2 of <code>docs/learn/02-tokens-and-outputs.html</code>). <code>run_mlx_hidden_states</code> of Step 4 returns the token sequence before block 1 and after each block. It is the planned hook.</p>
+  <p><b>Option A: the stored fp32 hidden states only.</b> The five reference files already hold them. No model load. ViT-7B/16 comes from the streamed reference of D4.</p>
+  <p><b>Option B: <code>run_mlx_hidden_states</code> for each model size and dtype mode</b>, on <code>iss-kibo-lab/224x224</code>, in the session of the parity tests.</p>
+  <p><b>Option C: Option B for all 12 configurations, plus the branch outputs.</b> For each block, a new helper records the largest absolute value of four tensors:</p>
+  <ul>
+    <li>the token sequence;</li>
+    <li>the attention branch output before LayerScale;</li>
+    <li>the feed-forward branch output before LayerScale;</li>
+    <li>the feed-forward hidden values (GELU output, or SiLU(gate) · up).</li>
+  </ul>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Criterion</th><th>A: stored fp32 only</th><th>B: <code>run_mlx_hidden_states</code>, one configuration</th><th>C: all configurations and the branches</th></tr></thead>
+      <tbody>
+        <tr><td>Extra model loads</td><td>None</td><td>None: it runs in the session of the parity tests</td><td>None</td></tr>
+        <tr><td>Shows the dtype modes on <code>mlx</code></td><td>No</td><td>Yes</td><td>Yes</td></tr>
+        <tr><td>Shows the effect of the input resolution (ViT-H+/16 overflows at 224 px only)</td><td>No</td><td>No</td><td>Yes</td></tr>
+        <tr><td>Shows an overflow in the fp16 branches of fp16-autocast (R20)</td><td>No</td><td>No</td><td>Yes</td></tr>
+        <tr><td>ViT-7B/16</td><td>Only with D4 Option A</td><td>Yes, in the four fp16 and bf16 dtype modes</td><td>Yes, in the four fp16 and bf16 dtype modes</td></tr>
+        <tr><td>Compares with Step 2 Figure 2</td><td colspan="3">Yes, in fp32 for five model sizes</td></tr>
+        <tr><td>Cost</td><td>None</td><td>One forward pass for each model size and mode</td><td>12 forward passes for each model size and mode. For ViT-7B/16 about 96 TFLOP for each mode</td></tr>
+        <tr><td>Code</td><td>A script</td><td>A test</td><td>A helper and a test</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 15.</b> Trade-offs of D6.</p>
+  <div class="box">
+    <p><b>Recommendation: Option C.</b></p>
+    <ul>
+      <li>Add <code>run_mlx_token_range(model, pixels)</code>. It calls the parts of each block in the order of <code>Block.__call__</code> and keeps only the largest absolute values, not the full hidden states. A test checks that its last token sequence equals <code>run_mlx_hidden_states</code> exactly, so the two paths cannot differ.</li>
+      <li>One test for each model size and dtype mode runs it on the 12 configurations and writes one line for each configuration. The values are report only. A non-finite value is a result: it shows the first block that overflows.</li>
+      <li>One check in fp32: the largest value after each block of <code>iss-kibo-lab/224x224</code> on <code>mlx</code> against the stored hidden states of Step 2. The plan sets the target; we expect a relative difference far below 1e-4.</li>
+      <li>The Learn stage extends Figure 2 of Step 2 with ViT-7B/16, the dtype modes and the input resolutions (<code>docs/learn/05-3-numeric-range.html</code>).</li>
+    </ul>
+  </div>
+
+  <h3>3.7 D7: test matrix and run time</h3>
+  <p>The tests need one model load for each model size, backend and dtype mode. The backbone fixture holds one model. <code>pytest_collection_modifyitems</code> sorts the tests by model size (in the order of <code>MODEL_IDS</code>), backend and dtype mode, so each combination loads once and ViT-7B/16 comes last. <code>docs/plan.html</code> says: ViT-S/16 and ViT-B/16 run by default; the other model sizes run with <code>DINOV3_SLOW=1</code>.</p>
+  <p><b>Option A: the plan rule.</b> By default, <code>mlx</code> runs ViT-S/16 and ViT-B/16 in five modes. SwiGLU gets only the part tests with the small model.</p>
+  <p><b>Option B: the plan rule plus ViT-S+/16 for <code>mlx</code>.</b> By default, <code>mlx</code> runs ViT-S/16, ViT-S+/16 and ViT-B/16 in five modes.</p>
+  <p><b>Option C: all model sizes except ViT-7B/16 by default.</b></p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Criterion</th><th>A: plan rule</th><th>B: plus ViT-S+/16</th><th>C: all except ViT-7B/16</th></tr></thead>
+      <tbody>
+        <tr><td>SwiGLU with the real weights in the default session</td><td class="fail">No</td><td class="pass">Yes</td><td class="pass">Yes</td></tr>
+        <tr><td>The smallest bf16 margin in the default session (ViT-S+/16 bf16-autocast, patch mean 0.995177 against 0.995 (headroom 1.04); frame 0.998365 against 0.998 (headroom 1.22))</td><td>No</td><td>Yes</td><td>Yes</td></tr>
+        <tr><td><code>mlx</code> loads in the default session</td><td class="num">10</td><td class="num">15</td><td class="num">25</td></tr>
+        <tr><td>fp32 file bytes read by these loads</td><td class="num">2.1 GB</td><td class="num">2.7 GB</td><td class="num">25.6 GB</td></tr>
+        <tr><td>Largest memory check need</td><td class="num">4.4 GB</td><td class="num">4.4 GB</td><td class="num">8.0 GB</td></tr>
+        <tr><td>Change to the plan</td><td>None</td><td>A note in Table 9 of <code>docs/plan.html</code> for <code>mlx</code></td><td>A new rule</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 16.</b> Trade-offs of D7. Loads: model sizes × five dtype modes. The slow session (<code>DINOV3_SLOW=1</code>) adds the other model sizes in all options: 29 <code>mlx</code> loads in all (five model sizes × five modes, plus ViT-7B/16 × the four fp16 and bf16 dtype modes). Each ViT-7B/16 load reads 26.9 GB of fp32 files and needs 20.1 GB. The slow session reads about 244 GB of fp32 files: 133 GB in the <code>mlx</code> loads, 79 GB in the <code>torch-mps</code> loads and 32 GB in the <code>torch-cpu</code> loads. Seven reads of the ViT-7B/16 files (four <code>mlx</code>, two <code>torch-mps</code>, one streamed <code>torch-cpu</code>) give most of it. We did not measure the session time.</p>
+  <div class="box">
+    <p><b>Recommendation: Option B.</b> Set <code>MLX_MODEL_SIZES_UNDER_TEST</code> to <code>MODEL_SIZES_UNDER_TEST</code> with <code>DINOV3_SLOW=1</code>, else to ViT-S/16, ViT-S+/16 and ViT-B/16. The <code>torch-mps</code> list does not change, so the test ids of Steps 2 and 3 stay. Two more groups of tests run by default on this Mac:</p>
+    <ol>
+      <li>Tests without weights: the part tests with the three small models and the dtype flow of Table 7.</li>
+      <li>Tests that need the files of the Hugging Face cache: the key map of the six model sizes (from the headers) and the load peak test. These tests skip when the files are missing.</li>
+    </ol>
+    <p>Table 17 gives the order of the heavy jobs. Each job starts after the previous one ends.</p>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>No.</th><th>Job</th><th>Process</th><th>Largest need</th></tr></thead>
+      <tbody>
+        <tr><td>1</td><td>Tests without weights, the key map of the six model sizes from the headers, and the load peak test (ViT-S/16 in bf16 on <code>mlx</code>)</td><td>pytest</td><td class="num">4.1 GB</td></tr>
+        <tr><td>2</td><td>Only after the explicit yes of the user (D4). Check of the streamed reference: ViT-S/16, ViT-S+/16, ViT-B/16, ViT-L/16, ViT-H+/16 against the stored files</td><td>One subprocess for each model size</td><td class="num">at most 4.8 GB</td></tr>
+        <tr><td>3</td><td>Only after the explicit yes of the user (D4). Streamed reference of ViT-7B/16</td><td>One subprocess, alone</td><td class="num">4.8 GB</td></tr>
+        <tr><td>4</td><td>Default session</td><td>pytest</td><td class="num">4.4 GB</td></tr>
+        <tr><td>5</td><td>Slow session, <code>DINOV3_SLOW=1</code>. ViT-7B/16 last. The sort key of <code>tests/conftest.py</code> puts "mlx" before "torch". So the order is: <code>mlx</code> in the four fp16 and bf16 dtype modes, <code>torch-cpu</code> (one streamed configuration, after the yes of D4), <code>torch-mps</code> bf16-cast and fp16-cast</td><td>pytest</td><td class="num">20.1 GB</td></tr>
+        <tr><td>6</td><td><code>scripts/parity_table.py</code> for <code>mlx</code> and <code>torch-mps</code>, and the table of the token range</td><td>script</td><td>none</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 17.</b> Order of the heavy jobs of the Build stage. <code>docs/plan.html</code> gives Step 5 no required benchmark. The <code>mlx</code> benchmark belongs to Step 6.</p>
+
+  <h3>3.8 D8: checks against the stored hidden states in fp16 and bf16</h3>
+  <p>Step 4 compares the embeddings, each block and the final norm with the stored fp32 hidden states (<code>tests/test_mlx_parity.py</code>). These checks assume fp32. <code>PART_COSINE</code> is 0.99999 for every mode. <code>prefix_exact</code> asks for equal prefix tokens. <code>NUM_BLOCKS</code> is 12. In a cast mode, the stored block input is first rounded to fp16 or bf16, and in fp16-cast ViT-L/16 the input itself is already infinite.</p>
+  <p><b>Option A: these checks in fp32 only.</b> The four fp16 and bf16 dtype modes skip them.</p>
+  <p><b>Option B: these checks in every mode. They assert in fp32 and are report only in the four fp16 and bf16 dtype modes.</b> In the cast modes, the prefix check compares with the stored prefix tokens rounded to the stream dtype. That check stays exact.</p>
+  <p><b>Option C: thresholds for each mode</b>, set from the values that the Build measures.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Criterion</th><th>A: fp32 only</th><th>B: assert fp32, report half</th><th>C: thresholds for each mode</th></tr></thead>
+      <tbody>
+        <tr><td>Finds the first wrong block in an fp16 or bf16 dtype mode</td><td>No</td><td>Yes, in the record</td><td>Yes, as a failure</td></tr>
+        <tr><td>Thresholds without evidence</td><td>None</td><td>None</td><td>New numbers from one run. The end-to-end thresholds of ADR 0003 already judge the four fp16 and bf16 dtype modes</td></tr>
+        <tr><td>Prefix tokens</td><td>Exact in fp32</td><td>Exact in fp32, exact against the rounded values in the cast modes</td><td>The same as B</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 18.</b> Trade-offs of D8.</p>
+  <div class="box">
+    <p><b>Recommendation: Option B.</b> One block test for each model size and dtype mode loops over the blocks of the loaded config (12, 24, 32 or 40). It records each block. Its failure message names the first block below <code>PART_COSINE</code>. This replaces the fixed <code>NUM_BLOCKS</code> and keeps the test count low. The tests of <code>test_mlx_weights.py</code> and <code>test_mlx_parts.py</code> that assume one dtype for each mode change to the new mode API.</p>
+  </div>
+</section>
+
+<section id="risks">
+  <h2>4 Risks</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>No.</th><th>Risk</th><th>Effect</th><th>Action</th><th>Step</th></tr></thead>
+      <tbody>
+        <tr><td>R6</td><td>fp16 overflow (<code>docs/plan.html</code>)</td><td>fp16-cast gives NaN for ViT-L/16 and ViT-H+/16. ViT-7B/16 is open</td><td>D3: xfail with evidence (M2). fp16-autocast and bf16 give the valid rows. D6 records the range</td><td>5</td></tr>
+        <tr><td>R19</td><td>The load peak of the current MLX loader</td><td>About 40.3 GB for ViT-7B/16 in bf16, against a need of 20.1 GB. The Mac crashed from out-of-memory before</td><td>D5: one tensor at a time, <code>mx.clear_cache()</code>, a peak test. This comes before any ViT-7B/16 load</td><td>5</td></tr>
+        <tr><td>R20</td><td>Overflow in the fp16 branches of fp16-autocast</td><td>o_proj, down_proj and the feed-forward hidden values stay fp16 before LayerScale. Probe: silu(300) · 300 is infinite in fp16. |λ| reaches 62 (ViT-H+/16), 51 (ViT-L/16) and 25 (ViT-7B/16). So a large residual value can come from a small branch value</td><td>D6 records the branch values. On <code>torch-mps</code>, fp16-autocast passes for ViT-L/16 and ViT-H+/16. If ViT-7B/16 fails, <code>verify.html</code> explains it with the record, and bf16 gives its rows</td><td>5</td></tr>
+        <tr><td>R21</td><td>ViT-7B/16 in fp32 on <code>mlx</code></td><td>Its memory check (about 36.2 GB) can pass on this 64 GB Mac. A 27 GB fp32 load breaks the run rules</td><td>D5: a refusal before the memory check, and a test skip</td><td>5</td></tr>
+        <tr><td>R22</td><td>A full fp32 load of ViT-7B/16 on <code>torch-cpu</code></td><td><code>make_reference.py</code> and <code>test_reference_is_reproducible</code> load 26.9 GB of fp32 weights once a reference file exists</td><td>D4: a guard in <code>load_torch_backbone</code> and the streamed path</td><td>5</td></tr>
+        <tr><td>R23</td><td>Small bf16 margins</td><td>On <code>torch-mps</code>: ViT-S+/16 bf16-autocast, patch mean 0.995177 against 0.995 (headroom 1.04); frame 0.998365 against 0.998 (headroom 1.22). ViT-H+/16 bf16-cast patch 1st percentile 0.9689 against 0.96. MLX rounds more often in the layer norm. A row can land on either side of a threshold</td><td>D2: activation in fp32. D7: ViT-S+/16 in the default session. A failure that <code>torch-mps</code> does not have goes to <code>verify.html</code>. For each <code>mlx</code> bf16 configuration below a threshold, run <code>torch-cpu</code> in the same bf16 mode on that configuration. Run one subprocess at a time, after its memory check (ViT-H+/16: 6.0 GB in bf16-cast, 8.0 GB in bf16-autocast). For ViT-7B/16, only bf16-cast fits the run rule. Record both values in <code>verify.html</code> (F2 of Step 2). ADR 0003 changes only by a decision of the user</td><td>5</td></tr>
+        <tr><td>R24</td><td>The streamed reference differs from a full-model run</td><td>A wrong reference for ViT-7B/16, with no way to see it</td><td>D4: check the streamed path against five stored files first</td><td>5</td></tr>
+        <tr><td>R25</td><td>The user does not give an explicit yes to the run-rule question of the streamed fp32 reference</td><td>No ViT-7B/16 parity against fp32</td><td>D4: Option D, with Option C as a diagnostic. <code>verify.html</code> explains the skips</td><td>5</td></tr>
+        <tr><td>R26</td><td>Session time and disk reads</td><td>The slow session reads about 244 GB of fp32 files. Seven reads of the ViT-7B/16 files (four <code>mlx</code>, two <code>torch-mps</code>, one streamed <code>torch-cpu</code>) give most of it</td><td>ViT-7B/16 last. One heavy job at a time. <code>verify.html</code> records the session times</td><td>5</td></tr>
+        <tr><td>R27</td><td>The global random key of MLX</td><td>A second probe block in <code>block_parameter_names</code> advances the global key of <code>mx.random</code> 14 more times: two random inits for each of its 7 <code>nn.Linear</code> modules. It runs once in each process, because of <code>@cache</code>. A test that depends on the global key can change</td><td>Tests that use random values set their seed first</td><td>5</td></tr>
+        <tr><td>R28</td><td>Small λ values in fp16-cast</td><td>0.1 to 0.5 % of the λ values (0.2 to 0.3 % for ViT-L/16, ViT-H+/16 and ViT-7B/16) are below the smallest normal fp16 value. The smallest is 3.6e-8. The effect is small</td><td>None. The autocast modes keep λ in fp32</td><td>5</td></tr>
+        <tr><td>R29</td><td>Results change with the MLX version</td><td>Another MLX version or another GPU can change the order of the sums. T11 has only 12 % margin (8.8e-6 against 1e-5, F11 of Step 4)</td><td>Each result line records the MLX version</td><td>5, 6</td></tr>
+        <tr><td>R30</td><td>Speed of the autocast modes before <code>mx.compile</code></td><td>About 4 more element-wise kernels in each block. This matters at batch size 1 for the small model sizes</td><td>Step 6 compiles the forward pass. D3 Option C stays an idea</td><td>6</td></tr>
+        <tr><td>R31</td><td>Wrong words in the steering files</td><td>GLOSSARY.md defines autocast mode with fp32 weights. <code>bench.WEIGHT_BYTES</code> gives 4 bytes for the autocast modes. Table 3 of <code>docs/plan.html</code> gives q and v biases to all model sizes, which is wrong for ViT-7B/16</td><td>Section 5.2 changes the glossary. The plan stage fixes Table 3. Step 6 makes <code>WEIGHT_BYTES</code> depend on the backend</td><td>5, 6</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 19.</b> Risks of Step 5. R6 comes from Table 14 of <code>docs/plan.html</code>. R19 to R31 are new; R5 and R10 to R18 are in <code>specs/04-mlx-port/explore.html</code>. The owner of each action is the agent.</p>
+</section>
+
+<section id="recommendation">
+  <h2>5 Recommendation</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>No.</th><th>Decision</th><th>Chosen option</th><th>Main reason</th></tr></thead>
+      <tbody>
+        <tr><td>D1</td><td>SwiGLU</td><td class="rec">A: three separate <code>nn.Linear</code> modules with the Hugging Face names. <code>block_parameter_names</code> is the union of an MLP probe block and a SwiGLU probe block</td><td>The key map stays the identity. The strict load checks each name and shape. A fused matmul is a Step 6 question</td></tr>
+        <tr><td>D2</td><td>MLX dtype modes and names</td><td class="rec">B: five modes, each a pair of matmul dtype and stream dtype. The autocast-like modes use the names fp16-autocast and bf16-autocast. RoPE in fp32. Activation in fp32 with one rounding</td><td>A valid fp16 row for ViT-L/16 and ViT-H+/16. ViT-7B/16 in the official precision. The thresholds, the parity table and the baseline join need no new keys</td></tr>
+        <tr><td>D3</td><td>fp16 overflow</td><td class="rec">A: accept, as on <code>torch-mps</code>. Mark with M2: xfail with the reason only for the pairs with evidence</td><td>The same mode compares with <code>torch-mps</code>. A NaN in any other model size fails</td></tr>
+        <tr><td>D4</td><td>ViT-7B/16 reference output</td><td class="rec">Not chosen yet. A (streamed fp32 reference on <code>torch-cpu</code>, checked against five stored files first) only after the explicit yes of the user to the run-rule question. Until then D, with C as a diagnostic</td><td>Real fp32 parity at a need of 4.8 GB. The fp32 weights of the whole model are never in memory</td></tr>
+        <tr><td>D5</td><td>Loading all model sizes</td><td class="rec">B: cast and evaluate one tensor at a time, then <code>mx.clear_cache()</code>. Refuse ViT-7B/16 in fp32. A load peak test</td><td>Peak about 13.6 GB instead of about 40.3 GB for ViT-7B/16 in bf16</td></tr>
+        <tr><td>D6</td><td>Token range</td><td class="rec">C: all 12 configurations and the branch outputs, for each model size and dtype mode; an fp32 check against the stored hidden states</td><td>Shows the input-resolution effect and the fp16 branches, with no extra load</td></tr>
+        <tr><td>D7</td><td>Test matrix and run time</td><td class="rec">B: ViT-S/16, ViT-S+/16 and ViT-B/16 on <code>mlx</code> by default; all six with <code>DINOV3_SLOW=1</code>; ViT-7B/16 last; the job order of Table 17</td><td>SwiGLU and the smallest bf16 margin in every default session, for 5 more small loads</td></tr>
+        <tr><td>D8</td><td>Hidden-state checks in half precision</td><td class="rec">B: assert in fp32, report in the four fp16 and bf16 dtype modes; one block test that loops over the blocks</td><td>Finds the first wrong block without new thresholds</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 20.</b> The chosen options. On 2026-11-06 the user asked the agent to decide. D1 to D3 and D5 to D8 are the choice. D4 waits for the user's own answer to the run-rule question (Section 5.3).</p>
+
+  <h3>5.1 What the design keeps open for later steps</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Step</th><th>Need</th><th>How the Step 5 design supports it</th></tr></thead>
+      <tbody>
+        <tr><td>6</td><td><code>mx.compile</code></td><td>The casts of the autocast modes and the fp32 activation are element-wise. <code>mx.compile</code> can fuse them. The mode is a plain attribute, not a value branch</td></tr>
+        <tr><td>6</td><td>Quantized weights</td><td><code>nn.quantize</code> replaces the <code>nn.Linear</code> modules. The mode does not come from the weight dtypes, so packed uint32 weights do not change it</td></tr>
+        <tr><td>6</td><td>Fused gate and up, fused q, k, v</td><td>The load can join the weights. The decision needs the <code>mlx</code> block profile</td></tr>
+        <tr><td>6</td><td>Benchmark matrix and the speedup</td><td>The <code>mlx</code> modes use the names of <code>THRESHOLDS</code> and <code>DTYPE_OF_MODE</code>, so the rows join with the baseline of Step 3. <code>WEIGHT_BYTES</code> gets a value for each backend</td></tr>
+        <tr><td>6</td><td>A converted half-precision file, a scaled residual stream</td><td>D5 Option D and D3 Option C stay possible behind the same load function</td></tr>
+        <tr><td>7</td><td>CI without weights</td><td>The part tests with the three small models and the dtype flow test need no gated weights. The key map test and the load peak test need the files of the Hugging Face cache and skip without them</td></tr>
+        <tr><td>8</td><td>Adapters on a frozen backbone: LoRA on <code>q_proj</code> and <code>v_proj</code> in fp16 autocast (8a); adapters on all linear layers and (IA)³ on the feed-forward activations (8b)</td><td>The frozen backbone runs in the <code>mlx</code> fp16-autocast mode, as the reference fine-tuning setup does. With D1 Option A, each <code>nn.Linear</code> module keeps its own name, and the feed-forward hidden values are one tensor in <code>SwiGLU.__call__</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 21.</b> Hooks for Steps 6 to 8.</p>
+
+  <h3>5.2 Terms for GLOSSARY.md</h3>
+  <ul>
+    <li><b>Matmul</b>: one matrix multiplication of the backbone, for example in an <code>nn.Linear</code> module or in the patch embedding.</li>
+    <li><b>Autocast mode</b> (changed): a dtype mode in which the matmuls run in fp16 or bf16, and the residual stream, the layer norms and LayerScale stay in fp32. On torch, the weights stay in fp32 and <code>torch.autocast</code> casts them at each matmul. On <code>mlx</code>, the load casts the weights of the matmuls once.</li>
+    <li><b>Residual stream</b>: the token sequence that passes from block to block. Each branch of a block adds its output to it.</li>
+    <li><b>Matmul dtype</b>: the dtype of the weights and the inputs of the matmuls in one dtype mode of <code>mlx</code>.</li>
+    <li><b>Stream dtype</b>: the dtype of the residual stream, the layer norms, LayerScale, the CLS token and the register tokens in one dtype mode of <code>mlx</code>.</li>
+    <li><b>Branch output</b>: the output of the attention branch or the feed-forward branch of a block, before LayerScale.</li>
+    <li><b>Token range</b>: the largest absolute value in the token sequence before block 1 and after each block, for one configuration.</li>
+    <li><b>Streamed reference</b>: a reference output computed on <code>torch-cpu</code> in fp32 with one block in memory at a time. ViT-7B/16 uses it.</li>
+    <li><b>Small model</b> (changed): a Hugging Face backbone with 2 blocks and random weights (<code>tests/small_model.py</code>). It has the values of ViT-S/16 or of ViT-S+/16, or the shape of ViT-7B/16 at a small embedding dimension. The oracle of the part tests. It needs no gated weights.</li>
+    <li><b>Part test</b> (changed): a test of one part of a block in <code>mlx</code> against the Hugging Face module on torch-cpu, with a small model.</li>
+    <li><b>Load peak</b>: the largest MLX active memory (<code>mx.get_peak_memory</code>) during one model load. It does not include the MLX cache.</li>
+    <li><b>Default session</b>: a pytest session without <code>DINOV3_SLOW</code>.</li>
+    <li><b>Slow session</b>: a pytest session with <code>DINOV3_SLOW=1</code>.</li>
+  </ul>
+
+  <h3>5.3 Open questions</h3>
+  <ul>
+    <li><b>Run rule.</b> The streamed fp32 reference of ViT-7B/16 (D4) reads the run rule as a limit on the fp32 weights in memory. The agent asks the user directly for a yes or no. The question: may the streamed fp32 reference of ViT-7B/16 run, with the fp32 weights of one block in memory at a time? The plan approval is not the answer. An approval by the agent on behalf of the user does not count. <code>plan.html</code> records the user's own answer and its date. After a yes, the Close stage records the reading in an ADR. Until the yes, Option D applies, with Option C as a diagnostic.</li>
+    <li><b>ADR for the <code>mlx</code> autocast modes.</b> Half-precision weights under the names fp16-autocast and bf16-autocast (D2) are hard to reverse once results exist. Recommendation: an ADR in the Close stage. The agent writes it.</li>
+    <li><b>ADR 0003.</b> If ViT-7B/16 in bf16 fails the bf16 set on <code>torch-mps</code> or on <code>mlx</code>, ADR 0003 says that the ADR changes. The user decides then.</li>
+    <li><b><code>docs/plan.html</code>.</b> The plan stage fixes Table 3 (no q and v biases in ViT-7B/16). It adds the <code>mlx</code> default model sizes to Table 9 (D7). After the yes of the user (D4), it replaces "Its fp32 run gives only the reference output" with the streamed reference.</li>
+    <li><b>Explainers.</b> Following the pattern of Step 4: <code>docs/learn/05-1-swiglu.html</code>, <code>05-2-model-scaling.html</code> and <code>05-3-numeric-range.html</code>.</li>
+    <li><b>Open items of Step 4.</b> F11: record the margin of test T11 (8.8e-6 against 1e-5) again with each MLX version. F8: Step 4 measured the TF32-on margin only for ViT-S/16. Step 6 measures the other model sizes.</li>
+    <li><b>Open item of Step 2 (F2).</b> For each <code>mlx</code> bf16 configuration below a threshold, run <code>torch-cpu</code> in the same bf16 mode on that configuration. Run one subprocess at a time, after its memory check (ViT-H+/16: 6.0 GB in bf16-cast, 8.0 GB in bf16-autocast). For ViT-7B/16, only bf16-cast fits the run rule. Record both values in <code>verify.html</code>. Then a fail shows if <code>mlx</code> or the bf16 arithmetic is the cause.</li>
+  </ul>
+</section>
+
+<section id="sources">
+  <h2>6 Sources</h2>
+  <ul>
+    <li><code>docs/plan.html</code>: Step 5 in Section 6, Table 3 (model sizes), Table 9 (parity tests) and Table 14 (risk R6). <code>roadmap.md</code>, <code>GLOSSARY.md</code> and <code>CLAUDE.md</code> (run rules).</li>
+    <li>Earlier specs: <code>specs/02-reference/verify.html</code> (Table 9, finding F2), <code>specs/03-baseline/verify.html</code>, <code>specs/04-mlx-port/explore.html</code> (Table 18), <code>specs/04-mlx-port/plan.html</code> (Table 5) and <code>specs/04-mlx-port/verify.html</code> (F1, F4, F8, F11).</li>
+    <li>Explainers: <code>docs/learn/02-tokens-and-outputs.html</code> (Figure 2, Tables 2 and 5, Section 6) and <code>docs/learn/04-5-mlp.html</code>. ADR 0003, ADR 0005 and ADR 0006 in <code>docs/adr/</code>.</li>
+    <li>Results: <code>results/parity-torch-mps.md</code>, <code>results/baseline-torch-mps.md</code>, <code>results/parity-mlx.md</code>, and the generated logs <code>tests/fixtures/generated/parity/torch-mps.jsonl</code>, <code>tests/fixtures/generated/parity/memory-checks.log</code> and <code>tests/fixtures/generated/reference/runs.jsonl</code> (git ignores them).</li>
+    <li>Code of this repo: <code>src/dinov3_apple/mlx_model.py</code>, <code>mlx_weights.py</code>, <code>reference.py</code>, <code>memory.py</code>, <code>bench.py</code>, <code>parity.py</code>, <code>hub.py</code>; <code>scripts/make_reference.py</code>; <code>tests/test_mlx_parity.py</code>, <code>test_torch_mps_parity.py</code>, <code>test_reference.py</code>, <code>parity_checks.py</code>, <code>under_test.py</code>, <code>small_model.py</code>, <code>conftest.py</code>.</li>
+    <li>Hugging Face transformers 5.22.1, Apache-2.0: <a href="https://github.com/huggingface/transformers/blob/main/src/transformers/models/dinov3_vit/modeling_dinov3_vit.py">modeling_dinov3_vit.py</a> (<code>DINOv3ViTGatedMLP</code>, <code>DINOv3ViTLayer</code>, the RoPE tables), <a href="https://github.com/huggingface/transformers/blob/main/src/transformers/models/dinov3_vit/configuration_dinov3_vit.py">configuration_dinov3_vit.py</a>, <a href="https://github.com/huggingface/transformers/blob/main/src/transformers/activations.py">activations.py</a> and <a href="https://github.com/huggingface/transformers/blob/main/src/transformers/conversion_mapping.py">conversion_mapping.py</a>. We read release 5.22.1; the main branch can differ.</li>
+    <li>Weights (gated repos), <code>config.json</code> and the safetensors headers only: <a href="https://huggingface.co/facebook/dinov3-vits16-pretrain-lvd1689m">dinov3-vits16</a>, <a href="https://huggingface.co/facebook/dinov3-vits16plus-pretrain-lvd1689m">dinov3-vits16plus</a>, <a href="https://huggingface.co/facebook/dinov3-vitb16-pretrain-lvd1689m">dinov3-vitb16</a>, <a href="https://huggingface.co/facebook/dinov3-vitl16-pretrain-lvd1689m">dinov3-vitl16</a>, <a href="https://huggingface.co/facebook/dinov3-vith16plus-pretrain-lvd1689m">dinov3-vith16plus</a> and <a href="https://huggingface.co/facebook/dinov3-vit7b16-pretrain-lvd1689m">dinov3-vit7b16</a> (with <code>model.safetensors.index.json</code>).</li>
+    <li>Official DINOv3 code, read to check facts only (ADR 0002): <a href="https://github.com/facebookresearch/dinov3">github.com/facebookresearch/dinov3</a>, files <code>dinov3/hub/backbones.py</code> (<code>pos_embed_rope_dtype</code>), <code>dinov3/layers/rope_position_encoding.py</code>, <code>dinov3/eval/setup.py</code> (<code>get_autocast_dtype</code>) and the train configs (<code>param_dtype: bf16</code>).</li>
+    <li>MLX 0.32.4: <a href="https://github.com/ml-explore/mlx">github.com/ml-explore/mlx</a>. Docs: <a href="https://ml-explore.github.io/mlx/build/html/python/_autosummary/mlx.core.load.html">mlx.core.load</a>, <a href="https://ml-explore.github.io/mlx/build/html/python/_autosummary/mlx.core.set_memory_limit.html">mlx.core.set_memory_limit</a>, <a href="https://ml-explore.github.io/mlx/build/html/python/_autosummary/mlx.core.clear_cache.html">mlx.core.clear_cache</a>, <a href="https://ml-explore.github.io/mlx/build/html/python/_autosummary/mlx.core.fast.scaled_dot_product_attention.html">mlx.core.fast.scaled_dot_product_attention</a>, <a href="https://ml-explore.github.io/mlx/build/html/python/_autosummary/mlx.core.fast.layer_norm.html">mlx.core.fast.layer_norm</a>, <a href="https://ml-explore.github.io/mlx/build/html/python/nn/_autosummary_functions/mlx.nn.silu.html">mlx.nn.silu</a>, <a href="https://ml-explore.github.io/mlx/build/html/python/nn/module.html">mlx.nn.Module</a>. Files of the installed package: <code>steel/gemm/transforms.h</code>, <code>gemv.h</code>, <code>gemm_nax.h</code>, <code>steel_attention.h</code>, <code>steel_attention_nax.h</code>, the kernel names in <code>mlx.metallib</code>, and <code>primitives.h</code> (the lazy <code>Load</code>).</li>
+    <li>PyTorch automatic mixed precision: <a href="https://pytorch.org/docs/stable/amp.html">pytorch.org/docs/stable/amp.html</a> (the op lists of autocast).</li>
+    <li>Shazeer, GLU Variants Improve Transformer, <a href="https://arxiv.org/abs/2002.05202">arXiv 2002.05202</a> (SwiGLU). Siméoni et al., DINOv3, <a href="https://arxiv.org/abs/2508.10104">arXiv 2508.10104</a>.</li>
+    <li>Probes on 2026-11-07, outside the repo: the probes of the MLX agent on arrays below 1 MB (matmul accumulation, layer norm, activations, type promotion, <code>astype</code>, <code>set_dtype</code>, the lazy load, the cast peak), and our computations of Tables 4, 11 and 14 from the headers. No probe loaded a model.</li>
+  </ul>
+</section>
+</main>
+</body>
+</html>
