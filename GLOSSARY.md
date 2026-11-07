@@ -209,6 +209,13 @@ _Avoid_: ground truth, golden output
 **Streamed reference**:
 A reference output computed on torch-cpu in fp32 with the weights of one block in memory at a time.
 
+**Apple Neural Engine**:
+The matrix accelerator of Apple silicon, apart from the GPU. Core ML runs a model on it.
+_Avoid_: ANE (in prose), NPU
+
+**Prior-art comparison**:
+The measurement of a related public repo with our benchmark harness and our parity tests.
+
 **Baseline**:
 The speed and the memory of the Hugging Face backbone on `torch-mps`. All speedups are relative to it.
 _Avoid_: reference (for speed)
