@@ -1,0 +1,95 @@
+"""A small DINOv3 backbone with random weights for the part tests (Section 6.1 of
+specs/04-mlx-port/plan.html).
+
+The Hugging Face model runs on torch-cpu in fp32. It is the test oracle. The MLX backbone gets the
+same weights through the key map, from the state dict with the spelling model.layer.{i}.… and
+with the mask token. So each part test also tests the key map.
+"""
+
+import math
+
+import mlx.core as mx
+import numpy as np
+import torch
+from transformers import DINOv3ViTConfig, DINOv3ViTModel
+
+from dinov3_apple.mlx_model import MlxBackbone, MlxConfig
+from dinov3_apple.mlx_weights import mlx_weights
+
+# The values of config.json of ViT-S/16, with 2 blocks.
+SMALL_CONFIG = {
+    "hidden_size": 384,
+    "num_attention_heads": 6,
+    "intermediate_size": 1536,
+    "num_hidden_layers": 2,
+    "num_register_tokens": 4,
+    "patch_size": 16,
+    "num_channels": 3,
+    "image_size": 224,
+    "rope_theta": 100.0,
+    "layer_norm_eps": 1e-5,
+    "query_bias": True,
+    "key_bias": False,
+    "value_bias": True,
+    "proj_bias": True,
+    "mlp_bias": True,
+    "hidden_act": "gelu",
+    "use_gated_mlp": False,
+    "layerscale_value": 1.0,
+    "drop_path_rate": 0.0,
+    "attention_dropout": 0.0,
+    "pos_embed_rescale": 2.0,
+}
+
+# Normal pixels, seed 1. The two shapes that are not square find a swap of height and width.
+PIXEL_SHAPES = [(2, 3, 224, 224), (1, 3, 224, 304), (1, 3, 304, 224)]
+
+# The patch grids of the 12 configurations.
+GRIDS = [(14, 14), (28, 28), (32, 32), (14, 25), (14, 19), (19, 14)]
+
+
+def _std_and_mean(name: str, param: torch.Tensor) -> tuple[float, float]:
+    if "norm" in name:
+        return 0.1, 1.0 if name.endswith("weight") else 0.0
+    if name.endswith("lambda1"):
+        return 0.3, 0.0
+    if name.endswith("bias"):
+        return 0.5, 0.0
+    if name.endswith("weight"):
+        return 1.0 / math.sqrt(param[0].numel()), 0.0
+    return 0.5, 0.0  # the CLS token, the register tokens and the mask token
+
+
+def small_hf_model(seed: int = 0) -> DINOv3ViTModel:
+    """Return the small Hugging Face backbone on torch-cpu in fp32, in eval mode.
+
+    Every parameter gets new random values. The Hugging Face init sets the biases to 0 and lambda1
+    to 1; with these values a wrong bias or a wrong LayerScale axis does not show.
+
+    Args:
+        seed: The seed of the random values.
+
+    Returns:
+        The model. Its rope_embeddings run in eval mode, so RoPE-box jittering is off.
+    """
+    model = DINOv3ViTModel(DINOv3ViTConfig(**SMALL_CONFIG)).eval()
+    generator = torch.Generator().manual_seed(seed)
+    with torch.no_grad():
+        for name, param in model.named_parameters():
+            std, mean = _std_and_mean(name, param)
+            param.copy_(mean + std * torch.randn(param.shape, generator=generator))
+    return model
+
+
+def small_mlx_model(hf_model: DINOv3ViTModel) -> MlxBackbone:
+    """Return the MLX backbone with the weights of the small Hugging Face backbone."""
+    model = MlxBackbone(MlxConfig.from_hf(hf_model.config.to_dict()))
+    tensors = {name: mx.array(t.detach().numpy()) for name, t in hf_model.state_dict().items()}
+    model.load_weights(mlx_weights(tensors, mx.float32), strict=True)
+    mx.eval(model.parameters())
+    return model
+
+
+def small_pixels(shape: tuple[int, ...], seed: int = 1) -> np.ndarray:
+    """Return normal fp32 pixels of one shape."""
+    return np.random.default_rng(seed).standard_normal(shape).astype(np.float32)

@@ -31,6 +31,7 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["scripts"]
+markers = ["mlx: a test of the backend mlx. uv run pytest -m mlx runs only these tests."]
 
 [tool.ruff]
 line-length = 100

@@ -10,12 +10,14 @@ from datetime import UTC, datetime
 from functools import cache
 
 import numpy as np
+from safetensors import safe_open
 
 from dinov3_apple.flops import MODEL_SHAPES, tokens
 from dinov3_apple.hub import MODEL_IDS, parameter_count
 from dinov3_apple.machine import MachineState
 from dinov3_apple.memory import load_bytes
 from dinov3_apple.parity import TEST_IMAGES, THRESHOLDS, Parity, measure_parity
+from dinov3_apple.stored import reference_path
 
 MAIN_MODEL_SIZES = [size for size in MODEL_IDS if size != "ViT-7B/16"]
 GIANT_MODEL_SIZE = "ViT-7B/16"
@@ -256,6 +258,15 @@ def make_batch(inputs: dict[str, np.ndarray], side: int, batch_size: int) -> np.
     images = [inputs[f"{image}/{side}x{side}"][0] for image in TEST_IMAGES]
     batch = np.stack([images[i % len(images)] for i in range(batch_size)])
     return batch.astype(np.float32, copy=False)
+
+
+def reference_tokens(model_size: str, side: int) -> np.ndarray | None:
+    """Return the reference tokens of image 0 at side x side px. None if the file is missing."""
+    path = reference_path(model_size)
+    if not path.exists():
+        return None
+    with safe_open(path, "np") as tensors:
+        return tensors.get_tensor(f"{TEST_IMAGES[0]}/{side}x{side}/tokens")
 
 
 @dataclass(frozen=True)

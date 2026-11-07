@@ -16,27 +16,21 @@ import torch
 import torch.nn.functional as F
 from PIL import Image
 
+from dinov3_apple.stored import own_aspect_size
+
+# own_aspect_size moved to stored.py, which imports no torch (Step 4). This module re-exports it.
+__all__ = [
+    "IMAGENET_MEAN",
+    "IMAGENET_STD",
+    "PATCH_SIZE",
+    "load_image",
+    "own_aspect_size",
+    "preprocess",
+]
+
 IMAGENET_MEAN = torch.tensor([0.485, 0.456, 0.406], dtype=torch.float32)
 IMAGENET_STD = torch.tensor([0.229, 0.224, 0.225], dtype=torch.float32)
 PATCH_SIZE = 16
-
-
-def own_aspect_size(height: int, width: int, short_side: int = 224) -> tuple[int, int]:
-    """Return the input resolution that keeps the aspect ratio of an image.
-
-    The short side becomes short_side. The long side is rounded to the nearest multiple of 16.
-
-    Args:
-        height: The image height in pixels.
-        width: The image width in pixels.
-        short_side: The short side of the input resolution, a multiple of 16.
-
-    Returns:
-        The input resolution as (height, width).
-    """
-    long_side = round(max(height, width) / min(height, width) * short_side / PATCH_SIZE)
-    long_side *= PATCH_SIZE
-    return (short_side, long_side) if height <= width else (long_side, short_side)
 
 
 def load_image(path: Path) -> np.ndarray:

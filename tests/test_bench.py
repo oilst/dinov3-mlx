@@ -1,8 +1,11 @@
 import sys
+from pathlib import Path
 
 import numpy as np
 import pytest
+from safetensors.numpy import save_file
 
+from dinov3_apple import bench
 from dinov3_apple.bench import (
     TIMED,
     WARM_UP,
@@ -14,6 +17,7 @@ from dinov3_apple.bench import (
     check_validity,
     keep_going,
     make_batch,
+    reference_tokens,
     required_bench_bytes,
     result_line,
     summarize,
@@ -164,6 +168,26 @@ def test_check_validity_without_reference_is_finite_only() -> None:
     assert validity.valid
     assert validity.parity is None
     assert "finite only" in validity.note
+
+
+def test_reference_tokens_read_image_0_or_none(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "reference.safetensors"
+    tokens = np.arange(12, dtype=np.float32).reshape(3, 4)
+    save_file(
+        {
+            f"{TEST_IMAGES[0]}/224x224/tokens": tokens,
+            f"{TEST_IMAGES[0]}/448x448/tokens": tokens + 1,
+            f"{TEST_IMAGES[1]}/224x224/tokens": tokens + 2,
+        },
+        path,
+    )
+    monkeypatch.setattr(bench, "reference_path", lambda model_size: path)
+    assert np.array_equal(reference_tokens("ViT-S/16", 224), tokens)
+    assert np.array_equal(reference_tokens("ViT-S/16", 448), tokens + 1)
+    monkeypatch.setattr(bench, "reference_path", lambda model_size: tmp_path / "missing")
+    assert reference_tokens("ViT-S/16", 224) is None
 
 
 def _line(dtype_mode: str, throughput: float, **fields: object) -> dict:

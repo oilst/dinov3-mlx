@@ -1,15 +1,14 @@
-from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from collections.abc import Callable
 
 import numpy as np
 import pytest
 import torch
+from parity_checks import BATCH_CONFIGS, CONFIG_IDS, assert_thresholds, record_skip
 from under_test import MODEL_SIZES_UNDER_TEST
 
-from dinov3_apple.parity import THRESHOLDS, Parity, measure_parity
-from dinov3_apple.reference import DTYPE_MODES, configurations, run_torch
+from dinov3_apple.parity import Parity, measure_parity
+from dinov3_apple.reference import DTYPE_MODES, run_torch
 
-CONFIG_IDS = [config.id for config in configurations()]
 PARITY_PARAMS = [
     pytest.param(model_size, dtype_mode, config, id=f"{model_size}-{dtype_mode}-{config}")
     for model_size in MODEL_SIZES_UNDER_TEST
@@ -22,8 +21,6 @@ BATCH_PARAMS = [
     for dtype_mode in DTYPE_MODES
 ]
 FP16_OVERFLOW = "fp16 overflow: a register token is above 65,504 (explore.html, Table 2)"
-# The batch of 8: the three images at 224 x 224 px, repeated.
-BATCH_CONFIGS = [CONFIG_IDS[i % 3 * 4] for i in range(8)]
 
 pytestmark = pytest.mark.skipif(not torch.backends.mps.is_available(), reason="no torch-mps")
 
@@ -32,23 +29,6 @@ def _skip_7b_fp32_weights(model_size: str, dtype_mode: str) -> str | None:
     if model_size == "ViT-7B/16" and DTYPE_MODES[dtype_mode].weights == torch.float32:
         return "ViT-7B/16 runs on torch-mps with fp16 or bf16 weights only (CLAUDE.md run rules)"
     return None
-
-
-@contextmanager
-def _record_skip(record: Callable[..., None], *key: str) -> Iterator[None]:
-    """Record a skip, for example a missing reference file or a failed memory check."""
-    try:
-        yield
-    except pytest.skip.Exception as skip:
-        record(*key, None, "skipped", str(skip))
-        raise
-
-
-def _assert_thresholds(parity: Parity, dtype_mode: str) -> None:
-    threshold = THRESHOLDS[dtype_mode]
-    assert parity.frame >= threshold.frame
-    assert parity.patch_mean >= threshold.patch_mean
-    assert parity.patch_p01 >= threshold.patch_p01
 
 
 @pytest.mark.parametrize(("model_size", "dtype_mode", "config"), PARITY_PARAMS)
@@ -64,7 +44,7 @@ def test_parity(
     if reason := _skip_7b_fp32_weights(model_size, dtype_mode):
         record("parity", model_size, dtype_mode, config, None, "skipped", reason)
         pytest.skip(reason)
-    with _record_skip(record, "parity", model_size, dtype_mode, config):
+    with record_skip(record, "parity", model_size, dtype_mode, config):
         expected = reference(model_size)[config]
         model = backbone(model_size, "mps", dtype_mode)
     tokens = run_torch(model, inputs[config], dtype_mode)[0]
@@ -75,7 +55,7 @@ def test_parity(
         pytest.fail("non-finite output")
     parity = measure_parity(expected, tokens)
     record("parity", model_size, dtype_mode, config, parity, "measured")
-    _assert_thresholds(parity, dtype_mode)
+    assert_thresholds(parity, dtype_mode)
 
 
 @pytest.mark.parametrize(("model_size", "dtype_mode"), BATCH_PARAMS)
@@ -89,7 +69,7 @@ def test_batch_consistency(
     if reason := _skip_7b_fp32_weights(model_size, dtype_mode):
         record("batch", model_size, dtype_mode, "batch-8-224x224", None, "skipped", reason)
         pytest.skip(reason)
-    with _record_skip(record, "batch", model_size, dtype_mode, "batch-8-224x224"):
+    with record_skip(record, "batch", model_size, dtype_mode, "batch-8-224x224"):
         model = backbone(model_size, "mps", dtype_mode)
     batch = np.concatenate([inputs[config] for config in BATCH_CONFIGS])
     batched = run_torch(model, batch, dtype_mode)
@@ -107,4 +87,4 @@ def test_batch_consistency(
         patch_min=min(p.patch_min for p in parities),
     )
     record("batch", model_size, dtype_mode, "batch-8-224x224", worst, "measured")
-    _assert_thresholds(worst, dtype_mode)
+    assert_thresholds(worst, dtype_mode)

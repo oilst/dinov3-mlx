@@ -1,33 +1,60 @@
-"""The configurations of Step 2, the torch runs in each dtype mode and the stored files.
+"""The torch runs of Step 2 in each dtype mode, and the load of the Hugging Face backbone.
 
 The reference output is the output of the Hugging Face backbone on torch-cpu in fp32. The parity
-tests run torch-mps (and later mlx) on the same stored pixels and compare with it.
+tests run torch-mps and mlx on the same stored pixels and compare with it. The configurations and
+the readers of the stored files live in stored.py, which imports no torch.
 """
 
-import json
 from dataclasses import dataclass
-from functools import cached_property
-from pathlib import Path
 
 import numpy as np
 import torch
-from PIL import Image
-from safetensors import safe_open
 from transformers import DINOv3ViTModel
 
-from dinov3_apple.hub import MODEL_IDS, parameter_count, weights_dir
+from dinov3_apple.hub import parameter_count, weights_dir
 from dinov3_apple.memory import LOAD_RATIO, check_free_memory, load_bytes
-from dinov3_apple.outputs import PATCH_SIZE
 from dinov3_apple.parity import TEST_IMAGES
-from dinov3_apple.preprocess import own_aspect_size
+from dinov3_apple.stored import (
+    HIDDEN_STATES_CONFIG,
+    IMAGES_DIR,
+    INPUTS_FILE,
+    REFERENCE_DIR,
+    REPO_ROOT,
+    SQUARE_SIZES,
+    Configuration,
+    configurations,
+    model_slug,
+    read_inputs,
+    read_reference,
+    reference_path,
+)
 
-REPO_ROOT = Path(__file__).parents[2]
-IMAGES_DIR = REPO_ROOT / "tests" / "fixtures" / "images"
-REFERENCE_DIR = REPO_ROOT / "tests" / "fixtures" / "generated" / "reference"
-INPUTS_FILE = REFERENCE_DIR / "inputs.safetensors"
-
-SQUARE_SIZES = [224, 448, 512]
-HIDDEN_STATES_CONFIG = "iss-kibo-lab/224x224"
+# The readers of the stored files moved to stored.py, which imports no torch (Step 4). This module
+# re-exports them, so the imports of Steps 2 and 3 keep working.
+__all__ = [
+    "DTYPE_MODES",
+    "HIDDEN_STATES_CONFIG",
+    "IMAGES_DIR",
+    "INPUTS_FILE",
+    "LOAD_RATIO",
+    "REFERENCE_DIR",
+    "REPO_ROOT",
+    "REQUIRED_METADATA",
+    "SQUARE_SIZES",
+    "TEST_IMAGES",
+    "Configuration",
+    "DtypeMode",
+    "configurations",
+    "load_torch_backbone",
+    "model_slug",
+    "parameter_count",
+    "read_inputs",
+    "read_reference",
+    "reference_path",
+    "required_load_bytes",
+    "run_torch",
+    "run_torch_hidden_states",
+]
 
 # The fields of the header metadata of a reference file (Section 3.4 of the plan).
 REQUIRED_METADATA = [
@@ -66,51 +93,6 @@ DTYPE_MODES: dict[str, DtypeMode] = {
     "fp16-autocast": DtypeMode(torch.float32, torch.float16),
     "bf16-autocast": DtypeMode(torch.float32, torch.bfloat16),
 }
-
-
-@dataclass(frozen=True)
-class Configuration:
-    """One test image at one input resolution."""
-
-    image: str
-    height: int
-    width: int
-
-    @property
-    def id(self) -> str:
-        """The key in the stored files, for example "forest/224x304"."""
-        return f"{self.image}/{self.height}x{self.width}"
-
-    @property
-    def image_path(self) -> Path:
-        """The test image file."""
-        return IMAGES_DIR / f"{self.image}.jpg"
-
-    @cached_property
-    def num_patches(self) -> int:
-        """The number of patch tokens."""
-        return (self.height // PATCH_SIZE) * (self.width // PATCH_SIZE)
-
-
-def configurations() -> list[Configuration]:
-    """Return the 12 configurations of Table 2: 3 images x (3 square sizes + own aspect ratio)."""
-    configs = []
-    for image in TEST_IMAGES:
-        with Image.open(IMAGES_DIR / f"{image}.jpg") as file:
-            width, height = file.size
-        sizes = [(size, size) for size in SQUARE_SIZES] + [own_aspect_size(height, width)]
-        configs += [Configuration(image, h, w) for h, w in sizes]
-    return configs
-
-
-def model_slug(model_size: str) -> str:
-    """Return the part of the Hugging Face id between "dinov3-" and "-pretrain", e.g. vits16."""
-    return MODEL_IDS[model_size].split("dinov3-", 1)[1].split("-pretrain", 1)[0]
-
-
-def reference_path(model_size: str) -> Path:
-    """Return the reference file of one model size."""
-    return REFERENCE_DIR / f"reference-{model_slug(model_size)}.safetensors"
 
 
 def required_load_bytes(model_size: str, dtype: torch.dtype, ratio: float = LOAD_RATIO) -> int:
@@ -196,24 +178,3 @@ def run_torch_hidden_states(model: DINOv3ViTModel, pixels: np.ndarray) -> np.nda
     if hidden.shape[0] != model.config.num_hidden_layers + 1:
         raise ValueError(f"{hidden.shape[0]} hidden states for {model.config.num_hidden_layers}")
     return hidden.float().cpu().numpy()
-
-
-def read_inputs(path: Path = INPUTS_FILE) -> dict[str, np.ndarray]:
-    """Return the stored pixels with shape (1, 3, H, W), keyed by configuration id."""
-    with safe_open(path, "np") as tensors:
-        keys = tensors.keys()
-        return {key.removesuffix("/pixels"): tensors.get_tensor(key) for key in keys}
-
-
-def read_reference(model_size: str) -> tuple[dict[str, np.ndarray], dict]:
-    """Return the reference tokens and the metadata of one model size.
-
-    Returns:
-        The tensors keyed by configuration id (tokens with shape (1 + 4 + N, D)), plus the key
-        "{HIDDEN_STATES_CONFIG}/hidden_states", and the metadata as a dict.
-    """
-    with safe_open(reference_path(model_size), "np") as tensors:
-        metadata = json.loads(tensors.metadata()["reference"])
-        keys = tensors.keys()
-        data = {key.removesuffix("/tokens"): tensors.get_tensor(key) for key in keys}
-    return data, metadata

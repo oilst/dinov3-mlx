@@ -14,7 +14,6 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from safetensors import safe_open
 from transformers import DINOv3ViTModel
 
 from dinov3_apple.bench import (
@@ -25,20 +24,19 @@ from dinov3_apple.bench import (
     check_validity,
     keep_going,
     make_batch,
+    reference_tokens,
     summarize,
 )
 from dinov3_apple.footprint import read_footprint
 from dinov3_apple.hub import MODEL_IDS
 from dinov3_apple.machine import read_versions
 from dinov3_apple.outputs import NUM_PREFIX_TOKENS
-from dinov3_apple.parity import TEST_IMAGES
 from dinov3_apple.reference import (
     DTYPE_MODES,
     REPO_ROOT,
     DtypeMode,
     load_torch_backbone,
     read_inputs,
-    reference_path,
 )
 
 BENCH_DIR = REPO_ROOT / "tests" / "fixtures" / "generated" / "bench"
@@ -77,14 +75,6 @@ def time_batch(
     patches = tokens[:, NUM_PREFIX_TOKENS:].cpu()
     t3 = time.perf_counter()
     return (t1 - t0, t2 - t0, (t1 - t0) + (t3 - t2)), frame, patches
-
-
-def _reference_tokens(model_size: str, side: int) -> np.ndarray | None:
-    path = reference_path(model_size)
-    if not path.exists():
-        return None
-    with safe_open(path, "np") as tensors:
-        return tensors.get_tensor(f"{TEST_IMAGES[0]}/{side}x{side}/tokens")
 
 
 def _phase(
@@ -148,7 +138,7 @@ def run_worker(
     validity = check_validity(
         frame[0].float().numpy(),
         patches[0].float().numpy(),
-        _reference_tokens(config.model_size, config.side),
+        reference_tokens(config.model_size, config.side),
         config.dtype_mode,
     )
     del frame, patches
