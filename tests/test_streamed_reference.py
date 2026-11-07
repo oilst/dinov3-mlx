@@ -277,3 +277,44 @@ def test_required_streamed_bytes_of_7b() -> None:
     except WeightsNotFoundError as error:
         pytest.skip(str(error))
     assert need == VIT7B16_STREAMED_NEED
+
+
+def test_streamed_stops_at_a_missing_block_tensor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    quiet_memory: None,
+    tracked_blocks: dict[str, Any],
+) -> None:
+    """T32 (V1 of specs/05-all-sizes/verify.html): a weights file without one tensor of block 1
+    stops the run before block 1 runs. The defences are the strict load_state_dict and
+    _check_materialized."""
+    hf_model = small_hf_model(seed=0, name="vit7b16-shape")
+    folder = tmp_path / "missing"
+    folder.mkdir()
+    state = {
+        name.removeprefix("model."): tensor.detach().contiguous()
+        for name, tensor in hf_model.state_dict().items()
+    }
+    missing = "layer.1.mlp.down_proj.weight"
+    del state[missing]
+    hf_model.config.to_json_file(folder / "config.json")
+    save_file(state, folder / "model.safetensors", metadata={"format": "pt"})
+    _use(monkeypatch, folder)
+    ran: list[int] = []
+    original = torch_reference.DINOv3ViTLayer.forward
+
+    def forward(self: Any, *args: Any, **kwargs: Any) -> Any:
+        ran.append(id(self))
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(torch_reference.DINOv3ViTLayer, "forward", forward)
+    # The first defence: the strict load_state_dict names the missing tensor.
+    with pytest.raises(RuntimeError, match=r'Missing key.*"mlp\.down_proj\.weight"'):
+        run_torch_streamed("ViT-7B/16", PIXELS, HIDDEN_CONFIG)
+    assert len(tracked_blocks["read"]) == 2  # block 0 and block 1 were read
+    assert len(set(ran)) <= 1  # only block 0 ran
+    # The second defence: a tensor left on the meta device stops the run.
+    with torch.device("meta"):
+        layer = torch.nn.Linear(2, 2)
+    with pytest.raises(ValueError, match="meta device"):
+        torch_reference._check_materialized(layer, "block 1")

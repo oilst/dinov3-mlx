@@ -4,6 +4,7 @@ RoPE tables."""
 import math
 from collections.abc import Callable
 
+import mlx.core as mx
 import numpy as np
 import pytest
 import torch
@@ -110,3 +111,88 @@ def test_rope_tables_head_dim_128(grid_h: int, grid_w: int, report: Callable[...
     )
     assert cos_difference <= 1e-6
     assert sin_difference <= 1e-6
+
+
+# Build step 2b of specs/06-speed/plan.html: the concat-free rotation and the RoPE cache.
+ROPE_DEVICES = {"gpu": mx.gpu, "cpu": mx.cpu}
+ROPE_DTYPES = {"fp32": mx.float32, "fp16": mx.float16, "bf16": mx.bfloat16}
+ROPE_GRIDS = [(14, 14), (32, 32), (14, 25)]
+
+
+@pytest.mark.parametrize(
+    ("device", "dtype", "head_dim", "grid"),
+    [
+        pytest.param(device, dtype, hd, grid, id=f"{device}-{dtype}-{hd}-{grid[0]}x{grid[1]}")
+        for device in ROPE_DEVICES
+        for dtype in ROPE_DTYPES
+        for hd in (64, 128)
+        for grid in ROPE_GRIDS
+    ],
+)
+def test_concat_free_rope_equals_the_step5_form(
+    device: str, dtype: str, head_dim: int, grid: tuple[int, int]
+) -> None:
+    """T38 (D2, R48): the concat-free rotation equals the Step 5 form bit for bit. The inputs come
+    in the transposed layout of Attention.qkv, as in the forward pass."""
+    from rope_oracle import apply_rope_step5
+
+    from dinov3_apple.mlx_model import apply_rope, rope_layout
+
+    cos, sin = rope_tables(*grid, head_dim, THETA)
+    cos2, sin2 = rope_layout(cos, sin)
+    assert cos2.shape == sin2.shape == (len(cos), 2, head_dim // 2)
+    rng = np.random.default_rng(0)
+    heads, t = 3, len(cos)
+    values = rng.standard_normal((2, t, heads * head_dim)).astype(np.float32)
+    with mx.stream(ROPE_DEVICES[device]):
+        x = mx.array(values).astype(ROPE_DTYPES[dtype])
+        x = x.reshape(2, t, heads, head_dim).transpose(0, 2, 1, 3)
+        new = apply_rope(x, mx.array(cos2), mx.array(sin2))
+        old = apply_rope_step5(x, mx.array(cos), mx.array(sin))
+        assert new.dtype == old.dtype == ROPE_DTYPES[dtype]
+        assert np.array_equal(np.array(new.astype(mx.float32)), np.array(old.astype(mx.float32)))
+
+
+def test_rope_cache_reuses_the_tables() -> None:
+    """T39 (A3, R43): the same arrays at a second call, one entry for each grid, no cache in the
+    module tree, fp32 tables in the layout (5 + N, 2, head_dim / 2)."""
+    from mlx.utils import tree_flatten
+    from small_model import small_hf_model, small_mlx_model
+
+    model = small_mlx_model(small_hf_model(seed=0))
+    first = model.rope(14, 14)
+    assert model.rope(14, 14)[0] is first[0] and model.rope(14, 14)[1] is first[1]
+    model.rope(14, 19)
+    assert len(model.rope_cache) == 2
+    names = [name for name, _ in tree_flatten(model.state)]
+    assert not any("rope" in name for name in names)
+    assert len(tree_flatten(model.parameters())) == len(names)
+    assert first[0].dtype == first[1].dtype == mx.float32
+    assert first[0].shape == (NUM_PREFIX_TOKENS + 196, 2, model.config.head_dim // 2)
+
+
+def test_compiled_forward_traces_once_per_shape(monkeypatch: pytest.MonkeyPatch) -> None:
+    """T37 (R43): calls at (1, 224, 224), (2, 224, 224), (1, 448, 448), (1, 224, 224) and
+    (2, 224, 224) give 3 traces and 2 cache entries; the new grid does not retrace the old
+    shapes."""
+    from small_model import small_hf_model, small_mlx_model, small_pixels
+
+    from dinov3_apple.mlx_model import MlxBackbone, compile_backbone
+
+    model = small_mlx_model(small_hf_model(seed=0))
+    traces: list[tuple[int, ...]] = []
+    original = MlxBackbone.forward_with_rope
+
+    def counting(self: MlxBackbone, pixels: mx.array, cos2: mx.array, sin2: mx.array) -> mx.array:
+        traces.append(tuple(pixels.shape))
+        return original(self, pixels, cos2, sin2)
+
+    monkeypatch.setattr(MlxBackbone, "forward_with_rope", counting)
+    forward = compile_backbone(model)
+    for shape in [(1, 3, 224, 224), (2, 3, 224, 224), (1, 3, 448, 448)] + [
+        (1, 3, 224, 224),
+        (2, 3, 224, 224),
+    ]:
+        mx.eval(forward(mx.array(small_pixels(shape))))
+    assert len(traces) == 3
+    assert len(model.rope_cache) == 2

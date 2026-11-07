@@ -54,6 +54,11 @@ PRIORITY = {
 
 DEFERRED_REASON = "ViT-7B/16 runs in its own session (D8)"
 
+# Quantized weights (D14 to D16 of specs/06-speed/plan.html): the model sizes of the quantized rows
+# and the dtype modes that load quantized weights.
+QUANTIZED_MODEL_SIZES = ["ViT-H+/16", "ViT-7B/16"]
+QUANTIZED_MODES = ["fp16-autocast", "bf16-autocast"]
+
 
 @dataclass(frozen=True)
 class TimeBudget:
@@ -100,8 +105,11 @@ class BenchConfig:
         dtype_mode: A name of DTYPE_MODE_NAMES.
         side: The square input resolution in pixels.
         batch_size: The batch size.
-        compile: True to wrap the backbone with torch.compile.
-        repeat: 0 for the main run, 1 and 2 for the repeats of B2.
+        compile: True to wrap the backbone with torch.compile (torch-mps) or to run the compiled
+            forward pass (mlx, D7 of specs/06-speed/plan.html).
+        bits: None for unquantized weights; 8 or 4 for quantized block weights (mlx, D22).
+        repeat: 0 for the main run, 1 and 2 for the repeats of B2. It stays the last field of the
+            key (add_rounds).
     """
 
     run: str
@@ -110,35 +118,41 @@ class BenchConfig:
     side: int
     batch_size: int
     compile: bool = False
+    bits: int | None = None
     repeat: int = 0
 
     @property
     def key(self) -> tuple:
-        """The identity of the configuration in the results. The run is not part of it."""
+        """The identity of the configuration in the results, in the order of the fields. The run
+        is not part of it."""
         return (
             self.model_size,
             self.dtype_mode,
             self.side,
             self.batch_size,
             self.compile,
+            self.bits,
             self.repeat,
         )
 
     @property
     def label(self) -> str:
         """A short name for logs, for example "ViT-S/16 fp32 224px b8"."""
-        extra = (" compile" if self.compile else "") + (f" r{self.repeat}" if self.repeat else "")
+        extra = (" compile" if self.compile else "") + (f" {self.bits}-bit" if self.bits else "")
+        extra += f" r{self.repeat}" if self.repeat else ""
         return f"{self.model_size} {self.dtype_mode} {self.side}px b{self.batch_size}{extra}"
 
 
 def line_key(line: dict) -> tuple:
-    """Return the BenchConfig.key of one JSON line."""
+    """Return the BenchConfig.key of one JSON line. A line without the field bits (Steps 3 to 5)
+    has unquantized weights."""
     return (
         line["model_size"],
         line["dtype_mode"],
         line["side"],
         line["batch_size"],
         line["compile"],
+        line.get("bits"),
         line["repeat"],
     )
 
@@ -151,9 +165,18 @@ def latest_lines(lines: list[dict]) -> list[dict]:
     return list(latest.values())
 
 
-def _modes(model_size: str) -> list[str]:
-    # ViT-7B/16 never loads fp32 weights on torch-mps (CLAUDE.md run rules).
-    return CAST_MODES if model_size == GIANT_MODEL_SIZE else DTYPE_MODE_NAMES
+def _modes(model_size: str, backend: str = "torch-mps") -> list[str]:
+    """Return the dtype modes of one model size on one backend.
+
+    ViT-7B/16 never loads fp32 weights (CLAUDE.md run rules, ADR 0008). On torch-mps its autocast
+    modes keep fp32 weights, so it runs the two cast modes. On mlx its autocast modes keep fp16 or
+    bf16 weights (ADR 0007), so it runs the four fp16 and bf16 dtype modes (D23).
+    """
+    if model_size != GIANT_MODEL_SIZE:
+        return DTYPE_MODE_NAMES
+    if backend == "mlx":
+        return [mode for mode in DTYPE_MODE_NAMES if mode != "fp32"]
+    return CAST_MODES
 
 
 def bench_configurations(
@@ -168,7 +191,8 @@ def bench_configurations(
         model_sizes: The model sizes of B1 or B4. None means the five sizes of B1.
         priority: True for the priority configurations P1 and P2 in all five dtype modes.
         repeats: With priority, the number of repeats (B2). Repeat numbers start at 1.
-        compile: With priority, the compile rows (B3).
+        compile: The compile rows: B3 with priority, else compile rows of B1 or B4 (D9 of
+            specs/06-speed/plan.html).
 
     Returns:
         The configurations from the smallest to the largest model size.
@@ -176,7 +200,7 @@ def bench_configurations(
     if priority:
         run = "B3" if compile else ("B2" if repeats else "B1")
         return [
-            BenchConfig(run, model_size, mode, side, batch_size, compile, repeat)
+            BenchConfig(run, model_size, mode, side, batch_size, compile, repeat=repeat)
             for model_size, side, batch_size, _ in PRIORITY.values()
             for repeat in (range(1, repeats + 1) if repeats else [0])
             for mode in DTYPE_MODE_NAMES
@@ -185,7 +209,7 @@ def bench_configurations(
     for model_size in model_sizes or MAIN_MODEL_SIZES:
         run = "B4" if model_size == GIANT_MODEL_SIZE else "B1"
         configs += [
-            BenchConfig(run, model_size, mode, side, batch_size)
+            BenchConfig(run, model_size, mode, side, batch_size, compile)
             for mode in _modes(model_size)
             for side in SIDES
             for batch_size in BATCH_SIZES
@@ -250,27 +274,65 @@ def bytes_per_weight(backend: str, dtype_mode: str) -> int:
     raise ValueError(f"unknown backend {backend!r}")
 
 
-def required_bench_bytes(config: BenchConfig, activation_factor: float = ACTIVATION_FACTOR) -> int:
-    """Return the memory need of one configuration (Section 3.6 of the plan).
+def quantized_weight_bytes(model_size: str, bits: int, parameters: int | None = None) -> int:
+    """Return the bytes of the weights of one model size with quantized block weights (Table 9 of
+    specs/06-speed/plan.html).
 
-    need = load_bytes(weights) + factor x (B T (8 D + 3 F) a + 2 B heads T^2 a), with a = 2 bytes
-    in cast mode and 4 bytes otherwise. The attention term assumes a full score matrix.
+    Each block weight takes bits / 8 bytes plus one fp16 or bf16 scale and one offset for each
+    group of 64 weights. The other parameters take 2 bytes. The loader keeps the layer norms,
+    LayerScale and the prefix tokens in fp32, so the value leaves out at most 2.0 MB (ViT-7B/16).
+
+    Args:
+        model_size: A key of MODEL_SHAPES.
+        bits: 8 or 4.
+        parameters: The parameter count. None reads it from the safetensors headers.
+
+    Returns:
+        block weights x (bits / 8 + 4 / 64) + the other parameters x 2.
+    """
+    shape = MODEL_SHAPES[model_size]
+    count = _parameter_count(model_size) if parameters is None else parameters
+    ff_matrices = 3 if shape.gated else 2
+    block = shape.blocks * (4 * shape.dim**2 + ff_matrices * shape.dim * shape.ff)
+    return block * (8 * bits + 4) // 64 + (count - block) * 2
+
+
+def required_bench_bytes(
+    config: BenchConfig, activation_factor: float = ACTIVATION_FACTOR, backend: str = "torch-mps"
+) -> int:
+    """Return the memory need of one configuration on one backend (Section 3.6 of the Step 3 plan,
+    D8 of specs/06-speed/plan.html).
+
+    torch-mps: need = load_bytes(weights) + factor x (B T (8 D + 3 F) a + 2 B heads T^2 a), with
+    a = 2 bytes in cast mode and 4 bytes otherwise. The attention term assumes a full score matrix.
+    mlx: the weights take the bytes of mlx (or the quantized bytes), and the need has no score
+    term: the MLX SDPA kernel needs at most 0.012 MB extra (probe sdpa).
 
     Args:
         config: The configuration.
         activation_factor: The factor on the activation terms.
+        backend: "torch-mps" or "mlx".
 
     Returns:
         The memory need in bytes.
 
     Raises:
+        ValueError: For bits on a backend other than mlx.
         WeightsNotFoundError: If the weights of the model size are not on this Mac.
     """
+    if config.bits is not None and backend != "mlx":
+        raise ValueError(f"quantized weights run on mlx only, not on {backend}")
     shape = MODEL_SHAPES[config.model_size]
-    weights = _parameter_count(config.model_size) * WEIGHT_BYTES[config.dtype_mode]
+    if config.bits is not None:
+        weights = quantized_weight_bytes(config.model_size, config.bits)
+    else:
+        count = _parameter_count(config.model_size)
+        weights = count * bytes_per_weight(backend, config.dtype_mode)
     a = 2 if config.dtype_mode in CAST_MODES else 4
     b, t = config.batch_size, tokens(config.side)
-    activations = b * t * (8 * shape.dim + 3 * shape.ff) * a + 2 * b * shape.heads * t * t * a
+    activations = b * t * (8 * shape.dim + 3 * shape.ff) * a
+    if backend != "mlx":
+        activations += 2 * b * shape.heads * t * t * a
     return load_bytes(weights) + round(activation_factor * activations)
 
 
@@ -370,6 +432,8 @@ def summarize(times: list[float], batch_size: int) -> dict[str, float]:
 
 
 # Table 7 of the plan. The worker gives the fields from "valid" to "time"; the driver adds the rest.
+# Step 6 adds bits, compile_trace_s and the name load_footprint_peak_bytes (Table 8 of
+# specs/06-speed/plan.html). The lines of Steps 3 to 5 keep the name load_peak_bytes.
 LINE_FIELDS = [
     "run",
     "model_size",
@@ -378,6 +442,7 @@ LINE_FIELDS = [
     "side",
     "batch_size",
     "compile",
+    "bits",
     "repeat",
     "status",
     "reason",
@@ -387,6 +452,7 @@ LINE_FIELDS = [
     "validity_note",
     "load_time_s",
     "first_call_s",
+    "compile_trace_s",
     "warm_up_batches",
     "warm_up_s",
     "timed_batches",
@@ -398,7 +464,7 @@ LINE_FIELDS = [
     "need_bytes",
     "available_bytes",
     "footprint_base_bytes",
-    "load_peak_bytes",
+    "load_footprint_peak_bytes",
     "peak_bytes",
     "run_peak_bytes",
     "run_peak_note",
@@ -408,6 +474,33 @@ LINE_FIELDS = [
     "attn_implementation",
     "start_time",
     "time",
+]
+# The pairing fields of a Step 6 line (Table 8 of specs/06-speed/plan.html), from the driver.
+PAIR_FIELDS = [
+    "run_id",
+    "group",
+    "round",
+    "position",
+    "backend",
+    "priority",
+    "other_heavy_jobs_seen",
+]
+# The fields of an mlx worker of Step 6 (Table 8), on top of LINE_FIELDS.
+MLX_FIELDS = [
+    "compile_trace_s",
+    "mlx_architecture",
+    "mlx_disable_compile",
+    "mlx_load_limit_bytes",
+    "mlx_memory_limit_bytes",
+    "mlx_timed_peak_bytes",
+    "mlx_cache_bytes",
+    "mlx_peak_bytes",
+    "output_transfer",
+    "tf32",
+    "load_report_need_bytes",
+    "load_report_peak_bytes",
+    "load_report_cache_bytes",
+    "load_report_footprint_bytes",
 ]
 
 
@@ -460,8 +553,9 @@ def result_line(
     need_bytes: int,
     available_bytes: int,
     machine: MachineState,
+    backend: str = "torch-mps",
 ) -> dict:
-    """Return one JSON line of results/baseline-torch-mps.jsonl.
+    """Return one JSON line of a results file of the benchmarks.
 
     Args:
         config: The configuration.
@@ -470,12 +564,13 @@ def result_line(
         need_bytes: The memory need from required_bench_bytes.
         available_bytes: The available memory before the worker.
         machine: The machine state before the worker.
+        backend: "torch-mps" or "mlx".
 
     Returns:
         A dict with every field of LINE_FIELDS.
     """
     line = dict.fromkeys(LINE_FIELDS)
-    line |= asdict(config) | {"backend": "torch-mps"}
+    line |= asdict(config) | {"backend": backend}
     line |= worker
     line |= {"need_bytes": need_bytes, "available_bytes": available_bytes}
     line["machine"] = asdict(machine)

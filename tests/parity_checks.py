@@ -8,12 +8,18 @@ from functools import cache
 
 import numpy as np
 import pytest
+from mlx.utils import tree_flatten
 from safetensors import safe_open
 
-from dinov3_apple.bench import bytes_per_weight
+from dinov3_apple.bench import bytes_per_weight, quantized_weight_bytes
 from dinov3_apple.hub import parameter_count, weights_dir
 from dinov3_apple.memory import LOAD_RATIO, RunRuleError, check_run_rule
-from dinov3_apple.mlx_model import MLX_DTYPE_MODES, MlxBackbone, linear_parameter_names
+from dinov3_apple.mlx_model import (
+    MLX_DTYPE_MODES,
+    MlxBackbone,
+    linear_parameter_names,
+    quantized_weight_names,
+)
 from dinov3_apple.mlx_weights import map_key
 from dinov3_apple.parity import EXPECTED_FP16_OVERFLOW, FP16_OVERFLOW, THRESHOLDS, Parity
 from dinov3_apple.stored import configurations
@@ -125,16 +131,24 @@ def largest_tensor_bytes(model_size: str) -> int:
     return max(4 * math.prod(shape) for shape in header_shapes(model_size).values())
 
 
-def load_peak_target(model_size: str, dtype_mode: str) -> int:
-    """Return the target of the load peak of one mlx load (Table 5 of the plan).
+def load_peak_target(model_size: str, dtype_mode: str, bits: int | None = None) -> int:
+    """Return the target of the load peak of one mlx load (Table 5 of the Step 5 plan, Table 9 of
+    specs/06-speed/plan.html).
 
     LOAD_RATIO x the weight bytes in the matmul dtype + the largest fp32 tensor of the headers.
+    With bits: LOAD_RATIO x the quantized weight bytes + the largest fp32 tensor + the same tensor
+    in the matmul dtype (one source, its cast and its quantized output live together).
 
     Raises:
         WeightsNotFoundError: If the weights are not on this Mac.
     """
-    weight_bytes = parameter_count(model_size) * MLX_DTYPE_MODES[dtype_mode].matmul.size
-    return round(LOAD_RATIO * weight_bytes) + largest_tensor_bytes(model_size)
+    matmul = MLX_DTYPE_MODES[dtype_mode].matmul.size
+    largest = largest_tensor_bytes(model_size)
+    if bits is not None:
+        weight_bytes = quantized_weight_bytes(model_size, bits, parameter_count(model_size))
+        return round(LOAD_RATIO * weight_bytes) + largest + largest * matmul // 4
+    weight_bytes = parameter_count(model_size) * matmul
+    return round(LOAD_RATIO * weight_bytes) + largest
 
 
 def load_peak_lower_bound(model_size: str, model: MlxBackbone) -> int:
@@ -155,8 +169,17 @@ def load_peak_lower_bound(model_size: str, model: MlxBackbone) -> int:
     """
     dtypes = MLX_DTYPE_MODES[model.dtype_mode]
     linear = linear_parameter_names(model)
+    quantized = quantized_weight_names(model)
+    parameters = dict(tree_flatten(model.parameters()))
     total = 0
     for name, shape in header_shapes(model_size).items():
-        if (key := map_key(name)) is not None:
+        if (key := map_key(name)) is None:
+            continue
+        if key in quantized:  # the packed weight, the scales and the offsets (F1 of Step 6)
+            stem = key.removesuffix(".weight")
+            total += sum(
+                parameters[f"{stem}.{leaf}"].nbytes for leaf in ("weight", "scales", "biases")
+            )
+        else:
             total += math.prod(shape) * (dtypes.matmul if key in linear else dtypes.stream).size
     return total

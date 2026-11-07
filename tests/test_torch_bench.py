@@ -29,6 +29,7 @@ def test_worker_writes_all_fields(tmp_path: Path) -> None:
         config, worker, need_bytes=1, available_bytes=2, machine=read_machine_state()
     )
     assert set(LINE_FIELDS) <= set(line)
+    assert "load_peak_bytes" not in line  # T12 (F17)
     assert line["valid"] is True
     assert line["parity"]["frame"] > 0.9999
     assert line["timed_batches"] >= 3
@@ -38,7 +39,7 @@ def test_worker_writes_all_fields(tmp_path: Path) -> None:
         assert line[output]["throughput_ips"] > 0
         assert line[output]["median_s"] <= line[output]["p90_s"]
     assert line["patch"]["median_s"] >= line["device"]["median_s"]
-    assert line["peak_bytes"] >= line["load_peak_bytes"] >= line["footprint_base_bytes"]
+    assert line["peak_bytes"] >= line["load_footprint_peak_bytes"] >= line["footprint_base_bytes"]
     assert line["run_peak_bytes"] is None or line["run_peak_bytes"] == line["peak_bytes"]
     assert line["mps_driver_max_bytes"] > 0
     assert line["attn_implementation"] == "sdpa"

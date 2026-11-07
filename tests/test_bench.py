@@ -397,3 +397,167 @@ def test_benchmark_worker_runs_through_the_shared_runner(monkeypatch: pytest.Mon
         assert kwargs["env"]["PYTORCH_MPS_HIGH_WATERMARK_RATIO"] == "0.8"
         assert kwargs["env"]["PYTORCH_MPS_LOW_WATERMARK_RATIO"] == "0.6"
         assert kwargs["capture_output"] and kwargs["text"] and not kwargs["check"]
+
+
+# The parameter counts of the safetensors headers, with the mask token.
+HEADER_COUNTS = {"ViT-S/16": 21_596_544, "ViT-H+/16": 840_592_640, "ViT-7B/16": 6_716_035_072}
+
+
+def test_line_fields_name_the_load_footprint_peak() -> None:
+    """T12 (F17)."""
+    assert "load_footprint_peak_bytes" in bench.LINE_FIELDS
+    assert "load_peak_bytes" not in bench.LINE_FIELDS
+
+
+def test_bench_config_key_has_bits() -> None:
+    """T15 (D22)."""
+    config = BenchConfig("S6", "ViT-H+/16", "bf16-autocast", 512, 8, compile=True, bits=8)
+    assert config.key == ("ViT-H+/16", "bf16-autocast", 512, 8, True, 8, 0)
+    assert BenchConfig("B1", *config.key) == BenchConfig(
+        "B1", "ViT-H+/16", "bf16-autocast", 512, 8, True, 8, 0
+    )
+    old = {
+        "model_size": "ViT-S/16",
+        "dtype_mode": "fp32",
+        "side": 224,
+        "batch_size": 8,
+        "compile": False,
+        "repeat": 1,
+    }
+    assert bench.line_key(old) == ("ViT-S/16", "fp32", 224, 8, False, None, 1)
+    assert bench.line_key(old | {"bits": 4})[5] == 4
+    configs = [BenchConfig("B1", "ViT-S/16", "fp32", 224, 8)]
+    lines = [old | {"repeat": 0}, old]
+    assert [c.repeat for c in add_rounds(configs, lines, rounds=2)] == [2, 3]
+    assert "bits" in bench.LINE_FIELDS
+    assert "compile_trace_s" in bench.LINE_FIELDS
+    assert "8-bit" in config.label
+
+
+def test_required_bench_bytes_by_backend(monkeypatch: pytest.MonkeyPatch) -> None:
+    """T16 (D8): the exact values of Section 3.3.4 of the plan."""
+    monkeypatch.setattr(bench, "_parameter_count", HEADER_COUNTS.__getitem__)
+
+    def need(model_size: str, mode: str, side: int, b: int, backend: str, bits=None) -> int:
+        config = BenchConfig("S6", model_size, mode, side, b, bits=bits)
+        return required_bench_bytes(config, backend=backend)
+
+    assert need("ViT-H+/16", "fp32", 512, 8, "mlx") == 8_877_801_472
+    assert need("ViT-H+/16", "bf16-cast", 512, 8, "mlx") == 6_438_900_736
+    assert need("ViT-H+/16", "bf16-autocast", 512, 8, "mlx") == 6_860_379_136
+    for mode in ("fp32", "fp16-autocast", "bf16-autocast"):
+        assert need("ViT-H+/16", mode, 512, 8, "torch-mps") == 10_233_117_952
+    assert need("ViT-H+/16", "bf16-cast", 512, 8, "torch-mps") == 7_116_558_976
+    config = BenchConfig("B1", "ViT-H+/16", "bf16-cast", 512, 8)
+    assert required_bench_bytes(config) == 7_116_558_976  # the default stays torch-mps
+    assert need("ViT-7B/16", "bf16-autocast", 512, 32, "mlx") == 27_671_377_101
+    assert need("ViT-7B/16", "bf16-autocast", 512, 32, "mlx", 8) == 20_121_629_901
+    assert need("ViT-7B/16", "bf16-autocast", 512, 32, "mlx", 4) == 16_095_098_061
+    assert need("ViT-7B/16", "bf16-cast", 512, 32, "torch-mps") == 28_231_943_373
+    with pytest.raises(ValueError, match="mlx"):
+        need("ViT-H+/16", "bf16-autocast", 512, 8, "torch-mps", 8)
+
+
+def test_quantized_weight_bytes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """T17 (Table 9 of the plan)."""
+    monkeypatch.setattr(bench, "_parameter_count", HEADER_COUNTS.__getitem__)
+    expected = {
+        "ViT-S/16": (23_286_528, 12_669_696),
+        "ViT-H+/16": (894_753_280, 475_322_880),
+        "ViT-7B/16": (7_140_614_144, 3_785_170_944),
+    }
+    for model_size, (eight, four) in expected.items():
+        assert bench.quantized_weight_bytes(model_size, 8) == eight
+        assert bench.quantized_weight_bytes(model_size, 4) == four
+    assert bench.quantized_weight_bytes("ViT-S/16", 8, parameters=21_596_544) == 23_286_528
+    assert bench.QUANTIZED_MODEL_SIZES == ["ViT-H+/16", "ViT-7B/16"]
+    assert bench.QUANTIZED_MODES == ["fp16-autocast", "bf16-autocast"]
+
+
+def test_modes_by_backend() -> None:
+    """T18 (D23)."""
+    assert bench._modes("ViT-7B/16", "torch-mps") == ["fp16-cast", "bf16-cast"]
+    assert bench._modes("ViT-7B/16") == ["fp16-cast", "bf16-cast"]
+    assert bench._modes("ViT-7B/16", "mlx") == [
+        "fp16-cast",
+        "bf16-cast",
+        "fp16-autocast",
+        "bf16-autocast",
+    ]
+    for backend in ("torch-mps", "mlx"):
+        assert bench._modes("ViT-S/16", backend) == DTYPE_MODE_NAMES
+
+
+def test_bench_configurations_compile_outside_priority() -> None:
+    """T19 (D9)."""
+    compiled = bench_configurations(compile=True)
+    assert len(compiled) == 225
+    assert all(c.compile and c.run == "B1" for c in compiled)
+    import benchmark
+
+    args = benchmark.parse_args(["--compile", "--dry-run"])
+    assert args.compile and not args.priority
+
+
+def test_result_line_takes_the_backend() -> None:
+    """T20."""
+    from dinov3_apple.machine import read_machine_state
+
+    config = BenchConfig("S6", "ViT-S/16", "fp32", 224, 1, bits=None)
+    worker = {"status": "skipped", "reason": "does not fit"}
+    machine = read_machine_state()
+    assert result_line(config, worker, 1, 0, machine, backend="mlx")["backend"] == "mlx"
+    assert result_line(config, worker, 1, 0, machine)["backend"] == "torch-mps"
+    assert result_line(config, worker, 1, 0, machine)["bits"] is None
+
+
+# A benchmark.py worker that runs the real load_torch_backbone up to its memory check and stops
+# before the weights: the need is 1 byte, and weights_dir raises.
+TORCH_WORKER_UNTIL_THE_CHECK = """
+from typing import NoReturn
+
+import benchmark
+from dinov3_apple import reference
+from dinov3_apple.hub import WeightsNotFoundError
+
+
+def stop(model_size: str) -> NoReturn:
+    raise WeightsNotFoundError("stop after the memory check")
+
+
+reference.required_load_bytes = lambda *args, **kwargs: 1
+reference.weights_dir = stop
+benchmark.main()
+"""
+
+
+def test_benchmark_worker_memory_check_reaches_the_driver_log(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """T10 (F6): the memory check of a benchmark.py worker reaches the driver log through
+    run_worker_subprocess."""
+    import benchmark
+
+    config = BenchConfig("B1", "ViT-S/16", "fp32", 224, 1)
+    worker = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            TORCH_WORKER_UNTIL_THE_CHECK,
+            "--worker",
+            json.dumps(asdict(config)),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        cwd=Path(__file__).parents[1] / "scripts",
+        timeout=120,
+    )
+    assert "memory check: ViT-S/16 torch-mps fp32" in worker.stderr, worker.stderr
+    monkeypatch.setattr(subprocess, "run", lambda command, **kwargs: worker)
+    monkeypatch.setattr(logging.getLogger("dinov3_apple.memory"), "handlers", [])
+    with caplog.at_level(logging.INFO):
+        result = benchmark.run_worker_subprocess(config)
+    assert result["status"] == "error"
+    records = [record for record in caplog.records if record.name == "dinov3_apple.memory"]
+    assert [r.getMessage().split(":")[1].strip() for r in records] == ["ViT-S/16 torch-mps fp32"]

@@ -1,6 +1,11 @@
 """The parity table of scripts/parity_table.py for the backends torch-mps and mlx (T31 of
 specs/05-all-sizes/plan.html)."""
 
+import json
+from collections.abc import Callable
+from pathlib import Path
+
+import pytest
 from parity_table import results_path, table_order, write_table
 
 
@@ -131,3 +136,67 @@ def test_table_order_follows_model_ids_and_thresholds() -> None:
         ("ViT-S+/16", "bf16-cast"),
         ("ViT-B/16", "fp32"),
     ]
+
+
+def test_parity_table_keeps_both_bits(
+    tmp_path: Path, record: Callable[..., None], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """T14: the key has bits; record() writes bits; the sections of the kinds compiled-equal,
+    quantized and fp16-output; --log and --out write the table from a given log."""
+    import conftest
+    import parity_table
+
+    unquantized = {"frame": 0.9999, "patch_mean": 0.9999, "patch_p01": 0.999, "patch_min": 0.99}
+    quantized = [
+        _line(
+            "mlx",
+            "mlx",
+            kind="quantized",
+            model_size="ViT-S/16",
+            dtype_mode="bf16-autocast",
+            bits=bits,
+            values={"unquantized": unquantized, "passes_thresholds": bits == 8},
+        )
+        for bits in (8, 4)
+    ]
+    log = tmp_path / "mlx.jsonl"
+    log.write_text("".join(json.dumps(line) + "\n" for line in quantized))
+    assert sorted(line["bits"] for line in parity_table.latest_lines(log)) == [4, 8]
+    text = write_table(parity_table.latest_lines(log), "mlx")
+    assert "Quantized weights" in text
+    assert "| ViT-S/16 | bf16-autocast | 8 | 1 | 1 |" in text
+    assert "| ViT-S/16 | bf16-autocast | 4 | 1 | 0 |" in text
+
+    equal = _line("mlx", "mlx", kind="compiled-equal", parity=None, values={"max_abs": 0.0})
+    fp16 = _line(
+        "mlx",
+        "mlx",
+        kind="fp16-output",
+        dtype_mode="bf16-cast",
+        values={"extra_loss": {"patch_mean": 2e-8, "patch_p01": 3e-8}, "frame_equal": True},
+    )
+    text = write_table([equal, fp16], "mlx")
+    assert "Compiled forward pass against the eager forward pass" in text
+    assert "| ViT-S/16 | fp32 | 1 | 1 | 0 |" in text
+    assert "fp16 patch embeddings" in text
+    assert "| ViT-S/16 | bf16-cast | 1 | 0.999980 | 0.999950 | 3e-08 | yes |" in text
+
+    monkeypatch.setattr(conftest, "PARITY_DIR", tmp_path / "parity")
+    (tmp_path / "parity").mkdir()
+    record(
+        "quantized",
+        "ViT-S/16",
+        "fp16-autocast",
+        "forest/224x224",
+        None,
+        "skipped",
+        "x",
+        backend="mlx",
+        bits=4,
+    )
+    written = json.loads((tmp_path / "parity" / "mlx.jsonl").read_text())
+    assert written["bits"] == 4
+
+    out = tmp_path / "out"
+    parity_table.main(["--backend", "mlx", "--log", str(log), "--out", str(out)])
+    assert "Quantized weights" in (out / "parity-mlx.md").read_text()

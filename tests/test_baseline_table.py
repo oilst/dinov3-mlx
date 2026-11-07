@@ -148,3 +148,15 @@ def test_profile_table_uses_forward_before_and_after() -> None:
     assert "1.17" in text  # forward / L in ms: mean 14 ms / 12
     # (12 x 1.05 + 0.21) / 14 = 0.915
     assert "0.915" in text
+
+
+def test_baseline_table_reads_both_load_peak_names() -> None:
+    """T13 (F17): the lines of Steps 3 to 5 have load_peak_bytes, the lines of Step 6 have
+    load_footprint_peak_bytes. Both give the same column value."""
+    from baseline_table import load_footprint_peak
+
+    old = _line("fp32", 100.0)
+    new = {k: v for k, v in old.items() if k != "load_peak_bytes"}
+    new["load_footprint_peak_bytes"] = 900_000_000
+    assert load_footprint_peak(old) == load_footprint_peak(new) == 900_000_000
+    assert write_baseline_table([old]) == write_baseline_table([new])

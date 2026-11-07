@@ -13,6 +13,7 @@ Usage:
     uv run python scripts/benchmark.py --only-skipped             # B1 lines that were skipped
     uv run python scripts/benchmark.py --priority --repeats 2     # B2
     uv run python scripts/benchmark.py --priority --compile       # B3
+    uv run python scripts/benchmark.py --compile                  # compile rows of B1 (ADR 0009)
     uv run python scripts/benchmark.py --model-size ViT-7B/16     # B4, cast modes only
     uv run python scripts/benchmark.py --model-size ViT-S/16 --rounds 2   # 2 more runs of each
 """
@@ -45,13 +46,19 @@ from dinov3_apple.bench import (
     result_line,
 )
 from dinov3_apple.bench import run_worker_subprocess as run_worker_command
+from dinov3_apple.gpu_lock import heavy_job
 from dinov3_apple.hub import MODEL_IDS, WeightsNotFoundError
 from dinov3_apple.machine import (
     MachineStateError,
     check_machine_state,
     read_machine_state,
 )
-from dinov3_apple.memory import GB, InsufficientMemoryError, available_memory_bytes
+from dinov3_apple.memory import (
+    GB,
+    InsufficientMemoryError,
+    available_memory_bytes,
+    send_checks_to,
+)
 
 REPO_ROOT = Path(__file__).parents[1]
 RESULTS = REPO_ROOT / "results" / "baseline-torch-mps.jsonl"
@@ -78,7 +85,12 @@ def append_line(path: Path, line: dict) -> None:
 
 
 def worker_main(config_json: str) -> None:
-    """Run one configuration in this process and print the result as one JSON line."""
+    """Run one configuration in this process and print the result as one JSON line.
+
+    The memory check of the model load goes to stderr; the driver writes it to driver.log (F6 of
+    specs/06-speed/plan.html).
+    """
+    send_checks_to(sys.stderr)
     from dinov3_apple.torch_bench import run_worker
 
     config = BenchConfig(**json.loads(config_json))
@@ -121,11 +133,13 @@ def dry_run(configs: list[BenchConfig], factor: float) -> None:
     print(f"available memory: {available / GB:.1f} GB, activation factor {factor}")
     fits = 0
     for config in configs:
-        need = required_bench_bytes(config, factor)
+        need = required_bench_bytes(config, factor, backend="torch-mps")
         ok = need <= available
         fits += ok
         print(f"{config.label:42s} need {need / GB:5.1f} GB  {'fits' if ok else 'does not fit'}")
-    largest = max((required_bench_bytes(c, factor) for c in configs), default=0)
+    largest = max(
+        (required_bench_bytes(c, factor, backend="torch-mps") for c in configs), default=0
+    )
     print(f"{fits} of {len(configs)} configurations fit. Largest need: {largest / GB:.1f} GB.")
 
 
@@ -139,7 +153,7 @@ def run_configs(configs: list[BenchConfig], factor: float, results: Path) -> Cou
     for index, config in enumerate(configs, start=1):
         machine = read_machine_state()
         check_machine_state(machine)
-        need = required_bench_bytes(config, factor)
+        need = required_bench_bytes(config, factor, backend="torch-mps")
         available = available_memory_bytes()
         fits = available >= need
         logger.info(
@@ -173,23 +187,38 @@ def write_deferred(results: Path, lines: list[dict], factor: float) -> int:
     for config in bench_configurations(model_sizes=[GIANT_MODEL_SIZE]):
         if config.key in known:
             continue
-        deferred = BenchConfig("B1", *config.key)
-        need = required_bench_bytes(deferred, factor)
+        deferred = BenchConfig(
+            run="B1",
+            model_size=config.model_size,
+            dtype_mode=config.dtype_mode,
+            side=config.side,
+            batch_size=config.batch_size,
+            compile=config.compile,
+            bits=config.bits,
+            repeat=config.repeat,
+        )
+        need = required_bench_bytes(deferred, factor, backend="torch-mps")
         worker = {"status": "deferred", "reason": DEFERRED_REASON}
         append_line(results, result_line(deferred, worker, need, machine.available_bytes, machine))
         written += 1
     return written
 
 
-def main() -> None:
-    """Parse the arguments and run the benchmark."""
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """Return the command-line options.
+
+    Args:
+        argv: The arguments. None reads sys.argv.
+    """
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawTextHelpFormatter
     )
     parser.add_argument("--model-size", nargs="+", choices=list(MODEL_IDS), help="B1 or B4")
     parser.add_argument("--priority", action="store_true", help="P1 and P2 in five dtype modes")
     parser.add_argument("--repeats", type=int, default=0, help="with --priority: B2")
-    parser.add_argument("--compile", action="store_true", help="with --priority: B3")
+    parser.add_argument(
+        "--compile", action="store_true", help="compile rows: B3 with --priority, else of B1 or B4"
+    )
     parser.add_argument("--dry-run", action="store_true", help="print the needs, load no model")
     parser.add_argument(
         "--only-skipped", action="store_true", help="only configurations whose latest line skipped"
@@ -211,15 +240,24 @@ def main() -> None:
     )
     parser.add_argument("--results", type=Path, default=RESULTS, help=argparse.SUPPRESS)
     parser.add_argument("--worker", help=argparse.SUPPRESS)
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
+    if args.activation_factor < ACTIVATION_FACTOR:
+        parser.error(f"the activation factor can only be raised above {ACTIVATION_FACTOR}")
+    if args.repeats and not args.priority:
+        parser.error("--repeats needs --priority")
+    return args
 
+
+def main(argv: list[str] | None = None) -> None:
+    """Parse the arguments and run the benchmark. A run that is not a dry run takes the GPU lock.
+
+    Args:
+        argv: The arguments. None reads sys.argv.
+    """
+    args = parse_args(argv)
     if args.worker:
         worker_main(args.worker)
         return
-    if args.activation_factor < ACTIVATION_FACTOR:
-        parser.error(f"the activation factor can only be raised above {ACTIVATION_FACTOR}")
-    if (args.repeats or args.compile) and not args.priority:
-        parser.error("--repeats and --compile need --priority")
 
     BENCH_DIR.mkdir(parents=True, exist_ok=True)
     logging.basicConfig(
@@ -232,21 +270,25 @@ def main() -> None:
     if args.dry_run:
         dry_run(configs, args.activation_factor)
         return
-    logger.info(f"run of {len(configs)} configurations, activation factor {args.activation_factor}")
-    try:
-        counts = run_configs(configs, args.activation_factor, args.results)
-    except MachineStateError as error:
-        logger.error(f"stop: {error}")
-        sys.exit(1)
-    except WeightsNotFoundError as error:
-        logger.error(f"stop: {error}")
-        sys.exit(1)
-    main_run = not args.priority and GIANT_MODEL_SIZE not in (args.model_size or [])
-    if main_run:
-        counts["deferred"] += write_deferred(
-            args.results, read_lines(args.results), args.activation_factor
+    with heavy_job("scripts/benchmark.py"):
+        logger.info(
+            f"run of {len(configs)} configurations, activation factor {args.activation_factor}"
         )
-    logger.info(f"end of run: {dict(counts)}")
+        try:
+            counts = run_configs(configs, args.activation_factor, args.results)
+        except MachineStateError as error:
+            logger.error(f"stop: {error}")
+            sys.exit(1)
+        except WeightsNotFoundError as error:
+            logger.error(f"stop: {error}")
+            sys.exit(1)
+        main_run = not args.priority and GIANT_MODEL_SIZE not in (args.model_size or [])
+        main_run = main_run and not args.compile
+        if main_run:
+            counts["deferred"] += write_deferred(
+                args.results, read_lines(args.results), args.activation_factor
+            )
+        logger.info(f"end of run: {dict(counts)}")
 
 
 if __name__ == "__main__":

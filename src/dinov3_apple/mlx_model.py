@@ -17,7 +17,7 @@ environment.
 
 import os
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -178,28 +178,71 @@ def rope_tables(
     return np.concatenate([prefix, np.cos(angles)]), np.concatenate([0 * prefix, np.sin(angles)])
 
 
-def rotate_half(x: mx.array) -> mx.array:
-    """Return (-x2, x1) for the halves x1 and x2 of the last axis (the half-split layout)."""
-    half = x.shape[-1] // 2
-    return mx.concatenate([-x[..., half:], x[..., :half]], axis=-1)
+def rope_layout(cos: np.ndarray, sin: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Return the RoPE tables in the layout of the concat-free rotation (D2 of
+    specs/06-speed/plan.html).
+
+    Args:
+        cos: The cos table of rope_tables, (T, head_dim), fp32.
+        sin: The sin table of rope_tables, (T, head_dim), fp32.
+
+    Returns:
+        cos2 and sin2, each (T, 2, head_dim / 2), fp32. sin2 holds -sin in its first half: the
+        sign of rotate_half moves into the table, so the rotation needs no join.
+    """
+    t, head_dim = cos.shape
+    half = head_dim // 2
+    signed = np.concatenate([-sin[:, :half], sin[:, half:]], axis=-1)
+    return cos.reshape(t, 2, half), signed.reshape(t, 2, half)
 
 
-def apply_rope(x: mx.array, cos: mx.array, sin: mx.array) -> mx.array:
-    """Rotate queries or keys with the RoPE tables.
+def apply_rope(x: mx.array, cos2: mx.array, sin2: mx.array) -> mx.array:
+    """Rotate queries or keys with the RoPE tables, without a join (D2, option R2).
 
-    The rotation runs in fp32 and the result has the dtype of x. The identity rows of the prefix
-    tokens give x · 1 + r · 0 = x, so no split and no join are necessary.
+    out = x · cos + (x2, x1) · (−sin1, sin2). The pair (x2, x1) is a reversed view of an axis of
+    size 2, so mx.compile fuses the rotation into one kernel. The rotation runs in fp32 and the
+    result has the dtype of x. In IEEE arithmetic (−x2) · s equals x2 · (−s), so the result
+    equals the Step 5 form with rotate_half bit for bit. The identity rows of the prefix tokens
+    give x · 1 + r · 0 = x.
 
     Args:
         x: Queries or keys with shape (B, heads, 5 + N, head_dim).
-        cos: The cos table with shape (5 + N, head_dim), fp32.
-        sin: The sin table with shape (5 + N, head_dim), fp32.
+        cos2: The cos table, (5 + N, 2, head_dim / 2), fp32.
+        sin2: The signed sin table, (5 + N, 2, head_dim / 2), fp32.
 
     Returns:
         The rotated values with the shape and the dtype of x.
     """
-    xf = x.astype(mx.float32)
-    return (xf * cos + rotate_half(xf) * sin).astype(x.dtype)
+    b, h, t, d = x.shape
+    xr = x.reshape(b, h, t, 2, d // 2).astype(mx.float32)
+    out = xr * cos2 + xr[..., ::-1, :] * sin2
+    return out.astype(x.dtype).reshape(b, h, t, d)
+
+
+class RopeCache:
+    """The RoPE tables of each patch grid, in the layout of apply_rope (A3 of
+    specs/06-speed/plan.html).
+
+    A plain object, not a dict: mlx.nn.Module keeps a dict attribute in its module tree, so
+    model.state and the inputs of the compiled forward pass would change with each new grid (R43).
+    """
+
+    def __init__(self, head_dim: int, theta: float) -> None:
+        self.head_dim = head_dim
+        self.theta = theta
+        self._tables: dict[tuple[int, int], tuple[mx.array, mx.array]] = {}
+
+    def tables(self, grid_h: int, grid_w: int) -> tuple[mx.array, mx.array]:
+        """Return (cos2, sin2) of one patch grid. The first call computes them in NumPy."""
+        key = (grid_h, grid_w)
+        if key not in self._tables:
+            cos, sin = rope_tables(grid_h, grid_w, self.head_dim, self.theta)
+            cos2, sin2 = rope_layout(cos, sin)
+            self._tables[key] = (mx.array(cos2), mx.array(sin2))
+        return self._tables[key]
+
+    def __len__(self) -> int:
+        return len(self._tables)
 
 
 def patchify(pixels: mx.array, patch_size: int) -> mx.array:
@@ -296,8 +339,8 @@ class Attention(nn.Module):
 
         Args:
             x: The tokens after norm1, (B, 5 + N, D).
-            cos: The cos table of the patch grid, (5 + N, head_dim).
-            sin: The sin table of the patch grid, (5 + N, head_dim).
+            cos: The cos table of the patch grid, (5 + N, 2, head_dim / 2).
+            sin: The signed sin table of the patch grid, (5 + N, 2, head_dim / 2).
         """
         q, k, v = self.qkv(x)
         q, k = apply_rope(q, cos, sin), apply_rope(k, cos, sin)
@@ -411,9 +454,10 @@ class Block(nn.Module):
 class MlxBackbone(nn.Module):
     """The DINOv3 backbone in MLX. Its parameter names are the keys of the safetensors file.
 
-    The RoPE tables are not parameters: an attribute whose name starts with "_" is not part of
-    parameters(), so load_weights(strict=True), set_dtype and nn.quantize do not touch them. The
-    dtype mode, its dtypes and the load report are plain attributes, not parameters.
+    The RoPE tables are not parameters: they live in a RopeCache, a plain object outside the
+    module tree, so load_weights(strict=True), set_dtype, nn.quantize and the inputs of the
+    compiled forward pass do not see them (R43). The dtype mode, its dtypes and the load report
+    are plain attributes, not parameters.
     """
 
     def __init__(self, config: MlxConfig, dtype_mode: str = "fp32") -> None:
@@ -424,42 +468,92 @@ class MlxBackbone(nn.Module):
         self.embeddings = Embeddings(config, self.dtypes)
         self.layer = [Block(config, self.dtypes) for _ in range(config.blocks)]
         self.norm = nn.LayerNorm(config.dim, eps=config.eps)
-        self._rope_cache: dict[tuple[int, int], tuple[mx.array, mx.array]] = {}
+        self.rope_cache = RopeCache(config.head_dim, config.rope_theta)
         self.rope_box_jitter = False  # RoPE-box jittering of training: off; Step 8 decides (R17)
         self.load_report: LoadReport | None = None  # load_mlx_backbone sets it
 
     def rope(self, grid_h: int, grid_w: int) -> tuple[mx.array, mx.array]:
-        """Return the RoPE tables (cos, sin) of one patch grid, from the cache."""
-        if (grid_h, grid_w) not in self._rope_cache:
-            cos, sin = rope_tables(grid_h, grid_w, self.config.head_dim, self.config.rope_theta)
-            self._rope_cache[(grid_h, grid_w)] = (mx.array(cos), mx.array(sin))
-        return self._rope_cache[(grid_h, grid_w)]
+        """Return the RoPE tables (cos2, sin2) of one patch grid from the RoPE cache, in the
+        layout of the concat-free rotation."""
+        return self.rope_cache.tables(grid_h, grid_w)
 
-    def __call__(self, pixels: mx.array) -> mx.array:
-        """Return all tokens after the final layer norm, (B, 5 + N, D), of NCHW pixels."""
+    def forward_with_rope(self, pixels: mx.array, cos: mx.array, sin: mx.array) -> mx.array:
+        """Return all tokens after the final layer norm, (B, 5 + N, D), with the given RoPE tables.
+
+        The eager and the compiled forward pass share this code path (D1 of
+        specs/06-speed/plan.html).
+        """
         x = self.embeddings(pixels)
-        p = self.config.patch_size
-        cos, sin = self.rope(pixels.shape[2] // p, pixels.shape[3] // p)
         for block in self.layer:
             x = block(x, cos, sin)
         return self.norm(x)
 
+    def __call__(self, pixels: mx.array) -> mx.array:
+        """The eager forward pass: all tokens after the final layer norm, (B, 5 + N, D), of NCHW
+        pixels, with the RoPE tables of the patch grid from the cache."""
+        p = self.config.patch_size
+        return self.forward_with_rope(
+            pixels, *self.rope(pixels.shape[2] // p, pixels.shape[3] // p)
+        )
+
+
+def compile_backbone(model: MlxBackbone) -> Callable[[mx.array], mx.array]:
+    """Return the compiled forward pass of one backbone (D1 of specs/06-speed/plan.html).
+
+    One trace for each input shape (B, H, W). The weights enter as implicit inputs
+    (inputs=model.state), so the output follows a later weight change (R35). The RoPE tables enter
+    as arguments; Python reads them from the cache, outside the trace. Call it after the last
+    weight change (the load, nn.quantize). The caller holds the function: a function stored on the
+    model keeps the weights until gc.collect() (R36).
+
+    Args:
+        model: A loaded backbone.
+
+    Returns:
+        forward(pixels) -> tokens, with the contract of model(pixels).
+    """
+    traced = mx.compile(lambda p, c, s: model.forward_with_rope(p, c, s), inputs=model.state)
+    patch = model.config.patch_size
+
+    def forward(pixels: mx.array) -> mx.array:
+        cos, sin = model.rope(pixels.shape[2] // patch, pixels.shape[3] // patch)
+        return traced(pixels, cos, sin)
+
+    return forward
+
 
 def linear_parameter_names(model: nn.Module) -> frozenset[str]:
-    """Return the names of the weight and bias of each nn.Linear module: the matmul dtype (D2).
+    """Return the names of the parameters of each nn.Linear and nn.QuantizedLinear module: the
+    matmul dtype (D2).
 
-    The names come from named_modules() and isinstance, not from name suffixes. All other
-    parameters get the stream dtype.
+    nn.QuantizedLinear is not a subclass of nn.Linear (F1 of specs/06-speed/plan.html): its
+    weight, scales, biases (the offsets) and bias count too. The names come from named_modules()
+    and isinstance, not from name suffixes. All other parameters get the stream dtype.
     """
     return frozenset(
         f"{name}.{leaf}"
         for name, module in model.named_modules()
-        if isinstance(module, nn.Linear)
+        if isinstance(module, nn.Linear | nn.QuantizedLinear)
         for leaf in module.parameters()
     )
 
 
-def run_mlx(model: MlxBackbone, pixels: np.ndarray, dtype_mode: str) -> np.ndarray:
+def quantized_weight_names(model: nn.Module) -> frozenset[str]:
+    """Return the names of the weight of each nn.QuantizedLinear module: the tensors that the
+    quantized load quantizes (D17 of specs/06-speed/plan.html)."""
+    return frozenset(
+        f"{name}.weight"
+        for name, module in model.named_modules()
+        if isinstance(module, nn.QuantizedLinear)
+    )
+
+
+def run_mlx(
+    model: MlxBackbone,
+    pixels: np.ndarray,
+    dtype_mode: str,
+    forward: Callable[[mx.array], mx.array] | None = None,
+) -> np.ndarray:
     """Run the backbone on stored pixels and return all tokens after the final layer norm.
 
     The contract of run_torch in reference.py. The model casts the fp32 pixels to its matmul
@@ -469,6 +563,8 @@ def run_mlx(model: MlxBackbone, pixels: np.ndarray, dtype_mode: str) -> np.ndarr
         model: A backbone from load_mlx_backbone.
         pixels: Normalized fp32 pixels with shape (B, 3, H, W), NCHW.
         dtype_mode: A key of MLX_DTYPE_MODES. It must be the dtype mode of the model.
+        forward: The compiled forward pass of model, from compile_backbone (D4 of
+            specs/06-speed/plan.html). None runs the eager forward pass (part tests, diagnostics).
 
     Returns:
         The tokens with shape (B, 1 + 4 + N, D), cast to fp32.
@@ -478,10 +574,41 @@ def run_mlx(model: MlxBackbone, pixels: np.ndarray, dtype_mode: str) -> np.ndarr
     """
     if dtype_mode != model.dtype_mode:
         raise ValueError(f"the model runs in {model.dtype_mode}, not in {dtype_mode}")
-    tokens = model(mx.array(pixels))
+    tokens = (forward or model)(mx.array(pixels))
     tokens = tokens.astype(mx.float32)  # a bf16 mx.array does not convert to NumPy
     mx.eval(tokens)
     return np.array(tokens)
+
+
+def patch_dtype(dtype_mode: str, patch_fp32: bool = False) -> mx.Dtype:
+    """Return the host dtype of the patch embeddings of one dtype mode (D13 of
+    specs/06-speed/plan.html): fp16 in the four fp16 and bf16 dtype modes, else fp32."""
+    half = MLX_DTYPE_MODES[dtype_mode].matmul != mx.float32
+    return mx.float16 if half and not patch_fp32 else mx.float32
+
+
+def mlx_embeddings(
+    tokens: mx.array, dtype_mode: str, patch_fp32: bool = False
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return the frame embeddings and the patch embeddings of one batch on the host (D13 of
+    specs/06-speed/plan.html).
+
+    The frame embeddings are fp32. In the four fp16 and bf16 dtype modes the patch embeddings are
+    fp16: half the host bytes for at most 3e-8 of parity (probe fp16-output). NumPy has no bf16,
+    so the bf16 modes cast to fp16 on the GPU; after the final layer norm no value is above 18.
+
+    Args:
+        tokens: All tokens after the final layer norm, (B, 5 + N, D).
+        dtype_mode: The dtype mode of the backbone.
+        patch_fp32: True for fp32 patch embeddings in every dtype mode.
+
+    Returns:
+        The frame embeddings (B, D) and the patch embeddings (B, N, D).
+    """
+    frame = tokens[:, 0].astype(mx.float32)
+    patches = tokens[:, NUM_PREFIX_TOKENS:].astype(patch_dtype(dtype_mode, patch_fp32))
+    mx.eval(frame, patches)
+    return np.array(frame), np.array(patches)
 
 
 def run_mlx_hidden_states(model: MlxBackbone, pixels: np.ndarray) -> np.ndarray:

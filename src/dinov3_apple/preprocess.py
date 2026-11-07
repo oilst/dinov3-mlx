@@ -16,7 +16,7 @@ import torch
 import torch.nn.functional as F
 from PIL import Image
 
-from dinov3_apple.stored import own_aspect_size
+from dinov3_apple.stored import IMAGENET_MEAN_VALUES, IMAGENET_STD_VALUES, own_aspect_size
 
 # own_aspect_size moved to stored.py, which imports no torch (Step 4). This module re-exports it.
 __all__ = [
@@ -28,8 +28,8 @@ __all__ = [
     "preprocess",
 ]
 
-IMAGENET_MEAN = torch.tensor([0.485, 0.456, 0.406], dtype=torch.float32)
-IMAGENET_STD = torch.tensor([0.229, 0.224, 0.225], dtype=torch.float32)
+IMAGENET_MEAN = torch.from_numpy(IMAGENET_MEAN_VALUES.copy())
+IMAGENET_STD = torch.from_numpy(IMAGENET_STD_VALUES.copy())
 PATCH_SIZE = 16
 
 

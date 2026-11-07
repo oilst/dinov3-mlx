@@ -15,6 +15,7 @@ import gc
 import json
 import logging
 from collections.abc import Callable, Iterator
+from contextlib import ExitStack
 from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
@@ -25,6 +26,7 @@ import numpy as np
 import pytest
 import torch
 
+from dinov3_apple.gpu_lock import heavy_job
 from dinov3_apple.hub import MODEL_IDS, WeightsNotFoundError
 from dinov3_apple.memory import GB, InsufficientMemoryError, RunRuleError
 from dinov3_apple.parity import Parity
@@ -50,6 +52,26 @@ MLX_SESSION_LIMIT_BYTES = 4 * 10**9
 mx.set_memory_limit(MLX_SESSION_LIMIT_BYTES)
 
 
+def pytest_sessionstart(session: pytest.Session) -> None:
+    """Take the GPU lock for the whole session (F14 of specs/05-all-sizes/verify.html).
+
+    The session waits for the holder of the lock and for heavy jobs outside the lock. A child
+    process of the session (a driver or a worker of a test) inherits DINOV3_GPU_LOCK and enters
+    at once.
+    """
+    stack = ExitStack()
+    stack.enter_context(heavy_job("pytest " + " ".join(session.config.args)))
+    session.gpu_lock = stack
+
+
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+    """Release the GPU lock of the session."""
+    stack = getattr(session, "gpu_lock", None)
+    if stack is not None:
+        stack.close()
+        session.gpu_lock = None
+
+
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     """Group the tests that need a model by model size, backend and dtype mode.
 
@@ -59,14 +81,21 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     """
     model_order = list(MODEL_IDS)
 
-    def key(item: pytest.Item) -> tuple[int, str, str]:
+    def key(item: pytest.Item) -> tuple[int, str, str, int]:
         callspec = getattr(item, "callspec", None)
         params = callspec.params if callspec else {}
         mlx = item.get_closest_marker("mlx") is not None
         if "model_size" not in params:
-            return (-2 if mlx else -1, "", "")
+            return (-2 if mlx else -1, "", "", 0)
         backend = "mlx" if mlx else "torch"
-        return (model_order.index(params["model_size"]), backend, params.get("dtype_mode", ""))
+        # bits last: each quantized model loads once, after the unquantized model (T49 of
+        # specs/06-speed/plan.html). params.get("bits") or 0 never compares None with an int.
+        return (
+            model_order.index(params["model_size"]),
+            backend,
+            params.get("dtype_mode", ""),
+            params.get("bits") or 0,
+        )
 
     items.sort(key=key)
 
@@ -81,22 +110,26 @@ class _BackboneSlot:
     """
 
     def __init__(self) -> None:
-        self.key: tuple[str, str, str] | None = None
+        self.key: tuple[str, str, str, int | None] | None = None
         self.model: Any = None
+        # The compiled forward pass of the mlx model (D4 of specs/06-speed/plan.html). The slot
+        # holds it next to the model, never on it (R36).
+        self.forward: Callable[[Any], Any] | None = None
         self.handler = logging.FileHandler(MEMORY_LOG)
         self.handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
         logging.getLogger("dinov3_apple.memory").addHandler(self.handler)
         logging.getLogger("dinov3_apple.memory").setLevel(logging.INFO)
 
     def free(self) -> None:
+        self.forward = None  # first the function, then the model (R36)
         self.model, self.key = None, None
         gc.collect()
         if torch.backends.mps.is_available():
             torch.mps.empty_cache()
         mx.clear_cache()
 
-    def get(self, model_size: str, device: str, dtype_mode: str) -> Any:
-        key = (model_size, device, dtype_mode)
+    def get(self, model_size: str, device: str, dtype_mode: str, bits: int | None = None) -> Any:
+        key = (model_size, device, dtype_mode, bits)
         if self.key != key:
             self.free()
             try:
@@ -105,17 +138,33 @@ class _BackboneSlot:
 
                     if os.environ.get("DINOV3_MLX_DEVICE") == "cpu":
                         mx.set_default_device(mx.cpu)
-                    self.model = load_mlx_backbone(model_size, dtype_mode)
+                    kwargs = {"bits": bits} if bits else {}
+                    self.model = load_mlx_backbone(model_size, dtype_mode, **kwargs)
                 else:
                     self.model = load_torch_backbone(model_size, device, dtype_mode)
             except (WeightsNotFoundError, InsufficientMemoryError, RunRuleError) as error:
                 pytest.skip(str(error))
             self.key = key
             if device == "mlx":
-                self.check_load_report(model_size, dtype_mode)
+                self.check_load_report(model_size, dtype_mode, bits)
         return self.model
 
-    def check_load_report(self, model_size: str, dtype_mode: str) -> None:
+    def forward_of(self, model: Any) -> Callable[[Any], Any]:
+        """Return the compiled forward pass of the mlx model of the slot. The first call compiles
+        it, after the load (R35).
+
+        Raises:
+            ValueError: For a model that is not the model of the slot.
+        """
+        if model is None or model is not self.model:
+            raise ValueError("the model is not the model of the backbone slot")
+        if self.forward is None:
+            from dinov3_apple.mlx_model import compile_backbone
+
+            self.forward = compile_backbone(model)
+        return self.forward
+
+    def check_load_report(self, model_size: str, dtype_mode: str, bits: int | None = None) -> None:
         """Fail the test if the load peak is outside its range or the MLX cache is not empty.
 
         The range: at least the bytes of the mapped tensors (a load that does not evaluate the
@@ -124,11 +173,12 @@ class _BackboneSlot:
         from parity_checks import load_peak_lower_bound, load_peak_target
 
         report = self.model.load_report
-        target = load_peak_target(model_size, dtype_mode)
+        target = load_peak_target(model_size, dtype_mode, bits)
         lower_bound = load_peak_lower_bound(model_size, self.model)
         if not lower_bound <= report.peak_bytes <= target or report.cache_bytes > 0:
+            name = f"{model_size} mlx {dtype_mode}" + (f" {bits}-bit" if bits else "")
             pytest.fail(
-                f"load of {model_size} mlx {dtype_mode}: load peak {report.peak_bytes / GB:.4f} GB "
+                f"load of {name}: load peak {report.peak_bytes / GB:.4f} GB "
                 f"(lower bound {lower_bound / GB:.4f} GB, target {target / GB:.4f} GB), "
                 f"cache {report.cache_bytes} bytes after the load"
             )
@@ -156,6 +206,12 @@ def backbone(backbone_slot: _BackboneSlot) -> Callable[[str, str, str], Any]:
     backbone. With DINOV3_MLX_DEVICE=cpu the MLX backbone runs on the CPU stream (a diagnostic).
     """
     return backbone_slot.get
+
+
+@pytest.fixture(scope="session")
+def mlx_forward(backbone_slot: _BackboneSlot) -> Callable[[Any], Callable[[Any], Any]]:
+    """Return a getter of the compiled forward pass of the mlx model of the slot (D4)."""
+    return backbone_slot.forward_of
 
 
 @pytest.fixture(scope="session")
@@ -201,6 +257,7 @@ def record() -> Callable[..., None]:
         reason: str = "",
         backend: str = "torch-mps",
         values: dict | None = None,
+        bits: int | None = None,
     ) -> None:
         package, package_version = BACKEND_PACKAGES[backend]
         line = {
@@ -213,6 +270,7 @@ def record() -> Callable[..., None]:
             "reason": reason,
             "parity": asdict(parity) if parity else None,
             "values": values,
+            "bits": bits,
             package: package_version,
             "time": datetime.now(UTC).isoformat(timespec="seconds"),
         }

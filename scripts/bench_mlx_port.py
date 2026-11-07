@@ -16,8 +16,9 @@ MLX_ENABLE_TF32=0 (D7). The torch-mps worker is the eager worker of Step 3 with 
 watermarks 0.8 and 0.6.
 
 Each worker sends the memory check and the load peak of its model load to the driver, and the
-driver writes them to driver.log. A bf16 output of mlx moves to the host as a view of uint16,
-because NumPy has no bf16; the validity check converts the bits to fp32 outside the timed batches.
+driver writes them to driver.log. Since Step 6 the mlx worker comes from dinov3_apple.mlx_bench:
+the frame embeddings move to the host in fp32, the patch embeddings in fp16 in the four fp16 and
+bf16 dtype modes (D13 of specs/06-speed/plan.html). The driver takes the GPU lock.
 
 Each priority has its own default results file and folder. P1: results/bench-mlx-port.jsonl and
 tests/fixtures/generated/bench/mlx-port/. P2: results/bench-all-sizes.jsonl and
@@ -38,38 +39,24 @@ import json
 import logging
 import os
 import sys
-import time
 from collections import Counter
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from dataclasses import asdict
-from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
-
-import numpy as np
 
 from dinov3_apple.bench import (
     DTYPE_MODE_NAMES,
     PRIORITY,
-    TIMED,
-    WARM_UP,
     BenchConfig,
-    TimeBudget,
-    check_validity,
-    keep_going,
-    make_batch,
-    reference_tokens,
     required_bench_bytes,
     result_line,
     run_worker_subprocess,
-    summarize,
 )
-from dinov3_apple.footprint import read_footprint
+from dinov3_apple.gpu_lock import heavy_job
 from dinov3_apple.machine import (
     MachineStateError,
     check_machine_state,
     read_machine_state,
-    read_versions,
 )
 from dinov3_apple.memory import (
     GB,
@@ -77,11 +64,13 @@ from dinov3_apple.memory import (
     available_memory_bytes,
     send_checks_to,
 )
-from dinov3_apple.outputs import NUM_PREFIX_TOKENS
-from dinov3_apple.stored import model_slug, read_inputs
-
-if TYPE_CHECKING:  # the module imports mlx only in the mlx worker
-    from dinov3_apple.mlx_model import MlxBackbone
+from dinov3_apple.mlx_bench import (  # noqa: F401 (the tests of Steps 4 and 5 import them here)
+    host_to_fp32,
+    load_report_fields,
+    output_transfer,
+    run_mlx_worker,
+    time_batch_mlx,
+)
 
 REPO_ROOT = Path(__file__).parents[1]
 RESULTS = REPO_ROOT / "results" / "bench-mlx-port.jsonl"
@@ -195,166 +184,6 @@ def bench_config(
     return BenchConfig(RUN_P2, model_size, dtype_mode, side, batch_size, repeat=repeat)
 
 
-def output_transfer(host: np.ndarray) -> str:
-    """Return how an output moved to the host: "view-uint16" for bf16 bits, else "native"."""
-    return "view-uint16" if host.dtype == np.uint16 else "native"
-
-
-def host_to_fp32(host: np.ndarray) -> np.ndarray:
-    """Return the fp32 values of a host output. bf16 bits (uint16) become fp32; others stay."""
-    if host.dtype != np.uint16:
-        return host
-    return (host.astype(np.uint32) << 16).view(np.float32)
-
-
-def time_batch_mlx(
-    model: "MlxBackbone", batch: np.ndarray
-) -> tuple[tuple[float, float, float], np.ndarray, np.ndarray]:
-    """Run one batch host to host on mlx and time it (Table 4 of the Step 3 plan).
-
-    The output stays in its dtype, as in the torch-mps worker. NumPy has no bf16, so a bf16
-    output moves to the host as a view of uint16 (the bits); host_to_fp32 converts them.
-
-    Args:
-        model: An MlxBackbone.
-        batch: fp32 pixels with shape (B, 3, H, W) in NumPy. The model casts them.
-
-    Returns:
-        The device time, the frame time and the patch time in seconds, then the frame embeddings
-        (B, D) and the patch embeddings (B, N, D) in NumPy: fp32, fp16 or uint16 bits of bf16.
-    """
-    import mlx.core as mx
-
-    t0 = time.perf_counter()
-    tokens = model(mx.array(batch))
-    mx.eval(tokens)  # mlx synchronizes with mx.eval
-    t1 = time.perf_counter()
-    if tokens.dtype == mx.bfloat16:
-        tokens = tokens.view(mx.uint16)
-    frame = np.array(tokens[:, 0])
-    t2 = time.perf_counter()
-    patches = np.array(tokens[:, NUM_PREFIX_TOKENS:])
-    t3 = time.perf_counter()
-    return (t1 - t0, t2 - t0, (t1 - t0) + (t3 - t2)), frame, patches
-
-
-def _phase(
-    run: Callable[[], tuple[float, float, float]], budget: TimeBudget
-) -> list[tuple[float, float, float]]:
-    times: list[tuple[float, float, float]] = []
-    elapsed = 0.0
-    while keep_going(budget, len(times), elapsed):
-        batch_times = run()
-        times.append(batch_times)
-        elapsed += batch_times[2]
-    return times
-
-
-def run_mlx_worker(
-    config: BenchConfig,
-    warm_up: TimeBudget = WARM_UP,
-    timed: TimeBudget = TIMED,
-    bench_dir: Path = BENCH_DIR / "mlx",
-) -> dict:
-    """Load the MLX backbone, check its first output, warm up, time the batches, return the result.
-
-    The same phases and fields as torch_bench.run_worker of Step 3. TF32 is off (D7).
-
-    Args:
-        config: The configuration.
-        warm_up: The time budget of the warm-up batches.
-        timed: The time budget of the timed batches.
-        bench_dir: The folder for the per-batch times.
-
-    Returns:
-        The worker fields of LINE_FIELDS with status "done", plus mlx_peak_bytes,
-        mlx_memory_limit_bytes (the value that the load gave to mx.set_memory_limit), tf32,
-        output_transfer and the fields of the load report (null if the model has none).
-
-    Raises:
-        TF32ModeError: If MLX_ENABLE_TF32 is not 0 in the environment.
-        InsufficientMemoryError: If the memory check of the load fails.
-        WeightsNotFoundError: If the weights are not on this Mac.
-    """
-    import mlx.core as mx
-
-    from dinov3_apple.mlx_weights import load_mlx_backbone
-
-    start_time = datetime.now(UTC).isoformat(timespec="seconds")
-    base = read_footprint()
-    start = time.perf_counter()
-    model = load_mlx_backbone(config.model_size, config.dtype_mode, tf32=False)
-    load_time_s = time.perf_counter() - start
-    load_peak = read_footprint().lifetime_max_bytes
-
-    batch = make_batch(read_inputs(), config.side, config.batch_size)
-    (_, _, first_call_s), frame, patches = time_batch_mlx(model, batch)
-    transfer = output_transfer(frame)
-    validity = check_validity(
-        host_to_fp32(frame[0]),
-        host_to_fp32(patches[0]),
-        reference_tokens(config.model_size, config.side),
-        config.dtype_mode,
-    )
-    output_dtype = "bfloat16" if transfer == "view-uint16" else str(frame.dtype)
-    del frame, patches
-
-    warm = _phase(lambda: time_batch_mlx(model, batch)[0], warm_up)
-    timed_times = _phase(lambda: time_batch_mlx(model, batch)[0], timed)
-    end = read_footprint()
-
-    device, frame_t, patch_t = (list(column) for column in zip(*timed_times, strict=True))
-    bench_dir.mkdir(parents=True, exist_ok=True)
-    slug = model_slug(config.model_size)
-    name = f"{slug}_{config.dtype_mode}_{config.side}_b{config.batch_size}_r{config.repeat}.json"
-    (bench_dir / name).write_text(
-        json.dumps({"config": config.key, "device": device, "frame": frame_t, "patch": patch_t})
-    )
-    above_load = end.lifetime_max_bytes > load_peak
-    load_report = getattr(model, "load_report", None)
-    return {
-        "status": "done",
-        "reason": "",
-        "valid": validity.valid,
-        "finite": validity.finite,
-        "parity": None if validity.parity is None else validity.parity.__dict__,
-        "validity_note": validity.note,
-        "load_time_s": load_time_s,
-        "first_call_s": first_call_s,
-        "warm_up_batches": len(warm),
-        "warm_up_s": sum(t[2] for t in warm),
-        "timed_batches": len(timed_times),
-        "timed_s": sum(patch_t),
-        "frame": summarize(frame_t, config.batch_size),
-        "patch": summarize(patch_t, config.batch_size),
-        "device": summarize(device, config.batch_size),
-        "output_dtype": output_dtype,
-        "footprint_base_bytes": base.current_bytes,
-        "load_peak_bytes": load_peak,
-        "peak_bytes": end.lifetime_max_bytes,
-        "run_peak_bytes": end.lifetime_max_bytes if above_load else None,
-        "run_peak_note": "" if above_load else f"below the load peak; end {end.current_bytes}",
-        "mps_driver_max_bytes": None,
-        "versions": read_versions(),
-        "attn_implementation": "mx.fast.scaled_dot_product_attention",
-        "start_time": start_time,
-        "time": datetime.now(UTC).isoformat(timespec="seconds"),
-        "mlx_peak_bytes": mx.get_peak_memory(),
-        "mlx_memory_limit_bytes": mx.get_memory_limit(),
-        "tf32": False,
-        "output_transfer": transfer,
-        **load_report_fields(load_report),
-    }
-
-
-def load_report_fields(load_report: object | None) -> dict[str, int | None]:
-    """Return the fields of the load report of an mlx worker, or null fields without a report."""
-    return {
-        f"load_report_{name}": getattr(load_report, name, None)
-        for name in ("need_bytes", "peak_bytes", "cache_bytes", "footprint_bytes")
-    }
-
-
 def worker_main(spec_json: str) -> None:
     """Run one worker in this process and print the result as one JSON line.
 
@@ -413,7 +242,7 @@ def dry_run(plan: list[tuple[int, int | str, str, bool | None]], priority: str =
     print(f"available memory: {available / GB:.1f} GB")
     for round_, batch_size_or_dtype_mode, backend, tf32 in plan:
         config = bench_config(round_, batch_size_or_dtype_mode, priority)
-        need = required_bench_bytes(config)
+        need = required_bench_bytes(config, backend=backend)
         fits = "fits" if need <= available else "does not fit"
         print(
             f"round {round_} {backend:9s} tf32 {tf32!s:5} {config.label:30s} "
@@ -446,7 +275,7 @@ def run_plan(
         config = bench_config(round_, batch_size_or_dtype_mode, priority)
         machine = read_machine_state()
         check_machine_state(machine)
-        need = required_bench_bytes(config)
+        need = required_bench_bytes(config, backend=backend)
         available = available_memory_bytes()
         fits = available >= need
         label = f"{backend} {config.label}"
@@ -459,7 +288,7 @@ def run_plan(
         else:
             reason = f"needs {need / GB:.1f} GB, {available / GB:.1f} GB available"
             worker = {"status": "skipped", "reason": reason}
-        line = result_line(config, worker, need, available, machine)
+        line = result_line(config, worker, need, available, machine, backend)
         pair = (round_, batch_size_or_dtype_mode)
         position = 1 + [entry[2] for entry in plan if entry[:2] == pair].index(backend)
         line |= {
@@ -490,8 +319,12 @@ def run_plan(
     return counts
 
 
-def main() -> None:
-    """Parse the arguments and run the benchmark."""
+def main(argv: list[str] | None = None) -> None:
+    """Parse the arguments and run the benchmark. A run that is not a dry run takes the GPU lock.
+
+    Args:
+        argv: The arguments. None reads sys.argv.
+    """
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawTextHelpFormatter
     )
@@ -503,7 +336,7 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true", help="print the plan, load no model")
     parser.add_argument("--results", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--worker", help=argparse.SUPPRESS)
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     if args.worker:
         worker_main(args.worker)
@@ -522,13 +355,14 @@ def main() -> None:
         format=LOG_FORMAT,
         handlers=[logging.StreamHandler(sys.stderr), logging.FileHandler(bench_dir / "driver.log")],
     )
-    logger.info(f"run of {len(plan)} workers")
-    try:
-        counts = run_plan(plan, results, bench_dir, args.priority)
-    except MachineStateError as error:
-        logger.error(f"stop: {error}")
-        sys.exit(1)
-    logger.info(f"end of run: {dict(counts)}")
+    with heavy_job("scripts/bench_mlx_port.py"):
+        logger.info(f"run of {len(plan)} workers")
+        try:
+            counts = run_plan(plan, results, bench_dir, args.priority)
+        except MachineStateError as error:
+            logger.error(f"stop: {error}")
+            sys.exit(1)
+        logger.info(f"end of run: {dict(counts)}")
 
 
 if __name__ == "__main__":

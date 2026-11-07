@@ -130,7 +130,7 @@ def run_worker(
     attn_implementation = model.config._attn_implementation
     if config.compile:
         model = torch.compile(model)
-    load_peak = read_footprint().lifetime_max_bytes
+    load_peak = read_footprint().lifetime_max_bytes  # the load footprint peak (F17)
 
     batch = make_batch(read_inputs(), config.side, config.batch_size)
     (_, _, first_call_s), frame, patches = time_batch(model, batch, mode)
@@ -177,7 +177,7 @@ def run_worker(
         "device": summarize(device, config.batch_size),
         "output_dtype": output_dtype,
         "footprint_base_bytes": base.current_bytes,
-        "load_peak_bytes": load_peak,
+        "load_footprint_peak_bytes": load_peak,
         "peak_bytes": end.lifetime_max_bytes,
         "run_peak_bytes": end.lifetime_max_bytes if above_load else None,
         "run_peak_note": "" if above_load else f"below the load peak; end {end.current_bytes}",

@@ -37,9 +37,11 @@ import numpy as np
 import torch
 from safetensors.numpy import save_file
 
+from dinov3_apple.gpu_lock import heavy_job
 from dinov3_apple.hub import CONVERTED_DIR, MODEL_IDS, weights_dir
 from dinov3_apple.memory import (
     GB,
+    NO_FP32_WEIGHTS,
     InsufficientMemoryError,
     RunRuleError,
     check_free_memory,
@@ -447,8 +449,37 @@ def run_streamed(model_sizes: list[str], check: bool) -> None:
         raise SystemExit(f"largest difference above {CHECK_TARGET:g}: {', '.join(above_target)}")
 
 
-def main() -> None:
-    """Parse the arguments and make the stored files."""
+def model_sizes_to_run(model_sizes: list[str], streamed: bool, check: bool) -> list[str]:
+    """Return the model sizes of one run, from the smallest to the largest (V2 of
+    specs/05-all-sizes/verify.html).
+
+    Args:
+        model_sizes: The model sizes of the command line. [] gives the default of the path.
+        streamed: True for the streamed path.
+        check: With streamed, True compares with the stored files.
+
+    Returns:
+        The given model sizes, sorted. Without model sizes: all six on the full-model path; with
+        --streamed only the model sizes without fp32 weights (ViT-7B/16), whose files only the
+        streamed path makes; with --streamed --check the five model sizes of the full-model files.
+    """
+    if not model_sizes:
+        if not streamed:
+            model_sizes = list(MODEL_IDS)
+        elif check:
+            model_sizes = [size for size in MODEL_IDS if size not in NO_FP32_WEIGHTS]
+        else:
+            model_sizes = sorted(NO_FP32_WEIGHTS)
+    return sorted(model_sizes, key=list(MODEL_IDS).index)
+
+
+def main(argv: list[str] | None = None) -> None:
+    """Parse the arguments and make the stored files. A run that is not a child process takes the
+    GPU lock.
+
+    Args:
+        argv: The arguments. None reads sys.argv.
+    """
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawTextHelpFormatter
     )
@@ -468,7 +499,7 @@ def main() -> None:
     )
     parser.add_argument("--child", help=argparse.SUPPRESS)
     parser.add_argument("--ratio", type=float, default=LOAD_RATIO, help=argparse.SUPPRESS)
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     if args.check and not args.streamed:
         parser.error("--check checks the streamed path: add --streamed")
 
@@ -484,16 +515,17 @@ def main() -> None:
         else:
             run_child(args.child, args.ratio)
         return
-    if args.force_inputs or not INPUTS_FILE.exists():
-        write_inputs()
     unknown = set(args.model_sizes) - set(MODEL_IDS)
     if unknown:
         parser.error(f"unknown model sizes: {sorted(unknown)}")
-    model_sizes = sorted(args.model_sizes or list(MODEL_IDS), key=list(MODEL_IDS).index)
-    if args.streamed:
-        run_streamed(model_sizes, args.check)
-    else:
-        run_all(model_sizes)
+    model_sizes = model_sizes_to_run(args.model_sizes, args.streamed, args.check)
+    with heavy_job("scripts/make_reference.py"):
+        if args.force_inputs or not INPUTS_FILE.exists():
+            write_inputs()
+        if args.streamed:
+            run_streamed(model_sizes, args.check)
+        else:
+            run_all(model_sizes)
 
 
 if __name__ == "__main__":

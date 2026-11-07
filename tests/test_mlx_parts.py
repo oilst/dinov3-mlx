@@ -7,6 +7,8 @@ its target in tests/fixtures/generated/mlx/report.jsonl (Table 7 of the Step 4 p
 Step 5 plan).
 """
 
+import gc
+import os
 from collections.abc import Callable
 
 import mlx.core as mx
@@ -16,6 +18,7 @@ import torch
 from mlx import nn
 from mlx.utils import tree_flatten
 from parity_checks import min_token_cosine
+from rope_oracle import rotate_half
 from small_model import (
     PIXEL_SHAPES,
     SMALL_CONFIGS,
@@ -29,6 +32,7 @@ from transformers.models.dinov3_vit.modeling_dinov3_vit import DINOv3ViTModel
 from dinov3_apple import mlx_model as mlx_model_module
 from dinov3_apple.block_profile import block_parts, run_parts
 from dinov3_apple.flops import PART_NAMES
+from dinov3_apple.mlx_bench import mlx_block_parts
 from dinov3_apple.mlx_model import (
     MLP,
     MLX_DTYPE_MODES,
@@ -40,6 +44,7 @@ from dinov3_apple.mlx_model import (
     apply_rope,
     linear_parameter_names,
     patchify,
+    rope_layout,
     rope_tables,
     run_mlx,
     run_mlx_hidden_states,
@@ -121,40 +126,19 @@ def _difference(expected: torch.Tensor | np.ndarray, output: mx.array) -> float:
 
 
 def _rope_tables(hf_model: DINOv3ViTModel, pixels: torch.Tensor) -> tuple[mx.array, mx.array]:
-    """The Hugging Face tables of one grid, plus 5 identity rows on top."""
+    """The Hugging Face tables of one grid, plus 5 identity rows on top, in the layout of the
+    concat-free rotation (rope_layout)."""
     cos, sin = hf_model.rope_embeddings(pixels)
     ones = np.ones((NUM_PREFIX_TOKENS, cos.shape[-1]), np.float32)
-    return (
-        mx.array(np.concatenate([ones, cos.numpy()])),
-        mx.array(np.concatenate([0 * ones, sin.numpy()])),
+    cos2, sin2 = rope_layout(
+        np.concatenate([ones, cos.numpy()]), np.concatenate([0 * ones, sin.numpy()])
     )
+    return mx.array(cos2), mx.array(sin2)
 
 
 def _mlx_parts(block: Block) -> dict[str, Callable[..., tuple[mx.array, ...]]]:
-    """The 11 parts of one MLX block, with the names, inputs and outputs of block_parts."""
-    attention, mlp = block.attention, block.mlp
-
-    def ff_in(h: mx.array) -> tuple[mx.array, ...]:
-        """(gate, up) for SwiGLU, (up,) for the MLP, as ff_in of block_parts."""
-        if isinstance(mlp, SwiGLU):
-            return mlp.gate_proj(h), mlp.up_proj(h)
-        return (mlp.up_proj(h),)
-
-    return {
-        "norm1": lambda x: (block.norm1(x),),
-        "qkv_proj": lambda h: attention.qkv(h),
-        "rope": lambda q, k, cos, sin: (apply_rope(q, cos, sin), apply_rope(k, cos, sin)),
-        "sdpa": lambda q, k, v: (
-            mx.fast.scaled_dot_product_attention(q, k, v, scale=attention.scale, mask=None),
-        ),
-        "o_proj": lambda a: (attention.output(a),),
-        "layer_scale1": lambda o, x: (block.layer_scale1(o) + x,),
-        "norm2": lambda x: (block.norm2(x),),
-        "ff_in": ff_in,
-        "activation": lambda *values: (mlp.activation(*values),),
-        "ff_out": lambda g: (mlp.down_proj(g),),
-        "layer_scale2": lambda y, x: (block.layer_scale2(y) + x,),
-    }
+    """The 11 parts of one MLX block (moved to mlx_bench.mlx_block_parts in Step 6)."""
+    return mlx_block_parts(block)
 
 
 @pytest.mark.parametrize(
@@ -521,6 +505,7 @@ def test_mlx_dtype_flow(model: str, dtype_mode: str, monkeypatch: pytest.MonkeyP
     assert x.dtype == stream
     cos, sin = mlx.rope(14, 14)
     assert cos.dtype == sin.dtype == mx.float32
+    assert cos.shape == sin.shape == (201, 2, mlx.config.head_dim // 2)
     rotations: list[tuple[mx.Dtype, mx.Dtype, mx.Dtype]] = []
 
     def record_rope(values: mx.array, cos: mx.array, sin: mx.array) -> mx.array:
@@ -725,7 +710,7 @@ def test_mlx_rope_rotation_rounds_once(dtype: str, report: Callable[..., None]) 
     mx_half, half = HALF_DTYPES[dtype]
     head_dim = 64
     cos, sin = rope_tables(14, 19, head_dim, 100.0)
-    cos_mlx, sin_mlx = mx.array(cos), mx.array(sin)
+    cos_mlx, sin_mlx = (mx.array(table) for table in rope_layout(cos, sin))
     rng = np.random.default_rng(0)
     shape = (2, 6, NUM_PREFIX_TOKENS + 14 * 19, head_dim)
     for name in ("q", "k"):
@@ -735,9 +720,7 @@ def test_mlx_rope_rotation_rounds_once(dtype: str, report: Callable[..., None]) 
         x32 = np.array(x.astype(mx.float32))
         rotated = np.concatenate([-x32[..., head_dim // 2 :], x32[..., : head_dim // 2]], axis=-1)
         oracle = torch.from_numpy(x32 * cos + rotated * sin).to(half)
-        in_half = x * cos_mlx.astype(mx_half) + mlx_model_module.rotate_half(x) * sin_mlx.astype(
-            mx_half
-        )
+        in_half = x * mx.array(cos).astype(mx_half) + rotate_half(x) * mx.array(sin).astype(mx_half)
         share = float((_to_torch(output, half) != oracle).float().mean())
         half_share = float((_to_torch(in_half, half) != oracle).float().mean())
         report(
@@ -750,3 +733,225 @@ def test_mlx_rope_rotation_rounds_once(dtype: str, report: Callable[..., None]) 
         )
         assert share == 0.0, name
         assert half_share > 0.01, name
+
+
+# Build step 2 of specs/06-speed/plan.html: the compiled forward pass (D1, D4).
+SMALL_NAMES = ["vits16", "vits16plus", "vit7b16-shape"]
+DEVICES = {"gpu": mx.gpu, "cpu": mx.cpu}
+# R37: on the CPU stream the compiled and the eager forward pass differ by up to 2.0e-6 in fp32.
+CPU_COMPILE_TOLERANCE = 1e-5
+# The decision of 2026-11-07 on T34 (a deviation from AC1): on the CPU stream the four fp16 and
+# bf16 dtype modes are report only, with a fault bound for each mode, at least 5 times its worst
+# measured value (fp16-cast 0.0059, bf16-cast 0.047, fp16-autocast 0.0024, bf16-autocast 0.017).
+# The compiled CPU kernel rounds once for each fused chain; the eager CPU path rounds after each
+# operation. So 1 to 1.5 units in the last place of the half dtype are expected.
+CPU_FAULT_BOUND = {
+    "fp16-cast": 0.03,
+    "bf16-cast": 0.25,
+    "fp16-autocast": 0.015,
+    "bf16-autocast": 0.1,
+}
+
+
+@pytest.mark.parametrize(
+    ("device", "model", "dtype_mode"),
+    [
+        pytest.param(device, model, mode, id=f"{device}-{model}-{mode}")
+        for device in DEVICES
+        for model in SMALL_NAMES
+        for mode in DTYPE_MODES
+    ],
+)
+def test_compiled_equals_eager_small(
+    device: str, model: str, dtype_mode: str, report: Callable[..., None]
+) -> None:
+    """T34 (D4, R37): compile_backbone against the eager forward pass, 3 pixel shapes. GPU: bit
+    for bit. CPU stream: largest difference at most 1e-5 in fp32; in the four fp16 and bf16 dtype
+    modes report only with the fault bound CPU_FAULT_BOUND of the mode (decision of 2026-11-07, a
+    deviation from AC1)."""
+    from dinov3_apple.mlx_model import compile_backbone
+
+    with mx.stream(DEVICES[device]):
+        mlx = small_mlx_model(small_hf_model(seed=0, name=model), dtype_mode)
+        forward = compile_backbone(mlx)
+        largest = 0.0
+        for shape in PIXEL_SHAPES:
+            pixels = mx.array(small_pixels(shape))
+            eager = np.array(mlx(pixels).astype(mx.float32))
+            compiled = np.array(forward(pixels).astype(mx.float32))
+            assert compiled.shape == eager.shape
+            largest = max(largest, float(np.abs(compiled - eager).max()))
+    if device == "gpu":
+        target = 0.0
+    else:
+        target = CPU_COMPILE_TOLERANCE if dtype_mode == "fp32" else CPU_FAULT_BOUND[dtype_mode]
+    report(
+        "test_compiled_equals_eager_small",
+        device=device,
+        model=model,
+        dtype_mode=dtype_mode,
+        difference=largest,
+        target=target,
+    )
+    assert largest <= target
+
+
+def test_compiled_forward_follows_a_weight_change() -> None:
+    """T35 (R35): the weights are inputs of the trace, so a weight change reaches the output."""
+    from dinov3_apple.mlx_model import compile_backbone
+
+    mlx = small_mlx_model(small_hf_model(seed=0), "fp32")
+    forward = compile_backbone(mlx)
+    pixels = mx.array(small_pixels(PIXEL_SHAPES[0]))
+    before = np.array(forward(pixels))
+    q_proj = mlx.layer[0].attention.q_proj
+    mlx.update({"layer": [{"attention": {"q_proj": {"weight": q_proj.weight + 0.01}}}]})
+    after = np.array(forward(pixels))
+    eager = np.array(mlx(pixels))
+    assert np.array_equal(after, eager)
+    assert not np.array_equal(after, before)
+
+
+def test_compiled_forward_frees_the_weights() -> None:
+    """T36 (R36): after del forward and del model the active memory is back within 1 MB, without
+    gc.collect(): the caller holds the function, the model does not."""
+    from dinov3_apple.mlx_model import compile_backbone
+
+    gc.collect()
+    mx.clear_cache()
+    hf = small_hf_model(seed=0, name="vits16plus")
+    before = mx.get_active_memory()
+    mlx = small_mlx_model(hf, "fp32")
+    forward = compile_backbone(mlx)
+    mx.eval(forward(mx.array(small_pixels(PIXEL_SHAPES[0]))))
+    assert mx.get_active_memory() - before > 1_000_000  # the weights are alive
+    gc.disable()
+    try:
+        del forward, mlx
+        mx.clear_cache()
+        assert mx.get_active_memory() - before <= 1_000_000
+    finally:
+        gc.enable()
+
+
+def test_run_mlx_uses_the_given_forward(mlx_model: MlxBackbone) -> None:
+    """T40 (D4): run_mlx runs the given compiled forward pass once; without it, the eager one."""
+    from dinov3_apple.mlx_model import compile_backbone
+
+    calls: list[tuple[int, ...]] = []
+    compiled = compile_backbone(mlx_model)
+
+    def counting(pixels: mx.array) -> mx.array:
+        calls.append(tuple(pixels.shape))
+        return compiled(pixels)
+
+    pixels = small_pixels(PIXEL_SHAPES[1])
+    tokens = run_mlx(mlx_model, pixels, "fp32", forward=counting)
+    assert calls == [PIXEL_SHAPES[1]]
+    assert np.array_equal(tokens, run_mlx(mlx_model, pixels, "fp32"))
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("dtype_mode", DTYPE_MODES)
+def test_mlx_embeddings_fp16_patches(dtype_mode: str) -> None:
+    """T55 (D13): frame fp32; patches fp16 in the four fp16 and bf16 dtype modes, fp32 in fp32 and
+    with patch_fp32=True; the fp16 values equal the fp32 tokens cast to fp16, bit for bit."""
+    from dinov3_apple.mlx_model import mlx_embeddings
+
+    mlx = small_mlx_model(small_hf_model(seed=0), dtype_mode)
+    tokens = mlx(mx.array(small_pixels(PIXEL_SHAPES[0])))
+    frame, patches = mlx_embeddings(tokens, dtype_mode)
+    as_fp32 = np.array(tokens.astype(mx.float32))
+    assert frame.dtype == np.float32
+    assert np.array_equal(frame, as_fp32[:, 0])
+    half = dtype_mode != "fp32"
+    assert patches.dtype == (np.float16 if half else np.float32)
+    assert np.array_equal(patches, as_fp32[:, NUM_PREFIX_TOKENS:].astype(patches.dtype))
+    _, wide = mlx_embeddings(tokens, dtype_mode, patch_fp32=True)
+    assert wide.dtype == np.float32
+    assert np.array_equal(wide, as_fp32[:, NUM_PREFIX_TOKENS:])
+
+
+def _sdpa_share(dtype: str, head_dim: int, t: int, via_fp32: bool, seed: int = 0) -> float:
+    """The share of SDPA outputs that differ from the float64 result rounded once."""
+    rng = np.random.default_rng(seed)
+    half = {"fp16": mx.float16, "bf16": mx.bfloat16}[dtype]
+    values = [rng.standard_normal((1, 6, t, head_dim)).astype(np.float32) for _ in range(3)]
+    q, k, v = (mx.array(a).astype(half) for a in values)
+    q64, k64, v64 = (np.array(a.astype(mx.float32)).astype(np.float64) for a in (q, k, v))
+    scale = head_dim**-0.5
+    scores = q64 @ k64.transpose(0, 1, 3, 2) * scale
+    scores = np.exp(scores - scores.max(-1, keepdims=True))
+    expected = (scores / scores.sum(-1, keepdims=True)) @ v64
+    if via_fp32:
+        output = mx.fast.scaled_dot_product_attention(
+            q.astype(mx.float32), k.astype(mx.float32), v.astype(mx.float32), scale=scale
+        ).astype(half)
+    else:
+        output = mx.fast.scaled_dot_product_attention(q, k, v, scale=scale)
+    if dtype == "fp16":
+        rounded = mx.array(expected.astype(np.float16))
+    else:
+        rounded = mx.array(expected.astype(np.float32)).astype(half)
+    share = mx.not_equal(output.view(mx.uint16), rounded.view(mx.uint16)).astype(mx.float32)
+    return float(share.mean().item())
+
+
+def test_mlx_sdpa_nax_fingerprint(report: Callable[..., None]) -> None:
+    """T57 (D19, F3), report only: the share of fp16 and bf16 SDPA outputs that differ from the
+    float64 result rounded once, at head dimension 64 and 128 and T = 201, with two controls
+    (head dimension 80; the fp32 kernel on fp16 and bf16 inputs). With the Neural Accelerators
+    on, the probe gave 54.5 % (fp16) and 12.6 % (bf16) at head dimension 64 with mlx 0.32.4; a new
+    MLX version that turns the NAX kernels off or changes the relaxed precision shows here."""
+    from dinov3_apple.machine import read_versions
+
+    shares = {}
+    for dtype in ("fp16", "bf16"):
+        for name, head_dim, via_fp32 in (
+            ("sdpa_hd64", 64, False),
+            ("sdpa_hd128", 128, False),
+            ("control_hd80", 80, False),
+            ("control_fp32_kernel_hd64", 64, True),
+        ):
+            shares[f"{dtype}/{name}"] = _sdpa_share(dtype, head_dim, 201, via_fp32)
+    versions = read_versions()
+    architecture = mx.device_info()["architecture"]
+    report(
+        "test_mlx_sdpa_nax_fingerprint",
+        shares=shares,
+        mlx_architecture=architecture,
+        versions=versions,
+        nax_variable=os.environ.get("MLX_METAL_GPU_ARCH"),
+    )
+    assert all(0.0 <= share <= 1.0 for share in shares.values())
+    assert versions["mlx-metal"] != "not installed"
+    assert isinstance(architecture, str) and architecture
+
+
+@pytest.mark.parametrize("dtype_mode", list(CPU_FAULT_BOUND))
+def test_cpu_fault_bound_catches_the_f1_fault(dtype_mode: str, report: Callable[..., None]) -> None:
+    """The red case of the CPU fault bounds of T34: the F1 fault of Step 4 (a wrong input cast:
+    the pixels pass through an integer dtype) on the CPU stream gives a difference to the eager
+    forward pass of at least 5 times the bound of the mode."""
+    from dinov3_apple.mlx_model import compile_backbone
+
+    largest = 0.0
+    with mx.stream(mx.cpu):
+        for model in SMALL_NAMES:
+            mlx = small_mlx_model(small_hf_model(seed=0, name=model), dtype_mode)
+            forward = compile_backbone(mlx)
+            for shape in PIXEL_SHAPES:
+                pixels = mx.array(small_pixels(shape))
+                eager = np.array(mlx(pixels).astype(mx.float32))
+                faulty = forward(pixels.astype(mx.uint32).astype(mx.float32))
+                difference = float(np.abs(np.array(faulty.astype(mx.float32)) - eager).max())
+                largest = max(largest, difference)
+    margin = largest / CPU_FAULT_BOUND[dtype_mode]
+    report(
+        "test_cpu_fault_bound_catches_the_f1_fault",
+        dtype_mode=dtype_mode,
+        difference=largest,
+        bound=CPU_FAULT_BOUND[dtype_mode],
+        margin=margin,
+    )
+    assert margin >= 5

@@ -57,6 +57,13 @@ def _gb(value: int | None) -> str:
     return "–" if value is None else f"{value / GB:.2f}"
 
 
+def load_footprint_peak(line: dict) -> int | None:
+    """Return the load footprint peak of one line: load_footprint_peak_bytes of Step 6, or
+    load_peak_bytes of the lines of Steps 3 to 5 (F17 of specs/06-speed/plan.html)."""
+    value = line.get("load_footprint_peak_bytes")
+    return line.get("load_peak_bytes") if value is None else value
+
+
 def _ms(value: float | None) -> str:
     return "–" if value is None else f"{1000 * value:.2f}"
 
@@ -135,7 +142,7 @@ def _all_modes_section(lines: list[dict]) -> str:
                 _ms(line["frame"]["median_s"]),
                 _ms(line["frame"]["p90_s"]),
                 _gb(line["peak_bytes"]),
-                _gb(line.get("load_peak_bytes")),
+                _gb(load_footprint_peak(line)),
                 _gb(line.get("mps_driver_max_bytes")),
                 _gb(line["need_bytes"]),
                 line.get("timed_batches"),

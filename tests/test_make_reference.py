@@ -290,3 +290,20 @@ def test_streamed_child_check_writes_no_file(
     assert child["tokens_max_abs"] == 0.0
     assert child["hidden_states_max_abs"] == 0.0
     assert not small_weights["out"].exists()
+
+
+def test_streamed_default_runs_only_no_fp32_weights_sizes() -> None:
+    """T33 (V2 of specs/05-all-sizes/verify.html)."""
+    from make_reference import model_sizes_to_run
+
+    from dinov3_apple.hub import MODEL_IDS
+
+    assert model_sizes_to_run([], streamed=True, check=False) == ["ViT-7B/16"]
+    assert model_sizes_to_run([], streamed=True, check=True) == [
+        size for size in MODEL_IDS if size != "ViT-7B/16"
+    ]
+    assert model_sizes_to_run([], streamed=False, check=False) == list(MODEL_IDS)
+    assert model_sizes_to_run(["ViT-B/16", "ViT-S/16"], streamed=True, check=False) == [
+        "ViT-S/16",
+        "ViT-B/16",
+    ]

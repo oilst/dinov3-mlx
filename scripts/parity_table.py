@@ -8,6 +8,7 @@ configurations of mlx with those of torch-mps.
 Usage:
     uv run python scripts/parity_table.py                   # torch-mps
     uv run python scripts/parity_table.py --backend mlx     # mlx
+    uv run python scripts/parity_table.py --backend mlx --log <file>.jsonl --out <folder>
 """
 
 import argparse
@@ -41,11 +42,16 @@ def results_path(backend: str) -> Path:
 
 
 def latest_lines(path: Path) -> list[dict]:
-    """Return the last line of each (kind, model size, dtype mode, configuration)."""
+    """Return the last line of each (kind, model size, dtype mode, configuration, bits).
+
+    The lines of Steps 4 and 5 have no field bits: they read as None. So the 8-bit line and the
+    4-bit line of one configuration both stay (T14 of specs/06-speed/plan.html).
+    """
     latest = {}
     for text in path.read_text().splitlines():
         line = json.loads(text)
-        latest[(line["kind"], line["model_size"], line["dtype_mode"], line["config"])] = line
+        key = (line["kind"], line["model_size"], line["dtype_mode"], line["config"])
+        latest[(*key, line.get("bits"))] = line
     return list(latest.values())
 
 
@@ -90,6 +96,76 @@ def summary_rows(lines: list[dict], kind: str) -> list[str]:
                 + " | ".join(values)
                 + f" | {result} |"
             )
+    return rows
+
+
+def _groups(lines: list[dict], kind: str, *fields: str) -> dict[tuple, list[dict]]:
+    """Group the lines of one kind by model size, dtype mode and the given fields, in the table
+    order."""
+    groups: dict[tuple, list[dict]] = defaultdict(list)
+    for line in lines:
+        if line["kind"] == kind:
+            key = (line["model_size"], line["dtype_mode"], *(line.get(f) for f in fields))
+            groups[key].append(line)
+    return dict(sorted(groups.items(), key=lambda item: (*table_order(*item[0][:2]), item[0][2:])))
+
+
+def compiled_equal_rows(lines: list[dict]) -> list[str]:
+    """Return one row for each model size and dtype mode of the kind "compiled-equal" (W1 of
+    specs/06-speed/plan.html): the configurations, the bit-equal ones and the largest difference.
+    A non-finite configuration counts as equal when both forms are non-finite at the same
+    positions."""
+    rows = []
+    for (model_size, dtype_mode), group in _groups(lines, "compiled-equal").items():
+        measured = [line for line in group if line["status"] in ("measured", "non-finite")]
+        equal = sum(line["values"]["max_abs"] == 0.0 for line in measured)
+        largest = max((line["values"]["max_abs"] for line in measured), default=None)
+        rows.append(
+            f"| {model_size} | {dtype_mode} | {len(measured)} | {equal} | "
+            f"{'–' if largest is None else f'{largest:.3g}'} |"
+        )
+    return rows
+
+
+def quantized_rows(lines: list[dict]) -> list[str]:
+    """Return one row for each model size, dtype mode and bits of the kind "quantized" (W2 of
+    specs/06-speed/plan.html): the configurations, the ones that pass THRESHOLDS[mode], and the
+    minimum parity against the reference output and against the unquantized output."""
+    rows = []
+    for (model_size, dtype_mode, bits), group in _groups(lines, "quantized", "bits").items():
+        measured = [line for line in group if line["status"] == "measured"]
+        passes = sum(bool(line["values"]["passes_thresholds"]) for line in measured)
+        if measured:
+            ref = [min(line["parity"][m] for line in measured) for m in MEASURES[:3]]
+            unq = [min(line["values"]["unquantized"][m] for line in measured) for m in MEASURES[:3]]
+            values = " | ".join(f"{v:.6f}" for v in ref + unq)
+        else:
+            skipped = [line["reason"] for line in group if line["status"] == "skipped"]
+            values = " | ".join(["–"] * 6) + (f" | skipped: {skipped[0]}" if skipped else "")
+        rows.append(
+            f"| {model_size} | {dtype_mode} | {bits} | {len(measured)} | {passes} | {values} |"
+        )
+    return rows
+
+
+def fp16_output_rows(lines: list[dict]) -> list[str]:
+    """Return one row for each model size and dtype mode of the kind "fp16-output" (W4 of
+    specs/06-speed/plan.html): the minimum parity with the fp16 patch embeddings and the largest
+    extra loss against the fp32 patch embeddings."""
+    rows = []
+    for (model_size, dtype_mode), group in _groups(lines, "fp16-output").items():
+        measured = [line for line in group if line["status"] == "measured"]
+        if not measured:
+            rows.append(f"| {model_size} | {dtype_mode} | 0 | – | – | – | – |")
+            continue
+        patch_mean = min(line["parity"]["patch_mean"] for line in measured)
+        patch_p01 = min(line["parity"]["patch_p01"] for line in measured)
+        extra = max(max(line["values"]["extra_loss"].values()) for line in measured)
+        frame = all(line["values"]["frame_equal"] for line in measured)
+        rows.append(
+            f"| {model_size} | {dtype_mode} | {len(measured)} | {patch_mean:.6f} | "
+            f"{patch_p01:.6f} | {extra:.2g} | {'yes' if frame else 'no'} |"
+        )
     return rows
 
 
@@ -291,6 +367,68 @@ def write_table(
             "",
         ]
         section += 1
+    if equal := compiled_equal_rows(lines):
+        text += [
+            f"## {section} Compiled forward pass against the eager forward pass",
+            "",
+            (
+                "Each configuration runs the compiled forward pass and the eager forward pass of "
+                "one backbone (W1 of specs/06-speed/plan.html). A non-finite configuration counts "
+                "as equal when both forms are non-finite at the same positions."
+            ),
+            "",
+            "| Model size | Dtype mode | Configurations | Bit for bit equal | Largest difference |",
+            "| --- | --- | --- | --- | --- |",
+            *equal,
+            "",
+            f"Table {section}. The compiled forward pass against the eager forward pass.",
+            "",
+        ]
+        section += 1
+    if quantized := quantized_rows(lines):
+        text += [
+            f"## {section} Quantized weights",
+            "",
+            (
+                "Report only, with a fault bound in the tests (ADR 0011). Each row has the "
+                "minimum over its configurations, against the reference output and against the "
+                "unquantized output of the same dtype mode. The column Pass counts the "
+                "configurations that pass the thresholds of the dtype mode (Section 3)."
+            ),
+            "",
+            (
+                "| Model size | Dtype mode | Bits | Measured | Pass | Frame | Patch mean | "
+                "Patch 1st percentile | Frame (unquantized) | Patch mean (unquantized) | "
+                "Patch 1st percentile (unquantized) |"
+            ),
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+            *quantized,
+            "",
+            f"Table {section}. Parity of the quantized weights.",
+            "",
+        ]
+        section += 1
+    if fp16 := fp16_output_rows(lines):
+        text += [
+            f"## {section} fp16 patch embeddings",
+            "",
+            (
+                "The patch embeddings of mlx_embeddings in fp16 (D13 of specs/06-speed/plan.html) "
+                "against the reference output. The extra loss is the fp32-output parity minus the "
+                "fp16-output parity of the patch mean and the patch 1st percentile."
+            ),
+            "",
+            (
+                "| Model size | Dtype mode | Measured | Patch mean | Patch 1st percentile | "
+                "Largest extra loss | Frame unchanged |"
+            ),
+            "| --- | --- | --- | --- | --- | --- | --- |",
+            *fp16,
+            "",
+            f"Table {section}. Parity with the fp16 patch embeddings.",
+            "",
+        ]
+        section += 1
     if torch_lines is not None:
         rows, last = non_finite_section(lines, torch_lines)
         text += [
@@ -313,17 +451,25 @@ def write_table(
     return "\n".join(text)
 
 
-def main() -> None:
-    """Write results/parity-{backend}.md."""
+def main(argv: list[str] | None = None) -> None:
+    """Write results/parity-{backend}.md, or parity-{backend}.md in the folder of --out.
+
+    Args:
+        argv: The arguments. None reads sys.argv.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--backend", choices=list(BACKEND_PACKAGES), default="torch-mps")
-    args = parser.parse_args()
+    parser.add_argument("--log", type=Path, help="the JSON lines file of the backend")
+    parser.add_argument("--out", type=Path, help="the folder of the Markdown file")
+    args = parser.parse_args(argv)
     results = results_path(args.backend)
+    if args.out is not None:
+        results = args.out / results.name
     results.parent.mkdir(parents=True, exist_ok=True)
     torch_lines = None
     if args.backend == "mlx" and parity_log("torch-mps").exists():
         torch_lines = latest_lines(parity_log("torch-mps"))
-    lines = latest_lines(parity_log(args.backend))
+    lines = latest_lines(args.log or parity_log(args.backend))
     results.write_text(write_table(lines, args.backend, torch_lines))
     print(f"wrote {results}")
 

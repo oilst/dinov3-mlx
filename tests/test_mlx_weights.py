@@ -19,7 +19,7 @@ from fakes import VIT7B16_PARAMETER_COUNT, fail_if_called
 from mlx.utils import tree_flatten
 from parity_checks import load_peak_lower_bound, load_peak_target
 from safetensors import safe_open
-from small_model import save_small_model, small_hf_model
+from small_model import SMALL_CONFIGS, save_small_model, small_hf_model
 
 from dinov3_apple.bench import DTYPE_OF_MODE, bytes_per_weight
 from dinov3_apple.hub import MODEL_IDS, WeightsNotFoundError, weights_dir
@@ -601,7 +601,9 @@ def test_backbone_slot_checks_the_load_report(
     monkeypatch.setattr(
         "dinov3_apple.mlx_weights.load_mlx_backbone", lambda model_size, dtype_mode: model
     )
-    monkeypatch.setattr(parity_checks, "load_peak_target", lambda model_size, dtype_mode: 1_000)
+    monkeypatch.setattr(
+        parity_checks, "load_peak_target", lambda model_size, dtype_mode, bits=None: 1_000
+    )
     monkeypatch.setattr(parity_checks, "load_peak_lower_bound", lambda model_size, model: 100)
     if not fails:
         assert lone_slot("ViT-S/16", "mlx", "bf16-cast") is model
@@ -621,3 +623,320 @@ def test_load_peak_target_of_an_autocast_pair(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr(parity_checks, "largest_tensor_bytes", lambda model_size: 134_217_728)
     for dtype_mode in ("fp16-autocast", "bf16-autocast"):
         assert load_peak_target("ViT-7B/16", dtype_mode) == 16_252_701_901
+
+
+def test_backbone_slot_holds_the_compiled_forward(monkeypatch: pytest.MonkeyPatch) -> None:
+    """T41 (R36, D4): the slot gives the same compiled forward pass twice for one load and a new
+    one after a new load; after free() the function is gone; a model outside the slot raises
+    ValueError."""
+    import gc
+    import weakref
+
+    import conftest
+    from small_model import small_mlx_model
+
+    hf = small_hf_model(seed=0)
+    monkeypatch.setattr(
+        "dinov3_apple.mlx_weights.load_mlx_backbone",
+        lambda model_size, dtype_mode, **kwargs: small_mlx_model(hf, dtype_mode),
+    )
+    monkeypatch.setattr(conftest._BackboneSlot, "check_load_report", lambda *args: None)
+    slot = conftest._BackboneSlot()
+    try:
+        model = slot.get("ViT-S/16", "mlx", "fp32")
+        first = slot.forward_of(model)
+        assert slot.forward_of(model) is first
+        other = slot.get("ViT-S/16", "mlx", "bf16-cast")
+        second = slot.forward_of(other)
+        assert second is not first
+        with pytest.raises(ValueError, match="slot"):
+            slot.forward_of(model)
+        reference = weakref.ref(second)
+        del first, second
+        slot.free()
+        gc.collect()
+        assert reference() is None
+    finally:
+        slot.free()
+        logging.getLogger("dinov3_apple.memory").removeHandler(slot.handler)
+        slot.handler.close()
+
+
+# Build step 3 of specs/06-speed/plan.html: the quantized loader (D14 to D18, F1, R50).
+VITH16PLUS_PARAMETER_COUNT = 840_592_640
+AUTOCAST_MODES = ["fp16-autocast", "bf16-autocast"]
+
+
+def _quantized_small(name: str, dtype_mode: str, bits: int) -> MlxBackbone:
+    """A small backbone with quantized block modules, before any load."""
+    from mlx import nn
+
+    from dinov3_apple.mlx_weights import block_linear_predicate
+
+    model = MlxBackbone(MlxConfig.from_hf(SMALL_CONFIGS[name]), dtype_mode)
+    nn.quantize(model, class_predicate=block_linear_predicate(bits))
+    return model
+
+
+def test_required_mlx_load_bytes_quantized(monkeypatch: pytest.MonkeyPatch) -> None:
+    """T42 (Table 9 of the plan)."""
+    counts = {"ViT-H+/16": VITH16PLUS_PARAMETER_COUNT, "ViT-7B/16": VIT7B16_PARAMETER_COUNT}
+    monkeypatch.setattr("dinov3_apple.mlx_weights.parameter_count", counts.__getitem__)
+    for mode in AUTOCAST_MODES:
+        assert required_mlx_load_bytes("ViT-H+/16", mode, bits=8) == 5_073_703_936
+        assert required_mlx_load_bytes("ViT-H+/16", mode, bits=4) == 4_570_387_456
+        assert required_mlx_load_bytes("ViT-7B/16", mode, bits=8) == 12_568_736_973
+        assert required_mlx_load_bytes("ViT-7B/16", mode, bits=4) == 8_542_205_133
+
+
+def test_linear_parameter_names_sees_quantized_linear() -> None:
+    """T43 (F1): QuantizedLinear is not a subclass of nn.Linear; its weight, scales, biases and
+    bias count as parameters of the matmul dtype."""
+    from mlx import nn
+
+    from dinov3_apple.mlx_model import quantized_weight_names
+
+    model = _quantized_small("vits16plus", "bf16-autocast", 8)
+    linear = linear_parameter_names(model)
+    quantized = quantized_weight_names(model)
+    assert len(quantized) == 14  # 2 blocks x 7 modules
+    for name, module in model.named_modules():
+        if isinstance(module, nn.QuantizedLinear):
+            leaves = {leaf for leaf, _ in tree_flatten(module.parameters())}
+            assert {f"{name}.{leaf}" for leaf in leaves} <= linear
+            expected = {"weight", "scales", "biases"} | ({"bias"} if "bias" in module else set())
+            assert leaves == expected, name
+            assert f"{name}.weight" in quantized
+    assert "layer.0.attention.k_proj.bias" not in linear  # the small configs have no k_proj bias
+    assert "embeddings.patch_embeddings.weight" in linear
+    assert "embeddings.patch_embeddings.weight" not in quantized
+
+
+def test_block_linear_predicate() -> None:
+    """T44 (D16)."""
+    from mlx import nn
+
+    from dinov3_apple.mlx_weights import GROUP_SIZE, QUANTIZED_BITS, block_linear_predicate
+
+    assert GROUP_SIZE == 64 and QUANTIZED_BITS == (8, 4)
+    predicate = block_linear_predicate(8)
+    linear = nn.Linear(64, 64)
+    assert predicate("layer.0.attention.q_proj", linear) == {"group_size": 64, "bits": 8}
+    assert predicate("embeddings.patch_embeddings", linear) is False
+    assert predicate("layer.0.norm1", nn.LayerNorm(64)) is False
+    for name, per_block in (("vits16plus", 7), ("vits16", 6)):
+        model = _quantized_small(name, "fp16-autocast", 4)
+        count = sum(isinstance(m, nn.QuantizedLinear) for _, m in model.named_modules())
+        assert count == per_block * 2
+
+
+def test_placeholder_skeleton_stays_small() -> None:
+    """T45 (R50): an evaluation of the placeholder skeleton allocates one value for each
+    parameter. The control without placeholders allocates the random fp32 weights."""
+    import gc
+
+    from mlx import nn
+
+    from dinov3_apple.mlx_weights import block_linear_predicate, placeholder_skeleton
+
+    config = MlxConfig.from_hf(
+        SMALL_CONFIGS["vit7b16-shape"]
+        | {
+            "hidden_size": 1024,
+            "num_attention_heads": 8,
+            "intermediate_size": 2048,
+            "num_hidden_layers": 8,
+        }
+    )
+    gc.collect()
+    mx.clear_cache()
+    before = mx.get_active_memory()
+    model = MlxBackbone(config, "bf16-autocast")
+    nn.quantize(model, class_predicate=block_linear_predicate(8))
+    placeholder_skeleton(model)
+    mx.eval(model.parameters())
+    growth = mx.get_active_memory() - before
+    del model
+    gc.collect()
+    mx.clear_cache()
+    before = mx.get_active_memory()
+    control = MlxBackbone(config, "fp32")
+    fp32_bytes = 4 * sum(v.size for _, v in tree_flatten(control.parameters()))
+    mx.eval(control.parameters())
+    control_growth = mx.get_active_memory() - before
+    del control
+    assert growth <= 1_000_000
+    assert control_growth >= 0.9 * fp32_bytes
+    assert fp32_bytes > 300_000_000
+
+
+@pytest.fixture
+def small_folder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """The weights of vits16plus in a temporary folder, as the folder of ViT-S+/16."""
+    folder = tmp_path / "vits16plus"
+    save_small_model(small_hf_model(seed=2, name="vits16plus"), folder, files=2)
+    monkeypatch.setattr("dinov3_apple.hub.weights_dir", lambda model_size: folder)
+    monkeypatch.setattr("dinov3_apple.mlx_weights.weights_dir", lambda model_size: folder)
+    monkeypatch.setattr(
+        "dinov3_apple.mlx_weights.parameter_count", lambda model_size: VITS16_PARAMETER_COUNT
+    )
+    monkeypatch.setattr(logging.getLogger("dinov3_apple.memory"), "handlers", [])
+    return folder
+
+
+@pytest.mark.parametrize(
+    ("dtype_mode", "bits"),
+    [pytest.param(m, b, id=f"{m}-{b}") for m in AUTOCAST_MODES for b in (8, 4)],
+)
+def test_quantized_loader_equals_load_then_quantize(
+    dtype_mode: str, bits: int, small_folder: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """T46 (D17, R57): L2 (quantize in the loader, one tensor at a time) equals L1 (load, then
+    nn.quantize) bit for bit in every parameter; the strict load passes; the memory check runs."""
+    from mlx import nn
+
+    from dinov3_apple.mlx_weights import block_linear_predicate
+
+    checks: list[int] = []
+    original = check_free_memory_of_module()
+    monkeypatch.setattr(
+        "dinov3_apple.mlx_weights.check_free_memory",
+        lambda need, label: checks.append(need) or original(need, label),
+    )
+    session_limit = mx.get_memory_limit()
+    try:
+        l2 = load_mlx_backbone("ViT-S+/16", dtype_mode, bits=bits)
+        l1 = load_mlx_backbone("ViT-S+/16", dtype_mode)
+    finally:
+        mx.set_memory_limit(session_limit)
+    nn.quantize(l1, class_predicate=block_linear_predicate(bits))
+    one, two = dict(tree_flatten(l1.parameters())), dict(tree_flatten(l2.parameters()))
+    assert sorted(one) == sorted(two)
+    for key, value in one.items():
+        assert value.dtype == two[key].dtype, key
+        assert mx.array_equal(value, two[key]).item(), key
+    assert len(checks) == 2
+    assert l2.load_report.bits == bits and l1.load_report.bits is None
+
+
+def check_free_memory_of_module() -> Callable[[int, str], int]:
+    from dinov3_apple import mlx_weights
+
+    return mlx_weights.check_free_memory
+
+
+@pytest.mark.parametrize(
+    ("dtype_mode", "bits"),
+    [pytest.param(m, b, id=f"{m}-{b}") for m in AUTOCAST_MODES for b in (8, 4)],
+)
+def test_quantized_parameters_have_the_matmul_dtype(
+    dtype_mode: str, bits: int, small_folder: Path
+) -> None:
+    """T47 (R46): the strict load checks no dtype, so the test does."""
+    from mlx import nn
+
+    session_limit = mx.get_memory_limit()
+    try:
+        model = load_mlx_backbone("ViT-S+/16", dtype_mode, bits=bits)
+    finally:
+        mx.set_memory_limit(session_limit)
+    matmul = MLX_DTYPE_MODES[dtype_mode].matmul
+    for name, module in model.named_modules():
+        if isinstance(module, nn.QuantizedLinear):
+            assert module.weight.dtype == mx.uint32, name
+            for leaf in ("scales", "biases", "bias"):
+                if leaf in module:
+                    assert module[leaf].dtype == matmul, f"{name}.{leaf}"
+    assert model.embeddings.patch_embeddings.weight.dtype == matmul
+
+
+def test_load_peak_target_of_a_quantized_load(
+    small_folder: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """T48 (F1, Table 9): the target and the lower bound know the quantized bytes."""
+    counts = {"ViT-H+/16": VITH16PLUS_PARAMETER_COUNT, "ViT-7B/16": VIT7B16_PARAMETER_COUNT}
+    largest = {"ViT-H+/16": 26_214_400, "ViT-7B/16": 134_217_728}
+    monkeypatch.setattr(parity_checks, "parameter_count", counts.__getitem__)
+    monkeypatch.setattr(parity_checks, "largest_tensor_bytes", largest.__getitem__)
+    assert load_peak_target("ViT-H+/16", "bf16-autocast", 8) == 1_113_025_536
+    assert load_peak_target("ViT-H+/16", "bf16-autocast", 4) == 609_709_056
+    assert load_peak_target("ViT-7B/16", "fp16-autocast", 8) == 8_770_063_565
+    assert load_peak_target("ViT-7B/16", "fp16-autocast", 4) == 4_743_531_725
+
+    session_limit = mx.get_memory_limit()
+    try:
+        model = load_mlx_backbone("ViT-S+/16", "bf16-autocast", bits=4)
+    finally:
+        mx.set_memory_limit(session_limit)
+    _, shapes = _header_shapes(small_folder)
+    monkeypatch.setattr(parity_checks, "header_shapes", lambda model_size: shapes)
+    # Each mapped tensor in its loaded form: the packed weight, the scales and the offsets of a
+    # quantized module; the matmul dtype or the stream dtype for the others.
+    expected = sum(v.nbytes for _, v in tree_flatten(model.parameters()))
+    assert load_peak_lower_bound("ViT-S+/16", model) == expected
+    assert load_peak_lower_bound("ViT-S+/16", model) <= model.load_report.peak_bytes
+
+
+def test_backbone_slot_checks_a_quantized_load(
+    lone_slot: Callable[..., Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """T49 (F1): the slot key has bits; the slot checks the load report of a quantized load with
+    the quantized target; the sort key of the session puts the unquantized tests first."""
+    import conftest
+
+    loads: list[Any] = []
+
+    def load(model_size: str, dtype_mode: str, **kwargs: Any) -> Any:
+        loads.append(kwargs.get("bits"))
+        report = LoadReport(
+            need_bytes=1, peak_bytes=500, cache_bytes=0, footprint_bytes=1, bits=kwargs.get("bits")
+        )
+        return SimpleNamespace(load_report=report)
+
+    targets: list[Any] = []
+    monkeypatch.setattr("dinov3_apple.mlx_weights.load_mlx_backbone", load)
+    monkeypatch.setattr(
+        parity_checks,
+        "load_peak_target",
+        lambda model_size, dtype_mode, bits=None: targets.append(bits) or 1_000,
+    )
+    monkeypatch.setattr(parity_checks, "load_peak_lower_bound", lambda model_size, model: 100)
+    lone_slot("ViT-S/16", "mlx", "bf16-autocast")
+    lone_slot("ViT-S/16", "mlx", "bf16-autocast", 8)
+    lone_slot("ViT-S/16", "mlx", "bf16-autocast", 8)
+    assert loads == [None, 8] and targets == [None, 8]
+    monkeypatch.setattr(parity_checks, "load_peak_lower_bound", lambda model_size, model: 600)
+    with pytest.raises(pytest.fail.Exception, match="bf16-autocast 4-bit"):
+        lone_slot("ViT-S/16", "mlx", "bf16-autocast", 4)
+
+    def item(name: str, **params: Any) -> SimpleNamespace:
+        return SimpleNamespace(
+            name=name,
+            callspec=SimpleNamespace(params=params),
+            get_closest_marker=lambda marker: object(),
+        )
+
+    items = [
+        item("q8", model_size="ViT-S/16", dtype_mode="bf16-autocast", bits=8),
+        item("plain", model_size="ViT-S/16", dtype_mode="bf16-autocast"),
+        item("q4", model_size="ViT-S/16", dtype_mode="bf16-autocast", bits=4),
+    ]
+    conftest.pytest_collection_modifyitems(items)
+    assert [i.name for i in items] == ["plain", "q4", "q8"]
+
+
+@pytest.mark.parametrize(
+    ("dtype_mode", "bits"),
+    [("fp32", 8), ("fp16-cast", 8), ("bf16-cast", 4), ("bf16-autocast", 6)],
+)
+def test_load_mlx_backbone_refuses_bits_outside_the_autocast_modes(
+    dtype_mode: str, bits: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """T50 (D15): bits in fp32 and in the cast modes, and bits=6, raise ValueError before any
+    file read."""
+    monkeypatch.setattr("dinov3_apple.mlx_weights.weights_dir", fail_if_called("weights_dir"))
+    monkeypatch.setattr(
+        "dinov3_apple.mlx_weights.parameter_count", fail_if_called("parameter_count")
+    )
+    with pytest.raises(ValueError, match="bits"):
+        load_mlx_backbone("ViT-S/16", dtype_mode, bits=bits)

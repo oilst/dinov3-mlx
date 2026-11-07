@@ -24,6 +24,10 @@ REFERENCE_DIR = REPO_ROOT / "tests" / "fixtures" / "generated" / "reference"
 INPUTS_FILE = REFERENCE_DIR / "inputs.safetensors"
 
 SQUARE_SIZES = [224, 448, 512]
+# The ImageNet mean and standard deviation of the normalization, fp32. preprocess.py (torch) and
+# mlx_preprocess.py (MLX) take them from here (D12 of specs/06-speed/plan.html).
+IMAGENET_MEAN_VALUES = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+IMAGENET_STD_VALUES = np.array([0.229, 0.224, 0.225], dtype=np.float32)
 HIDDEN_STATES_CONFIG = "iss-kibo-lab/224x224"
 
 

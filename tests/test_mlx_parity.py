@@ -28,6 +28,7 @@ from under_test import MLX_MODEL_SIZES_UNDER_TEST
 from dinov3_apple.mlx_model import (
     MLX_DTYPE_MODES,
     MlxBackbone,
+    mlx_embeddings,
     run_mlx,
     run_mlx_hidden_states,
     run_mlx_token_range,
@@ -67,6 +68,7 @@ PARITY_PARAMS = [
 ]
 
 Loader = Callable[[str, str, str], MlxBackbone]
+Forward = Callable[[mx.array], mx.array]
 Reader = Callable[[str], dict[str, np.ndarray]]
 
 
@@ -211,11 +213,13 @@ def test_parity(
     reference: Reader,
     inputs: dict[str, np.ndarray],
     record: Callable[..., None],
+    mlx_forward: Callable[[MlxBackbone], Forward],
 ) -> None:
-    """W5: the 12 configurations against the reference file."""
+    """W5: the 12 configurations against the reference file, on the compiled forward pass (D4 of
+    specs/06-speed/plan.html)."""
     key = ("parity", model_size, dtype_mode, config)
     model, stored = _load(backbone, reference, record, *key)
-    tokens = run_mlx(model, inputs[config], dtype_mode)[0]
+    tokens = run_mlx(model, inputs[config], dtype_mode, mlx_forward(model))[0]
     check_finite(
         tokens,
         model_size,
@@ -234,15 +238,18 @@ def test_batch_consistency(
     backbone: Loader,
     inputs: dict[str, np.ndarray],
     record: Callable[..., None],
+    mlx_forward: Callable[[MlxBackbone], Forward],
 ) -> None:
-    """W6: a batch of 8 against 8 single runs. Needs no reference file."""
+    """W6: a batch of 8 against 8 single runs, on the compiled forward pass. Needs no reference
+    file."""
     key = ("batch", model_size, dtype_mode, "batch-8-224x224")
     _skip_run_rule(record, *key)
     with record_skip(record, *key, backend=BACKEND):
         model = backbone(model_size, BACKEND, dtype_mode)
+    forward = mlx_forward(model)
     batch = np.concatenate([inputs[config] for config in BATCH_CONFIGS])
-    batched = run_mlx(model, batch, dtype_mode)
-    singles = [run_mlx(model, inputs[config], dtype_mode)[0] for config in BATCH_CONFIGS]
+    batched = run_mlx(model, batch, dtype_mode, forward)
+    singles = [run_mlx(model, inputs[config], dtype_mode, forward)[0] for config in BATCH_CONFIGS]
     check_finite(
         np.concatenate([batched, np.stack(singles)]),
         model_size,
@@ -328,3 +335,117 @@ def test_mlx_token_range_matches_stored(
     record(*key, None, "measured", backend=BACKEND, values=values)
     assert tokens.shape == expected.shape
     assert relative.max() <= TOKEN_RANGE_RELATIVE
+
+
+HALF_PARAMS = [
+    pytest.param(model_size, dtype_mode, id=f"{BACKEND}-{model_size}-{dtype_mode}")
+    for model_size in MLX_MODEL_SIZES_UNDER_TEST
+    for dtype_mode in MLX_DTYPE_MODES
+    if dtype_mode != "fp32"
+]
+# Table 21 of specs/06-speed/plan.html: the extra parity loss of the fp16 patch embeddings. The
+# decision of 2026-11-07 on W4 (a deviation from AC15): the patch mean keeps 1e-7; the patch 1st
+# percentile, a tail value that one rounding moves more, gets 1e-6. Measured in the default
+# session: patch mean at most 5.6e-8; patch 1st percentile up to 3.4e-7 (bf16-autocast) and
+# 1.5e-7 (fp16-autocast), 0 in the cast modes.
+FP16_EXTRA_LOSS = {"patch_mean": 1e-7, "patch_p01": 1e-6}
+
+
+@pytest.mark.parametrize(("model_size", "dtype_mode"), MODEL_PARAMS)
+def test_compiled_equals_eager(
+    model_size: str,
+    dtype_mode: str,
+    backbone: Loader,
+    inputs: dict[str, np.ndarray],
+    record: Callable[..., None],
+    mlx_forward: Callable[[MlxBackbone], Forward],
+) -> None:
+    """W1 of specs/06-speed/plan.html (D4): the 12 configurations, run_mlx with the compiled
+    forward pass of the slot against run_mlx eager. A finite output: largest difference 0.0. A
+    non-finite output: both forms non-finite at the same positions."""
+    key = ("compiled-equal", model_size, dtype_mode, "all")
+    _skip_run_rule(record, *key)
+    with record_skip(record, *key, backend=BACKEND):
+        model = backbone(model_size, BACKEND, dtype_mode)
+    forward = mlx_forward(model)
+    failures = []
+    for config in CONFIG_IDS:
+        compiled = run_mlx(model, inputs[config], dtype_mode, forward)
+        eager = run_mlx(model, inputs[config], dtype_mode)
+        finite = bool(np.isfinite(compiled).all() and np.isfinite(eager).all())
+        if finite:
+            largest = float(np.abs(compiled - eager).max())
+        else:
+            largest = 0.0 if np.array_equal(compiled, eager, equal_nan=True) else math.inf
+        status = "measured" if finite else "non-finite"
+        record(
+            "compiled-equal",
+            model_size,
+            dtype_mode,
+            config,
+            None,
+            status,
+            backend=BACKEND,
+            values={"max_abs": largest},
+        )
+        if largest != 0.0:
+            failures.append(f"{config}: {largest}")
+    assert not failures, failures
+
+
+@pytest.mark.parametrize(("model_size", "dtype_mode"), HALF_PARAMS)
+def test_fp16_patches_parity(
+    model_size: str,
+    dtype_mode: str,
+    backbone: Loader,
+    reference: Reader,
+    inputs: dict[str, np.ndarray],
+    record: Callable[..., None],
+    mlx_forward: Callable[[MlxBackbone], Forward],
+) -> None:
+    """W4 of specs/06-speed/plan.html (D13): the fp16 patch embeddings of mlx_embeddings on the
+    compiled forward pass against the reference output: THRESHOLDS[mode] (or an expected failure
+    through check_finite), an extra loss of at most 1e-7 for the patch mean and at most 1e-6 for
+    the patch 1st percentile (FP16_EXTRA_LOSS, decision of 2026-11-07), and the frame embeddings
+    unchanged."""
+    key = ("fp16-output", model_size, dtype_mode, "all")
+    model, stored = _load(backbone, reference, record, *key)
+    forward = mlx_forward(model)
+    largest_extra = dict.fromkeys(FP16_EXTRA_LOSS, 0.0)
+    for config in CONFIG_IDS:
+        tokens = forward(mx.array(inputs[config]))
+        frame, patches = mlx_embeddings(tokens, dtype_mode)
+        wide = np.array(tokens.astype(mx.float32))[0]
+        assert patches.dtype == np.float16
+        check_finite(
+            wide,
+            model_size,
+            dtype_mode,
+            lambda config=config: record(
+                "fp16-output", model_size, dtype_mode, config, None, "non-finite", backend=BACKEND
+            ),
+        )
+        narrow = np.concatenate(
+            [frame[0][None], wide[1:NUM_PREFIX_TOKENS], patches[0].astype(np.float32)]
+        )
+        fp32_parity = measure_parity(stored[config], wide)
+        parity = measure_parity(stored[config], narrow)
+        extra = {
+            "patch_mean": fp32_parity.patch_mean - parity.patch_mean,
+            "patch_p01": fp32_parity.patch_p01 - parity.patch_p01,
+        }
+        frame_equal = bool(np.array_equal(frame[0], wide[0]))
+        record(
+            "fp16-output",
+            model_size,
+            dtype_mode,
+            config,
+            parity,
+            "measured",
+            backend=BACKEND,
+            values={"extra_loss": extra, "frame_equal": frame_equal},
+        )
+        assert frame_equal
+        assert_thresholds(parity, dtype_mode)
+        largest_extra = {m: max(largest_extra[m], extra[m]) for m in FP16_EXTRA_LOSS}
+    assert all(largest_extra[m] <= FP16_EXTRA_LOSS[m] for m in FP16_EXTRA_LOSS), largest_extra

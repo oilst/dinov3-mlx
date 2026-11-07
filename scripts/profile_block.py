@@ -26,6 +26,7 @@ from pathlib import Path
 
 from dinov3_apple.bench import BenchConfig, make_batch, required_bench_bytes
 from dinov3_apple.flops import MODEL_SHAPES, part_bytes, part_flops, tokens
+from dinov3_apple.gpu_lock import heavy_job
 from dinov3_apple.machine import check_machine_state, read_machine_state
 from dinov3_apple.memory import GB, available_memory_bytes
 
@@ -106,14 +107,18 @@ def subprocess_lines(
     return [line | {"status": "done"} | extra for line in found]
 
 
-def main() -> None:
-    """Run one subprocess for each model size and dtype mode."""
+def main(argv: list[str] | None = None) -> None:
+    """Run one subprocess for each model size and dtype mode, under the GPU lock.
+
+    Args:
+        argv: The arguments. None reads sys.argv.
+    """
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawTextHelpFormatter
     )
     parser.add_argument("--child", nargs=2, help=argparse.SUPPRESS)
     parser.add_argument("--results", type=Path, default=RESULTS, help=argparse.SUPPRESS)
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     if args.child:
         child(*args.child)
         return
@@ -124,13 +129,20 @@ def main() -> None:
         format="%(asctime)s %(name)s %(message)s",
         handlers=[logging.StreamHandler(sys.stderr), logging.FileHandler(LOG)],
     )
+    with heavy_job("scripts/profile_block.py"):
+        run_all(args.results)
+
+
+def run_all(results: Path) -> None:
+    """Run one subprocess for each model size and dtype mode and append its lines to results."""
     for model_size in MODEL_SIZES:
         for dtype_mode in DTYPE_MODES:
             machine = read_machine_state()
             check_machine_state(machine)
             # The largest configuration of the subprocess sets the need.
             need = required_bench_bytes(
-                BenchConfig("B5", model_size, dtype_mode, max(SIDES), max(BATCH_SIZES))
+                BenchConfig("B5", model_size, dtype_mode, max(SIDES), max(BATCH_SIZES)),
+                backend="torch-mps",
             )
             available = available_memory_bytes()
             fits = available >= need
@@ -146,7 +158,7 @@ def main() -> None:
                     "reason": f"needs {need / GB:.1f} GB, {available / GB:.1f} GB available",
                     "time": datetime.now(UTC).isoformat(timespec="seconds"),
                 }
-                with args.results.open("a") as file:
+                with results.open("a") as file:
                     file.write(json.dumps(skip) + "\n")
                 continue
             done = subprocess.run(
@@ -160,7 +172,7 @@ def main() -> None:
             lines = subprocess_lines(
                 model_size, dtype_mode, done.returncode, done.stdout, done.stderr, extra
             )
-            with args.results.open("a") as file:
+            with results.open("a") as file:
                 for line in lines:
                     file.write(json.dumps(line) + "\n")
             for line in lines:

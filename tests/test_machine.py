@@ -97,3 +97,10 @@ def test_check_machine_state_refuses_weak_adapter() -> None:
 def test_check_machine_state_accepts_no_adapter_report() -> None:
     # A desktop Mac has no adapter. Battery power is refused by its own check.
     check_machine_state(_state(ac=AC_NONE))
+
+
+def test_versions_include_mlx_metal() -> None:
+    """T31 (D19 of specs/06-speed/plan.html): mlx-metal is an indirect dependency."""
+    from dinov3_apple.machine import read_versions
+
+    assert read_versions()["mlx-metal"] == "0.32.4"

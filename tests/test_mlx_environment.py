@@ -90,10 +90,12 @@ def test_tf32_enabled_reads_the_environment_as_mlx_does() -> None:
 
 
 def test_mlx_modules_do_not_import_torch() -> None:
+    """T54: no torch import in the mlx modules and in the Step 6 modules."""
     code = (
         "import sys\n"
         "import dinov3_apple.stored, dinov3_apple.mlx_model, dinov3_apple.mlx_weights\n"
-        "import dinov3_apple.memory\n"
+        "import dinov3_apple.memory, dinov3_apple.mlx_preprocess, dinov3_apple.mlx_bench\n"
+        "import dinov3_apple.speedup, dinov3_apple.gpu_lock\n"
         "print(sorted(name for name in ('torch', 'transformers') if name in sys.modules))\n"
     )
     result = subprocess.run(
@@ -190,42 +192,87 @@ def test_bench_mlx_port_dry_run() -> None:
     assert sum("ViT-S/16" in line for line in lines) == 12
 
 
-def test_mlx_worker_records_its_memory_limit_and_model_slug(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The worker records the value that its load gave to mx.set_memory_limit (Table 10).
+def _fake_load(monkeypatch: pytest.MonkeyPatch, limit: int, name: str = "vits16") -> MlxBackbone:
+    """Replace load_mlx_backbone with a load of a small model that sets the MLX limit to limit."""
+    model = small_mlx_model(small_hf_model(seed=0, name=name))
 
-    The load gives the small model of tests/small_model.py, so the test needs no gated weights.
-    ViT-S+/16 has the width 384 of the small model and a model slug other than vits16.
-    """
-    import bench_mlx_port
-
-    if not stored.INPUTS_FILE.exists():
-        pytest.skip(f"{stored.INPUTS_FILE.name} is missing. Run scripts/make_reference.py.")
-    limit = 3 * 10**9  # not the need of a load, not the limit of the test session
-    model = small_mlx_model(small_hf_model(seed=0))
-
-    def load(model_size: str, dtype_mode: str = "fp32", tf32: bool = False) -> MlxBackbone:
+    def load(model_size: str, dtype_mode: str = "fp32", tf32: bool = False, **kwargs: object):
         mx.set_memory_limit(limit)
         return model
 
     monkeypatch.setattr(mlx_weights, "load_mlx_backbone", load)
+    return model
+
+
+def test_mlx_worker_raises_the_limit_to_the_bench_need(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """T29 (D8): the worker loads with the load need as the MLX limit, then raises the limit to
+    the benchmark need of mlx. The batch file name has the model slug, bits, the compile flag and
+    the run id. The small model has the width 384 of ViT-S+/16 and needs no gated weights."""
+    from dinov3_apple import bench, mlx_bench
+
+    if not stored.INPUTS_FILE.exists():
+        pytest.skip(f"{stored.INPUTS_FILE.name} is missing. Run scripts/make_reference.py.")
+    limit = 3 * 10**9  # not the need of a load, not the limit of the test session
+    _fake_load(monkeypatch, limit)
+    monkeypatch.setattr(bench, "_parameter_count", lambda model_size: 21_596_544)
     short = TimeBudget(min_batches=2, min_seconds=0.0)
-    config = BenchConfig("T", "ViT-S+/16", "fp32", 224, 1)
     session_limit = mx.get_memory_limit()
+    names = []
     try:
-        worker = bench_mlx_port.run_mlx_worker(config, short, short, tmp_path)
+        for bits, run_id in ((None, None), (8, "1"), (4, "1"), (4, "2")):
+            config = BenchConfig("S6", "ViT-S+/16", "fp32", 224, 1, compile=True, bits=bits)
+            worker = mlx_bench.run_mlx_worker(config, short, short, tmp_path, run_id=run_id)
+            names.append(worker["batch_file"])
+            assert worker["mlx_load_limit_bytes"] == limit
+            assert worker["mlx_memory_limit_bytes"] == bench.required_bench_bytes(
+                config, backend="mlx"
+            )
     finally:
         mx.set_memory_limit(session_limit)
-    assert worker["status"] == "done"
-    assert worker["mlx_memory_limit_bytes"] == limit
-    # The small model has no load report: the worker writes null load-report fields.
+    assert names == [
+        "vits16plus_fp32_224_b1_compile_r0.json",
+        "vits16plus_fp32_224_b1_compile_8bit_r0_run1.json",
+        "vits16plus_fp32_224_b1_compile_4bit_r0_run1.json",
+        "vits16plus_fp32_224_b1_compile_4bit_r0_run2.json",
+    ]
+    assert sorted(path.name for path in tmp_path.glob("*.json")) == sorted(names)
     assert worker["load_report_peak_bytes"] is None
-    assert worker["load_report_need_bytes"] is None
-    assert worker["output_transfer"] == "native"
     assert worker["tf32"] is False
-    assert worker["timed_batches"] >= 2
-    assert [path.name for path in tmp_path.glob("*.json")] == ["vits16plus_fp32_224_b1_r0.json"]
+
+
+def test_mlx_worker_records_versions_and_compile_fields(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """T30 (D19, R38, R42): the compile trace, the architecture, the versions, the value of
+    MLX_DISABLE_COMPILE, the MLX cache and the MLX peak of the timed batches."""
+    from dinov3_apple import bench, mlx_bench
+
+    if not stored.INPUTS_FILE.exists():
+        pytest.skip(f"{stored.INPUTS_FILE.name} is missing. Run scripts/make_reference.py.")
+    _fake_load(monkeypatch, 3 * 10**9, "vits16plus")
+    monkeypatch.setattr(bench, "_parameter_count", lambda model_size: 21_596_544)
+    monkeypatch.delenv("MLX_DISABLE_COMPILE", raising=False)
+    short = TimeBudget(min_batches=2, min_seconds=0.0)
+    config = BenchConfig("S6", "ViT-S+/16", "bf16-cast", 224, 1, compile=True)
+    session_limit = mx.get_memory_limit()
+    try:
+        worker = mlx_bench.run_mlx_worker(config, short, short, tmp_path)
+        monkeypatch.setenv("MLX_DISABLE_COMPILE", "1")
+        disabled = mlx_bench.run_mlx_worker(config, short, short, tmp_path)
+    finally:
+        mx.set_memory_limit(session_limit)
+    assert 0 < worker["compile_trace_s"] < worker["first_call_s"]
+    assert worker["mlx_architecture"] == mx.device_info()["architecture"]
+    assert worker["versions"]["mlx-metal"] == "0.32.4"
+    assert worker["mlx_disable_compile"] is None
+    assert disabled["mlx_disable_compile"] == "1"
+    assert worker["mlx_cache_bytes"] >= 0
+    assert worker["mlx_timed_peak_bytes"] > 0
+    assert worker["output_transfer"] == "fp16-patches"
+    assert set(bench.MLX_FIELDS) <= set(worker)
+    assert "load_peak_bytes" not in worker
 
 
 def test_bench_mlx_port_files_follow_the_results_path(tmp_path: Path) -> None:
@@ -390,26 +437,76 @@ def test_bench_p2_worker_plan(
     lines = capsys.readouterr().out.strip().splitlines()
     workers = [line for line in lines if "ViT-H+/16" in line]
     assert len(workers) == 30
+    # The needs of each backend (D8 of specs/06-speed/plan.html).
+    mlx_needs = {"fp32": 8.88, "cast": 6.44, "autocast": 6.86}
     for line in workers:
-        cast = "-cast" in line
-        assert f"need {7.12 if cast else 10.23:4.2f} GB" in line, line
+        kind = "fp32" if " fp32 " in line else ("cast" if "-cast" in line else "autocast")
+        if line.split()[2] == "mlx":
+            assert f"need {mlx_needs[kind]:4.2f} GB" in line, line
+        else:
+            assert f"need {7.12 if kind == 'cast' else 10.23:4.2f} GB" in line, line
 
 
-def test_time_batch_mlx_moves_bf16_output() -> None:
-    """T30: a bf16 output moves to the host as uint16 bits; as fp32 they equal run_mlx."""
-    import bench_mlx_port
+def test_time_batch_mlx_gives_fp16_patches() -> None:
+    """T56 (D13): in bf16-cast the frame embeddings are fp32 and the patch embeddings fp16; the
+    values equal run_mlx cast to fp16. In fp32 both stay fp32."""
+    from dinov3_apple import mlx_bench
+    from dinov3_apple.mlx_model import compile_backbone
 
     model = small_mlx_model(small_hf_model(seed=0), "bf16-cast")
     batch = small_pixels((2, 3, 224, 224))
-    times, frame, patches = bench_mlx_port.time_batch_mlx(model, batch)
+    times, frame, patches = mlx_bench.time_batch_mlx(compile_backbone(model), batch, "bf16-cast")
     assert len(times) == 3
-    assert frame.dtype == patches.dtype == np.uint16
-    assert bench_mlx_port.output_transfer(frame) == "view-uint16"
+    assert frame.dtype == np.float32
+    assert patches.dtype == np.float16
+    assert mlx_bench.output_transfer(frame, patches) == "fp16-patches"
     tokens = run_mlx(model, batch, "bf16-cast")
-    assert np.array_equal(bench_mlx_port.host_to_fp32(frame), tokens[:, 0])
-    assert np.array_equal(bench_mlx_port.host_to_fp32(patches), tokens[:, NUM_PREFIX_TOKENS:])
+    assert np.array_equal(frame, tokens[:, 0])
+    assert np.array_equal(patches, tokens[:, NUM_PREFIX_TOKENS:].astype(np.float16))
     fp32 = small_mlx_model(small_hf_model(seed=0), "fp32")
-    _, frame32, _ = bench_mlx_port.time_batch_mlx(fp32, batch)
-    assert frame32.dtype == np.float32
-    assert bench_mlx_port.output_transfer(frame32) == "native"
-    assert bench_mlx_port.host_to_fp32(frame32) is frame32
+    _, frame32, patches32 = mlx_bench.time_batch_mlx(fp32, batch, "fp32")
+    assert frame32.dtype == patches32.dtype == np.float32
+    assert mlx_bench.output_transfer(frame32, patches32) == "native"
+    # The lines of Step 5 hold bf16 bits as uint16: host_to_fp32 still reads them.
+    bits = np.array([0x3F80], np.uint16)
+    assert mlx_bench.host_to_fp32(bits)[0] == 1.0
+    assert mlx_bench.output_transfer(bits, bits) == "view-uint16"
+
+
+@pytest.mark.parametrize(
+    ("change", "forms"), [("C1", ["E", "A"]), ("C2", ["A", "R"]), ("C4", ["R-fp32", "R-fp16"])]
+)
+def test_change_worker_forms(
+    change: str, forms: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R56 and T22: the forms of one change run in one process and give the same tokens; each
+    round gives one ratio. A small model, so the test needs no gated weights."""
+    from dinov3_apple import mlx_bench
+
+    if not stored.INPUTS_FILE.exists():
+        pytest.skip(f"{stored.INPUTS_FILE.name} is missing. Run scripts/make_reference.py.")
+    _fake_load(monkeypatch, mx.get_memory_limit(), "vits16plus")
+    config = BenchConfig("S6", "ViT-S+/16", "bf16-cast", 224, 2, compile=True)
+    short = TimeBudget(min_batches=2, min_seconds=0.0)
+    result = mlx_bench.run_change_worker(config, change, forms, 2, short, short)
+    assert result["frame_equal"]
+    assert result["patches_equal"]
+    assert len(result["ratios"]["frame"]) == 2
+    assert all(len(result["throughput"][form]["patch"]) == 2 for form in forms)
+
+
+def test_profile_worker_parts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Table 12 of specs/06-speed/plan.html: the profile worker gives the host share, the 11
+    parts of block 1, the kernel counts and the throughput at batch sizes 8 and 32."""
+    from dinov3_apple import mlx_bench
+    from dinov3_apple.flops import PART_NAMES
+
+    if not stored.INPUTS_FILE.exists():
+        pytest.skip(f"{stored.INPUTS_FILE.name} is missing. Run scripts/make_reference.py.")
+    _fake_load(monkeypatch, mx.get_memory_limit(), "vits16plus")
+    config = BenchConfig("S6", "ViT-S+/16", "fp16-cast", 224, 8, compile=True)
+    result = mlx_bench.run_profile_worker(config, tmp_path)
+    assert list(result["parts_s"]) == PART_NAMES
+    assert 0 < result["host"]["host_share"]
+    assert result["kernels"]["eager"] > result["kernels"]["compiled"] > 0
+    assert set(result["batch_sizes"]) == {"8", "32"}

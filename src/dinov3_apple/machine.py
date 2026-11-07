@@ -14,7 +14,7 @@ from importlib.metadata import PackageNotFoundError, version
 
 from dinov3_apple.memory import available_memory_bytes
 
-VERSIONED_PACKAGES = ["torch", "transformers", "mlx", "numpy", "safetensors"]
+VERSIONED_PACKAGES = ["torch", "transformers", "mlx", "mlx-metal", "numpy", "safetensors"]
 
 # The smallest power adapter for a benchmark. The adapter of this Mac (96 W) reports 94 W.
 MIN_ADAPTER_WATTS = 90
@@ -85,7 +85,8 @@ def _thermal(therm_text: str) -> str:
 
 
 def read_versions() -> dict[str, str]:
-    """Return the macOS, Python, torch, transformers, mlx, NumPy and safetensors versions."""
+    """Return the macOS, Python, torch, transformers, mlx, mlx-metal, NumPy and safetensors
+    versions."""
     versions = {"macos": platform.mac_ver()[0], "python": platform.python_version()}
     for package in VERSIONED_PACKAGES:
         try:

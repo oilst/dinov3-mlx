@@ -10,13 +10,15 @@ specs/05-all-sizes/explore.html; F4 of specs/05-all-sizes/verify.html). No torch
 import dataclasses
 import json
 import re
-from collections.abc import Iterator, MutableMapping
+from collections.abc import Callable, Iterator, MutableMapping
 from dataclasses import dataclass
 from functools import cache
 
 import mlx.core as mx
-from mlx.utils import tree_flatten
+from mlx import nn
+from mlx.utils import tree_flatten, tree_map
 
+from dinov3_apple.bench import QUANTIZED_MODES, quantized_weight_bytes
 from dinov3_apple.footprint import read_footprint
 from dinov3_apple.hub import parameter_count, weights_dir
 from dinov3_apple.memory import (
@@ -34,8 +36,14 @@ from dinov3_apple.mlx_model import (
     MlxDtypeMode,
     TF32ModeError,
     linear_parameter_names,
+    quantized_weight_names,
     tf32_enabled,
 )
+
+# Quantized weights (D14 of specs/06-speed/plan.html): the affine format, 8 and 4 bits, one
+# scale and one offset for each group of 64 weights of a row.
+GROUP_SIZE = 64
+QUANTIZED_BITS = (8, 4)
 
 DROPPED_KEYS = frozenset({"embeddings.mask_token"})  # training only (bool_masked_pos)
 PATCH_WEIGHT = "embeddings.patch_embeddings.weight"
@@ -68,12 +76,14 @@ class LoadReport:
             active memory before the load. It does not include the MLX cache.
         cache_bytes: The MLX cache memory after the load.
         footprint_bytes: The process footprint after the load.
+        bits: None for unquantized weights; 8 or 4 for quantized block weights.
     """
 
     need_bytes: int
     peak_bytes: int
     cache_bytes: int
     footprint_bytes: int
+    bits: int | None = None
 
 
 @cache
@@ -169,7 +179,7 @@ def mlx_weights(
 
 
 def required_mlx_load_bytes(
-    model_size: str, dtype_mode: str = "fp32", ratio: float = LOAD_RATIO
+    model_size: str, dtype_mode: str = "fp32", ratio: float = LOAD_RATIO, bits: int | None = None
 ) -> int:
     """Return the memory that the memory check asks for before an mlx load of one model size.
 
@@ -177,6 +187,8 @@ def required_mlx_load_bytes(
         model_size: A key of MODEL_IDS.
         dtype_mode: A key of MLX_DTYPE_MODES.
         ratio: The ratio of the load peak to the weight bytes.
+        bits: None, or 8 or 4 for quantized block weights: the weight bytes are then the
+            quantized bytes of Table 9 of specs/06-speed/plan.html.
 
     Returns:
         ratio x the weight bytes in the matmul dtype + LOAD_RESERVE_BYTES. ViT-S/16 in fp32:
@@ -186,20 +198,66 @@ def required_mlx_load_bytes(
     Raises:
         WeightsNotFoundError: If the weights are not on this Mac.
     """
+    if bits is not None:
+        return load_bytes(
+            quantized_weight_bytes(model_size, bits, parameter_count(model_size)), ratio
+        )
     bytes_per_weight = MLX_DTYPE_MODES[dtype_mode].matmul.size
     return load_bytes(parameter_count(model_size) * bytes_per_weight, ratio)
 
 
+def block_linear_predicate(
+    bits: int, group_size: int = GROUP_SIZE
+) -> Callable[[str, nn.Module], dict | bool]:
+    """Return the class predicate of nn.quantize for the block nn.Linear modules (D16).
+
+    The patch embedding keeps the matmul dtype: it is the most sensitive part (probe Q5) and the
+    path of F1 of Step 4. The predicate returns the parameters of each module, so a later mixed
+    row (other bits for one module group) changes only this function.
+
+    Args:
+        bits: 8 or 4.
+        group_size: The number of weights of one row that share one scale and one offset.
+    """
+
+    def predicate(path: str, module: nn.Module) -> dict | bool:
+        if isinstance(module, nn.Linear) and path.startswith("layer."):
+            return {"group_size": group_size, "bits": bits}
+        return False
+
+    return predicate
+
+
+def placeholder_skeleton(model: nn.Module) -> None:
+    """Replace each parameter of a model before a load by a zero-stride placeholder (R50).
+
+    The placeholder has the shape and the dtype of the parameter, so load_weights(strict=True)
+    checks the same names and shapes. An evaluated placeholder holds one value. So an mx.eval of
+    the skeleton, by mistake, allocates bytes, not the random fp32 weights of the whole model
+    (about 27 GB for ViT-7B/16, against ADR 0008).
+    """
+    model.update(
+        tree_map(lambda p: mx.broadcast_to(mx.zeros((), p.dtype), p.shape), model.parameters())
+    )
+
+
 def load_mlx_backbone(
-    model_size: str, dtype_mode: str = "fp32", tf32: bool = False, ratio: float = LOAD_RATIO
+    model_size: str,
+    dtype_mode: str = "fp32",
+    tf32: bool = False,
+    ratio: float = LOAD_RATIO,
+    bits: int | None = None,
+    group_size: int = GROUP_SIZE,
 ) -> MlxBackbone:
     """Load the MLX backbone of one model size in one dtype mode (Section 3.5 of
-    specs/05-all-sizes/plan.html).
+    specs/05-all-sizes/plan.html and of specs/06-speed/plan.html).
 
-    The order of the actions: the run rule, the TF32 check, the memory check, the memory limit,
-    the lazy model and the lazy files, then one tensor at a time, the strict load and an empty
-    cache. The backbone keeps a LoadReport in its plain attribute load_report, and one load-peak
-    line goes to the log of the memory checks.
+    The order of the actions: the run rule, the check of bits, the TF32 check, the memory check,
+    the memory limit, the skeleton (with bits: nn.quantize of the block nn.Linear modules), the
+    placeholders, the lazy files, then one tensor at a time (with bits: cast, quantize and
+    evaluate each block weight), the strict load and an empty cache. The backbone keeps a
+    LoadReport in its plain attribute load_report, and one load-peak line goes to the log of the
+    memory checks.
 
     Args:
         model_size: A key of MODEL_IDS.
@@ -207,28 +265,41 @@ def load_mlx_backbone(
         tf32: The TF32 state that the fp32 dtype mode asks for. It must equal the state of
             MLX_ENABLE_TF32 in the environment.
         ratio: The ratio of the load peak to the weight bytes for the memory check.
+        bits: None for unquantized weights; 8 or 4 for quantized block weights (D14, D15).
+        group_size: The group size of the quantized weights.
 
     Returns:
         The backbone with evaluated parameters, so the load cost stays out of the first call.
 
     Raises:
         RunRuleError: For ViT-7B/16 in fp32, before any file read.
+        ValueError: For bits outside QUANTIZED_BITS, or bits in a dtype mode other than
+            fp16-autocast and bf16-autocast (D15), before any file read.
         TF32ModeError: If the fp32 dtype mode asks for another TF32 state than MLX_ENABLE_TF32.
         InsufficientMemoryError: If the memory check fails.
         WeightsNotFoundError: If the weights are not on this Mac.
     """
     dtypes = MLX_DTYPE_MODES[dtype_mode]
-    label = f"{model_size} mlx {dtype_mode}"
+    label = f"{model_size} mlx {dtype_mode}" + (f" {bits}-bit" if bits else "")
     check_run_rule(model_size, dtypes.matmul.size, label)
+    if bits is not None:
+        if bits not in QUANTIZED_BITS:
+            raise ValueError(f"bits must be one of {QUANTIZED_BITS}, not {bits}")
+        if dtype_mode not in QUANTIZED_MODES:
+            raise ValueError(f"quantized bits load in {QUANTIZED_MODES} only, not in {dtype_mode}")
     if dtypes.matmul == mx.float32 and tf32_enabled() != tf32:
         raise TF32ModeError(f"set MLX_ENABLE_TF32={int(tf32)} before the first use of mlx")
-    need = required_mlx_load_bytes(model_size, dtype_mode, ratio)
+    need = required_mlx_load_bytes(model_size, dtype_mode, ratio, bits)
     check_free_memory(need, label)
     mx.set_memory_limit(need)  # only a guideline (R13 of Step 4): the loop keeps the peak low
     folder = weights_dir(model_size)
     config = MlxConfig.from_hf(json.loads((folder / "config.json").read_text()))
     model = MlxBackbone(config, dtype_mode)  # the random init stays lazy and is never computed
-    linear = linear_parameter_names(model)
+    if bits is not None:
+        nn.quantize(model, class_predicate=block_linear_predicate(bits, group_size))
+    linear = linear_parameter_names(model)  # nn.Linear and nn.QuantizedLinear (F1)
+    quantized = quantized_weight_names(model)  # the .weight of each QuantizedLinear
+    placeholder_skeleton(model)  # no lazy random weight of the whole model is left (R50)
     tensors: dict[str, mx.array] = {}
     for file in sorted(folder.glob("*.safetensors")):
         tensors |= mx.load(str(file))  # lazy; a str, not a Path (R18)
@@ -236,6 +307,12 @@ def load_mlx_backbone(
     mx.reset_peak_memory()
     pairs = []
     for key, array in mlx_weights(tensors, dtypes, linear):
+        if key in quantized:
+            weight, scales, biases = mx.quantize(array, group_size, bits)
+            mx.eval(weight, scales, biases)  # one source, its cast and its quantized output
+            stem = key.removesuffix(".weight")
+            pairs += [(key, weight), (f"{stem}.scales", scales), (f"{stem}.biases", biases)]
+            continue
         mx.eval(array)  # reads one tensor from its file and casts it
         pairs.append((key, array))
     model.load_weights(pairs, strict=True)
@@ -246,6 +323,7 @@ def load_mlx_backbone(
         peak_bytes=mx.get_peak_memory() - active_before,
         cache_bytes=mx.get_cache_memory(),
         footprint_bytes=read_footprint().current_bytes,
+        bits=bits,
     )
     record_load_peak(label, model.load_report.peak_bytes, model.load_report.cache_bytes)
     return model

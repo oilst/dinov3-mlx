@@ -42,6 +42,7 @@ from safetensors import safe_open
 
 from dinov3_apple.bench import DTYPE_MODE_NAMES, bytes_per_weight, run_worker_subprocess
 from dinov3_apple.footprint import read_footprint
+from dinov3_apple.gpu_lock import heavy_job
 from dinov3_apple.hub import MODEL_IDS, parameter_count
 from dinov3_apple.memory import (
     GB,
@@ -168,7 +169,7 @@ def run_mlx_worker(spec: dict) -> dict:
     and append one cross-check line for each configuration."""
     import mlx.core as mx
 
-    from dinov3_apple.mlx_model import run_mlx
+    from dinov3_apple.mlx_model import compile_backbone, run_mlx
     from dinov3_apple.mlx_weights import load_mlx_backbone
 
     model_size, dtype_mode = spec["model_size"], spec["dtype_mode"]
@@ -179,10 +180,11 @@ def run_mlx_worker(spec: dict) -> dict:
     inputs = read_inputs()
     start = time.perf_counter()
     model = load_mlx_backbone(model_size, dtype_mode, tf32=False)
+    forward = compile_backbone(model)  # the compiled forward pass (D4 of specs/06-speed/plan.html)
     PARITY_LOG.parent.mkdir(parents=True, exist_ok=True)
     statuses = []
     for config in spec["configs"]:
-        tokens = run_mlx(model, inputs[config], dtype_mode)[0]
+        tokens = run_mlx(model, inputs[config], dtype_mode, forward)[0]
         status, parity, values = compare_tokens(torch_tokens[config], tokens)
         line = {
             "kind": "cross-check",
@@ -300,11 +302,12 @@ def main(argv: list[str] | None = None) -> None:
         format=LOG_FORMAT,
         handlers=[logging.StreamHandler(sys.stderr), logging.FileHandler(CROSS_DIR / "driver.log")],
     )
-    try:
-        code = run(args.model_size, args.dtype_mode, args.torch_device, args.configs)
-    except RunRuleError as error:
-        logger.error(f"refused: {error}")  # the refusal goes to driver.log
-        raise SystemExit(str(error)) from error
+    with heavy_job("scripts/cross_check.py"):
+        try:
+            code = run(args.model_size, args.dtype_mode, args.torch_device, args.configs)
+        except RunRuleError as error:
+            logger.error(f"refused: {error}")  # the refusal goes to driver.log
+            raise SystemExit(str(error)) from error
     sys.exit(code)
 
 
