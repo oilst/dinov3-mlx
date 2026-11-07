@@ -1,0 +1,395 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Step 6b Prior-art comparison: Explore</title>
+<style>
+/* Spec page. White page, black text, no dark mode. */
+:root { --bg: #ffffff; --fg: #111414; --muted: #4a5655; --rule: #d6dedd; --panel: #f5f8f7; --accent: #057379; --pass: #1d7a3a; --fail: #b3261e; color-scheme: light; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif; }
+main { max-width: 64rem; margin: 0 auto; padding: 40px 20px 64px; display: grid; gap: 1.75rem; }
+main > *, section > * { min-width: 0; }
+h1 { font-size: 1.9rem; line-height: 1.15; margin: 0; }
+h2 { font-size: 1.3rem; margin: 0; }
+h3 { font-size: 1.05rem; margin: 0; }
+section { display: grid; gap: 0.8rem; }
+p, ul, ol { margin: 0; max-width: 46rem; }
+li + li { margin-top: 0.25rem; }
+code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.86em; }
+p code, li code, td code { overflow-wrap: anywhere; }
+pre { margin: 0; background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 0.8rem 1rem; overflow-x: auto; }
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+th, td { text-align: left; vertical-align: top; padding: 0.45rem 0.7rem 0.45rem 0; border-bottom: 1px solid var(--rule); }
+th { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); border-bottom: 1.5px solid var(--fg); }
+td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+tr.group td { background: var(--panel); font-weight: 600; }
+.caption { font-size: 0.88rem; color: var(--muted); }
+.fail { color: var(--fail); font-weight: 600; }
+.pass { color: var(--pass); font-weight: 600; }
+.rec { color: var(--accent); font-weight: 600; }
+.box { border: 1.5px solid var(--accent); border-radius: 6px; padding: 0.8rem 1rem; display: grid; gap: 0.5rem; }
+.warn { border: 1.5px solid var(--fail); border-radius: 6px; padding: 0.8rem 1rem; display: grid; gap: 0.5rem; }
+figure { margin: 0; display: grid; gap: 0.4rem; }
+.fig { border: 1px solid var(--rule); border-radius: 6px; padding: 0.5rem; overflow-x: auto; }
+.fig svg { display: block; width: 100%; height: auto; min-width: 640px; }
+figcaption { font-size: 0.88rem; color: var(--muted); }
+a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+<header>
+  <h1>Step 6b Prior-art comparison: Explore</h1>
+  <p>Roadmap step 6b. Status: options picked. The user asked the agent to decide (night of 2026-11-07): each decision D1 to D9 takes the recommended option. One question stays with the user (Section 6). Date: 2026-11-07.</p>
+</header>
+
+<section id="task">
+  <h2>1 What Step 6b must do and the starting point</h2>
+  <p>Step 6b measures the related public repos with our harness: frame throughput and parity at the same model size, input resolution and batch size. The DINOv3 topic: which parts of the backbone each port changes, and what that costs in parity. Step 1 read the code of four MLX ports but did not run them (<code>specs/01-scope/explore.html</code>, <code>docs/learn/01-prior-ports.html</code>).</p>
+  <p>The starting point is the Step 6 result. Our compiled forward pass on <code>mlx</code> is about as fast as <code>torch.compile</code> on <code>torch-mps</code>. Paired speedups at P1 (ViT-S/16, 224 px, batch size 8): fp32 1.07, fp16-cast 0.87, bf16-cast 0.88. At P2 (ViT-H+/16, 512 px, batch size 8): 1.01 to 1.09 (<code>results/speedup-table.md</code>).</p>
+  <p>These points are fixed. They are not options:</p>
+  <ul>
+    <li>The parity thresholds of ADR 0003 and the paired measurement of ADR 0004: each row of another repo runs in the same session as a row of our compiled forward pass, in alternation.</li>
+    <li>The run rules of <code>CLAUDE.md</code>: one heavy job at a time through the GPU lock, a memory check before each load, <code>mx.set_memory_limit</code>.</li>
+    <li>The rules for third-party code: each clone or download in its own folder outside the repo (<code>~/.cache/dinov3-apple/prior-art/</code>), with its own venv; no third-party package in <code>pyproject.toml</code> or <code>uv.lock</code>; Python with <code>-I</code>; no pickle file from a third party; read each file before it runs.</li>
+    <li>Step 6c makes our own Core ML conversion. Step 6b measures only Core ML exports that other people made.</li>
+    <li>New code goes into new files. ADR numbers 0012 and 0013 are for Step 6b.</li>
+  </ul>
+  <div class="warn">
+    <p><b>The permission system refused the run of third-party Python code.</b> At 22:29 on 2026-11-07 the permission system of this session (auto mode) refused the first probe of the two Python MLX ports, with the reason "Code from External". The Explore did not try a workaround. The Core ML probes ran: Apple's <code>coremltools</code> runs downloaded model files with our own probe script. So Section 2 has measured results for the Core ML exports, and code-reading results for the MLX ports. Decision D2 and question Q1 (Section 6) handle the block.</p>
+  </div>
+</section>
+
+<section id="facts">
+  <h2>2 Candidates and probe results</h2>
+
+  <h3>2.1 The candidates</h3>
+  <p>We searched GitHub (API search, sorted by the last push) and the Hugging Face Hub (model search for "dinov3" and "dinov2" with "mlx", "coreml") on 2026-11-07. The four ports of Step 1 have no new commit. The search found three Core ML sources and four pipelines that contain a DINOv3 backbone. Table 1 lists every candidate.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>No.</th><th>Candidate</th><th>Kind</th><th>License</th><th>Last commit</th><th>Model sizes</th><th>Outputs</th><th>Dtypes</th><th>How to run</th><th>Risk</th><th>Verdict</th></tr></thead>
+      <tbody>
+        <tr><td>C1</td><td>mlx-image (riccardomusmeci), DINOv3 part</td><td>MLX port, Python</td><td>MIT</td><td>da92532, 2026-04-08</td><td>ViT-S/16, ViT-S+/16, ViT-B/16 (any multiple of 16)</td><td>CLS token, register tokens, patch tokens</td><td>fp32; others only through <code>set_dtype</code></td><td><code>venv-mlx</code> (mlx 0.32.4); weights from the <code>mlx-vision</code> org, safetensors, not gated</td><td>Third-party Python: refused by the permission system</td><td>Measure when the user allows it (D2)</td></tr>
+        <tr><td>C2</td><td>mlx_dinov3 (etornam45)</td><td>MLX port, Python</td><td>DINOv3 License</td><td>43d139b, 2026-05-16</td><td>Factories S, B, L, SO400M, H, giant2, 7B; S+ and H+ through the feed-forward ratio</td><td>As C1</td><td>As C1</td><td><code>venv-mlx</code>; its converter reads a pickle, so we use our own converted weights (Hugging Face safetensors to Meta names)</td><td>As C1</td><td>Measure ViT-H+/16 (P2) when the user allows it (D2)</td></tr>
+        <tr><td>C3</td><td>MLXDINOv3 (vincentamato)</td><td>MLX port, Swift</td><td>MIT</td><td>3122d79, 2026-04-10</td><td>All ViT sizes with one safetensors file (not ViT-7B/16)</td><td>CLS token, patch tokens, hidden states</td><td>fp32</td><td><code>xcodebuild</code> (Metal shaders), plus a Swift harness that we must write; SwiftPM fetches mlx-swift and swift-transformers</td><td>Third-party code as C1, and a new Swift harness</td><td>Skip</td></tr>
+        <tr><td>C4</td><td>mlx-dinov3 (sarveshmayil)</td><td>MLX port, Python</td><td>MIT</td><td>0bdeaa0, 2025-10-13</td><td>None: no ViT model</td><td>None</td><td>–</td><td>–</td><td>–</td><td>Skip</td></tr>
+        <tr><td>C5</td><td>Pipelines: mlx-community/sam-3d-body-dinov3-bf16 (mlx-vlm), xocialize/mlx-trellis2-swift, lyonsno/pixal3d-mlx, mnmly/mlx-swift-INSID3</td><td>DINOv3 inside a larger model</td><td>Mixed</td><td>2026-06 to 2026-11</td><td>ViT-L/16 or ViT-H+/16 inside the pipeline</td><td>Pipeline outputs</td><td>bf16 or fp32</td><td>The full pipeline and its packages</td><td>Large dependencies; the backbone weights can differ from the pretrained weights</td><td>Skip</td></tr>
+        <tr><td>C6</td><td>bahaehmimdi/dinov2-mlx</td><td>DINOv2 on "torch-mlx"</td><td>None</td><td>3d1fcf9, 2026-09-07</td><td>DINOv2</td><td><code>last_hidden_state</code>, pooler</td><td>fp32, fp16</td><td><code>git clone --recursive</code> of a torch replacement and a torchvision fork</td><td>The install step gets more code from two repos; no license</td><td>Skip</td></tr>
+        <tr><td>C7</td><td>SharpAI (Aegis AI) Core ML exports</td><td>Core ML export</td><td>DINOv3 License (weights); no code</td><td>2025-10-31 to 2025-11-04</td><td>ViT-S/16 at 224 (FP32, INT8), 336, 448, 560; ViT-B/16 at 448, 560 (FP32, FP16, INT8)</td><td>L2-normalized patch tokens as a grid (1, D, h, w); no CLS token</td><td>FP32, FP16, INT8 (palettized weights)</td><td><code>venv-coreml</code> (coremltools 9.0); 8-bit image input</td><td>None found: no custom layer</td><td>Measure ViT-S/16 224 FP32 and INT8, ViT-B/16 448 FP32 and FP16</td></tr>
+        <tr><td>C8</td><td>rinpatch/dinov3-coreml</td><td>Core ML export</td><td>MIT (code), DINOv3 License (weights)</td><td>5ea0dea, 2026-09-16</td><td>ViT-B/16 at 448 (from timm)</td><td>L2-normalized CLS token, raw patch tokens</td><td>FP32</td><td><code>venv-coreml</code>; 8-bit image input; the checksums of <code>SHA256SUMS</code> match</td><td>None found</td><td>Measure</td></tr>
+        <tr><td>C9</td><td>VimalMollyn/dinov2-coreml (GitHub)</td><td>Core ML export</td><td>No license file</td><td>6306a84, 2026-09-27</td><td>DINOv3 ViT-S/16 at 512 (the file name says 518) and 768 × 1360; DINOv2 ViT-S/14 with 4 registers at 518</td><td>Patch tokens after the final norm</td><td>FP16</td><td><code>venv-coreml</code>; fp32 input with the normalized pixels</td><td>No license: we measure only and copy nothing into the repo</td><td>Measure the 512 px DINOv3 file and the DINOv2 file</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 1.</b> Candidates on 2026-11-07. C1 and C2 have the same author and the same model code: a diff of the feed-forward file shows only style changes. The Meta-based ports therefore count as one design.</p>
+
+  <h3>2.2 What each port changes</h3>
+  <p>Table 2 compares each design with the Hugging Face backbone, which gives our reference output. We read the code of C1 to C3 and the operation lists of the Core ML programs (<code>probes/inspect_coreml.py</code>).</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Part</th><th>Hugging Face (reference)</th><th>C1 and C2 (Meta-based MLX ports)</th><th>C3 (MLXDINOv3)</th><th>C7 to C9 (Core ML exports)</th><th>Ours</th></tr></thead>
+      <tbody>
+        <tr><td>Source</td><td>transformers 5.22.1</td><td>Port of the Meta code</td><td>Line-by-line port of Hugging Face</td><td>C7: TorchScript trace (coremltools 8.3), source not published. C8: timm and <code>torch.export</code> (coremltools 9.0). C9: Meta hub code, TorchScript trace (coremltools 8.2)</td><td>MLX from the Hugging Face code</td></tr>
+        <tr><td>q, k, v projections</td><td>Three matmuls</td><td>One fused qkv matmul; a mask sets the k bias to zero</td><td>Three matmuls</td><td>C7: 6 <code>linear</code> ops for each block (separate). C8, C9: 4 for each block (fused qkv)</td><td>Three matmuls</td></tr>
+        <tr><td>RoPE periods</td><td>fp32 frequencies</td><td>Computed in bf16 from the base, or the bf16 values of a Meta checkpoint</td><td>fp32</td><td>C9: the bf16 periods of the Meta checkpoint (0.0079 rad angle difference at 224 px, Step 4)</td><td>fp32 (ADR 0006)</td></tr>
+        <tr><td>RoPE tables</td><td>fp32</td><td>bf16 coordinates, angles, sin and cos</td><td>fp32</td><td>Constants in the precision of the export</td><td>fp32</td></tr>
+        <tr><td>RoPE rotation</td><td>In the dtype of q and k</td><td>q and k go to bf16, rotate, go back</td><td>fp32</td><td>In the precision of the export</td><td>fp32, concat-free</td></tr>
+        <tr><td>Attention</td><td>SDPA</td><td>Unfused: matmul, softmax, matmul (the score matrix lives in memory)</td><td><code>scaledDotProductAttention</code> (fused)</td><td>Unfused: 24 <code>matmul</code> and 12 <code>softmax</code> ops for 12 blocks</td><td><code>mx.fast.scaled_dot_product_attention</code></td></tr>
+        <tr><td>RoPE tables per call</td><td>Once</td><td>Once in each block (12 or 32 times)</td><td>Once</td><td>Constant</td><td>Once for each patch grid (RoPE cache)</td></tr>
+        <tr><td>Graph</td><td>Eager</td><td>Eager</td><td>Eager</td><td>Compiled ML program</td><td><code>mx.compile</code></td></tr>
+        <tr><td>Input</td><td>fp32 pixels</td><td>fp32 pixels</td><td>fp32 pixels</td><td>C7, C8: an 8-bit RGB image; scale and normalization are inside. C9: fp32 pixels</td><td>fp32 pixels</td></tr>
+        <tr><td>Batch size</td><td>Any</td><td>Any</td><td>Any</td><td>1 (fixed shape)</td><td>Any</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 2.</b> The changes of each design. The bf16 RoPE of C1 and C2 applies in every dtype, also in fp32: the rotation rounds q and k to bf16 in each block.</p>
+
+  <h3>2.3 Core ML probes</h3>
+  <p>Each probe loads one export, runs the 3 test images at its input resolution (parity against our reference files) and then 10 timed batches. The image-input exports C7 and C8 ran two ways: "image" rounds the stored pixels to an 8-bit RGB image, as a user does; "spec-array" changes the image input in the spec to a FLOAT32 multiArray and gives the 0..255 values without rounding. The package on disk does not change. Log: <code>~/.cache/dinov3-apple/prior-art/probes/logs/probes.jsonl</code>.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Export</th><th>Input</th><th>Compute units</th><th>Batch size</th><th>img/s (10 batches)</th><th>Patch mean</th><th>Patch 1st percentile</th><th>Frame</th></tr></thead>
+      <tbody>
+        <tr><td>C7 ViT-S/16 224 FP32</td><td>image</td><td>ALL</td><td class="num">8</td><td class="num">595</td><td class="num">0.999906</td><td class="num fail">0.998996</td><td>–</td></tr>
+        <tr><td>C7 ViT-S/16 224 FP32</td><td>spec-array</td><td>ALL</td><td class="num">8</td><td class="num">614</td><td class="num">1.000000</td><td class="num">1.000000</td><td>–</td></tr>
+        <tr><td>C7 ViT-S/16 224 FP32</td><td>spec-array</td><td>CPU_AND_GPU</td><td class="num">8</td><td class="num">618</td><td class="num">1.000000</td><td class="num">1.000000</td><td>–</td></tr>
+        <tr><td>C7 ViT-S/16 224 FP32</td><td>spec-array</td><td>CPU_AND_NE</td><td class="num">8</td><td class="num">157</td><td class="num">1.000000</td><td class="num">1.000000</td><td>–</td></tr>
+        <tr><td>C7 ViT-S/16 224 FP32</td><td>spec-array</td><td>ALL</td><td class="num">1</td><td class="num">267</td><td class="num">1.000000</td><td class="num">1.000000</td><td>–</td></tr>
+        <tr><td>C7 ViT-S/16 224 INT8</td><td>spec-array</td><td>ALL</td><td class="num">8</td><td class="num">531</td><td class="num">0.999528</td><td class="num">0.998562</td><td>–</td></tr>
+        <tr><td>C9 ViT-S/16 512 FP16</td><td>array</td><td>ALL</td><td class="num">8</td><td class="num">480</td><td class="num">0.999997</td><td class="num">0.999992</td><td>–</td></tr>
+        <tr><td>C9 ViT-S/16 512 FP16</td><td>array</td><td>CPU_AND_GPU</td><td class="num">8</td><td class="num">485</td><td class="num">0.999997</td><td class="num">0.999992</td><td>–</td></tr>
+        <tr><td>C9 ViT-S/16 512 FP16</td><td>array</td><td>CPU_AND_NE</td><td class="num">8</td><td class="num">52</td><td class="num fail">0.662181</td><td class="num fail">0.397584</td><td>–</td></tr>
+        <tr><td>C8 ViT-B/16 448 FP32</td><td>image</td><td>ALL</td><td class="num">8</td><td class="num">77</td><td class="num">0.999860</td><td class="num fail">0.998874</td><td class="num">0.999910</td></tr>
+        <tr><td>C8 ViT-B/16 448 FP32</td><td>spec-array</td><td>ALL</td><td class="num">8</td><td class="num">77</td><td class="num">1.000000</td><td class="num">1.000000</td><td class="num">1.000000</td></tr>
+        <tr><td>C7 ViT-B/16 448 FP32</td><td>spec-array</td><td>ALL</td><td class="num">8</td><td class="num">70</td><td class="num">1.000000</td><td class="num">1.000000</td><td>–</td></tr>
+        <tr><td>C7 ViT-B/16 448 FP16</td><td>spec-array</td><td>ALL</td><td class="num">8</td><td class="num">251</td><td class="num">0.999997</td><td class="num">0.999994</td><td>–</td></tr>
+        <tr><td>C7 ViT-B/16 448 FP16</td><td>spec-array</td><td>CPU_AND_NE</td><td class="num">8</td><td class="num">29</td><td class="num fail">−0.026699</td><td class="num fail">−0.132274</td><td>–</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 3.</b> Core ML probes on 2026-11-07, 22:29 to 22:33. "1.000000" means at least 0.9999995. Red: below the threshold of the dtype (ADR 0003). The probe loads took 0.2 to 0.8 s (2.3 and 3.2 s on CPU_AND_NE). The last row comes from the paired check of Section 2.4.</p>
+  <p>Facts from Table 3:</p>
+  <ul>
+    <li>With float input, every FP32 export reproduces our reference output to 6 decimals, and every FP16 export passes the fp16 thresholds. The ports of the code (C7 to C9) cost nothing in parity on the GPU.</li>
+    <li>The 8-bit image input costs parity: patch 1st percentile 0.998996 (ViT-S/16) and 0.998874 (ViT-B/16), below the fp32 threshold 0.9999. This is the cost of the interface, not of the backbone.</li>
+    <li>INT8 (palettized weights, fp32 compute) gives patch mean 0.999528: below the fp32 thresholds.</li>
+    <li>On CPU_AND_NE the two FP16 exports break: patch mean 0.66 (ViT-S/16 512 px) and −0.03 (ViT-B/16 448 px). The FP32 export keeps parity but runs at 157 img/s, probably on the CPU. This is a Step 6c topic; the note <code>step6b-coreml-probe-findings.md</code> in the shared notes folder gives the facts to Step 6c.</li>
+    <li>ALL and CPU_AND_GPU gave the same speed in every pair. So ALL runs these exports on the GPU.</li>
+  </ul>
+
+  <h3>2.4 Paired checks against our compiled forward pass</h3>
+  <p>The first probe numbers (Table 3) disagree with our Step 6 matrix by up to 1.8 times in favour of Core ML at 448 and 512 px. Two paired checks tested this in one lock session: a Core ML export and our compiled forward pass in turn, with the order reversed in the second round. Check 1 used 30 batches (less than 1 s of timed work). Check 2 used the time budget of our harness: 2 s warm-up, at least 10 s timed.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Configuration (batch size 8)</th><th>Export</th><th>Our dtype mode</th><th>Check 1: export, ours (img/s)</th><th>Check 2 round 1: export, ours</th><th>Check 2 round 2: ours, export</th><th>Ratios ours ÷ export (check 2)</th></tr></thead>
+      <tbody>
+        <tr><td>ViT-S/16, 512 px, fp16</td><td>C9</td><td>fp16-cast</td><td class="num">382, 247 · 331, 296</td><td class="num">306.7, 301.7</td><td class="num">296.1, 314.4</td><td class="num">0.984, 0.942</td></tr>
+        <tr><td>ViT-B/16, 448 px, fp16</td><td>C7 FP16</td><td>fp16-cast</td><td class="num">138, 141 · 134, 147</td><td class="num">160.6, 160.8</td><td class="num">150.3, 151.3</td><td class="num">1.001, 0.993</td></tr>
+        <tr><td>ViT-B/16, 448 px, fp32</td><td>C8</td><td>fp32</td><td class="num">41, error · error, 43</td><td class="num">48.7, 52.1</td><td class="num">48.7, 44.5</td><td class="num">1.070, 1.094</td></tr>
+        <tr><td>ViT-S/16, 224 px, fp32 (P1)</td><td>C7 FP32</td><td>fp32</td><td class="num">561, error · error, 538</td><td class="num">463.6, 727.0</td><td class="num">669.0, 424.1</td><td class="num">1.568, 1.577</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 4.</b> Paired checks on 2026-11-07 (check 1 at 22:33, check 2 at 22:34 to 22:38), compute units CPU_AND_GPU. Check 1 lists round 1 then round 2. Our fp32 workers of check 1 stopped with <code>TF32ModeError</code>: the fp32 dtype mode needs <code>MLX_ENABLE_TF32=0</code> before the first use of mlx. Logs: <code>probes/logs/pair-check.jsonl</code> and <code>pair-check2.jsonl</code>.</p>
+  <figure>
+    <div class="fig"><svg viewBox="0 0 960 270" role="img" aria-label="Paired ratios of our compiled forward pass over the Core ML exports">
+      <rect width="960" height="270" fill="#ffffff"/>
+      <rect x="413.3" y="30" width="40" height="200" fill="#f5f8f7"/>
+      <line x1="433.3" y1="30" x2="433.3" y2="230" stroke="#111414" stroke-width="1.5"/>
+      <g stroke="#d6dedd" stroke-width="1">
+        <line x1="300" y1="30" x2="300" y2="230"/><line x1="566.7" y1="30" x2="566.7" y2="230"/><line x1="700" y1="30" x2="700" y2="230"/><line x1="833.3" y1="30" x2="833.3" y2="230"/>
+        <line x1="300" y1="230" x2="900" y2="230" stroke="#111414"/>
+      </g>
+      <g font-family="-apple-system, Helvetica, Arial, sans-serif" font-size="13" fill="#111414">
+        <text x="300" y="250" text-anchor="middle">0.8</text><text x="433.3" y="250" text-anchor="middle">1.0</text><text x="566.7" y="250" text-anchor="middle">1.2</text><text x="700" y="250" text-anchor="middle">1.4</text><text x="833.3" y="250" text-anchor="middle">1.6</text>
+        <text x="600" y="266" text-anchor="middle" fill="#4a5655">ours ÷ export (above 1: ours is faster)</text>
+        <text x="20" y="64">ViT-S/16, 512 px, fp16 (C9)</text>
+        <text x="20" y="114">ViT-B/16, 448 px, fp16 (C7)</text>
+        <text x="20" y="164">ViT-B/16, 448 px, fp32 (C8)</text>
+        <text x="20" y="214">ViT-S/16, 224 px, fp32 (C7)</text>
+        <text x="433.3" y="22" text-anchor="middle" fill="#4a5655">noise band 1 ± 0.03</text>
+      </g>
+      <g fill="#057379"><circle cx="422.7" cy="60" r="6"/><circle cx="434.0" cy="110" r="6"/><circle cx="480.0" cy="160" r="6"/><circle cx="812.0" cy="210" r="6"/></g>
+      <g fill="#ffffff" stroke="#111414" stroke-width="2"><circle cx="394.7" cy="60" r="6"/><circle cx="428.7" cy="110" r="6"/><circle cx="496.0" cy="160" r="6"/><circle cx="818.0" cy="210" r="6"/></g>
+    </svg></div>
+    <figcaption><b>Figure 1.</b> Paired ratios of check 2. Filled: round 1. Open: round 2. At 448 and 512 px the Core ML exports and our compiled forward pass are within 6 % of each other. At 224 px, batch size 8, ours is 1.57 times faster: each export has a fixed batch size of 1, so Core ML runs 8 small calls.</figcaption>
+  </figure>
+  <p>Facts from Table 4 and Figure 1:</p>
+  <ul>
+    <li>Runs of less than 1 s do not measure throughput on this Mac. In check 1 the same pair gave ratios from 0.65 to 1.12. With the time budget of our harness, the two rounds of each pair agree within 4 %. The single probes of Table 3 were 1.4 to 1.8 times faster than check 2 at 448 and 512 px; we do not use their throughput.</li>
+    <li>At 448 and 512 px, Core ML on the GPU and our compiled mlx are equal within 6 %. This fits the Step 6 result: both backends reach the matmul limit of the GPU at high token counts.</li>
+    <li>At 224 px, batch size 8, our compiled forward pass is 1.57 times faster than the C7 export in fp32. The export has batch size 1, and a call of about 2 ms leaves the GPU partly idle.</li>
+  </ul>
+</section>
+
+<section id="decisions">
+  <h2>3 Decisions</h2>
+  <p>The user asked the agent to decide (night of 2026-11-07). Each decision takes its recommended option.</p>
+
+  <h3>3.1 D1: The candidates that the build measures</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Option</th><th>What the build measures</th><th>For</th><th>Against</th></tr></thead>
+      <tbody>
+        <tr><td>A. Core ML exports only</td><td>C7, C8, C9</td><td>Runs now; no third-party Python</td><td>No MLX port; the Learn question stays a code reading</td></tr>
+        <tr><td class="rec">B. Core ML exports, the Python ports when allowed, and our port-change variants</td><td>C7 to C9 (D3 to D6), C1 and C2 behind the gate of D2, the variants of D8</td><td>Every runnable candidate. The variants measure each port change also while C1 and C2 are blocked</td><td>Two more jobs (D8) and one gated job (D2)</td></tr>
+        <tr><td>C. All candidates</td><td>B plus C3 (Swift) and the pipelines C5</td><td>Complete</td><td>C3 needs a Swift harness and a third-party build; its design is our eager forward pass in Swift (Table 2). C5 are not backbones</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 5.</b> Trade-offs of D1.</p>
+  <div class="box"><p><b>Recommendation: Option B.</b> Skip C3 to C6 with the reasons of Table 1. Decided by the agent: the user asked the agent to decide (night of 2026-11-07).</p></div>
+
+  <h3>3.2 D2: The Python ports and the permission block</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Option</th><th>What changes</th><th>For</th><th>Against</th></tr></thead>
+      <tbody>
+        <tr><td>A. Skip C1 and C2</td><td>Table rows with the reason "blocked"</td><td>No risk</td><td>No measured MLX port, also after the user allows it</td></tr>
+        <tr><td class="rec">B. Gate</td><td>The build writes the port worker and the driver subcommand <code>ports</code>, tests them without third-party code, and does not run them. Without the user's permission each port row has the reason "blocked: no permission to run third-party Python code" and the command. With it, one command runs job J5 (about 35 min)</td><td>Respects the refusal. The rows appear with one command when the user allows it</td><td>The port rows can stay empty in this step</td></tr>
+        <tr><td>C. The build tries once</td><td>The build session starts the port worker</td><td>Maybe it runs</td><td>The permission system refused the same action. A new try from another session is a workaround</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 6.</b> Trade-offs of D2.</p>
+  <div class="box"><p><b>Recommendation: Option B.</b> The user answers question Q1 (Section 6). Decided by the agent: the user asked the agent to decide (night of 2026-11-07).</p></div>
+
+  <h3>3.3 D3: The input of the image-input exports C7 and C8</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Option</th><th>What the worker gives</th><th>For</th><th>Against</th></tr></thead>
+      <tbody>
+        <tr><td>A. As shipped</td><td>The stored pixels, rounded to an 8-bit RGB image</td><td>What a user gets</td><td>Mixes the cost of the 8-bit input into the backbone parity (patch 1st percentile 0.998874 and 0.998996, Table 3)</td></tr>
+        <tr><td>B. Spec-array input</td><td>The image input of the loaded spec becomes a FLOAT32 multiArray (1, 3, H, W); the worker gives (pixels × std + mean) × 255 without rounding</td><td>Measures the backbone only, as for every other backend (stored pixels). Parity 1.000000</td><td>Not the shipped path</td></tr>
+        <tr><td class="rec">C. B, plus one report-only row with A</td><td>B for all timed and parity rows. One parity row with A for each image-input export</td><td>The backbone parity and the cost of the interface, apart</td><td>3 more workers</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 7.</b> Trade-offs of D3. The probes gave the same speed for A and B (595 and 614 img/s; 77 and 77 img/s).</p>
+  <div class="box"><p><b>Recommendation: Option C.</b> Decided by the agent: the user asked the agent to decide (night of 2026-11-07).</p></div>
+
+  <h3>3.4 D4: The compute units</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Option</th><th>Rows</th><th>For</th><th>Against</th></tr></thead>
+      <tbody>
+        <tr><td>A. ALL</td><td>The default of Core ML</td><td>What a user gets</td><td>Core ML picks the device; the comparison with the GPU of mlx is not sure</td></tr>
+        <tr><td class="rec">B. CPU_AND_GPU, plus one report-only round with ALL</td><td>The paired rows on the GPU; one round with ALL</td><td>Same device as mlx. The ALL round shows if the default moves to the Neural Engine</td><td>One more round (about 4 min)</td></tr>
+        <tr><td>C. B plus CPU_AND_NE</td><td>Also Neural Engine rows</td><td>Complete</td><td>The FP16 exports break on CPU_AND_NE (Table 3). The Neural Engine is the topic of Step 6c</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 8.</b> Trade-offs of D4.</p>
+  <div class="box"><p><b>Recommendation: Option B.</b> The CPU_AND_NE facts go to Step 6c (shared notes folder). Decided by the agent: the user asked the agent to decide (night of 2026-11-07).</p></div>
+
+  <h3>3.5 D5: The configurations and the row of ours</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Option</th><th>Configurations</th><th>For</th><th>Against</th></tr></thead>
+      <tbody>
+        <tr><td>A. P1 and P2 only</td><td>C7 ViT-S/16 224 FP32 at batch size 8</td><td>Short</td><td>One cell; no export exists for ViT-H+/16, so P2 has no Core ML row</td></tr>
+        <tr><td class="rec">B. Each export at its own input resolution, batch sizes 1 and 8</td><td>C7 ViT-S/16 224 FP32 and INT8; C9 ViT-S/16 512 FP16; C7 ViT-B/16 448 FP32 and FP16; C8 ViT-B/16 448 FP32; C9 DINOv2 (D7). 7 exports × 2 batch sizes = 14 cells</td><td>Every export; P1 is one of the cells. 448 and 512 px have stored pixels and reference outputs</td><td>14 cells</td></tr>
+        <tr><td>C. B plus 336 and 560 px</td><td>More C7 files</td><td>The attention trend</td><td>No stored pixels and no reference output at 336 and 560 px</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 9.</b> Trade-offs of D5.</p>
+  <p>The row of ours is our compiled forward pass in the matching dtype mode: an FP32 export against fp32 (TF32 off, ADR 0005), an FP16 export against fp16-cast (the fastest fp16 dtype mode at these configurations in the Step 6 matrix), the INT8 export against fp32. The INT8 row is a quantized row: it reports parity against the fp32 thresholds and has no pass rule. Batch size 8 of an export is one <code>predict</code> call with a list of 8 inputs; the exports have a fixed batch size of 1.</p>
+  <div class="box"><p><b>Recommendation: Option B.</b> Decided by the agent: the user asked the agent to decide (night of 2026-11-07).</p></div>
+
+  <h3>3.6 D6: The pair protocol, the ratio and the verdict</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Option</th><th>Protocol</th><th>For</th><th>Against</th></tr></thead>
+      <tbody>
+        <tr><td>A. 3 rounds</td><td>Each cell: export and ours in turn, the order alternates</td><td>Short</td><td>The median of 3 rests on 2 values if one round fails</td></tr>
+        <tr><td class="rec">B. 5 rounds</td><td>As A, 5 rounds; the time budget of <code>bench.py</code> (<code>WARM_UP</code>, <code>TIMED</code>) on both sides; each worker in its own subprocess; one GPU lock for the driver</td><td>The protocol of the Step 6 paired runs</td><td>About 30 min</td></tr>
+        <tr><td>C. Two runs of 5 rounds at different times</td><td>As the P1 and P2 verdicts of Step 6</td><td>Shows drift between runs</td><td>Twice the time; these ratios are not mission targets</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 10.</b> Trade-offs of D6.</p>
+  <p>The ratio of one round is our throughput divided by the throughput of the export ("prior-art ratio"; above 1: ours is faster). A cell reports the lower median of its 5 ratios (ADR 0004), the spread and the verdict of <code>single_verdict</code> in <code>speedup.py</code> (mark "inside the noise" within 1 ± 0.03). The output is the patch embeddings in every cell, because every export gives them; C8 also gives the frame embedding. Two exports that share a configuration (C7 FP32 and INT8 at 224 px; C7 FP32 and C8 at 448 px) share the worker of ours in each round.</p>
+  <div class="box"><p><b>Recommendation: Option B.</b> Decided by the agent: the user asked the agent to decide (night of 2026-11-07).</p></div>
+
+  <h3>3.7 D7: DINOv2</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Option</th><th>Rows</th><th>For</th><th>Against</th></tr></thead>
+      <tbody>
+        <tr><td>A. Skip</td><td>None</td><td>No new code</td><td>The roadmap row names DINOv2 ports</td></tr>
+        <tr><td class="rec">B. Throughput at the same token count</td><td>The C9 DINOv2 export (ViT-S/14 with 4 registers, 518 px: 1 + 4 + 37 × 37 = 1374 tokens) against our ViT-S/16 at 592 px (1 + 4 + 37 × 37 = 1374 tokens), fp16, batch sizes 1 and 8, random pixels. No parity</td><td>Same width (384), 12 blocks, 6 heads, MLP with GELU: only the patch embedding and the position code differ. So the rows compare the same compute</td><td>No parity: no DINOv2 reference output</td></tr>
+        <tr><td>C. B plus a DINOv2 reference file</td><td>DINOv2 parity</td><td>Complete</td><td>A new reference pipeline: Step 2 scope, not a goal of the mission</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 11.</b> Trade-offs of D7. The DINOv2 model of C1 (mlx-image) works only at 518 px (a fixed position embedding) and joins the gated job of D2.</p>
+  <div class="box"><p><b>Recommendation: Option B.</b> Decided by the agent: the user asked the agent to decide (night of 2026-11-07).</p></div>
+
+  <h3>3.8 D8: The cost of each port change, measured in our own code</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Option</th><th>What the build adds</th><th>For</th><th>Against</th></tr></thead>
+      <tbody>
+        <tr><td>A. Reading only</td><td>Table 2 in the explainer</td><td>No GPU time</td><td>No number for "what that costs in parity" while C1 and C2 are blocked</td></tr>
+        <tr><td class="rec">B. Port-change variants</td><td>Our backbone with one change at a time: V1 the RoPE of C1 and C2 (bf16 tables and bf16 rotation), V2 the bf16 tables only, V3 the Meta periods (bf16 periods, fp32 tables), V4 the unfused attention, V5 the 8-bit input. Parity of V1 to V5 on the 12 configurations of ViT-S/16 and ViT-H+/16 in fp32 and bf16-cast. Speed of V1 and V4 at P1 and P2 in fp32 and bf16-cast, paired against V0 (our compiled forward pass), 3 rounds</td><td>Isolates each change (a port mixes them). Runs only our code. New file only</td><td>About 25 min of GPU time</td></tr>
+        <tr><td>C. B for all model sizes and dtype modes</td><td>6 sizes × 5 modes</td><td>Complete</td><td>Four times the time for the same lesson</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 12.</b> Trade-offs of D8. V0 must give the Step 5 output bit for bit; a test checks it.</p>
+  <div class="box"><p><b>Recommendation: Option B.</b> Decided by the agent: the user asked the agent to decide (night of 2026-11-07).</p></div>
+
+  <h3>3.9 D9: The code layout and the Core ML worker</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Option</th><th>Layout</th><th>For</th><th>Against</th></tr></thead>
+      <tbody>
+        <tr><td>A. Our package in <code>venv-coreml</code></td><td>The worker imports <code>dinov3_apple</code></td><td>One code path</td><td>Installs our package and its pinned tree into a third-party venv; two copies of the code</td></tr>
+        <tr><td class="rec">B. A standalone worker</td><td><code>scripts/prior_art_coreml_worker.py</code> needs only the standard library, NumPy, safetensors, coremltools and Pillow. It runs in <code>venv-coreml</code> with <code>-I</code> and writes the batch times as a JSON line and the outputs of the 3 test images as a safetensors file. The driver <code>scripts/bench_prior_art.py</code> (repo environment) computes the parity with <code>dinov3_apple.parity</code> and writes <code>results/prior-art.jsonl</code></td><td>No third-party package in the repo environment. One parity code path</td><td>The worker repeats the small batch code of <code>bench.py</code></td></tr>
+        <tr><td>C. coremltools in <code>pyproject.toml</code></td><td>The worker runs in the repo environment</td><td>Simple</td><td>Against the rules of this step</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 13.</b> Trade-offs of D9. New files: <code>src/dinov3_apple/prior_art.py</code> (candidates, port-change variants, pair plan, rows), <code>scripts/bench_prior_art.py</code>, <code>scripts/prior_art_coreml_worker.py</code>, <code>scripts/prior_art_port_worker.py</code> (gated), <code>results/prior-art.jsonl</code>, <code>results/prior-art-table.md</code>. No shared module changes.</p>
+  <div class="box"><p><b>Recommendation: Option B.</b> Decided by the agent: the user asked the agent to decide (night of 2026-11-07).</p></div>
+</section>
+
+<section id="risks">
+  <h2>4 Risks</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>No.</th><th>Risk</th><th>Check</th></tr></thead>
+      <tbody>
+        <tr><td>R1</td><td>Core ML throughput changes between runs by up to 1.8 times (Tables 3 and 4)</td><td>5 paired rounds with the full time budget; the table reports the spread</td></tr>
+        <tr><td>R2</td><td>The spec-array input takes another path in Core ML than the image input</td><td>The report-only image rows (D3); the parity of the spec-array rows is 1.000000</td></tr>
+        <tr><td>R3</td><td>The first load of an export compiles it; later loads use the Core ML cache</td><td>The worker records the load time; the warm-up comes after the load</td></tr>
+        <tr><td>R4</td><td>Our fp32 worker stops without <code>MLX_ENABLE_TF32=0</code> (check 1)</td><td>The driver sets it, as <code>bench_speed.py</code> does; a test checks the environment of the worker</td></tr>
+        <tr><td>R5</td><td>Licenses: C9 has no license file; C2 is under the DINOv3 License</td><td>The repo gets numbers only: no code, no file, no weight of a candidate</td></tr>
+        <tr><td>R6</td><td>The permission block stays, so C1 and C2 have no rows</td><td>D2 option B; the variants of D8 answer the Learn question</td></tr>
+        <tr><td>R7</td><td>Another session uses the GPU during a pair</td><td>The GPU lock; the field <code>other_heavy_jobs_seen</code> in each line, as in Step 6</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 14.</b> Risks.</p>
+</section>
+
+<section id="recommendation">
+  <h2>5 Recommendation</h2>
+  <p>Take D1 to D9 as recommended. Order of the work and its GPU time (16.4 s for each worker in check 2; 22 s for each worker in the Step 6 matrix):</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Job</th><th>Work</th><th>Workers</th><th>Estimate</th></tr></thead>
+      <tbody>
+        <tr><td>J1</td><td>Core ML pairs (D5, D6): 10 cells of ours and 14 export cells, 5 rounds</td><td class="num">120</td><td class="num">35 min</td></tr>
+        <tr><td>J2</td><td>The ALL round (14) and the image-input parity rows (3)</td><td class="num">17</td><td class="num">5 min</td></tr>
+        <tr><td>J3</td><td>Parity of the port-change variants V1 to V5 (D8)</td><td class="num">20</td><td class="num">10 min</td></tr>
+        <tr><td>J4</td><td>Speed of V0, V1 and V4 at P1 and P2, fp32 and bf16-cast, 3 rounds</td><td class="num">36</td><td class="num">15 min</td></tr>
+        <tr><td>J5</td><td>Gated (D2): C1 at P1 (fp32, bf16, fp16 at batch size 8; fp32 at batch size 1), C2 at P2 (fp32, bf16), C1 DINOv2 (fp32, bf16), each paired, 5 rounds</td><td class="num">80</td><td class="num">35 min</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 15.</b> Jobs. Without J5 about 65 min; with J5 about 100 min. The Verify subset (one round of J1, J3 for ViT-S/16, one round of J4 at P1, the image rows) takes about 15 min.</p>
+  <p>Learn: a new explainer <code>docs/learn/06b-prior-ports-measured.html</code> with Table 2, the measured cost of each port change (J3, J4) and the Core ML rows. Close: ADR 0012 (the prior-art ratio and its pair protocol), ADR 0013 (third-party code runs only in its own venv outside the repo, with <code>-I</code>, and only with the user's permission).</p>
+</section>
+
+<section id="questions">
+  <h2>6 Questions for the user</h2>
+  <ol>
+    <li><b>Q1.</b> The permission system of the agent sessions refuses to run the Python ports C1 (mlx-image) and C2 (mlx_dinov3). Do you want their rows? If yes, allow the run of <code>~/.cache/dinov3-apple/prior-art/venv-mlx/bin/python -I</code> with the probe and worker scripts, then start job J5 (about 35 min). If no, their rows keep the reason "blocked", and the variants of D8 give the cost of their changes. The user decides.</li>
+  </ol>
+</section>
+
+<section id="terms">
+  <h2>7 New terms</h2>
+  <ul>
+    <li><b>Core ML export</b>: a Core ML model package (<code>.mlpackage</code>) of a DINOv3 or DINOv2 backbone that another party made and published.</li>
+    <li><b>Compute units</b>: the Core ML setting that selects the devices of a model: ALL, CPU_AND_GPU, CPU_AND_NE or CPU_ONLY.</li>
+    <li><b>Spec-array input</b>: the image input of a Core ML export, changed in the loaded spec to a FLOAT32 multiArray, so the stored pixels go in without 8-bit rounding.</li>
+    <li><b>Port change</b>: one difference between a port and the Hugging Face backbone, for example bf16 RoPE tables.</li>
+    <li><b>Port-change variant</b>: our backbone with one port change, to measure the cost of that change in parity and speed.</li>
+    <li><b>Prior-art ratio</b>: our throughput divided by the throughput of a port or a Core ML export in the same round. Above 1: ours is faster.</li>
+  </ul>
+</section>
+
+<section id="sources">
+  <h2>8 Sources</h2>
+  <ul>
+    <li>github.com/riccardomusmeci/mlx-image, commit da92532 (2026-04-08): <code>src/mlxim/model/dinov3/</code>, <code>layers/</code>, <code>vit/</code>, <code>_utils.py</code>, <code>_factory.py</code>. Weights: huggingface.co/mlx-vision, <code>vit_small_patch16_224.dinov3-mlxim</code> (1c33f6b), <code>vit_small_plus_patch16_224.dinov3-mlxim</code> (b1db3cd), <code>vit_base_patch16_224.dinov3-mlxim</code> (a4a5a88), <code>vit_small_patch14_518.dinov2-mlxim</code> (9ad0dcc).</li>
+    <li>github.com/etornam45/mlx_dinov3, commit 43d139b (2026-05-16): <code>dinov3/models/</code>, <code>dinov3/layers/</code>, <code>dinov3/checkpoints/convert.py</code>.</li>
+    <li>github.com/vincentamato/MLXDINOv3, commit 3122d79 (2026-04-10): <code>Package.swift</code>, <code>Sources/MLXDINOv3/Modules/Attention.swift</code>, <code>mlx-run.sh</code>, <code>README.md</code>.</li>
+    <li>github.com/sarveshmayil/mlx-dinov3, commit 0bdeaa0. github.com/bahaehmimdi/dinov2-mlx, commit 3d1fcf9 (README only).</li>
+    <li>huggingface.co/SharpAI: <code>dinov3-vits16-pretrain-lvd1689m-coreml-FP32-224x224</code> (c76cab6), <code>-INT8-224x224</code> (fdec13c), <code>dinov3-vitb16-pretrain-lvd1689m-coreml-FP32-448x448</code> (42e4018), <code>-FP16-448x448</code> (0baa6bd).</li>
+    <li>huggingface.co/rinpatch/dinov3-coreml, commit 5ea0dea (2026-09-16): <code>README.md</code>, <code>convert.py</code>, <code>SHA256SUMS</code>, the validation file.</li>
+    <li>github.com/VimalMollyn/dinov2-coreml, commit 6306a84 (2026-09-27): <code>dinov3_vits16_518_fp16.mlpackage</code>, <code>dinov2_small_14_registers_518_fp16.mlpackage</code>, <code>convert_coreml.py</code>, <code>convert_coreml_dinov3_new.py</code>.</li>
+    <li>Pipelines: huggingface.co/mlx-community/sam-3d-body-dinov3-bf16, github.com/xocialize/mlx-trellis2-swift, github.com/lyonsno/pixal3d-mlx, github.com/mnmly/mlx-swift-INSID3 (descriptions only).</li>
+    <li>Probe scripts and logs, outside the repo: <code>~/.cache/dinov3-apple/prior-art/probes/</code> (<code>probe_coreml.py</code>, <code>probe_ours.py</code>, <code>inspect_coreml.py</code>, <code>logs/probes.jsonl</code>, <code>logs/pair-check.jsonl</code>, <code>logs/pair-check2.jsonl</code>, <code>logs/inspect_coreml.log</code>). Environments: <code>venv-coreml</code> (Python 3.12.14, coremltools 9.0, NumPy 2.5.4, Pillow 13.0.0), <code>venv-mlx</code> (mlx 0.32.4).</li>
+    <li>This repo: <code>results/speedup-table.md</code>, <code>results/speed-matrix.jsonl</code>, ADR 0003 to 0008, <code>specs/01-scope/explore.html</code>, <code>docs/learn/01-prior-ports.html</code>, <code>src/dinov3_apple/mlx_model.py</code>, <code>src/dinov3_apple/speedup.py</code>.</li>
+  </ul>
+</section>
+</main>
+</body>
+</html>
