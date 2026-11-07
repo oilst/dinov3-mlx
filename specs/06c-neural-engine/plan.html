@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Step 6c Neural Engine: Plan</title>
+<style>
+/* Spec page. White page, black text, no dark mode. */
+:root { --bg: #ffffff; --fg: #111414; --muted: #4a5655; --rule: #d6dedd; --panel: #f5f8f7; --accent: #057379; --pass: #1d7a3a; --fail: #b3261e; color-scheme: light; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif; }
+main { max-width: 60rem; margin: 0 auto; padding: 40px 20px 64px; display: grid; gap: 1.75rem; }
+main > *, section > * { min-width: 0; }
+h1 { font-size: 1.9rem; line-height: 1.15; margin: 0; }
+h2 { font-size: 1.3rem; margin: 0; }
+h3 { font-size: 1.05rem; margin: 0; }
+section { display: grid; gap: 0.8rem; }
+p, ul, ol { margin: 0; max-width: 46rem; }
+li + li { margin-top: 0.25rem; }
+code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.86em; }
+p code, li code, td code { overflow-wrap: anywhere; }
+pre { margin: 0; background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 0.8rem 1rem; overflow-x: auto; }
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 0.92rem; }
+th, td { text-align: left; vertical-align: top; padding: 0.45rem 0.7rem 0.45rem 0; border-bottom: 1px solid var(--rule); }
+th { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); border-bottom: 1.5px solid var(--fg); }
+td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.caption { font-size: 0.88rem; color: var(--muted); }
+.pass { color: var(--pass); font-weight: 600; }
+.fail { color: var(--fail); font-weight: 600; }
+figure { margin: 0; display: grid; gap: 0.4rem; }
+.fig { border: 1px solid var(--rule); border-radius: 6px; padding: 0.5rem; overflow-x: auto; }
+.fig svg { display: block; width: 100%; height: auto; min-width: 640px; }
+figcaption { font-size: 0.88rem; color: var(--muted); }
+a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+<header>
+  <h1>Step 6c Neural Engine: Plan</h1>
+  <p>Roadmap step 6c. Status: draft for approval. Date: 2026-11-07. The decisions come from <code>explore.html</code> (Table 12); the user asked the agent to decide (night of 2026-11-07).</p>
+</header>
+
+<section id="goal">
+  <h2>1 Goal</h2>
+  <p>Step 6c converts the Hugging Face backbone of ViT-S/16 to ViT-H+/16 into Core ML packages that run on the Apple Neural Engine with fp16 parity. It measures them on the Neural Engine (<code>coreml-ne</code>), on the GPU (<code>coreml-gpu</code>) and with ALL (<code>coreml-all</code>), against our compiled <code>mlx</code> in paired runs. It measures the two-stream run: Core ML on the Neural Engine and compiled <code>mlx</code> on the GPU at the same time. The result answers one question: can the Neural Engine add throughput to the GPU, which Step 6 found at its matmul limit?</p>
+  <p>The explore probes found the obstacle and its fix. The attention scores of DINOv3 reach 2.5 million (36 times the largest fp16 value), and the Neural Engine stores them in fp16, so the plain fp16 export breaks (finding F1). The Neural Engine rewrite (Section 3.2) keeps every value inside fp16 and is exact in real numbers.</p>
+</section>
+
+<section id="dinov3">
+  <h2>2 DINOv3 topic</h2>
+  <p>How the Neural Engine runs the attention and the feed-forward network, and the numeric range of DINOv3 in fp16: the attention scores, the residual stream with its register tokens, LayerScale and the feed-forward branch. The Learn stage writes <code>docs/learn/06c-neural-engine.html</code>: Figure 1 of <code>explore.html</code>, the range table (Table 3 of <code>explore.html</code> plus the build data), the compute plan of one block, the annotated code of <code>ne_attention</code> and <code>rewrite_for_neural_engine</code>, and the surprises (F1, the subnormal weights of the LayerScale fold, ALL runs on the GPU only, batch size 8 slower than batch size 1 on the Neural Engine).</p>
+</section>
+
+<section id="design">
+  <h2>3 Design</h2>
+
+  <h3>3.1 Files</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>File</th><th>Content</th><th>New or changed</th></tr></thead>
+      <tbody>
+        <tr><td><code>src/dinov3_apple/coreml.py</code></td><td>The <code>_cast</code> patch, <code>ne_attention</code>, <code>residual_scale</code>, <code>rewrite_for_neural_engine</code>, <code>package_path</code>, <code>convert_backbone</code>, <code>load_package</code>, <code>run_coreml</code>, <code>compute_plan_report</code>. Imports coremltools inside the functions that need it</td><td>New</td></tr>
+        <tr><td><code>scripts/bench_coreml.py</code></td><td>The driver: subcommands <code>convert</code>, <code>parity</code>, <code>matrix</code>, <code>pairs</code>, <code>streams</code>, <code>table</code>; the worker entry points <code>coreml-worker</code> and <code>stream-worker</code></td><td>New</td></tr>
+        <tr><td><code>tests/test_coreml.py</code></td><td>T1 to T12 (Section 6). <code>pytest.importorskip("coremltools")</code>; the tests with gated weights need <code>DINOV3_SLOW=1</code>, as in <code>tests/test_prior_art.py</code></td><td>New</td></tr>
+        <tr><td><code>results/coreml.jsonl</code>, <code>results/coreml-table.md</code></td><td>The result lines and the table of Step 6c</td><td>New</td></tr>
+        <tr><td><code>GLOSSARY.md</code>, <code>roadmap.md</code>, <code>docs/adr/0014-*.md</code>, <code>docs/adr/0015-*.md</code>, <code>docs/learn/06c-neural-engine.html</code></td><td>Terms of <code>explore.html</code> Section 7 (small edits, each committed at once); the Close stage</td><td>Shared: small edits</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 1.</b> The files of Step 6c. No shared module in <code>src/</code> changes: <code>bench_coreml.py</code> calls the public functions <code>bench.make_batch</code>, <code>bench.check_validity</code>, <code>bench.summarize</code>, <code>bench.phase</code> of <code>mlx_bench</code>, <code>bench.run_worker_subprocess</code>, <code>mlx_bench.run_mlx_worker</code>, <code>memory.check_free_memory</code>, <code>memory.check_run_rule</code>, <code>reference.load_torch_backbone</code> and <code>gpu_lock.heavy_job</code>. <code>pyproject.toml</code> and <code>uv.lock</code> are done (commit d9bb890); the build does not change them.</p>
+
+  <h3>3.2 The Neural Engine rewrite</h3>
+  <p>The rewrite changes the Hugging Face backbone in torch before the trace. It is exact in real numbers, so in fp32 on torch-cpu the rewritten backbone gives the output of the Hugging Face backbone (T1).</p>
+  <ol>
+    <li><b>Score scaling</b> (s = 256). The attention function <code>ne_attention</code> computes z = (q · (1/√d) / s) · kᵀ, then softmax(clip(z − max z, −60,000 / s) · s). It is registered with <code>transformers.AttentionInterface</code> under the name <code>"coreml-ne"</code>, and the rewrite sets <code>config._attn_implementation</code> to it.</li>
+    <li><b>Residual-stream scale</b> r. The wrapper divides the embeddings by r; the weights and the bias of <code>o_proj</code> and <code>down_proj</code> are multiplied by 1/r. LayerScale stays a separate multiplication. r is a power of two, so the products are exact except below the smallest normal fp16 value (6.1e-5).</li>
+    <li><b>No LayerScale fold.</b> The probe p7 to p10 fold of LayerScale into the weights made 94 % of the <code>o_proj</code> weights of block 1 of ViT-S/16 subnormal in fp16 (63 to 78 % in ViT-L/16 and ViT-H+/16; LayerScale factors down to 3.6e-8). It broke the parity on the Neural Engine and on the GPU (P2 patch 1st percentile 0.985). The build must not fold.</li>
+  </ol>
+  <p><code>residual_scale(model_size)</code> returns the smallest power of two r with (largest token value) / r ≤ 32,768. The largest token value comes from Table 1 of <code>results/token-range-mlx.md</code> (fp32 rows): r = 1 for ViT-S/16 (1,748), ViT-S+/16 (5,274), ViT-B/16 (14,926); r = 8 for ViT-L/16 (158,433) and ViT-H+/16 (149,750). The function reads the table, so a new token-range table changes r. ViT-7B/16 raises <code>RunRuleError</code> (D6).</p>
+
+  <h3>3.3 Conversion and packages</h3>
+  <p><code>convert_backbone(model_size, side, batch_size)</code>: the run rule, a memory check (the fp32 torch load plus 2 times the fp32 weights for the trace and the MIL program; ViT-H+/16 at 512 px batch size 8 reached a footprint of 6.37 GB), <code>load_torch_backbone(model_size, "cpu", "fp32")</code>, the rewrite, <code>torch.jit.trace</code> with a zero batch, <code>ct.convert</code> (ML Program, <code>compute_precision=ct.precision.FLOAT16</code>, <code>minimum_deployment_target=ct.target.macOS15</code>, input <code>pixels</code> fp32 (B, 3, H, W), output <code>tokens</code> fp32 (B, 5 + N, D)), save, then <code>ct.models.utils.compile_model</code> to an <code>.mlmodelc</code> next to it. One JSON line records the trace time, the conversion time, the save time, the compile time, the package size, the op counts and the lifetime peak of the process footprint.</p>
+  <p>The package path: <code>~/.cache/dinov3-apple/coreml/&lt;slug&gt;-&lt;side&gt;-b&lt;batch&gt;-ne-s256-r&lt;r&gt;-ct9.0.mlpackage</code>, for example <code>vits16-224-b8-ne-s256-r1-ct9.0.mlpackage</code>. A rewrite or a coremltools change gives a new name, so a stale package never serves a new configuration.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Use</th><th>Input resolutions</th><th>Batch sizes</th><th>Packages</th></tr></thead>
+      <tbody>
+        <tr><td>Parity (and speed at batch size 1)</td><td>224, 448, 512</td><td>1</td><td class="num">15</td></tr>
+        <tr><td>Speed at batch size 8</td><td>224, 512</td><td>8</td><td class="num">10</td></tr>
+        <tr><td>F1 evidence: the Hugging Face graph without the rewrite</td><td>224</td><td>1 (ViT-S/16 only)</td><td class="num">1</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 2.</b> The 26 packages: ViT-S/16, ViT-S+/16, ViT-B/16, ViT-L/16 and ViT-H+/16, plus one package of the plain graph. ViT-7B/16 is deferred (D6 of <code>explore.html</code>); <code>convert</code> writes one line with the status "deferred" and the reason.</p>
+
+  <h3>3.4 The Core ML worker</h3>
+  <p>A worker process (<code>bench_coreml.py coreml-worker</code>) runs one package on one compute unit. It records the first load time (the Neural Engine compile; Core ML caches it), unloads, loads again and records the cached load time. It runs the first output, checks the parity against the reference output with <code>bench.check_validity(..., "fp16-cast")</code>, then warms up and times the batches with the time budgets <code>WARM_UP</code> and <code>TIMED</code> of <code>bench.py</code>. Its result line has the fields of a Step 6 line where they apply (status, valid, finite, parity, frame and patch summaries, peak memory, versions, start time) plus the fields of Table 3.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Field</th><th>Content</th></tr></thead>
+      <tbody>
+        <tr><td><code>backend</code></td><td><code>coreml-ne</code>, <code>coreml-gpu</code> or <code>coreml-all</code></td></tr>
+        <tr><td><code>compute_unit</code></td><td>CPU_AND_NE, CPU_AND_GPU or ALL</td></tr>
+        <tr><td><code>package</code>, <code>rewrite</code></td><td>The package name; <code>{"score_scale": 256, "residual_scale": r}</code> or <code>null</code> for the plain graph</td></tr>
+        <tr><td><code>first_load_s</code>, <code>cached_load_s</code></td><td>The two load times</td></tr>
+        <tr><td><code>coremltools</code></td><td>The version (inside <code>versions</code>)</td></tr>
+        <tr><td><code>phase</code></td><td><code>convert</code>, <code>parity</code>, <code>plan</code>, <code>matrix</code>, <code>pairs</code>, <code>streams</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 3.</b> The extra fields of a Core ML line in <code>results/coreml.jsonl</code>.</p>
+  <p>The time of one Core ML batch: <code>model.predict({"pixels": batch})</code> returns NumPy arrays, so the output is on the host; the frame time and the patch time are the same call. The <code>mlx</code> side is <code>mlx_bench.run_mlx_worker</code> of Step 6 with the compiled forward pass, unchanged.</p>
+
+  <h3>3.5 Paired runs and the matrix</h3>
+  <p>One paired group is one model size, input resolution and batch size: the workers <code>coreml-ne</code>, <code>coreml-gpu</code> and <code>mlx</code> in a rotated order (ADR 0004). The <code>mlx</code> worker runs the fastest valid fp16 dtype mode of the Step 6 matrix for the configuration (fp16-cast for ViT-S/16 to ViT-B/16; fp16-autocast for ViT-L/16 and ViT-H+/16, except fp16-cast at P2, as in <code>results/speedup-table.md</code>). The ratio of each Core ML side is its throughput divided by the <code>mlx</code> throughput of the same round. <code>coreml-all</code> joins only P1 and P2 at batch size 8.</p>
+
+  <h3>3.6 The two-stream run</h3>
+  <p><code>bench_coreml.py streams</code> starts two worker processes: a Core ML worker on CPU_AND_NE and an <code>mlx</code> worker with the compiled forward pass. Each loads and warms up, then writes a ready file and waits. When both files exist, the parent writes a start time 2 s ahead. Each worker counts its batches from the start time for 10 s and reports its throughput. The cases of one round: <code>ne</code> alone, <code>mlx</code> alone, both. The order rotates over 3 rounds. The <code>mlx</code> side runs the batch size of the configuration; the Neural Engine side runs the faster of batch size 1 and 8 of the same model size and input resolution in the matrix (probe: 540 against 452 img/s at 224 px). The stream ratio is (Neural Engine + <code>mlx</code>, both) / (<code>mlx</code> alone), with the median over the rounds. The probe gave 2,458 against 2,040 img/s at P1 (1.20).</p>
+
+  <h3>3.7 Jobs and machine time</h3>
+  <p>All jobs run through the GPU lock, one group at a time: <code>uv run python -m dinov3_apple.gpu_lock -- uv run --group coreml python scripts/bench_coreml.py &lt;subcommand&gt;</code>. Each worker runs in its own subprocess after a memory check. The times scale from the probes and from Step 6 (486 workers in 2 h 58 min, about 22 s each).</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Job</th><th>Content</th><th>Workers</th><th>Basis of the estimate</th><th>Estimate</th></tr></thead>
+      <tbody>
+        <tr><td>J1 convert</td><td>26 packages and the deferred ViT-7B/16 line</td><td class="num">26</td><td>ViT-S/16 3 s, ViT-L/16 10 s, ViT-H+/16 512 px b8 82 s (trace 65 s, convert 17 s), plus the model load</td><td class="num">12 min</td></tr>
+        <tr><td>J2 parity and plan</td><td>15 parity packages × 3 compute units × 3 images; the plain ViT-S/16 package (F1); the compute plan of each package on CPU_AND_NE</td><td class="num">46</td><td>First loads: ViT-S/16 1.4 to 3.7 s, ViT-L/16 6.4 s, ViT-H+/16 512 px 114 s</td><td class="num">15 min</td></tr>
+        <tr><td>J3 matrix</td><td>20 configurations × (<code>coreml-ne</code>, <code>coreml-gpu</code>, <code>mlx</code>), 1 round</td><td class="num">60</td><td>22 s each; the slow Neural Engine rows (ViT-H+/16 512 px, 2.9 s a batch) reach the 60 s cap</td><td class="num">28 min</td></tr>
+        <tr><td>J4 pairs, run 1</td><td>P1 and P2 at batch size 8 and 1 × 3 or 4 sides × 5 rounds</td><td class="num">70</td><td>As J3</td><td class="num">32 min</td></tr>
+        <tr><td>J5 streams</td><td>P1 and P2 at batch size 8 and 1 × 3 cases × 3 rounds</td><td class="num">36 cases</td><td>Probe p8: 6 cases in 301 s</td><td class="num">20 min</td></tr>
+        <tr><td>J6 tests</td><td>Default session, <code>tests/test_coreml.py</code> with <code>DINOV3_SLOW=1</code>, ruff</td><td class="num">–</td><td>Default session 55 to 62 s; slow tests 3 packages</td><td class="num">8 min</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 4.</b> The jobs of the build: about 1 h 55 min of machine time, below the limit of 2.5 h. Lock waits for other sessions come on top. If J3 runs over 40 min, the build drops the 512 px batch size 1 rows of ViT-S+/16 and ViT-B/16 and records the drop.</p>
+  <p>The Verify subset (about 27 min): J4 run 2 at P1 and P2 batch size 8 only (35 workers, 16 min); J5 at P1 and P2 batch size 8 (18 cases, 10 min); the parity of the ViT-S/16 and ViT-H+/16 packages at 224 px on CPU_AND_NE (1 min). Verify reads the J1 to J3 lines and does not run them again.</p>
+</section>
+
+<section id="flow">
+  <h2>4 Data flow</h2>
+  <figure>
+    <div class="fig"><svg viewBox="0 0 960 330" role="img" aria-label="Data flow of Step 6c">
+      <rect width="960" height="330" fill="#ffffff"/>
+      <defs><marker id="b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#111414"/></marker></defs>
+      <g font-family="-apple-system, Helvetica, Arial, sans-serif" font-size="12.5" fill="#111414">
+        <rect x="16" y="20" width="150" height="52" rx="5" fill="#f5f8f7" stroke="#4a5655"/><text x="91" y="42" text-anchor="middle">Hugging Face weights</text><text x="91" y="60" text-anchor="middle">torch-cpu, fp32</text>
+        <rect x="196" y="20" width="170" height="52" rx="5" fill="#f5f8f7" stroke="#057379"/><text x="281" y="42" text-anchor="middle">rewrite_for_neural_engine</text><text x="281" y="60" text-anchor="middle">s = 256, r = 1 or 8</text>
+        <rect x="396" y="20" width="150" height="52" rx="5" fill="#f5f8f7" stroke="#4a5655"/><text x="471" y="42" text-anchor="middle">torch.jit.trace</text><text x="471" y="60" text-anchor="middle">fixed shape</text>
+        <rect x="576" y="20" width="170" height="52" rx="5" fill="#f5f8f7" stroke="#4a5655"/><text x="661" y="42" text-anchor="middle">ct.convert, fp16</text><text x="661" y="60" text-anchor="middle">_cast patch, macOS 15</text>
+        <rect x="776" y="20" width="170" height="52" rx="5" fill="#f5f8f7" stroke="#4a5655"/><text x="861" y="42" text-anchor="middle">.mlpackage, .mlmodelc</text><text x="861" y="60" text-anchor="middle">~/.cache/dinov3-apple/coreml</text>
+        <line x1="166" y1="46" x2="194" y2="46" stroke="#111414" marker-end="url(#b)"/>
+        <line x1="366" y1="46" x2="394" y2="46" stroke="#111414" marker-end="url(#b)"/>
+        <line x1="546" y1="46" x2="574" y2="46" stroke="#111414" marker-end="url(#b)"/>
+        <line x1="746" y1="46" x2="774" y2="46" stroke="#111414" marker-end="url(#b)"/>
+        <line x1="861" y1="72" x2="861" y2="112" stroke="#111414" marker-end="url(#b)"/>
+        <rect x="560" y="114" width="386" height="70" rx="5" fill="#f5f8f7" stroke="#057379"/><text x="753" y="136" text-anchor="middle">Core ML worker: first load, cached load, first output</text><text x="753" y="154" text-anchor="middle">CPU_AND_NE · CPU_AND_GPU · ALL</text><text x="753" y="172" text-anchor="middle">parity (fp16 thresholds), warm-up, timed batches</text>
+        <rect x="16" y="114" width="330" height="70" rx="5" fill="#f5f8f7" stroke="#4a5655"/><text x="181" y="136" text-anchor="middle">mlx worker of Step 6 (run_mlx_worker)</text><text x="181" y="154" text-anchor="middle">compiled forward pass, GPU</text><text x="181" y="172" text-anchor="middle">fastest valid fp16 dtype mode</text>
+        <rect x="376" y="114" width="154" height="70" rx="5" fill="#f5f8f7" stroke="#4a5655"/><text x="453" y="136" text-anchor="middle">Stored pixels</text><text x="453" y="154" text-anchor="middle">reference files</text><text x="453" y="172" text-anchor="middle">(Step 2)</text>
+        <line x1="530" y1="149" x2="558" y2="149" stroke="#111414" marker-end="url(#b)"/>
+        <line x1="376" y1="149" x2="348" y2="149" stroke="#111414" marker-end="url(#b)"/>
+        <rect x="16" y="222" width="290" height="58" rx="5" fill="#ffffff" stroke="#4a5655"/><text x="161" y="246" text-anchor="middle">pairs and matrix: rotated order,</text><text x="161" y="264" text-anchor="middle">ratio Core ML / mlx in each round</text>
+        <rect x="336" y="222" width="290" height="58" rx="5" fill="#ffffff" stroke="#4a5655"/><text x="481" y="246" text-anchor="middle">streams: Neural Engine and mlx</text><text x="481" y="264" text-anchor="middle">at the same time, common start</text>
+        <rect x="656" y="222" width="290" height="58" rx="5" fill="#ffffff" stroke="#4a5655"/><text x="801" y="246" text-anchor="middle">results/coreml.jsonl</text><text x="801" y="264" text-anchor="middle">→ results/coreml-table.md</text>
+        <line x1="181" y1="184" x2="161" y2="220" stroke="#111414" marker-end="url(#b)"/>
+        <line x1="753" y1="184" x2="481" y2="220" stroke="#111414" marker-end="url(#b)"/>
+        <line x1="753" y1="184" x2="181" y2="220" stroke="#111414" marker-end="url(#b)"/>
+        <line x1="181" y1="184" x2="481" y2="220" stroke="#111414" marker-end="url(#b)"/>
+        <line x1="306" y1="251" x2="654" y2="251" stroke="#111414" stroke-dasharray="4 3" marker-end="url(#b)"/>
+        <text x="16" y="312" fill="#4a5655">Every job runs through the GPU lock. Each worker is its own subprocess after a memory check. Packages and logs stay outside the repo.</text>
+      </g>
+    </svg></div>
+    <figcaption><b>Figure 1.</b> Data flow of Step 6c. The rewrite (teal) is the only new arithmetic; the <code>mlx</code> side is the Step 6 worker without a change.</figcaption>
+  </figure>
+</section>
+
+<section id="code">
+  <h2>5 Key code</h2>
+  <pre><code>SCORE_SCALE = 256.0  # a power of two: the division adds no rounding error
+
+
+def ne_attention(module, query, key, value, attention_mask, scaling=None, dropout=0.0, **kwargs):
+    """Attention whose scores fit fp16 on the Neural Engine. Exact in real numbers:
+    softmax(z) = softmax((z / s - max(z / s)) * s)."""
+    s = SCORE_SCALE
+    z = torch.matmul(query * (scaling / s), key.transpose(2, 3))  # at most 9,877 for ViT-S/16
+    z = z - z.amax(-1, keepdim=True)                               # every value at most 0
+    probs = torch.softmax(torch.clamp(z, min=-60000.0 / s) * s, dim=-1)
+    return torch.matmul(probs, value).transpose(1, 2).contiguous(), None</code></pre>
+  <pre><code>def rewrite_for_neural_engine(model: DINOv3ViTModel, residual_scale: int) -> torch.nn.Module:
+    """Return a module pixels -> tokens whose values fit fp16 (Section 3.2). No LayerScale fold."""
+    model.config._attn_implementation = "coreml-ne"   # every layer shares this config
+    with torch.no_grad():
+        for layer in model.model.layer:
+            for proj in (layer.attention.o_proj, layer.mlp.down_proj):
+                proj.weight.mul_(1.0 / residual_scale)
+                if proj.bias is not None:
+                    proj.bias.mul_(1.0 / residual_scale)
+    return NeuralEngineBackbone(model, residual_scale)  # embeddings / r, blocks, final layer norm</code></pre>
+  <pre><code>def _cast(context, node, dtype, dtype_name):
+    """coremltools 9.0 _cast with .item(): numpy 2.5 refuses int() of a 1-element array."""
+    x = torch_ops._get_inputs(context, node, expected=1)[0]
+    ...
+    if x.can_be_folded_to_const():
+        value = x.val.item() if isinstance(x.val, np.ndarray) else x.val
+        res = x if isinstance(x.val, dtype) else mb.const(val=dtype(value), name=node.name)
+    ...
+
+# applied once, by convert_backbone; the probe version is in explore.html Section 2.2</code></pre>
+</section>
+
+<section id="tests">
+  <h2>6 Tests</h2>
+  <p>Write each test first and see it go red. <code>tests/test_coreml.py</code> starts with <code>pytest.importorskip("coremltools")</code>. T1 to T9 use the small model of <code>tests/small_model.py</code> or synthetic tensors and run in the default session (target: at most 15 s together). T10 to T12 need the gated weights and run only with <code>DINOV3_SLOW=1</code>.</p>
+  <ol>
+    <li><code>test_ne_attention_equals_eager_in_fp32</code> (T1): synthetic q, k, v (B 2, 3 heads, 41 tokens, head dimension 64) with scores up to 1e7; <code>ne_attention</code> against <code>eager_attention_forward</code> in fp64: largest relative difference ≤ 1e-6.</li>
+    <li><code>test_ne_attention_fp16_stays_finite</code> (T2, F1): the same tensors in fp16 on torch-cpu: eager attention gives a non-finite value (red part of the evidence); <code>ne_attention</code> gives finite values with cosine ≥ 0.999 against fp64.</li>
+    <li><code>test_rewrite_is_exact_in_fp32</code> (T3): the small models <code>vits16</code> and <code>vits16plus</code> with r = 1 and r = 8, rewritten against the Hugging Face model on torch-cpu fp32: tokens equal within 1e-5 relative (the layer norm ε is the only change, 1e-5 · r²).</li>
+    <li><code>test_rewrite_keeps_layer_scale</code> (T4): after the rewrite each block still has <code>layer_scale1</code> and <code>layer_scale2</code> with the original factors, and <code>o_proj.weight</code> equals the original / r bit for bit (r a power of two).</li>
+    <li><code>test_residual_scale_from_token_range</code> (T5): r = 1, 1, 1, 8, 8 for ViT-S/16 to ViT-H+/16 from <code>results/token-range-mlx.md</code>; ViT-7B/16 raises <code>RunRuleError</code>; a table with a largest value of 70,000 gives 4.</li>
+    <li><code>test_cast_patch_converts_with_numpy_2_5</code> (T6): convert the small model <code>vits16</code> at 32 px, batch size 1. Without the patch: <code>TypeError</code> (red). With it: a package with the input <code>pixels</code> and the output <code>tokens</code>.</li>
+    <li><code>test_small_package_parity_on_each_unit</code> (T7): the T6 package on CPU_AND_NE, CPU_AND_GPU and ALL against the small model on torch-cpu fp32: cosine ≥ 0.999 (frame) and finite.</li>
+    <li><code>test_compute_plan_report</code> (T8): the report of the T6 package: device counts sum to the number of non-constant ops; the cost shares sum to 1 ± 1e-6; the list of ops off the Neural Engine has name, op type and cost.</li>
+    <li><code>test_package_path_and_line_fields</code> (T9): the package name holds slug, side, batch size, s, r and the coremltools version; a fake worker line has the fields of Table 3; a broken first output (frame 0.035) gives <code>valid</code> false (risk R53); the stream schedule rotates the three cases over 3 rounds.</li>
+    <li><code>test_plain_graph_fails_on_neural_engine</code> (T10, slow, F1 evidence): the plain ViT-S/16 package at 224 px on CPU_AND_NE: frame cosine below 0.5 for <code>iss-kibo-lab</code>; on CPU_AND_GPU ≥ 0.999.</li>
+    <li><code>test_vits16_package_passes_on_neural_engine</code> (T11, slow): the rewritten ViT-S/16 package at 224 px batch size 1 on CPU_AND_NE: the fp16 thresholds of ADR 0003 for the 3 test images.</li>
+    <li><code>test_convert_refuses_vit7b16_before_load</code> (T12, slow only because it reads the config): <code>convert_backbone("ViT-7B/16", 224, 1)</code> raises <code>RunRuleError</code> before any weight read.</li>
+  </ol>
+</section>
+
+<section id="benchmarks">
+  <h2>7 Benchmarks</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Run</th><th>Model sizes</th><th>Input resolutions</th><th>Batch sizes</th><th>Sides</th><th>Output</th><th>Rounds</th></tr></thead>
+      <tbody>
+        <tr><td>Parity (J2)</td><td>ViT-S/16 to ViT-H+/16</td><td>224, 448, 512</td><td>1</td><td>coreml-ne, coreml-gpu, coreml-all</td><td>frame and patch</td><td>1</td></tr>
+        <tr><td>Matrix (J3)</td><td>ViT-S/16 to ViT-H+/16</td><td>224, 512</td><td>1, 8</td><td>coreml-ne, coreml-gpu, mlx</td><td>patch (the Core ML call gives both)</td><td>1</td></tr>
+        <tr><td>Pairs (J4)</td><td>P1 ViT-S/16; P2 ViT-H+/16</td><td>224; 512</td><td>8 and 1</td><td>coreml-ne, coreml-gpu, mlx; coreml-all at batch size 8</td><td>frame (P1), patch (P2)</td><td>5, two runs (Build, Verify)</td></tr>
+        <tr><td>Streams (J5)</td><td>P1, P2</td><td>224; 512</td><td>8 and 1 (mlx side)</td><td>ne alone, mlx alone, both</td><td>as Pairs</td><td>3</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 5.</b> The benchmark matrix of Step 6c. All rows fp16 (Core ML fp16 compute precision; <code>mlx</code> the fastest valid fp16 dtype mode). Probe values (short loops, not results): P1 batch size 8 on CPU_AND_NE 452 img/s, on CPU_AND_GPU 1,476 img/s, <code>mlx</code> 2,040 img/s; P2 on CPU_AND_NE 2.7 img/s, on CPU_AND_GPU 19.7 img/s, <code>mlx</code> 16.3 img/s (Step 6 matrix).</p>
+</section>
+
+<section id="criteria">
+  <h2>8 Acceptance criteria</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>No.</th><th>Criterion</th><th>Target</th><th>Checked by</th></tr></thead>
+      <tbody>
+        <tr><td>AC1</td><td>F1 is reproduced and explained: the plain fp16 graph breaks on the Neural Engine because the attention scores leave the fp16 range</td><td>T2 green; T10: plain ViT-S/16 frame &lt; 0.5 on CPU_AND_NE and ≥ 0.999 on CPU_AND_GPU; one J2 line of the plain package</td><td>T2, T10, J2</td></tr>
+        <tr><td>AC2</td><td>The Neural Engine rewrite is exact</td><td>T1 ≤ 1e-6; T3 ≤ 1e-5 relative; T4 bit for bit</td><td>T1, T3, T4</td></tr>
+        <tr><td>AC3</td><td>Conversion of every planned package</td><td>26 of 26 packages convert and compile; each J1 line has trace, conversion, save and compile times, package size and peak footprint; ViT-7B/16 has one "deferred" line with the reason</td><td>J1, T12</td></tr>
+        <tr><td>AC4</td><td>Parity on the Neural Engine</td><td>45 rows (5 model sizes × 9 square configurations) on <code>coreml-ne</code>: each passes the fp16 thresholds of ADR 0003 (0.999, 0.999, 0.99), or is an expected failure with the evidence of a tensor above 65,504 in the range data of <code>explore.html</code> Table 3 and a probe of the block</td><td>J2, T11</td></tr>
+        <tr><td>AC5</td><td>Parity on the GPU and with ALL</td><td>The same 45 rows on <code>coreml-gpu</code> and on <code>coreml-all</code>: each passes the fp16 thresholds</td><td>J2, T7</td></tr>
+        <tr><td>AC6</td><td>Compute plan</td><td>One report for each of the 26 packages on CPU_AND_NE: ops per device, estimated cost share of each device, the list of ops off the Neural Engine. The table gives the share of the Neural Engine for each package</td><td>J2, T8</td></tr>
+        <tr><td>AC7</td><td>Load times and memory</td><td>For each package and compute unit: the first load (Neural Engine compile) and the cached load. The cached load ≤ 0.5 s for every package (probes: 0.02 to 0.24 s). The peak footprint of each worker in its line</td><td>J2, J3</td></tr>
+        <tr><td>AC8</td><td>Matrix</td><td>60 of 60 cells (20 configurations × 3 sides) with a throughput, or a reason; each Core ML cell has its ratio to <code>mlx</code> of the same group</td><td>J3, <code>results/coreml-table.md</code></td></tr>
+        <tr><td>AC9</td><td>Paired runs at P1 and P2</td><td>Batch size 8 and 1, 5 rounds in the build run (J4) and, at batch size 8, 5 rounds in the Verify run: the median paired ratio of <code>coreml-ne</code>, <code>coreml-gpu</code> and <code>coreml-all</code> to <code>mlx</code>, the spread between runs, and the verdict rule D21 of Step 6 (report only: Step 6c has no speed target)</td><td>J4, Verify</td></tr>
+        <tr><td>AC10</td><td>Two-stream run</td><td>P1 and P2 at batch size 8 and 1, 3 rounds: the median stream ratio (both) / (<code>mlx</code> alone), and the throughput of each side. Expected from the probe: P1 batch size 8 ≥ 1.10 (probe 1.20). A value below 1.05 gets a reason in <code>verify.html</code></td><td>J5, Verify</td></tr>
+        <tr><td>AC11</td><td>Run rules</td><td>Every job and test session through the GPU lock: 0 lines with an entry in <code>other_heavy_jobs_seen</code>; a memory-check line before each conversion and each load; no load of ViT-7B/16</td><td>gpu-lock.log, J1 to J5</td></tr>
+        <tr><td>AC12</td><td>Tests, lint and docs</td><td><code>uv run pytest</code> 0 failed and the default session ≤ 75 s; <code>uv run --group coreml pytest tests/test_coreml.py</code> with <code>DINOV3_SLOW=1</code> 0 failed; ruff clean; the terms of <code>explore.html</code> Section 7 in <code>GLOSSARY.md</code>; ADR 0014 (the Neural Engine rewrite, no LayerScale fold) and ADR 0015 (Core ML packages: fixed shapes, outside the repo, coremltools 9.0 with the <code>_cast</code> patch)</td><td>J6, Close</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 6.</b> Acceptance criteria of Step 6c.</p>
+</section>
+
+<section id="open">
+  <h2>9 Open questions</h2>
+  <ul>
+    <li>Q1 (the user): the layout of <code>ml-ane-transformers</code> in a later step, if the Neural Engine adds throughput in J5 (<code>explore.html</code> D2 option D).</li>
+    <li>Q2 (the user): the Neural Engine path in the Step 7 Python API.</li>
+    <li>Q3 (the build decides, then records): if a model size fails AC4 on the Neural Engine with the rewrite, the build runs the block probe of <code>explore.html</code> (14 intermediate values of one block) on the first wrong block and records the tensor and its range. It does not try a new rewrite in this step.</li>
+  </ul>
+</section>
+</main>
+</body>
+</html>
