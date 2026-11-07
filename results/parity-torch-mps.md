@@ -1,6 +1,6 @@
 # Parity of torch-mps
 
-Made by `scripts/parity_table.py` on 2026-11-06 from the parity tests (torch 2.15.0). The reference output is torch-cpu in fp32. Each value is the minimum over the configurations of the row. The patch minimum is report only. Section 3 gives the thresholds.
+Made by `scripts/parity_table.py` on 2026-11-07 from the parity tests (torch 2.15.0). The reference output is torch-cpu in fp32. Each value is the minimum over the configurations of the row. The patch minimum is report only. Section 3 gives the thresholds.
 
 ## 1 Parity against the reference output
 
@@ -33,11 +33,11 @@ Each row covers 12 configurations: 3 test images × 4 input resolutions.
 | ViT-H+/16 | bf16-cast | 12 | 0 | 0.999860 | 0.998206 | 0.968878 | 0.845469 | pass |
 | ViT-H+/16 | fp16-autocast | 12 | 0 | 0.999999 | 0.999985 | 0.999781 | 0.998451 | pass |
 | ViT-H+/16 | bf16-autocast | 12 | 0 | 0.999946 | 0.999430 | 0.991417 | 0.923758 | pass |
-| ViT-7B/16 | fp32 | 0 | 0 | – | – | – | – | skipped: ViT-7B/16 runs on torch-mps with fp16 or bf16 weights only (CLAUDE.md run rules) |
+| ViT-7B/16 | fp32 | 0 | 0 | – | – | – | – | skipped: ViT-7B/16 torch-mps fp32: ViT-7B/16 runs with fp16, bf16 or quantized weights only (CLAUDE.md run rules) |
 | ViT-7B/16 | fp16-cast | 0 | 0 | – | – | – | – | skipped: reference-vit7b16.safetensors is missing. |
 | ViT-7B/16 | bf16-cast | 0 | 0 | – | – | – | – | skipped: reference-vit7b16.safetensors is missing. |
-| ViT-7B/16 | fp16-autocast | 0 | 0 | – | – | – | – | skipped: ViT-7B/16 runs on torch-mps with fp16 or bf16 weights only (CLAUDE.md run rules) |
-| ViT-7B/16 | bf16-autocast | 0 | 0 | – | – | – | – | skipped: ViT-7B/16 runs on torch-mps with fp16 or bf16 weights only (CLAUDE.md run rules) |
+| ViT-7B/16 | fp16-autocast | 0 | 0 | – | – | – | – | skipped: ViT-7B/16 torch-mps fp16-autocast: ViT-7B/16 runs with fp16, bf16 or quantized weights only (CLAUDE.md run rules) |
+| ViT-7B/16 | bf16-autocast | 0 | 0 | – | – | – | – | skipped: ViT-7B/16 torch-mps bf16-autocast: ViT-7B/16 runs with fp16, bf16 or quantized weights only (CLAUDE.md run rules) |
 
 Table 1. Parity of torch-mps against the reference output.
 
@@ -72,11 +72,11 @@ A batch of 8 at 224 × 224 px against 8 runs with batch size 1, on torch-mps in 
 | ViT-H+/16 | bf16-cast | 1 | 0 | 1.000000 | 1.000000 | 1.000000 | 1.000000 | pass |
 | ViT-H+/16 | fp16-autocast | 1 | 0 | 1.000000 | 1.000000 | 1.000000 | 1.000000 | pass |
 | ViT-H+/16 | bf16-autocast | 1 | 0 | 1.000000 | 1.000000 | 1.000000 | 1.000000 | pass |
-| ViT-7B/16 | fp32 | 0 | 0 | – | – | – | – | skipped: ViT-7B/16 runs on torch-mps with fp16 or bf16 weights only (CLAUDE.md run rules) |
-| ViT-7B/16 | fp16-cast | 0 | 0 | – | – | – | – | skipped: memory check: ViT-7B/16 torch-mps fp16-cast: needs 20.1 GB, 14.7 GB available, does not fit |
-| ViT-7B/16 | bf16-cast | 0 | 0 | – | – | – | – | skipped: memory check: ViT-7B/16 torch-mps bf16-cast: needs 20.1 GB, 14.7 GB available, does not fit |
-| ViT-7B/16 | fp16-autocast | 0 | 0 | – | – | – | – | skipped: ViT-7B/16 runs on torch-mps with fp16 or bf16 weights only (CLAUDE.md run rules) |
-| ViT-7B/16 | bf16-autocast | 0 | 0 | – | – | – | – | skipped: ViT-7B/16 runs on torch-mps with fp16 or bf16 weights only (CLAUDE.md run rules) |
+| ViT-7B/16 | fp32 | 0 | 0 | – | – | – | – | skipped: ViT-7B/16 torch-mps fp32: ViT-7B/16 runs with fp16, bf16 or quantized weights only (CLAUDE.md run rules) |
+| ViT-7B/16 | fp16-cast | 1 | 0 | 1.000000 | 1.000000 | 1.000000 | 1.000000 | pass |
+| ViT-7B/16 | bf16-cast | 1 | 0 | 1.000000 | 1.000000 | 1.000000 | 1.000000 | pass |
+| ViT-7B/16 | fp16-autocast | 0 | 0 | – | – | – | – | skipped: ViT-7B/16 torch-mps fp16-autocast: ViT-7B/16 runs with fp16, bf16 or quantized weights only (CLAUDE.md run rules) |
+| ViT-7B/16 | bf16-autocast | 0 | 0 | – | – | – | – | skipped: ViT-7B/16 torch-mps bf16-autocast: ViT-7B/16 runs with fp16, bf16 or quantized weights only (CLAUDE.md run rules) |
 
 Table 2. Batch consistency.
 

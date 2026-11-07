@@ -1,8 +1,10 @@
-"""Tests T10 to T20 of specs/04-mlx-port/plan.html: each part of the MLX backbone against the
-Hugging Face modules on torch-cpu, with the small model of tests/small_model.py.
+"""Tests T10 to T20 of specs/04-mlx-port/plan.html and T16 to T26 of specs/05-all-sizes/plan.html:
+each part of the MLX backbone against the Hugging Face modules on torch-cpu, with the small models
+of tests/small_model.py, and the dtype of each part in each dtype mode.
 
 MLX runs on the GPU with TF32 off (tests/conftest.py). Each test records its measured value next to
-its target in tests/fixtures/generated/mlx/report.jsonl (Table 7 of the plan).
+its target in tests/fixtures/generated/mlx/report.jsonl (Table 7 of the Step 4 plan, Table 13 of the
+Step 5 plan).
 """
 
 from collections.abc import Callable
@@ -14,7 +16,13 @@ import torch
 from mlx import nn
 from mlx.utils import tree_flatten
 from parity_checks import min_token_cosine
-from small_model import PIXEL_SHAPES, small_hf_model, small_mlx_model, small_pixels
+from small_model import (
+    PIXEL_SHAPES,
+    SMALL_CONFIGS,
+    small_hf_model,
+    small_mlx_model,
+    small_pixels,
+)
 from transformers.activations import ACT2FN
 from transformers.models.dinov3_vit.modeling_dinov3_vit import DINOv3ViTModel
 
@@ -22,12 +30,18 @@ from dinov3_apple import mlx_model as mlx_model_module
 from dinov3_apple.block_profile import block_parts, run_parts
 from dinov3_apple.flops import PART_NAMES
 from dinov3_apple.mlx_model import (
+    MLP,
+    MLX_DTYPE_MODES,
     Block,
     MlxBackbone,
+    MlxConfig,
+    SwiGLU,
     apply_rope,
+    linear_parameter_names,
     patchify,
     run_mlx,
     run_mlx_hidden_states,
+    run_mlx_token_range,
 )
 from dinov3_apple.outputs import NUM_PREFIX_TOKENS, PATCH_SIZE, split_tokens
 
@@ -47,17 +61,32 @@ PART_TARGETS = {
     "ff_out": 2e-5,
     "layer_scale2": 0.0,
 }
+# Table 13 of specs/05-all-sizes/plan.html: the parts of SwiGLU. The other parts keep Table 7.
+SWIGLU_PART_TARGETS = PART_TARGETS | {"ff_in": 1e-5, "activation": 1e-5, "ff_out": 2e-5}
 # The pixels of the part tests: the batch of 2 at 224 x 224 px.
 PART_PIXELS = PIXEL_SHAPES[0]
 SHAPE_IDS = ["x".join(map(str, shape)) for shape in PIXEL_SHAPES]
 # The grids of the attention and block tests: 14 x 14 and 14 x 19 patches.
 GRID_SHAPES = [(2, 3, 224, 224), (1, 3, 224, 304)]
 GRID_IDS = ["14x14", "14x19"]
+# The small models with SwiGLU. The vits16 cases keep the test ids of Step 4.
+SWIGLU_MODELS = ["vits16plus", "vit7b16-shape"]
+DTYPE_MODES = list(MLX_DTYPE_MODES)
+HALF_DTYPES = {"fp16": (mx.float16, torch.float16), "bf16": (mx.bfloat16, torch.bfloat16)}
+
+
+def _model_params(names: list[str], cases: list, case_ids: list[str]) -> list:
+    """Parameters (model name, case): no prefix for vits16, the model name for the others."""
+    return [
+        pytest.param(name, case, id=case_id if name == "vits16" else f"{name}-{case_id}")
+        for name in names
+        for case, case_id in zip(cases, case_ids, strict=True)
+    ]
 
 
 @pytest.fixture(scope="module")
 def hf_model() -> DINOv3ViTModel:
-    """Return the small Hugging Face backbone, seed 0 (the oracle of the part tests)."""
+    """Return the small Hugging Face backbone vits16, seed 0 (the oracle of the part tests)."""
     return small_hf_model(seed=0)
 
 
@@ -65,6 +94,21 @@ def hf_model() -> DINOv3ViTModel:
 def mlx_model(hf_model: DINOv3ViTModel) -> MlxBackbone:
     """Return the small MLX backbone with the weights of hf_model."""
     return small_mlx_model(hf_model)
+
+
+@pytest.fixture(scope="module")
+def small_models() -> Callable[[str], tuple[DINOv3ViTModel, MlxBackbone]]:
+    """Return a getter of the small models by name, seed 0: the Hugging Face oracle and the MLX
+    backbone in fp32. Each model is made once."""
+    models: dict[str, tuple[DINOv3ViTModel, MlxBackbone]] = {}
+
+    def get(name: str) -> tuple[DINOv3ViTModel, MlxBackbone]:
+        if name not in models:
+            hf = small_hf_model(seed=0, name=name)
+            models[name] = (hf, small_mlx_model(hf))
+        return models[name]
+
+    return get
 
 
 def _difference(expected: torch.Tensor | np.ndarray, output: mx.array) -> float:
@@ -87,6 +131,13 @@ def _rope_tables(hf_model: DINOv3ViTModel, pixels: torch.Tensor) -> tuple[mx.arr
 def _mlx_parts(block: Block) -> dict[str, Callable[..., tuple[mx.array, ...]]]:
     """The 11 parts of one MLX block, with the names, inputs and outputs of block_parts."""
     attention, mlp = block.attention, block.mlp
+
+    def ff_in(h: mx.array) -> tuple[mx.array, ...]:
+        """(gate, up) for SwiGLU, (up,) for the MLP, as ff_in of block_parts."""
+        if isinstance(mlp, SwiGLU):
+            return mlp.gate_proj(h), mlp.up_proj(h)
+        return (mlp.up_proj(h),)
+
     return {
         "norm1": lambda x: (block.norm1(x),),
         "qkv_proj": lambda h: attention.qkv(h),
@@ -97,20 +148,25 @@ def _mlx_parts(block: Block) -> dict[str, Callable[..., tuple[mx.array, ...]]]:
         "o_proj": lambda a: (attention.output(a),),
         "layer_scale1": lambda o, x: (block.layer_scale1(o) + x,),
         "norm2": lambda x: (block.norm2(x),),
-        "ff_in": lambda h: (mlp.up_proj(h),),
-        "activation": lambda up: (nn.gelu(up),),
+        "ff_in": ff_in,
+        "activation": lambda *values: (mlp.activation(*values),),
         "ff_out": lambda g: (mlp.down_proj(g),),
         "layer_scale2": lambda y, x: (block.layer_scale2(y) + x,),
     }
 
 
-@pytest.mark.parametrize("name", PART_NAMES)
+@pytest.mark.parametrize(
+    ("model", "name"), _model_params(["vits16", "vits16plus"], PART_NAMES, PART_NAMES)
+)
 def test_mlx_block_part(
+    model: str,
     name: str,
-    hf_model: DINOv3ViTModel,
-    mlx_model: MlxBackbone,
+    small_models: Callable[[str], tuple[DINOv3ViTModel, MlxBackbone]],
     report: Callable[..., None],
 ) -> None:
+    """T16: each part of block 1 against block_parts; for SwiGLU, ff_in gives (gate, up)."""
+    hf_model, mlx_model = small_models(model)
+    targets = PART_TARGETS if model == "vits16" else SWIGLU_PART_TARGETS
     pixels = torch.from_numpy(small_pixels(PART_PIXELS))
     layer = hf_model.model.layer[0]
     with torch.inference_mode():
@@ -129,8 +185,10 @@ def test_mlx_block_part(
     difference = max(
         _difference(state[out], output) for out, output in zip(part.outputs, outputs, strict=True)
     )
-    report("test_mlx_block_part", part=name, difference=difference, target=PART_TARGETS[name])
-    assert difference <= PART_TARGETS[name]
+    report(
+        "test_mlx_block_part", model=model, part=name, difference=difference, target=targets[name]
+    )
+    assert difference <= targets[name]
 
 
 @pytest.mark.parametrize("shape", PIXEL_SHAPES, ids=SHAPE_IDS)
@@ -173,15 +231,28 @@ def test_patchify_order() -> None:
     assert np.array_equal(patches[1, 3 * i + j], expected)
 
 
-def test_mlx_forward_casts_the_pixels_to_the_weight_dtype(hf_model: DINOv3ViTModel) -> None:
-    """fp32 pixels and bf16 weights give bf16 tokens, as in the Hugging Face forward pass."""
-    model = small_mlx_model(hf_model)
-    model.set_dtype(mx.bfloat16)
+def test_mlx_forward_casts_the_pixels_to_the_matmul_dtype(
+    hf_model: DINOv3ViTModel, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """T25: fp32 pixels get the matmul dtype. bf16-cast gives bf16 embeddings and tokens;
+    bf16-autocast gives bf16 pixels into patchify and fp32 embeddings and tokens."""
     pixels = mx.array(small_pixels(PART_PIXELS))
+    model = small_mlx_model(hf_model, "bf16-cast")
     embeddings = model.embeddings(pixels)
     assert embeddings.dtype == mx.bfloat16
     assert mx.array_equal(embeddings, model.embeddings(pixels.astype(mx.bfloat16))).item()
     assert model(pixels).dtype == mx.bfloat16
+    pixel_dtypes: list[mx.Dtype] = []
+
+    def record_patchify(x: mx.array, patch_size: int) -> mx.array:
+        pixel_dtypes.append(x.dtype)
+        return patchify(x, patch_size)
+
+    monkeypatch.setattr(mlx_model_module, "patchify", record_patchify)
+    model = small_mlx_model(hf_model, "bf16-autocast")
+    assert model.embeddings(pixels).dtype == mx.float32
+    assert model(pixels).dtype == mx.float32
+    assert pixel_dtypes == [mx.bfloat16, mx.bfloat16]
 
 
 def test_mlx_quantized_patch_embedding_gets_float_pixels(
@@ -236,13 +307,17 @@ def test_mlx_quantized_patch_embedding_gets_float_pixels(
     assert run >= 0.999
 
 
-@pytest.mark.parametrize("shape", GRID_SHAPES, ids=GRID_IDS)
+@pytest.mark.parametrize(
+    ("model", "shape"), _model_params(["vits16", "vit7b16-shape"], GRID_SHAPES, GRID_IDS)
+)
 def test_mlx_part_attention(
+    model: str,
     shape: tuple[int, ...],
-    hf_model: DINOv3ViTModel,
-    mlx_model: MlxBackbone,
+    small_models: Callable[[str], tuple[DINOv3ViTModel, MlxBackbone]],
     report: Callable[..., None],
 ) -> None:
+    """T19 for vit7b16-shape: no q, k, v biases and head dimension 128."""
+    hf_model, mlx_model = small_models(model)
     pixels = torch.from_numpy(small_pixels(shape))
     layer = hf_model.model.layer[0]
     with torch.inference_mode():
@@ -251,7 +326,13 @@ def test_mlx_part_attention(
     cos, sin = mlx_model.rope(shape[2] // PATCH_SIZE, shape[3] // PATCH_SIZE)
     output = mlx_model.layer[0].attention(mx.array(h.numpy()), cos, sin)
     difference = _difference(expected, output)
-    report("test_mlx_part_attention", shape=list(shape), difference=difference, target=1e-5)
+    report(
+        "test_mlx_part_attention",
+        model=model,
+        shape=list(shape),
+        difference=difference,
+        target=1e-5,
+    )
     assert difference <= 1e-5
 
 
@@ -281,13 +362,17 @@ def test_mlx_part_gelu_is_exact_form(report: Callable[..., None]) -> None:
     assert approx >= 1e-4
 
 
-@pytest.mark.parametrize("shape", GRID_SHAPES, ids=GRID_IDS)
+@pytest.mark.parametrize(
+    ("model", "shape"), _model_params(["vits16", *SWIGLU_MODELS], GRID_SHAPES, GRID_IDS)
+)
 def test_mlx_part_block(
+    model: str,
     shape: tuple[int, ...],
-    hf_model: DINOv3ViTModel,
-    mlx_model: MlxBackbone,
+    small_models: Callable[[str], tuple[DINOv3ViTModel, MlxBackbone]],
     report: Callable[..., None],
 ) -> None:
+    """T20 for the SwiGLU models: the block against DINOv3ViTLayer."""
+    hf_model, mlx_model = small_models(model)
     pixels = torch.from_numpy(small_pixels(shape))
     with torch.inference_mode():
         x = hf_model.embeddings(pixels)
@@ -295,7 +380,9 @@ def test_mlx_part_block(
     cos, sin = mlx_model.rope(shape[2] // PATCH_SIZE, shape[3] // PATCH_SIZE)
     output = mlx_model.layer[0](mx.array(x.numpy()), cos, sin)
     difference = _difference(expected, output)
-    report("test_mlx_part_block", shape=list(shape), difference=difference, target=3e-5)
+    report(
+        "test_mlx_part_block", model=model, shape=list(shape), difference=difference, target=3e-5
+    )
     assert difference <= 3e-5
 
 
@@ -312,13 +399,17 @@ def test_mlx_part_final_norm(
     assert difference <= 1e-5
 
 
-@pytest.mark.parametrize("shape", PIXEL_SHAPES, ids=SHAPE_IDS)
+@pytest.mark.parametrize(
+    ("model", "shape"), _model_params(["vits16", *SWIGLU_MODELS], PIXEL_SHAPES, SHAPE_IDS)
+)
 def test_mlx_small_model_tokens(
+    model: str,
     shape: tuple[int, ...],
-    hf_model: DINOv3ViTModel,
-    mlx_model: MlxBackbone,
+    small_models: Callable[[str], tuple[DINOv3ViTModel, MlxBackbone]],
     report: Callable[..., None],
 ) -> None:
+    """T21 for the SwiGLU models: run_mlx and run_mlx_hidden_states."""
+    hf_model, mlx_model = small_models(model)
     pixels = small_pixels(shape)
     with torch.inference_mode():
         output = hf_model(pixel_values=torch.from_numpy(pixels), output_hidden_states=True)
@@ -330,7 +421,7 @@ def test_mlx_small_model_tokens(
         expected = torch.stack([state[0] for state in output.hidden_states]).numpy()
         assert hidden.shape == expected.shape == (3, *tokens.shape[1:])
         values["hidden_states"] = float(np.abs(hidden - expected).max())
-    report("test_mlx_small_model_tokens", shape=list(shape), **values, target=5e-5)
+    report("test_mlx_small_model_tokens", model=model, shape=list(shape), **values, target=5e-5)
     assert max(values.values()) <= 5e-5
 
 
@@ -364,3 +455,177 @@ def test_mlx_sdpa_float64(shape: tuple[int, ...], report: Callable[..., None]) -
     report("test_mlx_sdpa_float64", shape=list(shape), difference=difference, target=5e-6)
     assert mx.default_device() == mx.gpu
     assert difference <= 5e-6
+
+
+@pytest.mark.parametrize("model", SWIGLU_MODELS)
+def test_mlx_part_swiglu(
+    model: str,
+    small_models: Callable[[str], tuple[DINOv3ViTModel, MlxBackbone]],
+    report: Callable[..., None],
+) -> None:
+    """T17: SwiGLU against DINOv3ViTGatedMLP on the input of norm2."""
+    hf_model, mlx_model = small_models(model)
+    pixels = torch.from_numpy(small_pixels(PART_PIXELS))
+    layer = hf_model.model.layer[0]
+    with torch.inference_mode():
+        cos, sin = hf_model.rope_embeddings(pixels)
+        x = hf_model.embeddings(pixels)
+        h2 = run_parts(block_parts(layer), {"x": x, "cos": cos, "sin": sin})["h2"]
+        expected = layer.mlp(h2)
+    mlp = mlx_model.layer[0].mlp
+    assert isinstance(mlp, SwiGLU)
+    difference = _difference(expected, mlp(mx.array(h2.numpy())))
+    report("test_mlx_part_swiglu", model=model, difference=difference, target=2e-5)
+    assert difference <= 2e-5
+
+
+def test_mlx_part_silu(report: Callable[..., None]) -> None:
+    """T18: nn.silu in fp32 against ACT2FN["silu"]."""
+    values = np.linspace(-8, 8, 200_001, dtype=np.float32)
+    expected = ACT2FN["silu"](torch.from_numpy(values)).numpy()
+    difference = float(np.abs(np.array(nn.silu(mx.array(values))) - expected).max())
+    report("test_mlx_part_silu", difference=difference, target=4e-6)
+    assert difference <= 4e-6
+
+
+def _expected_dtypes(dtype_mode: str) -> tuple[mx.Dtype, mx.Dtype]:
+    dtypes = MLX_DTYPE_MODES[dtype_mode]
+    return dtypes.matmul, dtypes.stream
+
+
+@pytest.mark.parametrize(
+    ("model", "dtype_mode"),
+    [
+        pytest.param(model, mode, id=f"{model}-{mode}")
+        for model in ("vits16", "vits16plus")
+        for mode in DTYPE_MODES
+    ],
+)
+def test_mlx_dtype_flow(model: str, dtype_mode: str) -> None:
+    """T22: the dtype of each part in each dtype mode (Table 3 of the plan)."""
+    matmul, stream = _expected_dtypes(dtype_mode)
+    mlx = small_mlx_model(small_hf_model(seed=0, name=model), dtype_mode)
+    assert mlx.dtype_mode == dtype_mode
+    linear = linear_parameter_names(mlx)
+    for name, value in tree_flatten(mlx.parameters()):
+        assert value.dtype == (matmul if name in linear else stream), name
+    pixels = small_pixels(PART_PIXELS)
+    x = mlx.embeddings(mx.array(pixels))
+    assert x.dtype == stream
+    cos, sin = mlx.rope(14, 14)
+    assert cos.dtype == sin.dtype == mx.float32
+    for block in mlx.layer:
+        assert block.attention_branch(x, cos, sin).dtype == matmul
+        assert block.ff_hidden(x).dtype == matmul
+        x = block(x, cos, sin)
+        assert x.dtype == stream
+    assert mlx(mx.array(pixels)).dtype == stream
+    tokens = run_mlx(mlx, pixels, dtype_mode)
+    assert isinstance(tokens, np.ndarray)
+    assert tokens.dtype == np.float32
+
+
+def _ordered(values: torch.Tensor) -> np.ndarray:
+    """Map half values to integers whose differences count units in the last place."""
+    bits = values.view(torch.int16).numpy().astype(np.int32)
+    magnitude = bits & 0x7FFF
+    return np.where(bits < 0, -magnitude, magnitude)
+
+
+def _to_torch(output: mx.array, half: torch.dtype) -> torch.Tensor:
+    """Return a half MLX array as a torch tensor of the same half dtype (exact)."""
+    return torch.from_numpy(np.array(output.astype(mx.float32))).to(half)
+
+
+def _compare(output: torch.Tensor, oracle: torch.Tensor) -> tuple[float, int]:
+    """Return the share of values that differ and the largest difference in units in the last
+    place, of a half output against the half oracle."""
+    ulps = np.abs(_ordered(output) - _ordered(oracle))
+    return float((ulps > 0).mean()), int(ulps.max())
+
+
+@pytest.mark.parametrize("dtype", list(HALF_DTYPES))
+@pytest.mark.parametrize("function", ["gelu", "swiglu"])
+def test_mlx_activation_rounds_once(function: str, dtype: str, report: Callable[..., None]) -> None:
+    """T23: the activation computes in fp32 and rounds once to the half dtype.
+
+    The oracle is the float64 function, rounded once by torch. GELU below x = -2.5 uses nn.gelu on
+    the fp32 values as the oracle: there 1 + erf cancels in fp32, so even a correct fp32 GELU
+    differs from the float64 value. The activation in the half dtype misses the target.
+    """
+    mx_half, half = HALF_DTYPES[dtype]
+    x = torch.linspace(-8, 8, 100_001, dtype=torch.float64).to(half)
+    x32 = x.float().numpy()
+    x_mlx = mx.array(x32).astype(mx_half)
+    if function == "gelu":
+        module = MLP(MlxConfig.from_hf(SMALL_CONFIGS["vits16"]))
+        exact = torch.nn.functional.gelu(x.double()).to(half)
+        fp32 = torch.from_numpy(np.array(nn.gelu(mx.array(x32)))).to(half)
+        tail = torch.from_numpy(x32 < -2.5)
+        oracle = torch.where(tail, fp32, exact)
+        output = module.activation(x_mlx)
+        in_half = nn.gelu(x_mlx)
+        keep = ~tail
+    else:
+        module = SwiGLU(MlxConfig.from_hf(SMALL_CONFIGS["vits16plus"]))
+        up = x.flip(0)
+        up_mlx = mx.array(up.float().numpy()).astype(mx_half)
+        oracle = (torch.nn.functional.silu(x.double()) * up.double()).to(half)
+        output = module.activation(x_mlx, up_mlx)
+        in_half = nn.silu(x_mlx) * up_mlx
+        keep = torch.ones(len(x32), dtype=torch.bool)
+    assert output.dtype == mx_half
+    output = _to_torch(output, half)
+    share, ulps = _compare(output[keep], oracle[keep])
+    tail_share = _compare(output[~keep], oracle[~keep])[0] if (~keep).any() else 0.0
+    half_share, half_ulps = _compare(_to_torch(in_half, half), oracle)
+    report(
+        "test_mlx_activation_rounds_once",
+        function=function,
+        dtype=dtype,
+        share=share,
+        ulps=ulps,
+        tail_share=tail_share,
+        half_share=half_share,
+        half_ulps=half_ulps,
+        target_share=1e-3,
+    )
+    assert share <= 1e-3
+    assert ulps <= 1
+    assert tail_share == 0.0
+    assert half_share > 1e-3 or half_ulps > 1
+
+
+def test_run_mlx_rejects_a_mode_mismatch(hf_model: DINOv3ViTModel) -> None:
+    """T24: run_mlx checks its dtype mode against the dtype mode of the model."""
+    model = small_mlx_model(hf_model, "bf16-cast")
+    with pytest.raises(ValueError, match="bf16-cast"):
+        run_mlx(model, small_pixels(PART_PIXELS), "fp32")
+
+
+@pytest.mark.parametrize(
+    ("model", "dtype_mode"),
+    [
+        pytest.param(model, mode, id=f"{model}-{mode}")
+        for model in ("vits16", "vits16plus")
+        for mode in DTYPE_MODES
+    ],
+)
+def test_token_range_matches_hidden_states(model: str, dtype_mode: str) -> None:
+    """T26: the token range and run_mlx_hidden_states agree exactly."""
+    mlx = small_mlx_model(small_hf_model(seed=0, name=model), dtype_mode)
+    pixels = small_pixels((1, 3, 224, 304))
+    token_range = run_mlx_token_range(mlx, pixels)
+    hidden = run_mlx_hidden_states(mlx, pixels)
+    blocks = len(mlx.layer)
+    assert token_range.tokens.shape == (blocks + 1,)
+    assert token_range.tokens_where.shape == (blocks + 1,)
+    assert token_range.tokens_finite.shape == (blocks + 1,)
+    for values in (token_range.attention, token_range.ff_hidden, token_range.ff_out):
+        assert values.shape == (blocks,)
+    assert token_range.last_state.dtype == np.float32
+    assert np.array_equal(token_range.last_state, hidden[-1])
+    for i, state in enumerate(hidden):
+        assert token_range.tokens[i] == np.abs(state).max(), i
+        assert token_range.tokens_where[i] == np.abs(state).max(-1).argmax(), i
+        assert bool(token_range.tokens_finite[i]) == bool(np.isfinite(state).all()), i

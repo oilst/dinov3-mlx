@@ -1,5 +1,5 @@
-"""A small DINOv3 backbone with random weights for the part tests (Section 6.1 of
-specs/04-mlx-port/plan.html).
+"""The small DINOv3 backbones with random weights for the part tests (Section 6.1 of
+specs/04-mlx-port/plan.html and of specs/05-all-sizes/plan.html).
 
 The Hugging Face model runs on torch-cpu in fp32. It is the test oracle. The MLX backbone gets the
 same weights through the key map, from the state dict with the spelling model.layer.{i}.… and
@@ -13,7 +13,7 @@ import numpy as np
 import torch
 from transformers import DINOv3ViTConfig, DINOv3ViTModel
 
-from dinov3_apple.mlx_model import MlxBackbone, MlxConfig
+from dinov3_apple.mlx_model import MLX_DTYPE_MODES, MlxBackbone, MlxConfig, linear_parameter_names
 from dinov3_apple.mlx_weights import mlx_weights
 
 # The values of config.json of ViT-S/16, with 2 blocks.
@@ -41,6 +41,26 @@ SMALL_CONFIG = {
     "pos_embed_rescale": 2.0,
 }
 
+# The three small models of Section 6.1 of specs/05-all-sizes/plan.html.
+SMALL_CONFIGS = {
+    # The values of ViT-S/16: MLP with GELU.
+    "vits16": SMALL_CONFIG,
+    # The values of ViT-S+/16: SwiGLU with SiLU, FF 1,536, q and v biases, no k bias.
+    "vits16plus": SMALL_CONFIG | {"hidden_act": "silu", "use_gated_mlp": True},
+    # The shape of ViT-7B/16 at D = 256: head dimension 128, FF = 2 D, SwiGLU, no q, k, v biases.
+    "vit7b16-shape": SMALL_CONFIG
+    | {
+        "hidden_size": 256,
+        "num_attention_heads": 2,
+        "intermediate_size": 512,
+        "hidden_act": "silu",
+        "use_gated_mlp": True,
+        "query_bias": False,
+        "key_bias": False,
+        "value_bias": False,
+    },
+}
+
 # Normal pixels, seed 1. The two shapes that are not square find a swap of height and width.
 PIXEL_SHAPES = [(2, 3, 224, 224), (1, 3, 224, 304), (1, 3, 304, 224)]
 
@@ -60,32 +80,42 @@ def _std_and_mean(name: str, param: torch.Tensor) -> tuple[float, float]:
     return 0.5, 0.0  # the CLS token, the register tokens and the mask token
 
 
-def small_hf_model(seed: int = 0) -> DINOv3ViTModel:
-    """Return the small Hugging Face backbone on torch-cpu in fp32, in eval mode.
+def small_hf_model(seed: int = 0, name: str = "vits16") -> DINOv3ViTModel:
+    """Return a small Hugging Face backbone on torch-cpu in fp32, in eval mode.
 
     Every parameter gets new random values. The Hugging Face init sets the biases to 0 and lambda1
     to 1; with these values a wrong bias or a wrong LayerScale axis does not show.
 
     Args:
         seed: The seed of the random values.
+        name: A key of SMALL_CONFIGS.
 
     Returns:
         The model. Its rope_embeddings run in eval mode, so RoPE-box jittering is off.
     """
-    model = DINOv3ViTModel(DINOv3ViTConfig(**SMALL_CONFIG)).eval()
+    model = DINOv3ViTModel(DINOv3ViTConfig(**SMALL_CONFIGS[name])).eval()
     generator = torch.Generator().manual_seed(seed)
     with torch.no_grad():
-        for name, param in model.named_parameters():
-            std, mean = _std_and_mean(name, param)
+        for param_name, param in model.named_parameters():
+            std, mean = _std_and_mean(param_name, param)
             param.copy_(mean + std * torch.randn(param.shape, generator=generator))
     return model
 
 
-def small_mlx_model(hf_model: DINOv3ViTModel) -> MlxBackbone:
-    """Return the MLX backbone with the weights of the small Hugging Face backbone."""
-    model = MlxBackbone(MlxConfig.from_hf(hf_model.config.to_dict()))
+def small_mlx_model(hf_model: DINOv3ViTModel, dtype_mode: str = "fp32") -> MlxBackbone:
+    """Return the MLX backbone with the weights of a small Hugging Face backbone.
+
+    Args:
+        hf_model: A model from small_hf_model.
+        dtype_mode: A key of MLX_DTYPE_MODES.
+
+    Returns:
+        The backbone in the dtype mode, with evaluated parameters.
+    """
+    model = MlxBackbone(MlxConfig.from_hf(hf_model.config.to_dict()), dtype_mode)
     tensors = {name: mx.array(t.detach().numpy()) for name, t in hf_model.state_dict().items()}
-    model.load_weights(mlx_weights(tensors, mx.float32), strict=True)
+    pairs = list(mlx_weights(tensors, MLX_DTYPE_MODES[dtype_mode], linear_parameter_names(model)))
+    model.load_weights(pairs, strict=True)
     mx.eval(model.parameters())
     return model
 

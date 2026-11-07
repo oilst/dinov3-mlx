@@ -1,7 +1,7 @@
-"""Free memory on macOS and the memory check before each model load.
+"""Free memory on macOS, the run rules and the memory check before each model load.
 
-This Mac crashed from out-of-memory before (CLAUDE.md). Every model load calls check_free_memory
-first.
+This Mac crashed from out-of-memory before (CLAUDE.md). Every model load calls check_run_rule and
+then check_free_memory first. No torch and no mlx import.
 """
 
 import logging
@@ -20,9 +20,35 @@ FORWARD_PREFIX = "memory-check-record"
 LOAD_RATIO = 1.2
 LOAD_RESERVE_BYTES = 4 * 10**9
 
+# CLAUDE.md, run rules: ViT-7B/16 runs in fp16, bf16 or with quantized weights. In fp32 its
+# weights alone need about 27 GB.
+NO_FP32_WEIGHTS = frozenset({"ViT-7B/16"})
+
 
 class InsufficientMemoryError(MemoryError):
     """A model load needs more memory than is available."""
+
+
+class RunRuleError(RuntimeError):
+    """A load breaks a run rule of CLAUDE.md. The load stops before the memory check."""
+
+
+def check_run_rule(model_size: str, bytes_per_weight: int, label: str) -> None:
+    """Stop a load that breaks a run rule, before the memory check and before any file read.
+
+    Args:
+        model_size: A key of MODEL_IDS.
+        bytes_per_weight: The bytes of each loaded weight: 4 for fp32 weights, 2 for fp16 or bf16.
+        label: The name of the load, for example "ViT-7B/16 torch-cpu fp32".
+
+    Raises:
+        RunRuleError: For a model size in NO_FP32_WEIGHTS with 4 bytes for each weight.
+    """
+    if model_size in NO_FP32_WEIGHTS and bytes_per_weight >= 4:
+        raise RunRuleError(
+            f"{label}: {model_size} runs with fp16, bf16 or quantized weights only "
+            "(CLAUDE.md run rules)"
+        )
 
 
 def available_memory_bytes(vm_stat_text: str | None = None) -> int:
@@ -80,6 +106,22 @@ def check_free_memory(required_bytes: int, label: str) -> int:
     if not fits:
         raise InsufficientMemoryError(message)
     return available
+
+
+def record_load_peak(label: str, peak_bytes: int, cache_bytes: int) -> None:
+    """Log the load peak of one mlx load on the logger of the memory checks.
+
+    The line goes where the memory-check lines go: memory-checks.log of the tests, or the driver
+    log of a benchmark through send_checks_to and replay_checks.
+
+    Args:
+        label: The name of the load, for example "ViT-S/16 mlx bf16-cast".
+        peak_bytes: The load peak in bytes.
+        cache_bytes: The MLX cache memory after the load.
+    """
+    logger.info(
+        f"load peak: {label}: {peak_bytes / 1e6:.1f} MB, cache {cache_bytes} bytes after the load"
+    )
 
 
 def load_bytes(weight_bytes: int, ratio: float = LOAD_RATIO) -> int:

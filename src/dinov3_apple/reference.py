@@ -12,7 +12,7 @@ import torch
 from transformers import DINOv3ViTModel
 
 from dinov3_apple.hub import parameter_count, weights_dir
-from dinov3_apple.memory import LOAD_RATIO, check_free_memory, load_bytes
+from dinov3_apple.memory import LOAD_RATIO, check_free_memory, check_run_rule, load_bytes
 from dinov3_apple.parity import TEST_IMAGES
 from dinov3_apple.stored import (
     HIDDEN_STATES_CONFIG,
@@ -112,7 +112,7 @@ def required_load_bytes(model_size: str, dtype: torch.dtype, ratio: float = LOAD
 def load_torch_backbone(
     model_size: str, device: str, dtype_mode: str, ratio: float = LOAD_RATIO
 ) -> DINOv3ViTModel:
-    """Load the Hugging Face backbone of one model size after a memory check.
+    """Load the Hugging Face backbone of one model size after the run rule and a memory check.
 
     Args:
         model_size: A key of MODEL_IDS.
@@ -124,11 +124,14 @@ def load_torch_backbone(
         The backbone in eval mode on the device.
 
     Raises:
+        RunRuleError: For ViT-7B/16 with fp32 weights (fp32 and the two autocast modes), before
+            the memory check and before any file read.
         InsufficientMemoryError: If the memory check fails.
         WeightsNotFoundError: If the weights are not on this Mac.
     """
     dtype = DTYPE_MODES[dtype_mode].weights
     label = f"{model_size} torch-{device} {dtype_mode}"
+    check_run_rule(model_size, dtype.itemsize, label)
     check_free_memory(required_load_bytes(model_size, dtype, ratio), label)
     model = DINOv3ViTModel.from_pretrained(weights_dir(model_size), dtype=dtype)
     return model.to(device).eval()

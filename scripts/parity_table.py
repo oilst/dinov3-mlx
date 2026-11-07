@@ -1,7 +1,9 @@
 """Turn the parity results of the parity tests of one backend into results/parity-{backend}.md.
 
 The tests append one JSON line for each configuration to
-tests/fixtures/generated/parity/{backend}.jsonl. For each configuration the last line counts.
+tests/fixtures/generated/parity/{backend}.jsonl. For each configuration the last line counts. The
+mlx table also lists the cross-check lines of scripts/cross_check.py and compares the non-finite
+configurations of mlx with those of torch-mps.
 
 Usage:
     uv run python scripts/parity_table.py                   # torch-mps
@@ -15,15 +17,17 @@ from datetime import date
 from pathlib import Path
 
 from dinov3_apple.hub import MODEL_IDS
-from dinov3_apple.parity import THRESHOLDS
+from dinov3_apple.parity import EXPECTED_FP16_OVERFLOW, THRESHOLDS
 
 REPO_ROOT = Path(__file__).parents[1]
 PARITY_DIR = REPO_ROOT / "tests" / "fixtures" / "generated" / "parity"
 MEASURES = ["frame", "patch_mean", "patch_p01", "patch_min"]
 # The package whose version the lines of each backend carry.
 BACKEND_PACKAGES = {"torch-mps": "torch", "mlx": "mlx"}
-# The checks of the mlx tests against the stored hidden states (W1 to W4 of the Step 4 plan).
+# The checks of the mlx tests against the stored hidden states (W1 to W4 of the Step 5 plan).
 STORED_KINDS = ["stored-embeddings", "stored-block", "stored-final-norm", "hidden-state"]
+# The kinds of test whose non-finite configurations the two backends must share (AC8).
+NON_FINITE_KINDS = ["parity", "batch"]
 
 
 def parity_log(backend: str) -> Path:
@@ -62,6 +66,7 @@ def summary_rows(lines: list[dict], kind: str) -> list[str]:
             group = groups.get((model_size, dtype_mode))
             if not group:
                 continue
+            expected = (model_size, dtype_mode) in EXPECTED_FP16_OVERFLOW
             measured = [line["parity"] for line in group if line["status"] == "measured"]
             non_finite = sum(line["status"] == "non-finite" for line in group)
             skipped = [line for line in group if line["status"] == "skipped"]
@@ -70,13 +75,16 @@ def summary_rows(lines: list[dict], kind: str) -> list[str]:
                 result = f"skipped: {skipped[0]['reason']}"
             elif not measured:
                 values = ["–"] * 4
-                result = "expected failure (fp16 overflow)" if dtype_mode == "fp16-cast" else "fail"
+                result = "expected failure (fp16 overflow)" if expected else "fail"
             else:
                 minimum = {m: min(p[m] for p in measured) for m in MEASURES}
                 values = [f"{minimum[m]:.6f}" for m in MEASURES]
                 result = "pass" if _passes(minimum, dtype_mode) else "fail"
                 if non_finite:
-                    result += f", {non_finite} expected failures (fp16 overflow)"
+                    if expected:
+                        result += f", {non_finite} expected failures (fp16 overflow)"
+                    else:
+                        result += f", {non_finite} non-finite: fail"
             rows.append(
                 f"| {model_size} | {dtype_mode} | {len(measured)} | {non_finite} | "
                 + " | ".join(values)
@@ -85,31 +93,103 @@ def summary_rows(lines: list[dict], kind: str) -> list[str]:
     return rows
 
 
+def _order(line: dict) -> tuple[int, int]:
+    """The position of the model size and the dtype mode of one line in MODEL_IDS and THRESHOLDS."""
+    return list(MODEL_IDS).index(line["model_size"]), list(THRESHOLDS).index(line["dtype_mode"])
+
+
 def stored_rows(lines: list[dict]) -> list[str]:
-    """Return one Markdown table row for each check against the stored hidden states."""
+    """Return one Markdown table row for each check against the stored hidden states.
+
+    The rows come in the order of MODEL_IDS, then THRESHOLDS, then STORED_KINDS.
+    """
     rows = []
-    for kind in STORED_KINDS:
-        for line in lines:
-            if line["kind"] != kind or line["status"] != "measured" or not line.get("values"):
-                continue
-            values = line["values"]
-            rows.append(
-                f"| {kind} | {line['config']} | {1 - values['min_cosine']:.2e} | "
-                f"{values['max_abs']:.4g} | {values['max_rel']:.4g} |"
-            )
+    selected = [
+        line
+        for line in lines
+        if line["kind"] in STORED_KINDS and line["status"] == "measured" and line.get("values")
+    ]
+    selected.sort(key=lambda line: (*_order(line), STORED_KINDS.index(line["kind"])))
+    for line in selected:
+        values = line["values"]
+        rows.append(
+            f"| {line['model_size']} | {line['dtype_mode']} | {line['kind']} | {line['config']} | "
+            f"{1 - values['min_cosine']:.2e} | {values['max_abs']:.4g} | {values['max_rel']:.4g} |"
+        )
     return rows
 
 
-def write_table(lines: list[dict], backend: str = "torch-mps") -> str:
+def cross_check_rows(lines: list[dict]) -> list[str]:
+    """Return one Markdown table row for each cross-check line (scripts/cross_check.py)."""
+    selected = sorted(
+        (line for line in lines if line["kind"] == "cross-check"),
+        key=lambda line: (*_order(line), line["config"]),
+    )
+    rows = []
+    for line in selected:
+        torch_device = (line.get("values") or {}).get("torch_device", "–")
+        if line["status"] == "measured":
+            values = [f"{line['parity'][m]:.6f}" for m in MEASURES]
+        else:
+            values = ["–"] * 4
+        rows.append(
+            f"| {line['model_size']} | {line['dtype_mode']} | {line['config']} | "
+            f"torch-{torch_device} | {line['status']} | " + " | ".join(values) + " |"
+        )
+    return rows
+
+
+def non_finite_keys(lines: list[dict]) -> set[tuple[str, str, str, str]]:
+    """Return (kind, model size, dtype mode, configuration) of each non-finite parity or batch
+    line."""
+    return {
+        (line["kind"], line["model_size"], line["dtype_mode"], line["config"])
+        for line in lines
+        if line["kind"] in NON_FINITE_KINDS and line["status"] == "non-finite"
+    }
+
+
+def non_finite_section(mlx_lines: list[dict], torch_lines: list[dict]) -> tuple[list[str], str]:
+    """Return the rows of the non-finite configurations of both backends and one last line:
+    "equal", or the list of differences."""
+    mlx, torch_mps = non_finite_keys(mlx_lines), non_finite_keys(torch_lines)
+    keys = sorted(
+        mlx | torch_mps,
+        key=lambda key: (
+            NON_FINITE_KINDS.index(key[0]),
+            list(MODEL_IDS).index(key[1]),
+            list(THRESHOLDS).index(key[2]),
+            key[3],
+        ),
+    )
+    rows, differences = [], []
+    for key in keys:
+        kind, model_size, dtype_mode, config = key
+        on_mlx = "non-finite" if key in mlx else "–"
+        on_torch = "non-finite" if key in torch_mps else "–"
+        rows.append(f"| {kind} | {model_size} | {dtype_mode} | {config} | {on_mlx} | {on_torch} |")
+        if (key in mlx) != (key in torch_mps):
+            only = "mlx" if key in mlx else "torch-mps"
+            differences.append(f"{model_size} {dtype_mode} {config} ({kind}): {only} only")
+    last = "equal" if not differences else "differences: " + "; ".join(differences)
+    return rows, last
+
+
+def write_table(
+    lines: list[dict], backend: str = "torch-mps", torch_lines: list[dict] | None = None
+) -> str:
     """Return the Markdown text of the results file of one backend.
 
     Args:
         lines: The latest JSON lines of the parity tests of the backend.
         backend: "torch-mps" or "mlx".
+        torch_lines: The latest JSON lines of torch-mps, for the comparison of the non-finite
+            configurations of mlx with those of torch-mps. None: no comparison.
 
     Returns:
-        The text with the parity, the batch consistency, the thresholds and, for lines of the
-        stored hidden-state checks, a fourth section.
+        The text with the parity, the batch consistency and the thresholds. Further sections
+        follow for the stored hidden-state checks, the cross-check lines and the comparison of
+        the non-finite configurations, if there are lines for them.
     """
     package = BACKEND_PACKAGES[backend]
     versions = sorted({line[package] for line in lines if package in line})
@@ -165,24 +245,68 @@ def write_table(lines: list[dict], backend: str = "torch-mps") -> str:
         ),
         "",
     ]
+    section = 4
     if stored := stored_rows(lines):
         text += [
-            "## 4 Stored hidden states",
+            f"## {section} Stored hidden states",
             "",
             (
                 "Each check runs one part on the stored input of iss-kibo-lab/224x224 and compares "
                 "with the stored output: the embeddings, each block alone, the final layer norm "
-                "and the 13 hidden states in a chain. The minimum token cosine runs in fp64."
+                "and the L + 1 hidden states in a chain (L is the number of blocks). In the cast "
+                "modes the stored inputs are first rounded to the stream dtype. The fp32 rows "
+                "assert; the four fp16 and bf16 dtype modes are report only. The minimum token "
+                "cosine runs in fp64."
             ),
             "",
             (
-                "| Check | Part | 1 − minimum token cosine | Largest difference | "
-                "Largest relative difference |"
+                "| Model size | Dtype mode | Check | Part | 1 − minimum token cosine | "
+                "Largest difference | Largest relative difference |"
             ),
-            "| --- | --- | --- | --- | --- |",
+            "| --- | --- | --- | --- | --- | --- | --- |",
             *stored,
             "",
-            f"Table 4. Checks of {backend} against the stored hidden states.",
+            f"Table {section}. Checks of {backend} against the stored hidden states.",
+            "",
+        ]
+        section += 1
+    if cross := cross_check_rows(lines):
+        text += [
+            f"## {section} Cross-check against torch",
+            "",
+            (
+                "scripts/cross_check.py compares the mlx output with the torch output in the same "
+                "dtype mode, without the reference output. Report only: no threshold applies."
+            ),
+            "",
+            (
+                "| Model size | Dtype mode | Configuration | Torch backend | Status | Frame | "
+                "Patch mean | Patch 1st percentile | Patch minimum |"
+            ),
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+            *cross,
+            "",
+            f"Table {section}. Cross-check of {backend} against torch.",
+            "",
+        ]
+        section += 1
+    if torch_lines is not None:
+        rows, last = non_finite_section(lines, torch_lines)
+        text += [
+            f"## {section} Non-finite configurations: mlx against torch-mps",
+            "",
+            (
+                "Each row is a parity or batch configuration with a non-finite output on at least "
+                "one backend. The last line says if the two sets are equal."
+            ),
+            "",
+            "| Test | Model size | Dtype mode | Configuration | mlx | torch-mps |",
+            "| --- | --- | --- | --- | --- | --- |",
+            *rows,
+            "",
+            f"Table {section}. Non-finite configurations of mlx and torch-mps.",
+            "",
+            last,
             "",
         ]
     return "\n".join(text)
@@ -195,7 +319,11 @@ def main() -> None:
     args = parser.parse_args()
     results = results_path(args.backend)
     results.parent.mkdir(parents=True, exist_ok=True)
-    results.write_text(write_table(latest_lines(parity_log(args.backend)), args.backend))
+    torch_lines = None
+    if args.backend == "mlx" and parity_log("torch-mps").exists():
+        torch_lines = latest_lines(parity_log("torch-mps"))
+    lines = latest_lines(parity_log(args.backend))
+    results.write_text(write_table(lines, args.backend, torch_lines))
     print(f"wrote {results}")
 
 

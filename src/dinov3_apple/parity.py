@@ -33,6 +33,15 @@ _FP16 = Parity(frame=0.999, patch_mean=0.999, patch_p01=0.99, patch_min=-1.0)
 # frame parity down to 0.9984 and a patch 1st percentile down to 0.969 (ViT-H+/16 at 224 px).
 _BF16 = Parity(frame=0.998, patch_mean=0.995, patch_p01=0.96, patch_min=-1.0)
 
+FP16_OVERFLOW = (
+    "fp16 overflow: a register token is above 65,504 (Table 3 of specs/05-all-sizes/explore.html)"
+)
+# The pairs with a token range above 65,504 in a tensor that the dtype mode keeps in fp16. A pair
+# joins only with the evidence of a token-range line (D3, way M2 of specs/05-all-sizes/explore.html).
+EXPECTED_FP16_OVERFLOW: frozenset[tuple[str, str]] = frozenset(
+    {("ViT-L/16", "fp16-cast"), ("ViT-H+/16", "fp16-cast")}
+)
+
 # Table 6 of specs/02-reference/plan.html. patch_min is report only, so its limit is -1.
 THRESHOLDS: dict[str, Parity] = {
     "fp32": _FP32,

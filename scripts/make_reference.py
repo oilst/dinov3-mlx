@@ -1,9 +1,10 @@
 """Make the stored pixels and the reference output of each model size on torch-cpu in fp32.
 
 The script writes inputs.safetensors first. Then it runs each model size in its own subprocess,
-from the smallest to the largest, one after the other. Before each subprocess it checks the free
-memory: LOAD_RATIO x the fp32 weight bytes + 4 GB. A model size that does not fit is skipped, and
-runs.jsonl records the reason. Section 3.5 of specs/02-reference/plan.html gives the rules.
+from the smallest to the largest, one after the other. Before each subprocess it checks the run
+rules of CLAUDE.md and then the free memory: LOAD_RATIO x the fp32 weight bytes + 4 GB. A model
+size that breaks a run rule (ViT-7B/16 never loads with fp32 weights) or does not fit is skipped,
+and runs.jsonl records the reason. Section 3.5 of specs/02-reference/plan.html gives the rules.
 
 Usage:
     uv run python scripts/make_reference.py                # all model sizes
@@ -28,7 +29,13 @@ import torch
 from safetensors.numpy import save_file
 
 from dinov3_apple.hub import CONVERTED_DIR, MODEL_IDS, weights_dir
-from dinov3_apple.memory import GB, InsufficientMemoryError, check_free_memory
+from dinov3_apple.memory import (
+    GB,
+    InsufficientMemoryError,
+    RunRuleError,
+    check_free_memory,
+    check_run_rule,
+)
 from dinov3_apple.preprocess import IMAGENET_MEAN, IMAGENET_STD, load_image, preprocess
 from dinov3_apple.reference import (
     HIDDEN_STATES_CONFIG,
@@ -198,10 +205,21 @@ def load_ratio(runs_log: Path = RUNS_LOG) -> float:
 
 
 def run_all(model_sizes: list[str]) -> None:
-    """Run each model size in its own subprocess, one after the other, after a memory check."""
+    """Run each model size in its own subprocess, one after the other.
+
+    Each model size first passes the run rule, then the memory check. A skip goes to runs.jsonl
+    with its reason.
+    """
     ratio = load_ratio()
     logger.info(f"the memory check uses the load ratio {ratio:.2f}")
     for model_size in model_sizes:
+        try:
+            check_run_rule(model_size, 4, f"{model_size} torch-cpu fp32 (make_reference.py)")
+        except RunRuleError as error:
+            line = {"model_size": model_size, "time": _now(), "ratio": round(ratio, 3)}
+            _append_run(line | {"status": "skipped", "reason": str(error)})
+            logger.warning(f"{model_size}: skipped. {error}")
+            continue
         fp32_bytes = parameter_count(model_size) * 4
         line = {
             "model_size": model_size,

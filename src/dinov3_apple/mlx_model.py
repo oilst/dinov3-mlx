@@ -1,4 +1,4 @@
-"""The DINOv3 backbone in MLX (Step 4: the blocks with an MLP, for example ViT-S/16).
+"""The DINOv3 backbone in MLX: all six model sizes, the MLP and SwiGLU, five dtype modes.
 
 Source: we wrote this module from modeling_dinov3_vit.py of Hugging Face transformers 5.22.1
 (Apache-2.0, Copyright 2025 Meta AI and The HuggingFace Inc. team) and the DINOv3 paper
@@ -6,15 +6,20 @@ Source: we wrote this module from modeling_dinov3_vit.py of Hugging Face transfo
 files, so the key map of mlx_weights.py is almost the identity (D1 of
 specs/04-mlx-port/explore.html).
 
+Each dtype mode is a pair of dtypes: the matmul dtype and the stream dtype (D2 of
+specs/05-all-sizes/explore.html). The backbone keeps the pair as a plain attribute, not as a
+parameter, so load_weights, set_dtype and nn.quantize do not change it.
+
 No torch import. The fp32 dtype mode needs TF32 off: MLX_ENABLE_TF32=0 in the environment before
-the first use of mlx (D7). This module does not change the environment.
+the first use of mlx (D7 of specs/04-mlx-port/explore.html). This module does not change the
+environment.
 """
 
 import os
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import mlx.core as mx
 import numpy as np
@@ -22,8 +27,34 @@ from mlx import nn
 
 from dinov3_apple.outputs import NUM_PREFIX_TOKENS
 
-# The dtype modes of the backend mlx. Each key is also a key of THRESHOLDS and DTYPE_OF_MODE.
-MLX_DTYPE_MODES: dict[str, mx.Dtype] = {"fp32": mx.float32}  # Step 5 adds fp16 and bf16 modes
+if TYPE_CHECKING:  # mlx_weights imports this module
+    from dinov3_apple.mlx_weights import LoadReport
+
+
+@dataclass(frozen=True)
+class MlxDtypeMode:
+    """The two dtypes of one dtype mode of mlx (D2 of specs/05-all-sizes/explore.html).
+
+    Attributes:
+        matmul: The matmul dtype: the weight and bias of each nn.Linear, the inputs of the
+            matmuls and of the SDPA.
+        stream: The stream dtype: the residual stream, the layer norms, LayerScale, the CLS
+            token and the register tokens.
+    """
+
+    matmul: mx.Dtype
+    stream: mx.Dtype
+
+
+# The keys are the keys of THRESHOLDS and DTYPE_OF_MODE, in the order of THRESHOLDS.
+MLX_DTYPE_MODES: dict[str, MlxDtypeMode] = {
+    "fp32": MlxDtypeMode(mx.float32, mx.float32),
+    "fp16-cast": MlxDtypeMode(mx.float16, mx.float16),
+    "bf16-cast": MlxDtypeMode(mx.bfloat16, mx.bfloat16),
+    "fp16-autocast": MlxDtypeMode(mx.float16, mx.float32),
+    "bf16-autocast": MlxDtypeMode(mx.bfloat16, mx.float32),
+}
+FP32 = MLX_DTYPE_MODES["fp32"]
 
 
 class TF32ModeError(RuntimeError):
@@ -66,8 +97,9 @@ class MlxConfig:
         rope_theta: The base of the RoPE frequencies.
         query_bias: True if q_proj has a bias. The same for key_bias, value_bias and proj_bias.
         mlp_bias: True if the feed-forward network has biases.
-        gated: True for SwiGLU (use_gated_mlp). Step 5 adds it.
-        hidden_act: The activation of the feed-forward network, "gelu" for the MLP.
+        gated: True for SwiGLU (use_gated_mlp).
+        hidden_act: The activation of the feed-forward network: "gelu" for the MLP, "silu" for
+            SwiGLU.
     """
 
     dim: int
@@ -201,8 +233,9 @@ class Embeddings(nn.Module):
     mask token of the weights file is for training only; the key map drops it.
     """
 
-    def __init__(self, config: MlxConfig) -> None:
+    def __init__(self, config: MlxConfig, dtypes: MlxDtypeMode = FP32) -> None:
         super().__init__()
+        self.dtypes = dtypes  # a plain attribute: no parameter, nn.quantize keeps it
         self.patch_size = config.patch_size
         self.cls_token = mx.zeros((1, 1, config.dim))
         self.register_tokens = mx.zeros((1, config.num_register_tokens, config.dim))
@@ -211,17 +244,21 @@ class Embeddings(nn.Module):
     def __call__(self, pixels: mx.array) -> mx.array:
         """Return the token sequence (B, 1 + 4 + N, D) of NCHW pixels (B, C, H, W).
 
-        The pixels get the dtype of the CLS token first, as in the Hugging Face forward pass (the
-        dtype of the model weights). Without this cast, fp32 pixels promote the residual stream of
-        a model with bf16 or fp16 weights to fp32. The cast does not use the dtype of the patch
-        embedding weight: nn.quantize packs that weight into uint32, and uint32 pixels give wrong
-        tokens without an error (F1 of specs/04-mlx-port/verify.html).
+        The pixels get the matmul dtype first, as in the Hugging Face forward pass. The patch
+        tokens get the stream dtype: half in cast mode, fp32 in autocast mode. The cast uses the
+        plain attribute dtypes, not the dtype of a weight: nn.quantize packs the patch embedding
+        weight into uint32, and uint32 pixels give wrong tokens without an error (F1 of
+        specs/04-mlx-port/verify.html).
+
+        Returns:
+            The tokens in the stream dtype.
         """
-        pixels = pixels.astype(self.cls_token.dtype)
+        pixels = pixels.astype(self.dtypes.matmul)
         patches = self.patch_embeddings(patchify(pixels, self.patch_size))
+        patches = patches.astype(self.dtypes.stream)
         prefix = mx.concatenate([self.cls_token, self.register_tokens], axis=1)
         prefix = mx.broadcast_to(prefix, (pixels.shape[0], *prefix.shape[1:]))
-        return mx.concatenate([prefix.astype(patches.dtype), patches], axis=1)
+        return mx.concatenate([prefix.astype(self.dtypes.stream), patches], axis=1)
 
 
 class Attention(nn.Module):
@@ -291,47 +328,105 @@ class MLP(nn.Module):
         self.up_proj = nn.Linear(config.dim, config.ff, bias=config.mlp_bias)
         self.down_proj = nn.Linear(config.ff, config.dim, bias=config.mlp_bias)
 
+    def activation(self, up: mx.array) -> mx.array:
+        """Return gelu(up). It computes in fp32 and rounds once to the dtype of up.
+
+        nn.gelu is the erf form, not nn.gelu_approx. In half precision the MLX activations round
+        after each operation (Table 8 of specs/05-all-sizes/explore.html). In fp32 the casts do
+        nothing.
+        """
+        return nn.gelu(up.astype(mx.float32)).astype(up.dtype)
+
+    def hidden(self, x: mx.array) -> mx.array:
+        """Return the feed-forward hidden values gelu(up_proj(x))."""
+        return self.activation(self.up_proj(x))
+
     def __call__(self, x: mx.array) -> mx.array:
-        """Return down_proj(gelu(up_proj(x))). nn.gelu is the erf form, not nn.gelu_approx."""
-        return self.down_proj(nn.gelu(self.up_proj(x)))
+        """Return down_proj(gelu(up_proj(x))), as DINOv3ViTMLP."""
+        return self.down_proj(self.hidden(x))
+
+
+class SwiGLU(nn.Module):
+    """The feed-forward network of ViT-S+/16, ViT-H+/16 and ViT-7B/16 (D1 of
+    specs/05-all-sizes/explore.html). Three nn.Linear modules with the Hugging Face names."""
+
+    def __init__(self, config: MlxConfig) -> None:
+        super().__init__()
+        if config.hidden_act != "silu":
+            raise NotImplementedError(f"activation {config.hidden_act!r} of SwiGLU")
+        self.gate_proj = nn.Linear(config.dim, config.ff, bias=config.mlp_bias)
+        self.up_proj = nn.Linear(config.dim, config.ff, bias=config.mlp_bias)
+        self.down_proj = nn.Linear(config.ff, config.dim, bias=config.mlp_bias)
+
+    def activation(self, gate: mx.array, up: mx.array) -> mx.array:
+        """Return silu(gate) · up. It computes in fp32 and rounds once to the dtype of gate."""
+        product = nn.silu(gate.astype(mx.float32)) * up.astype(mx.float32)
+        return product.astype(gate.dtype)
+
+    def hidden(self, x: mx.array) -> mx.array:
+        """Return the feed-forward hidden values silu(gate_proj(x)) · up_proj(x)."""
+        return self.activation(self.gate_proj(x), self.up_proj(x))
+
+    def __call__(self, x: mx.array) -> mx.array:
+        """Return down_proj(silu(gate_proj(x)) · up_proj(x)), as DINOv3ViTGatedMLP."""
+        return self.down_proj(self.hidden(x))
 
 
 class Block(nn.Module):
     """One block: an attention branch and a feed-forward branch, each with a pre-norm, a
-    LayerScale and a residual add."""
+    LayerScale and a residual add.
 
-    def __init__(self, config: MlxConfig) -> None:
+    The branches run in the matmul dtype, the residual stream in the stream dtype. In an
+    autocast mode a half branch output times the fp32 LayerScale factor gives fp32. In fp32 and
+    in a cast mode both dtypes are the same, so the casts allocate nothing.
+    """
+
+    def __init__(self, config: MlxConfig, dtypes: MlxDtypeMode = FP32) -> None:
         super().__init__()
-        if config.gated:
-            raise NotImplementedError("SwiGLU comes in Step 5")
+        self.dtypes = dtypes  # a plain attribute: no parameter, nn.quantize keeps it
         self.norm1 = nn.LayerNorm(config.dim, eps=config.eps)
         self.attention = Attention(config)
         self.layer_scale1 = LayerScale(config.dim)
         self.norm2 = nn.LayerNorm(config.dim, eps=config.eps)
-        self.mlp = MLP(config)
+        self.mlp = SwiGLU(config) if config.gated else MLP(config)
         self.layer_scale2 = LayerScale(config.dim)
 
+    def attention_branch(self, x: mx.array, cos: mx.array, sin: mx.array) -> mx.array:
+        """Return the attention branch output before LayerScale, in the matmul dtype."""
+        return self.attention(self.norm1(x).astype(self.dtypes.matmul), cos, sin)
+
+    def ff_hidden(self, x: mx.array) -> mx.array:
+        """Return the feed-forward hidden values: the GELU output, or silu(gate) · up."""
+        return self.mlp.hidden(self.norm2(x).astype(self.dtypes.matmul))
+
     def __call__(self, x: mx.array, cos: mx.array, sin: mx.array) -> mx.array:
-        """Return the block output (B, 5 + N, D) of the tokens x and the RoPE tables."""
-        x = self.layer_scale1(self.attention(self.norm1(x), cos, sin)) + x
-        return self.layer_scale2(self.mlp(self.norm2(x))) + x
+        """Return the block output (B, 5 + N, D) of the tokens x and the RoPE tables.
+
+        run_mlx_token_range calls the same methods in the same order.
+        """
+        x = self.layer_scale1(self.attention_branch(x, cos, sin)) + x
+        return self.layer_scale2(self.mlp.down_proj(self.ff_hidden(x))) + x
 
 
 class MlxBackbone(nn.Module):
     """The DINOv3 backbone in MLX. Its parameter names are the keys of the safetensors file.
 
     The RoPE tables are not parameters: an attribute whose name starts with "_" is not part of
-    parameters(), so load_weights(strict=True), set_dtype and nn.quantize do not touch them.
+    parameters(), so load_weights(strict=True), set_dtype and nn.quantize do not touch them. The
+    dtype mode, its dtypes and the load report are plain attributes, not parameters.
     """
 
-    def __init__(self, config: MlxConfig) -> None:
+    def __init__(self, config: MlxConfig, dtype_mode: str = "fp32") -> None:
         super().__init__()
         self.config = config
-        self.embeddings = Embeddings(config)
-        self.layer = [Block(config) for _ in range(config.blocks)]
+        self.dtype_mode = dtype_mode
+        self.dtypes = MLX_DTYPE_MODES[dtype_mode]
+        self.embeddings = Embeddings(config, self.dtypes)
+        self.layer = [Block(config, self.dtypes) for _ in range(config.blocks)]
         self.norm = nn.LayerNorm(config.dim, eps=config.eps)
         self._rope_cache: dict[tuple[int, int], tuple[mx.array, mx.array]] = {}
         self.rope_box_jitter = False  # RoPE-box jittering of training: off; Step 8 decides (R17)
+        self.load_report: LoadReport | None = None  # load_mlx_backbone sets it
 
     def rope(self, grid_h: int, grid_w: int) -> tuple[mx.array, mx.array]:
         """Return the RoPE tables (cos, sin) of one patch grid, from the cache."""
@@ -350,20 +445,40 @@ class MlxBackbone(nn.Module):
         return self.norm(x)
 
 
+def linear_parameter_names(model: nn.Module) -> frozenset[str]:
+    """Return the names of the weight and bias of each nn.Linear module: the matmul dtype (D2).
+
+    The names come from named_modules() and isinstance, not from name suffixes. All other
+    parameters get the stream dtype.
+    """
+    return frozenset(
+        f"{name}.{leaf}"
+        for name, module in model.named_modules()
+        if isinstance(module, nn.Linear)
+        for leaf in module.parameters()
+    )
+
+
 def run_mlx(model: MlxBackbone, pixels: np.ndarray, dtype_mode: str) -> np.ndarray:
     """Run the backbone on stored pixels and return all tokens after the final layer norm.
 
-    The contract of run_torch in reference.py.
+    The contract of run_torch in reference.py. The model casts the fp32 pixels to its matmul
+    dtype.
 
     Args:
         model: A backbone from load_mlx_backbone.
         pixels: Normalized fp32 pixels with shape (B, 3, H, W), NCHW.
-        dtype_mode: A key of MLX_DTYPE_MODES. It must match the dtype of the model weights.
+        dtype_mode: A key of MLX_DTYPE_MODES. It must be the dtype mode of the model.
 
     Returns:
         The tokens with shape (B, 1 + 4 + N, D), cast to fp32.
+
+    Raises:
+        ValueError: If dtype_mode is not the dtype mode of the model.
     """
-    tokens = model(mx.array(pixels).astype(MLX_DTYPE_MODES[dtype_mode]))
+    if dtype_mode != model.dtype_mode:
+        raise ValueError(f"the model runs in {model.dtype_mode}, not in {dtype_mode}")
+    tokens = model(mx.array(pixels))
     tokens = tokens.astype(mx.float32)  # a bf16 mx.array does not convert to NumPy
     mx.eval(tokens)
     return np.array(tokens)
@@ -379,9 +494,9 @@ def run_mlx_hidden_states(model: MlxBackbone, pixels: np.ndarray) -> np.ndarray:
         pixels: Normalized fp32 pixels with shape (1, 3, H, W).
 
     Returns:
-        The hidden states with shape (L + 1, 1 + 4 + N, D) in fp32.
+        The hidden states with shape (L + 1, 1 + 4 + N, D), cast to fp32.
     """
-    x = model.embeddings(mx.array(pixels[:1]).astype(model.norm.weight.dtype))
+    x = model.embeddings(mx.array(pixels[:1]))  # the model casts the fp32 pixels
     p = model.config.patch_size
     cos, sin = model.rope(pixels.shape[2] // p, pixels.shape[3] // p)
     states = [x[0]]
@@ -391,3 +506,97 @@ def run_mlx_hidden_states(model: MlxBackbone, pixels: np.ndarray) -> np.ndarray:
     hidden = mx.stack(states).astype(mx.float32)
     mx.eval(hidden)
     return np.array(hidden)
+
+
+@dataclass(frozen=True)
+class TokenRange:
+    """The largest absolute values of one configuration, block by block (D6). Report only.
+
+    Attributes:
+        tokens: (L + 1,) fp32: the token sequence before block 1 and after each block.
+        tokens_where: (L + 1,): the token index of each value of tokens. 0 is the CLS token; 1 to 4
+            are the register tokens.
+        tokens_finite: (L + 1,): True if every value of the token sequence is finite.
+        attention: (L,) fp32: the attention branch output before LayerScale.
+        ff_hidden: (L,) fp32: the feed-forward hidden values.
+        ff_out: (L,) fp32: the feed-forward branch output before LayerScale.
+        last_state: (5 + N, D) fp32: the token sequence after the last block.
+    """
+
+    tokens: np.ndarray
+    tokens_where: np.ndarray
+    tokens_finite: np.ndarray
+    attention: np.ndarray
+    ff_hidden: np.ndarray
+    ff_out: np.ndarray
+    last_state: np.ndarray
+
+    @property
+    def finite(self) -> bool:
+        """True if every token sequence and every branch value is finite."""
+        values = (self.tokens, self.attention, self.ff_hidden, self.ff_out)
+        return bool(self.tokens_finite.all() and all(np.isfinite(v).all() for v in values))
+
+    def report_values(self) -> dict[str, list]:
+        """Return all fields except last_state as lists, for one JSON line."""
+        return {
+            "tokens": self.tokens.tolist(),
+            "tokens_where": self.tokens_where.tolist(),
+            "tokens_finite": self.tokens_finite.tolist(),
+            "attention": self.attention.tolist(),
+            "ff_hidden": self.ff_hidden.tolist(),
+            "ff_out": self.ff_out.tolist(),
+        }
+
+
+def _largest(t: mx.array) -> mx.array:
+    return mx.abs(t.astype(mx.float32)).max()  # inf stays inf
+
+
+def _token_values(x: mx.array) -> tuple[mx.array, mx.array, mx.array]:
+    """The largest absolute value of a token sequence (1, T, D), its token and the finite flag."""
+    magnitude = mx.abs(x[0].astype(mx.float32)).max(axis=-1)
+    return magnitude.max(), mx.argmax(magnitude), mx.isfinite(x).all()
+
+
+def run_mlx_token_range(model: MlxBackbone, pixels: np.ndarray) -> TokenRange:
+    """Run image 0 block by block and keep only the largest absolute values (D6). Report only.
+
+    The calls and their order are the calls of Block.__call__, so the last token sequence equals
+    the last state of run_mlx_hidden_states. The function evaluates one block at a time.
+
+    Args:
+        model: A backbone from load_mlx_backbone.
+        pixels: Normalized fp32 pixels with shape (B, 3, H, W). Only image 0 runs.
+
+    Returns:
+        The token range of image 0.
+    """
+    x = model.embeddings(mx.array(pixels[:1]))
+    p = model.config.patch_size
+    cos, sin = model.rope(pixels.shape[2] // p, pixels.shape[3] // p)
+    states = [_token_values(x)]
+    mx.eval(x, states[-1])
+    branches = []
+    for block in model.layer:
+        a = block.attention_branch(x, cos, sin)
+        x = block.layer_scale1(a) + x
+        h = block.ff_hidden(x)
+        f = block.mlp.down_proj(h)
+        x = block.layer_scale2(f) + x
+        states.append(_token_values(x))
+        branches.append((_largest(a), _largest(h), _largest(f)))
+        mx.eval(x, states[-1], branches[-1])  # one block at a time
+    largest, where, finite = (np.array([s[i].item() for s in states]) for i in range(3))
+    attention, ff_hidden, ff_out = (
+        np.array([b[i].item() for b in branches], np.float32) for i in range(3)
+    )
+    return TokenRange(
+        tokens=largest.astype(np.float32),
+        tokens_where=where.astype(np.int64),
+        tokens_finite=finite.astype(bool),
+        attention=attention,
+        ff_hidden=ff_hidden,
+        ff_out=ff_out,
+        last_state=np.array(x[0].astype(mx.float32)),
+    )

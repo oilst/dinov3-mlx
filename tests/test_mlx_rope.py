@@ -1,4 +1,5 @@
-"""Tests T8 and T9 of specs/04-mlx-port/plan.html: the RoPE tables."""
+"""Tests T8 and T9 of specs/04-mlx-port/plan.html and T27 of specs/05-all-sizes/plan.html: the
+RoPE tables."""
 
 import math
 from collections.abc import Callable
@@ -6,7 +7,7 @@ from collections.abc import Callable
 import numpy as np
 import pytest
 import torch
-from small_model import GRIDS, SMALL_CONFIG
+from small_model import GRIDS, SMALL_CONFIG, SMALL_CONFIGS
 from transformers import DINOv3ViTConfig
 from transformers.models.dinov3_vit.modeling_dinov3_vit import DINOv3ViTRopePositionEmbedding
 
@@ -23,8 +24,10 @@ THETA = 100.0
 META_ANGLE_DIFFERENCE = {(14, 14): 0.0079, (32, 32): 0.0083}
 
 
-def _hf_tables(grid_h: int, grid_w: int) -> tuple[np.ndarray, np.ndarray]:
-    rope = DINOv3ViTRopePositionEmbedding(DINOv3ViTConfig(**SMALL_CONFIG)).eval()
+def _hf_tables(
+    grid_h: int, grid_w: int, config: dict = SMALL_CONFIG
+) -> tuple[np.ndarray, np.ndarray]:
+    rope = DINOv3ViTRopePositionEmbedding(DINOv3ViTConfig(**config)).eval()
     pixels = torch.zeros(1, 3, grid_h * PATCH_SIZE, grid_w * PATCH_SIZE)
     with torch.inference_mode():
         cos, sin = rope(pixels)
@@ -82,3 +85,28 @@ def test_rope_tables_meta_difference(grid_h: int, grid_w: int, report: Callable[
     )
     if (grid_h, grid_w) in META_ANGLE_DIFFERENCE:
         assert angle == pytest.approx(META_ANGLE_DIFFERENCE[(grid_h, grid_w)], rel=0.05)
+
+
+@pytest.mark.parametrize(("grid_h", "grid_w"), GRIDS, ids=[f"{h}x{w}" for h, w in GRIDS])
+def test_rope_tables_head_dim_128(grid_h: int, grid_w: int, report: Callable[..., None]) -> None:
+    """T27: the tables of head dimension 128 (ViT-7B/16) against Hugging Face."""
+    head_dim = 128
+    cos, sin = rope_tables(grid_h, grid_w, head_dim, THETA)
+    hf_cos, hf_sin = _hf_tables(grid_h, grid_w, SMALL_CONFIGS["vit7b16-shape"])
+    n = grid_h * grid_w
+    assert hf_cos.shape == (n, head_dim)
+    assert cos.shape == sin.shape == (NUM_PREFIX_TOKENS + n, head_dim)
+    assert cos.dtype == sin.dtype == np.float32
+    assert np.array_equal(cos[:NUM_PREFIX_TOKENS], np.ones((NUM_PREFIX_TOKENS, head_dim)))
+    assert np.array_equal(sin[:NUM_PREFIX_TOKENS], np.zeros((NUM_PREFIX_TOKENS, head_dim)))
+    cos_difference = float(np.abs(cos[NUM_PREFIX_TOKENS:] - hf_cos).max())
+    sin_difference = float(np.abs(sin[NUM_PREFIX_TOKENS:] - hf_sin).max())
+    report(
+        "test_rope_tables_head_dim_128",
+        grid=f"{grid_h}x{grid_w}",
+        cos=cos_difference,
+        sin=sin_difference,
+        target=1e-6,
+    )
+    assert cos_difference <= 1e-6
+    assert sin_difference <= 1e-6

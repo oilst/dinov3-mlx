@@ -26,7 +26,7 @@ import pytest
 import torch
 
 from dinov3_apple.hub import MODEL_IDS, WeightsNotFoundError
-from dinov3_apple.memory import InsufficientMemoryError
+from dinov3_apple.memory import GB, InsufficientMemoryError, RunRuleError
 from dinov3_apple.parity import Parity
 from dinov3_apple.reference import (
     INPUTS_FILE,
@@ -72,7 +72,12 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
 
 
 class _BackboneSlot:
-    """Holds at most one backbone, torch or mlx. A new load frees the previous one first."""
+    """Holds at most one backbone, torch or mlx. A new load frees the previous one first.
+
+    A load that breaks a run rule skips with the reason, as a second guard. After each mlx load
+    the slot checks the load report: a load peak above its target of Table 5 of
+    specs/05-all-sizes/plan.html, or a cache above 0 bytes, fails the test.
+    """
 
     def __init__(self) -> None:
         self.key: tuple[str, str, str] | None = None
@@ -102,10 +107,24 @@ class _BackboneSlot:
                     self.model = load_mlx_backbone(model_size, dtype_mode)
                 else:
                     self.model = load_torch_backbone(model_size, device, dtype_mode)
-            except (WeightsNotFoundError, InsufficientMemoryError) as error:
+            except (WeightsNotFoundError, InsufficientMemoryError, RunRuleError) as error:
                 pytest.skip(str(error))
             self.key = key
+            if device == "mlx":
+                self.check_load_report(model_size, dtype_mode)
         return self.model
+
+    def check_load_report(self, model_size: str, dtype_mode: str) -> None:
+        """Fail the test if the load peak is above its target or the MLX cache is not empty."""
+        from parity_checks import load_peak_target
+
+        report = self.model.load_report
+        target = load_peak_target(model_size, dtype_mode)
+        if report.peak_bytes > target or report.cache_bytes > 0:
+            pytest.fail(
+                f"load of {model_size} mlx {dtype_mode}: load peak {report.peak_bytes / GB:.4f} GB "
+                f"(target {target / GB:.4f} GB), cache {report.cache_bytes} bytes after the load"
+            )
 
 
 @pytest.fixture(scope="session")

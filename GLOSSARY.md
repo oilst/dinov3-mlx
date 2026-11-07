@@ -70,6 +70,15 @@ _Avoid_: FFN (in prose), MLP (for the general case)
 **SwiGLU**:
 The gated feed-forward network of ViT-S+/16, ViT-H+/16 and ViT-7B/16: `down(silu(gate(x)) * up(x))`. Its hidden width is 2/3 of the width that the Meta ratio gives.
 
+**Residual stream**:
+The token sequence that passes from block to block. Each branch of a block adds its output to it.
+
+**Branch output**:
+The output of the attention branch or the feed-forward branch of a block, before LayerScale.
+
+**Feed-forward hidden values**:
+The input of `down_proj` in one block: the GELU output of an MLP, or `silu(gate_proj(x)) · up_proj(x)` of SwiGLU.
+
 **Embedding dimension**:
 The length of each token vector of a model size: 384, 768, 1024, 1280 or 4096.
 _Avoid_: hidden size, width, d_model
@@ -170,6 +179,9 @@ The test of one fp32 matmul with `MLX_ENABLE_TF32=0` and `=1` against NumPy floa
 The output of the Hugging Face backbone on `torch-cpu` in fp32. All parity tests compare with it.
 _Avoid_: ground truth, golden output
 
+**Streamed reference**:
+A reference output computed on torch-cpu in fp32 with the weights of one block in memory at a time.
+
 **Baseline**:
 The speed and the memory of the Hugging Face backbone on `torch-mps`. All speedups are relative to it.
 _Avoid_: reference (for speed)
@@ -178,11 +190,17 @@ _Avoid_: reference (for speed)
 The agreement of an output with the reference output, measured as cosine similarity.
 _Avoid_: accuracy, correctness, fidelity
 
+**Expected failure**:
+A configuration that a test marks as xfail with a reason, because evidence shows that it cannot pass, for example the fp16 overflow.
+
+**Cross-check**:
+The parity of an `mlx` output against a torch output in the same dtype mode, without the reference output. Report only.
+
 **Part test**:
-A test of one part of a block in `mlx` against the Hugging Face module on torch-cpu, with the small model.
+A test of one part of a block in `mlx` against the Hugging Face module on torch-cpu, with a small model.
 
 **Small model**:
-The Hugging Face backbone with the values of ViT-S/16, 2 blocks and random weights (`tests/small_model.py`). The oracle of the part tests. It needs no gated weights.
+A Hugging Face backbone with 2 blocks and random weights (`tests/small_model.py`). It has the values of ViT-S/16 or of ViT-S+/16, or the shape of ViT-7B/16 at a small embedding dimension. The oracle of the part tests. It needs no gated weights.
 
 **Configuration**:
 One combination of model size, backend, dtype, input resolution, batch size and output. In a parity test, the test image is also part of it.
@@ -210,11 +228,29 @@ _Avoid_: precision mode
 A dtype mode in which the weights, the inputs and the residual stream are in fp16 or bf16.
 
 **Autocast mode**:
-A dtype mode in which the weights and the residual stream stay in fp32 and `torch.autocast` runs the matrix products in fp16 or bf16.
+A dtype mode in which the matmuls run in fp16 or bf16, and the residual stream, the layer norms and LayerScale stay in fp32. On torch, the weights stay in fp32 and `torch.autocast` casts them at each matmul. On `mlx`, the load casts the weights of the matmuls once.
 _Avoid_: mixed precision (alone)
+
+**Matmul**:
+One matrix multiplication of the backbone, for example in an `nn.Linear` module or in the patch embedding.
+
+**Matmul dtype**:
+The dtype of the weights and the inputs of the matmuls in one dtype mode of `mlx`.
+
+**Stream dtype**:
+The dtype of the residual stream, the layer norms, LayerScale, the CLS token and the register tokens in one dtype mode of `mlx`.
+
+**Token range**:
+The largest absolute value in the token sequence before block 1 and after each block, for one configuration.
 
 **Memory check**:
 The comparison of the free memory with the need of a model load, before the load. A load that does not fit stops with a recorded reason.
+
+**Load peak**:
+The largest MLX active memory (`mx.get_peak_memory`) during one model load, minus the active memory before the load. It does not include the MLX cache.
+
+**Run rule**:
+One rule of the section "Run rules" of `CLAUDE.md`, for example: ViT-7B/16 never loads with fp32 weights.
 
 **Throughput**:
 Images per second in steady state, after warm-up.
@@ -304,3 +340,9 @@ _Avoid_: tutorial, write-up
 
 **Acceptance criterion**:
 A numbered, measurable condition in `plan.html` that `verify.html` checks.
+
+**Default session**:
+A pytest session without `DINOV3_SLOW`.
+
+**Slow session**:
+A pytest session with `DINOV3_SLOW=1`.

@@ -1,26 +1,38 @@
 """The MLX weights: the key map from the Hugging Face safetensors and the load of the MLX backbone.
 
 The key map runs at load time; no converted file (D2 of specs/04-mlx-port/explore.html). Each
-load checks the free memory first and raises the errors of the torch loader, so the test fixture
-skips in the same way. No torch import.
+load checks the run rule and the free memory first and raises the errors of the torch loader, so
+the test fixture skips in the same way. The load casts and evaluates one tensor at a time, so at
+most one fp32 source tensor is alive (D5 of specs/05-all-sizes/explore.html). No torch import.
 """
 
+import dataclasses
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Iterator, MutableMapping
+from dataclasses import dataclass
 from functools import cache
 
 import mlx.core as mx
 from mlx.utils import tree_flatten
 
+from dinov3_apple.footprint import read_footprint
 from dinov3_apple.hub import parameter_count, weights_dir
-from dinov3_apple.memory import LOAD_RATIO, check_free_memory, load_bytes
+from dinov3_apple.memory import (
+    LOAD_RATIO,
+    check_free_memory,
+    check_run_rule,
+    load_bytes,
+    record_load_peak,
+)
 from dinov3_apple.mlx_model import (
     MLX_DTYPE_MODES,
     Block,
     MlxBackbone,
     MlxConfig,
+    MlxDtypeMode,
     TF32ModeError,
+    linear_parameter_names,
     tf32_enabled,
 )
 
@@ -45,15 +57,34 @@ class UnknownWeightError(KeyError):
     """A tensor name of the weights has no place in the MLX backbone."""
 
 
+@dataclass(frozen=True)
+class LoadReport:
+    """The memory of one mlx load (D5 of specs/05-all-sizes/explore.html).
+
+    Attributes:
+        need_bytes: The need of the memory check and the MLX memory limit of the load.
+        peak_bytes: The load peak: the largest MLX active memory during the load, minus the
+            active memory before the load. It does not include the MLX cache.
+        cache_bytes: The MLX cache memory after the load.
+        footprint_bytes: The process footprint after the load.
+    """
+
+    need_bytes: int
+    peak_bytes: int
+    cache_bytes: int
+    footprint_bytes: int
+
+
 @cache
 def block_parameter_names() -> frozenset[str]:
-    """Return the parameter names of one MLX block with all biases, for example norm1.weight.
+    """Return the parameter names of an MLP block and of a SwiGLU block, both with all biases.
 
-    The names come from the Block module itself, so the key map and the module cannot differ.
-    The block has a small width. Its arrays stay lazy and are never computed; its random init
-    advances the global key of mx.random once, as the init of each MlxBackbone does.
+    The union has 20 names. The names come from the Block module itself, so the key map and the
+    module cannot differ. map_key stays without the config; load_weights(strict=True) stops a
+    gate_proj key of an MLP model size. The probe blocks have a small width. Their arrays stay
+    lazy and are never computed; their random init advances the global key of mx.random.
     """
-    config = MlxConfig(
+    mlp = MlxConfig(
         dim=8,
         heads=1,
         blocks=1,
@@ -71,7 +102,10 @@ def block_parameter_names() -> frozenset[str]:
         gated=False,
         hidden_act="gelu",
     )
-    return frozenset(name for name, _ in tree_flatten(Block(config).parameters()))
+    gated = dataclasses.replace(mlp, gated=True, hidden_act="silu")
+    return frozenset(
+        name for config in (mlp, gated) for name, _ in tree_flatten(Block(config).parameters())
+    )
 
 
 def map_key(name: str) -> str | None:
@@ -101,31 +135,36 @@ def map_key(name: str) -> str | None:
     raise UnknownWeightError(name)
 
 
-def mlx_weights(tensors: Mapping[str, mx.array], dtype: mx.Dtype) -> list[tuple[str, mx.array]]:
-    """Return the MLX weights as (name, array) pairs for load_weights(strict=True).
+def mlx_weights(
+    tensors: MutableMapping[str, mx.array], dtypes: MlxDtypeMode, linear: frozenset[str]
+) -> Iterator[tuple[str, mx.array]]:
+    """Pop each tensor, map its key, reshape the patch weight and cast the tensor.
 
     The patch embedding weight (D, C, p, p) becomes (D, C · p · p): channel, row, column, as in
-    patchify. Each array is cast to dtype. Lazy arrays stay lazy.
+    patchify. The weight and bias of each nn.Linear (a name in linear) get the matmul dtype, all
+    other parameters the stream dtype. The arrays stay lazy: the caller evaluates one at a time
+    (D5). A generator: load_weights cannot take it, so each caller gives a list of the pairs.
 
     Args:
-        tensors: The tensors by Hugging Face name, for example from mx.load.
-        dtype: The dtype of the dtype mode.
+        tensors: The tensors by Hugging Face name, for example from mx.load. The generator pops
+            each tensor, so the dict holds no reference to an fp32 source after its pair.
+        dtypes: The dtypes of the dtype mode.
+        linear: The parameter names of the matmul dtype, from linear_parameter_names.
 
-    Returns:
-        The pairs, without the dropped tensors.
+    Yields:
+        The pairs (MLX name, array), without the dropped tensors.
 
     Raises:
         UnknownWeightError: If map_key rejects a name. load_weights(strict=True) stops a name
             that map_key accepts and the backbone does not have (a block index beyond the config).
     """
-    pairs = []
-    for name, array in tensors.items():
+    for name in list(tensors):
+        array = tensors.pop(name)  # drop the last reference of the dict to the fp32 source
         if (key := map_key(name)) is None:
-            continue
+            continue  # the mask token
         if key == PATCH_WEIGHT:
             array = array.reshape(array.shape[0], -1)
-        pairs.append((key, array.astype(dtype)))
-    return pairs
+        yield key, array.astype(dtypes.matmul if key in linear else dtypes.stream)
 
 
 def required_mlx_load_bytes(
@@ -139,19 +178,27 @@ def required_mlx_load_bytes(
         ratio: The ratio of the load peak to the weight bytes.
 
     Returns:
-        ratio x the weight bytes in the dtype of the mode + LOAD_RESERVE_BYTES. ViT-S/16 in fp32:
-        1.2 x 86.4 MB + 4 GB = 4.10 GB.
+        ratio x the weight bytes in the matmul dtype + LOAD_RESERVE_BYTES. ViT-S/16 in fp32:
+        1.2 x 86.4 MB + 4 GB = 4.10 GB. The autocast modes have the need of the cast modes,
+        because their weights are half on mlx.
 
     Raises:
         WeightsNotFoundError: If the weights are not on this Mac.
     """
-    return load_bytes(parameter_count(model_size) * MLX_DTYPE_MODES[dtype_mode].size, ratio)
+    bytes_per_weight = MLX_DTYPE_MODES[dtype_mode].matmul.size
+    return load_bytes(parameter_count(model_size) * bytes_per_weight, ratio)
 
 
 def load_mlx_backbone(
     model_size: str, dtype_mode: str = "fp32", tf32: bool = False, ratio: float = LOAD_RATIO
 ) -> MlxBackbone:
-    """Load the MLX backbone of one model size after a memory check (Section 3.3 of the plan).
+    """Load the MLX backbone of one model size in one dtype mode (Section 3.5 of
+    specs/05-all-sizes/plan.html).
+
+    The order of the actions: the run rule, the TF32 check, the memory check, the memory limit,
+    the lazy model and the lazy files, then one tensor at a time, the strict load and an empty
+    cache. The backbone keeps a LoadReport in its plain attribute load_report, and one load-peak
+    line goes to the log of the memory checks.
 
     Args:
         model_size: A key of MODEL_IDS.
@@ -164,22 +211,40 @@ def load_mlx_backbone(
         The backbone with evaluated parameters, so the load cost stays out of the first call.
 
     Raises:
+        RunRuleError: For ViT-7B/16 in fp32, before any file read.
         TF32ModeError: If the fp32 dtype mode asks for another TF32 state than MLX_ENABLE_TF32.
         InsufficientMemoryError: If the memory check fails.
         WeightsNotFoundError: If the weights are not on this Mac.
-        NotImplementedError: For a model size with SwiGLU (Step 5).
     """
-    dtype = MLX_DTYPE_MODES[dtype_mode]
-    if dtype == mx.float32 and tf32_enabled() != tf32:
+    dtypes = MLX_DTYPE_MODES[dtype_mode]
+    label = f"{model_size} mlx {dtype_mode}"
+    check_run_rule(model_size, dtypes.matmul.size, label)
+    if dtypes.matmul == mx.float32 and tf32_enabled() != tf32:
         raise TF32ModeError(f"set MLX_ENABLE_TF32={int(tf32)} before the first use of mlx")
     need = required_mlx_load_bytes(model_size, dtype_mode, ratio)
-    check_free_memory(need, f"{model_size} mlx {dtype_mode}")
-    mx.set_memory_limit(need)
+    check_free_memory(need, label)
+    mx.set_memory_limit(need)  # only a guideline (R13 of Step 4): the loop keeps the peak low
     folder = weights_dir(model_size)
-    model = MlxBackbone(MlxConfig.from_hf(json.loads((folder / "config.json").read_text())))
+    config = MlxConfig.from_hf(json.loads((folder / "config.json").read_text()))
+    model = MlxBackbone(config, dtype_mode)  # the random init stays lazy and is never computed
+    linear = linear_parameter_names(model)
     tensors: dict[str, mx.array] = {}
     for file in sorted(folder.glob("*.safetensors")):
         tensors |= mx.load(str(file))  # lazy; a str, not a Path (R18)
-    model.load_weights(mlx_weights(tensors, dtype), strict=True)
-    mx.eval(model.parameters())  # the load cost stays out of the first forward pass (R14)
+    active_before = mx.get_active_memory()
+    mx.reset_peak_memory()
+    pairs = []
+    for key, array in mlx_weights(tensors, dtypes, linear):
+        mx.eval(array)  # reads one tensor from its file and casts it
+        pairs.append((key, array))
+    model.load_weights(pairs, strict=True)
+    del pairs
+    mx.clear_cache()  # the freed fp32 buffers leave the MLX cache
+    model.load_report = LoadReport(
+        need_bytes=need,
+        peak_bytes=mx.get_peak_memory() - active_before,
+        cache_bytes=mx.get_cache_memory(),
+        footprint_bytes=read_footprint().current_bytes,
+    )
+    record_load_peak(label, model.load_report.peak_bytes, model.load_report.cache_bytes)
     return model

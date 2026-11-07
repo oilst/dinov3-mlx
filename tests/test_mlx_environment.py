@@ -1,5 +1,7 @@
 """Tests T21 to T25 of specs/04-mlx-port/plan.html: TF32, imports, the moved readers, the TF32
-probe and the dry run of the Step 4 benchmark. Also the fields of its mlx worker."""
+probe and the dry run of the Step 4 benchmark. Also the fields of its mlx worker. Tests T28 to T30
+of specs/05-all-sizes/plan.html: the model sizes under test, the plan of the benchmark at P2 and
+the host copy of bf16 output."""
 
 import dataclasses
 import json
@@ -13,12 +15,15 @@ from collections.abc import Callable
 from pathlib import Path
 
 import mlx.core as mx
+import numpy as np
 import pytest
-from small_model import small_hf_model, small_mlx_model
+from small_model import small_hf_model, small_mlx_model, small_pixels
 
 from dinov3_apple import mlx_weights, preprocess, reference, stored
-from dinov3_apple.bench import BenchConfig, TimeBudget
-from dinov3_apple.mlx_model import MlxBackbone, tf32_enabled
+from dinov3_apple.bench import DTYPE_MODE_NAMES, BenchConfig, TimeBudget
+from dinov3_apple.hub import MODEL_IDS
+from dinov3_apple.mlx_model import MlxBackbone, run_mlx, tf32_enabled
+from dinov3_apple.outputs import NUM_PREFIX_TOKENS
 
 pytestmark = pytest.mark.mlx
 
@@ -87,6 +92,7 @@ def test_mlx_modules_do_not_import_torch() -> None:
     code = (
         "import sys\n"
         "import dinov3_apple.stored, dinov3_apple.mlx_model, dinov3_apple.mlx_weights\n"
+        "import dinov3_apple.memory\n"
         "print(sorted(name for name in ('torch', 'transformers') if name in sys.modules))\n"
     )
     result = subprocess.run(
@@ -212,6 +218,10 @@ def test_mlx_worker_records_its_memory_limit_and_model_slug(
         mx.set_memory_limit(session_limit)
     assert worker["status"] == "done"
     assert worker["mlx_memory_limit_bytes"] == limit
+    # The small model has no load report: the worker writes null load-report fields.
+    assert worker["load_report_peak_bytes"] is None
+    assert worker["load_report_need_bytes"] is None
+    assert worker["output_transfer"] == "native"
     assert worker["tf32"] is False
     assert worker["timed_batches"] >= 2
     assert [path.name for path in tmp_path.glob("*.json")] == ["vits16plus_fp32_224_b1_r0.json"]
@@ -223,6 +233,12 @@ def test_bench_mlx_port_files_follow_the_results_path(tmp_path: Path) -> None:
     import bench_mlx_port
 
     assert bench_mlx_port.bench_dir_of(bench_mlx_port.RESULTS) == bench_mlx_port.BENCH_DIR
+    # The default results file of each priority has its own folder (Table 2 of the Step 5 plan).
+    assert bench_mlx_port.RESULTS.name == "bench-mlx-port.jsonl"
+    assert bench_mlx_port.BENCH_DIR.name == "mlx-port"
+    assert bench_mlx_port.RESULTS_P2.name == "bench-all-sizes.jsonl"
+    assert bench_mlx_port.BENCH_DIR_P2.name == "all-sizes"
+    assert bench_mlx_port.bench_dir_of(bench_mlx_port.RESULTS_P2) == bench_mlx_port.BENCH_DIR_P2
     results = tmp_path / "bench.jsonl"
     assert bench_mlx_port.bench_dir_of(results) == tmp_path / "bench-batches"
     default_log = bench_mlx_port.BENCH_DIR / "driver.log"
@@ -309,3 +325,94 @@ def test_mlx_worker_memory_check_reaches_the_driver_log(
     assert re.fullmatch(
         r"\d{4}-\d\d-\d\d \d\d:\d\d:\d\d,\d{3} dinov3_apple\.memory memory check: .+ ok", line
     )
+
+
+def test_mlx_model_sizes_under_test() -> None:
+    """T28: mlx runs ViT-S/16, ViT-S+/16 and ViT-B/16 by default, all six with DINOV3_SLOW=1."""
+    code = "import json, under_test; print(json.dumps(under_test.MLX_MODEL_SIZES_UNDER_TEST))"
+    sizes = {}
+    for slow in ("0", "1"):
+        env = {k: v for k, v in os.environ.items() if k != "DINOV3_SLOW"}
+        if slow == "1":
+            env["DINOV3_SLOW"] = "1"
+        result = subprocess.run(
+            [sys.executable, "-c", code],
+            check=False,
+            capture_output=True,
+            text=True,
+            cwd=REPO_ROOT / "tests",
+            env=env,
+        )
+        assert result.returncode == 0, result.stderr
+        sizes[slow] = json.loads(result.stdout.strip().splitlines()[-1])
+    assert sizes["0"] == ["ViT-S/16", "ViT-S+/16", "ViT-B/16"]
+    assert sizes["1"] == list(MODEL_IDS)
+
+
+def test_bench_p2_worker_plan(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """T29: 3 rounds x 5 dtype modes x 2 backends at P2; the order of the backends alternates from
+    round to round. The P1 plan keeps its 12 workers. The dry run loads no model."""
+    import bench_mlx_port
+
+    assert len(bench_mlx_port.worker_plan(3)) == 12
+    plan = bench_mlx_port.worker_plan(3, "P2")
+    assert len(plan) == 30
+    assert [entry[0] for entry in plan] == [1] * 10 + [2] * 10 + [3] * 10
+    for round_ in (1, 2, 3):
+        entries = [entry for entry in plan if entry[0] == round_]
+        assert [entry[1] for entry in entries] == [m for m in DTYPE_MODE_NAMES for _ in range(2)]
+        first = "torch-mps" if round_ % 2 else "mlx"
+        assert [entry[2] for entry in entries] == [first, _other(first)] * 5
+    for _, _, backend, tf32 in plan:
+        env = bench_mlx_port.worker_env(backend, tf32, {"PATH": "/usr/bin", "MLX_ENABLE_TF32": "1"})
+        if backend == "mlx":
+            assert tf32 is False
+            assert env["MLX_ENABLE_TF32"] == "0"
+            assert "PYTORCH_MPS_HIGH_WATERMARK_RATIO" not in env
+        else:
+            assert tf32 is None
+            assert env["PYTORCH_MPS_HIGH_WATERMARK_RATIO"] == "0.8"
+            assert env["PYTORCH_MPS_LOW_WATERMARK_RATIO"] == "0.6"
+    config = bench_mlx_port.bench_config(2, "bf16-autocast", "P2")
+    assert (config.run, config.model_size, config.dtype_mode) == (
+        "step5",
+        "ViT-H+/16",
+        "bf16-autocast",
+    )
+    assert (config.side, config.batch_size, config.repeat) == (512, 8, 1)
+    # The needs read the headers of ViT-H+/16. The test gives the count, so it reads no file.
+    monkeypatch.setattr("dinov3_apple.bench._parameter_count", lambda model_size: 840_592_640)
+    monkeypatch.setattr("dinov3_apple.mlx_weights.load_mlx_backbone", _fail_load)
+    bench_mlx_port.dry_run(plan, "P2")
+    lines = capsys.readouterr().out.strip().splitlines()
+    workers = [line for line in lines if "ViT-H+/16" in line]
+    assert len(workers) == 30
+    for line in workers:
+        cast = "-cast" in line
+        assert f"need {7.12 if cast else 10.23:4.2f} GB" in line, line
+
+
+def _fail_load(*args: object, **kwargs: object) -> None:
+    raise AssertionError("the dry run loaded a model")
+
+
+def test_time_batch_mlx_moves_bf16_output() -> None:
+    """T30: a bf16 output moves to the host as uint16 bits; as fp32 they equal run_mlx."""
+    import bench_mlx_port
+
+    model = small_mlx_model(small_hf_model(seed=0), "bf16-cast")
+    batch = small_pixels((2, 3, 224, 224))
+    times, frame, patches = bench_mlx_port.time_batch_mlx(model, batch)
+    assert len(times) == 3
+    assert frame.dtype == patches.dtype == np.uint16
+    assert bench_mlx_port.output_transfer(frame) == "view-uint16"
+    tokens = run_mlx(model, batch, "bf16-cast")
+    assert np.array_equal(bench_mlx_port.host_to_fp32(frame), tokens[:, 0])
+    assert np.array_equal(bench_mlx_port.host_to_fp32(patches), tokens[:, NUM_PREFIX_TOKENS:])
+    fp32 = small_mlx_model(small_hf_model(seed=0), "fp32")
+    _, frame32, _ = bench_mlx_port.time_batch_mlx(fp32, batch)
+    assert frame32.dtype == np.float32
+    assert bench_mlx_port.output_transfer(frame32) == "native"
+    assert bench_mlx_port.host_to_fp32(frame32) is frame32
