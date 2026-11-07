@@ -60,6 +60,12 @@ _Avoid_: positional encoding, position embedding (alone)
 **RoPE tables**:
 The cos and sin arrays of one patch grid, with one row for each token and one column for each value of a head. The prefix tokens get identity rows (cos 1, sin 0).
 
+**Concat-free rotation**:
+The RoPE rotation x · cos2 + reversed(x) · sin2 on a (…, 2, head_dim / 2) view, with the sign of `rotate_half` in the sin table. It gives one fused kernel.
+
+**RoPE cache**:
+The RoPE tables of each patch grid of one backbone, in the layout of the concat-free rotation (`RopeCache`). It is outside the module tree.
+
 **LayerScale**:
 A learned factor for each channel on the output of each branch of a block.
 
@@ -114,6 +120,15 @@ One safetensors file of a model size whose weights are in more than one file. `m
 **Outer parts**:
 The parts of the backbone outside the blocks: the embeddings, the RoPE tables and the final layer norm (`OuterParts`).
 
+**Placeholder skeleton**:
+The backbone before a load, with a zero-stride placeholder for each parameter. An evaluation of it allocates one value for each parameter.
+
+**Quantized weights**:
+The weights of an `nn.Linear` module stored as 8-bit or 4-bit integers, with one scale and one offset for each group of weights (affine format). The scales and the offsets have the matmul dtype. A quantized row keeps the name of its dtype mode and adds the field `bits`.
+
+**Group size**:
+The number of weights of one row that share one scale and one offset. Step 6 uses 64.
+
 ## Outputs
 
 **Frame embedding**:
@@ -127,6 +142,12 @@ _Avoid_: dense features, feature map, patch features
 **Input resolution**:
 The height and width in pixels of the image that enters the backbone. Both are multiples of 16.
 _Avoid_: image size, crop size
+
+**Preprocessing**:
+The steps from an RGB image to the normalized fp32 pixels: divide by 255, resize (bilinear, antialiased), normalize with the ImageNet mean and standard deviation.
+
+**Separable resize**:
+A resize as two matmuls with fixed weight matrices, one for the rows and one for the columns.
 
 ## Training method
 
@@ -199,6 +220,9 @@ _Avoid_: accuracy, correctness, fidelity
 **Expected failure**:
 A configuration that a test marks as xfail with a reason, because evidence shows that it cannot pass, for example the fp16 overflow.
 
+**Fault bound**:
+A loose parity bound that catches only faults, for example a wrong input cast. It is not a threshold.
+
 **Cross-check**:
 The parity of an `mlx` output against a torch output in the same dtype mode, without the reference output. Report only.
 
@@ -246,6 +270,21 @@ The dtype of the weights and the inputs of the matmuls in one dtype mode of `mlx
 **Stream dtype**:
 The dtype of the residual stream, the layer norms, LayerScale, the CLS token and the register tokens in one dtype mode of `mlx`.
 
+**Eager forward pass**:
+The forward pass of the MLX backbone without `mx.compile`. Each call builds the graph again.
+
+**Compiled forward pass**:
+The forward pass of the MLX backbone from `compile_backbone`: one `mx.compile` function with the weights as inputs (`inputs=model.state`) and the RoPE tables as arguments. It has one trace for each input shape.
+
+**Trace**:
+The record of the operations of one call of a compiled function for one set of input shapes and dtypes. `mx.compile` makes it at the first call and replays it at later calls.
+
+**Fused kernel**:
+One GPU kernel that `mx.compile` makes from a chain of element-wise operations.
+
+**Fusion barrier**:
+An operation that `mx.compile` does not fuse with its neighbours, for example `mx.fast.layer_norm`, a matmul, slice and concatenate.
+
 **Token range**:
 The largest absolute value in the token sequence before block 1 and after each block, for one configuration.
 
@@ -253,13 +292,25 @@ The largest absolute value in the token sequence before block 1 and after each b
 The comparison of the free memory with the need of a model load, before the load. A load that does not fit stops with a recorded reason.
 
 **Load peak**:
-The largest MLX active memory (`mx.get_peak_memory`) during one model load, minus the active memory before the load. It does not include the MLX cache.
+The largest MLX active memory (`mx.get_peak_memory`) during one model load, minus the active memory before the load. It does not include the MLX cache. It is not the load footprint peak.
+
+**Load footprint peak**:
+The lifetime maximum of the process footprint after a model load (the field `load_footprint_peak_bytes`). It is not the load peak.
+
+**MLX peak**:
+`mx.get_peak_memory()` after `mx.reset_peak_memory()`: the largest MLX allocation during one measured phase. It is not the peak memory (the lifetime maximum of the process footprint).
 
 **Load report**:
 The memory record of one `mlx` load (`LoadReport`): the need of the memory check, the load peak, the MLX cache after the load and the process footprint after the load.
 
 **Run rule**:
 One rule of the section "Run rules" of `CLAUDE.md`, for example: ViT-7B/16 never loads with fp32 weights.
+
+**Heavy job**:
+A job that loads a model, runs a benchmark or trains. One heavy job runs at a time (`CLAUDE.md`, run rules).
+
+**GPU lock**:
+The exclusive file lock that each heavy job and each light GPU job takes before it starts (`heavy_job`). Its holder also waits for jobs that do not use the lock.
 
 **Throughput**:
 Images per second in steady state, after warm-up.
@@ -279,10 +330,16 @@ _Avoid_: RSS, resident memory
 The rule that ends the warm-up and the timed batches of one benchmark configuration: a minimum number of batches, a minimum time and a time limit.
 
 **Priority configuration**:
-One of the two configurations that the benchmarks repeat and compile: P1 (ViT-S/16, 224 px, batch size 8, frame embedding) and P2 (ViT-H+/16, 512 px, batch size 8, patch embeddings).
+One of the two configurations that the benchmarks measure in two paired runs of five rounds, and where each change gets its change ratio: P1 (ViT-S/16, 224 px, batch size 8, frame embedding) and P2 (ViT-H+/16, 512 px, batch size 8, patch embeddings).
 
 **Compile row**:
-A benchmark result of a priority configuration with the backbone wrapped by `torch.compile`.
+A benchmark result with the backbone wrapped by `torch.compile` on `torch-mps` or by `mx.compile` on `mlx`. Since Step 6, every configuration has compile rows.
+
+**Compile check**:
+The comparison of a compiled `torch-mps` row with the Step 3 eager row of the same configuration and dtype mode. A compiled row below the eager row gets a follow-up group with both.
+
+**Best batch size**:
+The batch size with the highest throughput for one model size, input resolution and dtype mode.
 
 **Round**:
 One run of each configuration of a benchmark command, in order. A second round runs the whole list again. The baseline row takes the median of the runs of each configuration.
@@ -291,16 +348,40 @@ One run of each configuration of a benchmark command, in order. A second round r
 The time of each part of block 1, with each part run alone in a loop, next to its FLOP count.
 
 **Speedup**:
-The throughput of `mlx` divided by the throughput of the baseline, for the same configuration.
+The throughput of `mlx` divided by the throughput of the baseline row, from a paired run. At P1 and P2 the median of the paired ratios of two runs.
+
+**Speedup table**:
+The table with the speedup of each configuration of the benchmark matrix (`results/speedup-table.md`).
 
 **Paired ratio**:
 The throughput of `mlx` divided by the throughput of torch-mps in the same round of one benchmark run, for the same configuration. The median of the paired ratios over the rounds is robust to a change of the speed of the Mac between rounds.
+
+**Paired group**:
+The workers of one model size, input resolution and batch size in one matrix run: the `torch-mps` workers and the `mlx` workers, one after the other, in a rotated order.
+
+**Change ratio**:
+The throughput after a change divided by the throughput before it, both forms in one process, in alternation and in a rotated order. The median over the rounds. A change that compares two configurations (C3, C5) runs each configuration in its own subprocess, in alternation.
+
+**Inside the noise**:
+The mark of a paired ratio within 1 ± 0.03, the spread inside one arm in the probe paired-noise.
+
+**Spread between runs**:
+(largest run median − smallest run median) / smallest run median, over two or more runs of the same configuration at different times.
 
 **Unified memory**:
 The one memory pool that the CPU and the GPU share on Apple silicon.
 
 **Neural Accelerators**:
 The matrix-multiply units in each GPU core of the M5 chip.
+
+**NAX kernel**:
+An MLX Metal kernel that uses the Neural Accelerators. Its name contains "nax", for example `steel_attention_nax`.
+
+**Neural Accelerators on / off**:
+The state with and without the NAX kernels. `MLX_METAL_GPU_ARCH=applegpu_g16s` turns the NAX kernels off.
+
+**Relaxed precision**:
+The option of the NAX matrix operation that lets the hardware compute with less precision. MLX 0.32.4 turns it on in the NAX matmul and attention kernels.
 
 ## Fine-tuning
 
