@@ -471,6 +471,18 @@ def _median_time(function: Callable[[], Any], warm_up: int = 3, calls: int = 20)
     return float(np.median(times))
 
 
+def _queued_time(function: Callable[[], Any], warm_up: int = 3, calls: int = 20) -> float:
+    """The time of one call when calls calls run back to back with one mx.eval at the end: the
+    GPU time without the wait of each mx.eval."""
+    import mlx.core as mx
+
+    for _ in range(warm_up):
+        mx.eval(function())
+    start = time.perf_counter()
+    mx.eval([function() for _ in range(calls)])
+    return (time.perf_counter() - start) / calls
+
+
 def _count_kernels(outputs: "mx.array", folder: Path) -> int:
     """The number of operation nodes of the graph of outputs, from a DOT export without an
     evaluation."""
@@ -490,8 +502,9 @@ def run_profile_worker(config: BenchConfig, bench_dir: Path = Path(".")) -> dict
 
     The host share of 50 calls (the compiled call before mx.eval, the time to the end of mx.eval,
     the gap between two calls), the 11 parts of block 1 each alone and compiled (3 warm-up and 20
-    calls), the kernel count of one forward pass (compiled and eager) and the compiled
-    throughput at batch sizes 8 and 32.
+    calls, mx.eval after each; and, report only, 20 calls with one mx.eval, which leaves out the
+    wait of each mx.eval), the kernel count of one forward pass (compiled and eager) and the
+    compiled throughput at batch sizes 8 and 32.
     """
     import mlx.core as mx
 
@@ -555,12 +568,14 @@ def run_profile_worker(config: BenchConfig, bench_dir: Path = Path(".")) -> dict
         "layer_scale2": (state["y"], state["x1"]),
     }
     mx.eval(list(arguments.values()))
-    parts_s = {}
+    parts_s, parts_queued_s = {}, {}
     for name in PART_NAMES:
         compiled = mx.compile(parts[name])
         parts_s[name] = _median_time(lambda c=compiled, a=arguments[name]: c(*a))
+        parts_queued_s[name] = _queued_time(lambda c=compiled, a=arguments[name]: c(*a))
     block_compiled = mx.compile(lambda y: block(y, cos, sin))
     block_s = _median_time(lambda: block_compiled(x))
+    block_queued_s = _queued_time(lambda: block_compiled(x))
 
     kernels = {
         "compiled": _count_kernels(forward(batch), bench_dir / "dot-compiled"),
@@ -576,7 +591,9 @@ def run_profile_worker(config: BenchConfig, bench_dir: Path = Path(".")) -> dict
         "reason": "",
         "host": host,
         "parts_s": parts_s,
+        "parts_queued_s": parts_queued_s,
         "block_s": block_s,
+        "block_queued_s": block_queued_s,
         "blocks": model.config.blocks,
         "kernels": kernels,
         "batch_sizes": batch_sizes,

@@ -318,10 +318,17 @@ def profile_section(profile: list[dict], block_profile: list[dict]) -> list[str]
     for name in PART_NAMES:
         row = [name]
         for line in profile:
-            row.append(_f(1e3 * line["parts_s"][name], 4) if line.get("status") == "done" else "–")
+            done = line.get("status") == "done"
+            row.append(_f(1e3 * line["parts_s"][name], 4) if done else "–")
+            queued = (line.get("parts_queued_s") or {}).get(name) if done else None
+            row.append(_f(None if queued is None else 1e3 * queued, 4))
         row.append(_f(1e3 * torch_line["parts_s"][name], 4) if torch_line else "–")
         rows.append(row)
-    modes = [f"mlx {l['dtype_mode']} (ms)" for l in profile]
+    modes = [
+        heading
+        for line in profile
+        for heading in (f"mlx {line['dtype_mode']} (ms)", f"mlx {line['dtype_mode']} queued (ms)")
+    ]
     text += ["", *_table(["Part", *modes, "torch-mps fp16-cast eager, Step 3 (ms)"], rows)]
     return text
 
@@ -496,9 +503,16 @@ def write_table(files: dict[str, list[dict]]) -> str:
         "",
         "The P1 profile (Table 12 of the plan), ViT-S/16, 224 px, batch size 8:",
         "",
-        *profile_section(files["profile"], files["block_profile"]),
+        *profile_section(
+            list({line["dtype_mode"]: line for line in files["profile"]}.values()),
+            files["block_profile"],
+        ),
         "",
-        "Table 8. The parts of block 1 at P1, each alone. mlx: compiled, 3 warm-up and 20 calls. torch-mps: eager, Step 3.",
+        (
+            "Table 8. The parts of block 1 at P1, each alone. mlx: compiled, 3 warm-up and 20 "
+            "calls with mx.eval after each; queued: 20 calls and one mx.eval (report only). "
+            "torch-mps: eager, Step 3."
+        ),
         "",
     ]
     learn = files["learn"]
