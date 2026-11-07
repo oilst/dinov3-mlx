@@ -35,6 +35,7 @@ Apple M5 Max, 64 GB unified memory, macOS 26.5.2. All benchmark results in this 
 | pillow | 13.0.0 |
 | pytest | 9.2.0 |
 | ruff | 0.17.4 |
+| coremltools | 9.0 (dependency group `coreml`, Step 6c, 2026-11-07). It is tested with torch 2.7 only; with numpy 2.5 its torch converter needs one patch (`specs/06c-neural-engine/explore.html`). |
 
 Change a version only in its own commit, and record the new version here.
 
