@@ -1449,7 +1449,100 @@ scripts/cross_check.py compares the mlx output with the torch output in the same
 
 Table 5. Cross-check of mlx against torch.
 
-## 6 Non-finite configurations: mlx against torch-mps
+## 6 Compiled forward pass against the eager forward pass
+
+Each configuration runs the compiled forward pass and the eager forward pass of one backbone (W1 of specs/06-speed/plan.html). A non-finite configuration counts as equal when both forms are non-finite at the same positions.
+
+| Model size | Dtype mode | Configurations | Bit for bit equal | Largest difference |
+| --- | --- | --- | --- | --- |
+| ViT-S/16 | fp32 | 12 | 12 | 0 |
+| ViT-S/16 | fp16-cast | 12 | 12 | 0 |
+| ViT-S/16 | bf16-cast | 12 | 12 | 0 |
+| ViT-S/16 | fp16-autocast | 12 | 12 | 0 |
+| ViT-S/16 | bf16-autocast | 12 | 12 | 0 |
+| ViT-S+/16 | fp32 | 12 | 12 | 0 |
+| ViT-S+/16 | fp16-cast | 12 | 12 | 0 |
+| ViT-S+/16 | bf16-cast | 12 | 12 | 0 |
+| ViT-S+/16 | fp16-autocast | 12 | 12 | 0 |
+| ViT-S+/16 | bf16-autocast | 12 | 12 | 0 |
+| ViT-B/16 | fp32 | 12 | 12 | 0 |
+| ViT-B/16 | fp16-cast | 12 | 12 | 0 |
+| ViT-B/16 | bf16-cast | 12 | 12 | 0 |
+| ViT-B/16 | fp16-autocast | 12 | 12 | 0 |
+| ViT-B/16 | bf16-autocast | 12 | 12 | 0 |
+| ViT-L/16 | fp32 | 12 | 12 | 0 |
+| ViT-L/16 | fp16-cast | 12 | 12 | 0 |
+| ViT-L/16 | bf16-cast | 12 | 12 | 0 |
+| ViT-L/16 | fp16-autocast | 12 | 12 | 0 |
+| ViT-L/16 | bf16-autocast | 12 | 12 | 0 |
+| ViT-H+/16 | fp32 | 12 | 12 | 0 |
+| ViT-H+/16 | fp16-cast | 12 | 12 | 0 |
+| ViT-H+/16 | bf16-cast | 12 | 12 | 0 |
+| ViT-H+/16 | fp16-autocast | 12 | 12 | 0 |
+| ViT-H+/16 | bf16-autocast | 12 | 12 | 0 |
+| ViT-7B/16 | fp32 | 0 | 0 | – |
+| ViT-7B/16 | fp16-cast | 12 | 12 | 0 |
+| ViT-7B/16 | bf16-cast | 12 | 12 | 0 |
+| ViT-7B/16 | fp16-autocast | 12 | 12 | 0 |
+| ViT-7B/16 | bf16-autocast | 12 | 12 | 0 |
+
+Table 6. The compiled forward pass against the eager forward pass.
+
+## 7 Quantized weights
+
+Report only, with a fault bound in the tests (ADR 0011). Each row has the minimum over its configurations, against the reference output and against the unquantized output of the same dtype mode. The column Pass counts the configurations that pass the thresholds of the dtype mode (Section 3).
+
+| Model size | Dtype mode | Bits | Measured | Pass | Frame | Patch mean | Patch 1st percentile | Frame (unquantized) | Patch mean (unquantized) | Patch 1st percentile (unquantized) |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| ViT-S/16 | fp16-autocast | 4 | 12 | 0 | 0.861780 | 0.940549 | 0.903443 | 0.861770 | 0.940538 | 0.903631 |
+| ViT-S/16 | fp16-autocast | 8 | 12 | 12 | 0.999392 | 0.999818 | 0.999441 | 0.999412 | 0.999819 | 0.999440 |
+| ViT-S/16 | bf16-autocast | 4 | 12 | 0 | 0.863331 | 0.940645 | 0.903103 | 0.863758 | 0.940730 | 0.903360 |
+| ViT-S/16 | bf16-autocast | 8 | 12 | 12 | 0.998484 | 0.999458 | 0.998767 | 0.998406 | 0.999478 | 0.998820 |
+| ViT-H+/16 | fp16-autocast | 4 | 12 | 0 | 0.987205 | 0.961082 | 0.757351 | 0.987206 | 0.961042 | 0.752912 |
+| ViT-H+/16 | fp16-autocast | 8 | 12 | 12 | 0.999954 | 0.999790 | 0.998918 | 0.999951 | 0.999805 | 0.998775 |
+| ViT-H+/16 | bf16-autocast | 4 | 12 | 0 | 0.987078 | 0.960276 | 0.749771 | 0.987063 | 0.960893 | 0.759336 |
+| ViT-H+/16 | bf16-autocast | 8 | 12 | 12 | 0.999877 | 0.998980 | 0.983976 | 0.999882 | 0.999345 | 0.995660 |
+| ViT-7B/16 | fp16-autocast | 4 | 12 | 0 | 0.993235 | 0.987466 | 0.933929 | 0.993231 | 0.987451 | 0.934982 |
+| ViT-7B/16 | fp16-autocast | 8 | 12 | 12 | 0.999967 | 0.999931 | 0.999337 | 0.999975 | 0.999948 | 0.999678 |
+| ViT-7B/16 | bf16-autocast | 4 | 12 | 0 | 0.993112 | 0.986591 | 0.910137 | 0.993356 | 0.987231 | 0.939965 |
+| ViT-7B/16 | bf16-autocast | 8 | 12 | 12 | 0.999893 | 0.998698 | 0.983754 | 0.999932 | 0.999271 | 0.998212 |
+
+Table 7. Parity of the quantized weights.
+
+## 8 fp16 patch embeddings
+
+The patch embeddings of mlx_embeddings in fp16 (D13 of specs/06-speed/plan.html) against the reference output. The extra loss is the fp32-output parity minus the fp16-output parity of the patch mean and the patch 1st percentile.
+
+| Model size | Dtype mode | Measured | Patch mean | Patch 1st percentile | Largest extra loss | Frame unchanged |
+| --- | --- | --- | --- | --- | --- | --- |
+| ViT-S/16 | fp16-cast | 12 | 0.999997 | 0.999986 | 0 | yes |
+| ViT-S/16 | bf16-cast | 12 | 0.999779 | 0.999560 | 0 | yes |
+| ViT-S/16 | fp16-autocast | 12 | 0.999998 | 0.999995 | 5.3e-08 | yes |
+| ViT-S/16 | bf16-autocast | 12 | 0.999924 | 0.999650 | 3.4e-07 | yes |
+| ViT-S+/16 | fp16-cast | 12 | 0.999920 | 0.999808 | 0 | yes |
+| ViT-S+/16 | bf16-cast | 12 | 0.995816 | 0.990381 | 0 | yes |
+| ViT-S+/16 | fp16-autocast | 12 | 0.999958 | 0.999904 | 1.5e-07 | yes |
+| ViT-S+/16 | bf16-autocast | 12 | 0.995136 | 0.988886 | 2.1e-07 | yes |
+| ViT-B/16 | fp16-cast | 12 | 0.999997 | 0.999991 | 0 | yes |
+| ViT-B/16 | bf16-cast | 12 | 0.999821 | 0.999478 | 0 | yes |
+| ViT-B/16 | fp16-autocast | 12 | 0.999998 | 0.999993 | 9.2e-08 | yes |
+| ViT-B/16 | bf16-autocast | 12 | 0.999899 | 0.999528 | 1.8e-07 | yes |
+| ViT-L/16 | fp16-cast | 0 | – | – | – | – |
+| ViT-L/16 | bf16-cast | 12 | 0.999558 | 0.996394 | 0 | yes |
+| ViT-L/16 | fp16-autocast | 12 | 0.999996 | 0.999966 | 8.3e-08 | yes |
+| ViT-L/16 | bf16-autocast | 12 | 0.999791 | 0.997287 | 2.8e-07 | yes |
+| ViT-H+/16 | fp16-cast | 6 | 0.999998 | 0.999993 | 0 | yes |
+| ViT-H+/16 | bf16-cast | 12 | 0.999061 | 0.986725 | 3.7e-15 | yes |
+| ViT-H+/16 | fp16-autocast | 12 | 0.999981 | 0.999679 | 2.5e-07 | yes |
+| ViT-H+/16 | bf16-autocast | 12 | 0.999279 | 0.985938 | 1.3e-06 | yes |
+| ViT-7B/16 | fp16-cast | 12 | 0.999981 | 0.999654 | 0 | yes |
+| ViT-7B/16 | bf16-cast | 12 | 0.999119 | 0.982649 | 3.1e-15 | yes |
+| ViT-7B/16 | fp16-autocast | 12 | 0.999986 | 0.999761 | 1e-07 | yes |
+| ViT-7B/16 | bf16-autocast | 12 | 0.999229 | 0.983737 | 7.3e-07 | yes |
+
+Table 8. Parity with the fp16 patch embeddings.
+
+## 9 Non-finite configurations: mlx against torch-mps
 
 Each row is a parity or batch configuration with a non-finite output on at least one backend. The last line says if the two sets are equal.
 
@@ -1476,6 +1569,6 @@ Each row is a parity or batch configuration with a non-finite output on at least
 | batch | ViT-L/16 | fp16-cast | batch-8-224x224 | non-finite | non-finite |
 | batch | ViT-H+/16 | fp16-cast | batch-8-224x224 | non-finite | non-finite |
 
-Table 6. Non-finite configurations of mlx and torch-mps.
+Table 9. Non-finite configurations of mlx and torch-mps.
 
 equal
