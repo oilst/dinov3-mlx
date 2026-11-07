@@ -1,0 +1,718 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Preprocessing and the Separable Resize</title>
+<style>
+/* Explainer page. White page, black text, no dark mode. */
+:root { --bg: #ffffff; --fg: #111414; --muted: #4a5655; --rule: #d6dedd; --panel: #f5f8f7; --accent: #057379; --cls: #057379; --patch: #9fd3d1; --reg: #e0a336; color-scheme: light; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif; }
+main { max-width: 62rem; margin: 0 auto; padding: 40px 20px 64px; display: grid; gap: 1.75rem; }
+main > *, section > * { min-width: 0; }
+h1 { font-size: 1.9rem; line-height: 1.15; margin: 0; }
+h2 { font-size: 1.3rem; margin: 0; }
+h3 { font-size: 1.05rem; margin: 0; }
+section { display: grid; gap: 0.8rem; }
+p, ul, ol { margin: 0; max-width: 46rem; }
+li + li { margin-top: 0.25rem; }
+code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.86em; }
+p code, li code, td code { overflow-wrap: anywhere; }
+pre { margin: 0; background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 0.8rem 1rem; overflow-x: auto; }
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 0.92rem; }
+th, td { text-align: left; vertical-align: top; padding: 0.45rem 0.7rem 0.45rem 0; border-bottom: 1px solid var(--rule); }
+th { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); border-bottom: 1.5px solid var(--fg); }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+tr.group td { background: var(--panel); font-weight: 600; }
+table.first-nowrap td:first-child { white-space: nowrap; }
+.caption, figcaption { font-size: 0.88rem; color: var(--muted); }
+figure { margin: 0; display: grid; gap: 0.4rem; }
+.fig { border: 1px solid var(--rule); border-radius: 6px; padding: 0.5rem; overflow-x: auto; }
+.fig svg { display: block; width: 100%; height: auto; min-width: 640px; }
+.note { border-left: 3px solid var(--accent); padding: 0.3rem 0 0.3rem 0.9rem; }
+nav ol { columns: 2; }
+.steps { font-size: 0.92rem; color: var(--muted); }
+a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+<header>
+  <h1>Preprocessing and the Separable Resize</h1>
+  <p>Explainer for roadmap Step 6. Date: 2026-11-07.</p>
+  <p class="steps">Step 6 explainers: <a href="06-1-compiled-forward-pass.html">1 Compiled forward pass</a> · <a href="06-2-attention-and-batch-size.html">2 Attention and batch size</a> · <a href="06-3-quantized-weights.html">3 Quantized weights</a> · 4 Preprocessing (this page). Step 2: <a href="02-tokens-and-outputs.html#pixels">From image file to pixels</a>.</p>
+  <p class="steps">Previous: <a href="06-3-quantized-weights.html">06-3 Quantized weights</a></p>
+</header>
+
+<nav>
+  <h2>Contents</h2>
+  <ol>
+    <li><a href="#why">Why this explainer</a></li>
+    <li><a href="#picture">Preprocessing in one picture</a></li>
+    <li><a href="#filter">The antialias filter widens when the image shrinks</a></li>
+    <li><a href="#code">The code</a></li>
+    <li><a href="#float">Why the resize runs on float values</a></li>
+    <li><a href="#tf32">Why TF32 must be off</a></li>
+    <li><a href="#fp16">The fp16 patch embeddings</a></li>
+    <li><a href="#c6">C6: the MLX path against the CPU path</a></li>
+    <li><a href="#tests">Tests and targets</a></li>
+    <li><a href="#surprises">Surprises</a></li>
+    <li><a href="#sources">Sources</a></li>
+  </ol>
+</nav>
+
+<section id="why">
+  <h2>1 Why this explainer</h2>
+  <p>The backbone takes normalized fp32 pixels with shape (B, 3, H, W). Up to Step 5, only <code>preprocess.py</code> made these pixels. It runs in torch, in fp64, on the CPU, one image at a time. An <code>mlx</code> user then needs torch only for the preprocessing. Step 6 adds a second path: <code>preprocess_frames</code> in <code>src/dinov3_apple/mlx_preprocess.py</code>. It takes a batch of uint8 RGB frames and makes the pixels on the GPU with MLX. It imports no torch (decision D12, option c of <code>specs/06-speed/explore.html</code>).</p>
+  <p>The core of the new path is the separable resize: two matmuls with fixed weight matrices, one for the rows and one for the columns. NumPy computes the weights in fp64 with the antialias rule of torch. This page explains that rule, the code and the measurements. It also explains the fp16 patch embeddings of decision D13, because they are the other end of the same data path: D12 changes what enters the backbone, D13 changes what leaves it.</p>
+  <p>This page covers the row <code>06-4-preprocessing.html</code> of Table 5 of <code>specs/06-speed/plan.html</code>: <code>resize_weights</code>, <code>preprocess_frames</code>, <code>IMAGENET_MEAN_VALUES</code> and <code>IMAGENET_STD_VALUES</code>. Table 1 lists them. It adds the private helper <code>_resize_matrices</code> and the new public function <code>patch_dtype</code> of <code>mlx_model.py</code>. Table 6 of the plan does not list <code>patch_dtype</code>. The build added it for the fp16 output. <a href="06-1-compiled-forward-pass.html">06-1</a> explains <code>mlx_embeddings</code> in the compiled forward pass. This page quotes it only for its output dtype.</p>
+  <p>The line numbers are those of commit <code>2567808</code>. The last change to <code>mlx_preprocess.py</code>, <code>stored.py</code>, <code>preprocess.py</code> and <code>mlx_model.py</code> is commit <code>6ef6c81</code>, so both commits give the same lines. Each code quote is an exact copy, or the text marks it as "shortened".</p>
+  <p>The agent that wrote this page ran no test, no model, no benchmark and no GPU work. It read the numbers from the committed files of Section 11. It computed Table 2 and Figure 2 with a NumPy copy of the formula of <code>resize_weights</code> on the CPU. It computed the times per image of Table 7 as 1 / throughput from <code>results/speed-pairs.jsonl</code>.</p>
+  <p>The result in three numbers:</p>
+  <ul>
+    <li>At 224 px, the MLX path needs 0.93 ms per 1080 × 1920 frame. The CPU path needs 1.74 ms. The median ratio is 1.900 [1.737–2.201] over 5 rounds (change ratio C6, <code>results/speedup-table.md</code>, Table 4). At 512 px: 1.15 ms against 2.01 ms, ratio 1.778 [1.403–1.959].</li>
+    <li>The target of the pixels is a largest difference of 2e-6 to the stored pixels. The probe of the explore stage measured 7.2e-7 to 9.5e-7 (Table 21 of the plan). T51 compares the resize weights with torch, with a target of 1e-12. No committed file holds a measured value of T51 or T52 (Section 9).</li>
+    <li>The fp16 patch embeddings halve the host bytes of a P2 batch, 21.0 MB against 42.0 MB (Table 13 of <code>explore.html</code>). They save no time: the change ratio C4 is 0.991 to 1.042.</li>
+  </ul>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Function or name</th><th class="num">Lines</th><th>What it does</th><th>Tests</th><th>Section</th></tr></thead>
+      <tbody>
+        <tr class="group"><td colspan="5"><code>src/dinov3_apple/mlx_preprocess.py</code> (new)</td></tr>
+        <tr><td><code>resize_weights(n_in, n_out)</code> (new)</td><td class="num">19–39</td><td>Returns the (n_out, n_in) fp64 weights of the bilinear antialiased resize of torch along one axis. Each row sums to 1. <code>functools.cache</code> keeps each result.</td><td>T51</td><td>3, 4.1</td></tr>
+        <tr><td><code>_resize_matrices(h, w, size)</code> (new, private)</td><td class="num">42–47</td><td>Casts the two weight matrices of one size pair to fp32 MLX arrays: rows (H, h) and columns (w, W). <code>functools.cache</code> keeps them.</td><td>Through T52</td><td>4.2</td></tr>
+        <tr><td><code>preprocess_frames(frames, size)</code> (new)</td><td class="num">50–73</td><td>Makes normalized fp32 pixels (B, 3, H, W) on the GPU from uint8 RGB frames (B, h, w, 3). Raises <code>TF32ModeError</code> when TF32 is on.</td><td>T52, T53, T54, W5, C6</td><td>2, 4.3, 6, 8</td></tr>
+        <tr class="group"><td colspan="5"><code>src/dinov3_apple/stored.py</code> (changed)</td></tr>
+        <tr><td><code>IMAGENET_MEAN_VALUES</code>, <code>IMAGENET_STD_VALUES</code> (new)</td><td class="num">27–30</td><td>The ImageNet mean and standard deviation as NumPy fp32 arrays. Both preprocessing paths read them.</td><td><code>test_imagenet_constants_have_one_source</code></td><td>4.4</td></tr>
+        <tr class="group"><td colspan="5"><code>src/dinov3_apple/preprocess.py</code> (changed)</td></tr>
+        <tr><td><code>IMAGENET_MEAN</code>, <code>IMAGENET_STD</code> (changed)</td><td class="num">31–32</td><td>The torch tensors of the CPU path. They now come from the NumPy constants of <code>stored.py</code>.</td><td><code>test_imagenet_constants_have_one_source</code></td><td>4.4</td></tr>
+        <tr><td><code>preprocess(image, size)</code> (no change)</td><td class="num">42–57</td><td>The CPU path: torch, fp64, one image. It made the stored pixels in Step 2.</td><td>Step 2 tests</td><td>4.5</td></tr>
+        <tr class="group"><td colspan="5"><code>src/dinov3_apple/mlx_model.py</code> (changed)</td></tr>
+        <tr><td><code>patch_dtype(dtype_mode, patch_fp32)</code> (new)</td><td class="num">583–587</td><td>Returns fp16 for the patch embeddings in the four fp16 and bf16 dtype modes, else fp32. <code>patch_fp32=True</code> gives fp32 in every dtype mode.</td><td>T55, T56, W4</td><td>7</td></tr>
+        <tr><td><code>mlx_embeddings(tokens, dtype_mode, patch_fp32)</code> (new)</td><td class="num">590–611</td><td>Returns the frame embeddings in fp32 and the patch embeddings in the dtype of <code>patch_dtype</code>. <a href="06-1-compiled-forward-pass.html">06-1</a> explains it.</td><td>T55, W4</td><td>7</td></tr>
+        <tr class="group"><td colspan="5"><code>scripts/bench_speed.py</code> (new)</td></tr>
+        <tr><td><code>preprocess_plan</code>, <code>run_preprocess_worker</code></td><td class="num">418–421, 805–858</td><td>The process of change ratio C6: the CPU path against <code>preprocess_frames</code> at 224 and 512 px.</td><td>C6</td><td>8</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 1.</b> The Step 6 code that this page explains. "(new)" and "(changed)" compare with commit <code>11a45b1</code>, the last commit before the Step 6 build. Tests: <code>tests/test_mlx_preprocess.py</code> (T51 to T53, W5, the constants test), <code>tests/test_mlx_environment.py</code> (T54, T56), <code>tests/test_mlx_parts.py</code> (T55), <code>tests/test_mlx_parity.py</code> (W4). Table 18 of the plan defines T51 to T56; Table 19 defines W4 and W5.</p>
+</section>
+
+<section id="picture">
+  <h2>2 Preprocessing in one picture</h2>
+  <p>Preprocessing has three steps: divide by 255, resize (bilinear, antialiased), normalize with the ImageNet mean and standard deviation. The Hugging Face image processor of DINOv3 does the same three steps in this order (<code>specs/02-reference/explore.html</code>, Section 3.3). Both paths of Figure 1 do them. They differ in the place, the dtype and the batch.</p>
+
+  <figure>
+    <div class="fig"><svg viewBox="0 0 960 480" role="img" aria-labelledby="fig1-title" font-family="-apple-system, Helvetica Neue, Arial, sans-serif">
+      <title id="fig1-title">The MLX path and the CPU path from RGB frames to normalized fp32 pixels, with the cached resize matrices, the shared constants and the comparison T52</title>
+      <defs><marker id="arrow1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#4a5655"/></marker></defs>
+      <rect width="960" height="480" fill="#ffffff"/>
+      <g font-size="12" fill="#111414">
+        <text x="20" y="24" font-weight="600" font-size="13">Two paths from RGB frames to normalized fp32 pixels. Teal outline: Step 6 code. Grey outline: Step 2 code and data.</text>
+
+        <!-- cached matrices -->
+        <rect x="20" y="40" width="270" height="62" rx="5" fill="#ffffff" stroke="#057379" stroke-width="1.5"/>
+        <text x="155" y="60" text-anchor="middle" font-weight="600">resize_weights(n_in, n_out)</text>
+        <text x="155" y="76" text-anchor="middle" font-size="10.5">NumPy fp64, one (n_out, n_in) matrix</text>
+        <text x="155" y="91" text-anchor="middle" font-size="10.5">each row sums to 1; @cache</text>
+        <line x1="290" y1="71" x2="310" y2="71" stroke="#4a5655" stroke-width="1.5" marker-end="url(#arrow1)"/>
+        <rect x="312" y="40" width="296" height="62" rx="5" fill="#ffffff" stroke="#057379" stroke-width="1.5"/>
+        <text x="460" y="60" text-anchor="middle" font-weight="600">_resize_matrices(h, w, size)</text>
+        <text x="460" y="76" text-anchor="middle" font-size="10.5">rows (H, h) and columns (w, W), cast to fp32</text>
+        <text x="460" y="91" text-anchor="middle" font-size="10.5">MLX arrays; @cache for each size pair</text>
+
+        <!-- TF32 check -->
+        <rect x="640" y="40" width="300" height="62" rx="5" fill="#ffffff" stroke="#e0a336" stroke-width="2"/>
+        <text x="790" y="60" text-anchor="middle" font-weight="600">TF32 check, line 65 (first action)</text>
+        <text x="790" y="76" text-anchor="middle" font-size="10.5">tf32_enabled() is True → TF32ModeError</text>
+        <text x="790" y="91" text-anchor="middle" font-size="10.5">the resize matmuls need fp32 (ADR 0005)</text>
+
+        <!-- MLX lane -->
+        <text x="20" y="140" font-weight="600" font-size="12.5" fill="#057379">MLX path: preprocess_frames (D12)</text>
+        <line x1="382" y1="102" x2="382" y2="156" stroke="#4a5655" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#arrow1)"/>
+        <line x1="538" y1="102" x2="538" y2="156" stroke="#4a5655" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#arrow1)"/>
+        <text x="388" y="134" font-size="10.5" fill="#4a5655">rows</text>
+        <text x="544" y="134" font-size="10.5" fill="#4a5655">columns</text>
+
+        <rect x="20" y="158" width="120" height="62" rx="5" fill="#f5f8f7" stroke="#4a5655" stroke-width="1.5"/>
+        <text x="80" y="178" text-anchor="middle" font-weight="600">uint8 frames</text>
+        <text x="80" y="194" text-anchor="middle" font-size="10.5">(B, h, w, 3)</text>
+        <text x="80" y="209" text-anchor="middle" font-size="10.5">on the host</text>
+
+        <rect x="156" y="158" width="140" height="62" rx="5" fill="#ffffff" stroke="#057379" stroke-width="1.5"/>
+        <text x="226" y="178" text-anchor="middle" font-weight="600">mx.array, astype</text>
+        <text x="226" y="194" text-anchor="middle" font-size="10.5">fp32, transpose, / 255</text>
+        <text x="226" y="209" text-anchor="middle" font-size="10.5">→ (B, 3, h, w)</text>
+
+        <rect x="312" y="158" width="140" height="62" rx="5" fill="#ffffff" stroke="#057379" stroke-width="1.5"/>
+        <text x="382" y="178" text-anchor="middle" font-weight="600">rows @ x</text>
+        <text x="382" y="194" text-anchor="middle" font-size="10.5">(H, h) · (h, w)</text>
+        <text x="382" y="209" text-anchor="middle" font-size="10.5">→ (B, 3, H, w)</text>
+
+        <rect x="468" y="158" width="140" height="62" rx="5" fill="#ffffff" stroke="#057379" stroke-width="1.5"/>
+        <text x="538" y="178" text-anchor="middle" font-weight="600">… @ columns</text>
+        <text x="538" y="194" text-anchor="middle" font-size="10.5">(H, w) · (w, W)</text>
+        <text x="538" y="209" text-anchor="middle" font-size="10.5">→ (B, 3, H, W)</text>
+
+        <rect x="624" y="158" width="140" height="62" rx="5" fill="#ffffff" stroke="#057379" stroke-width="1.5"/>
+        <text x="694" y="178" text-anchor="middle" font-weight="600">(x − mean) / std</text>
+        <text x="694" y="194" text-anchor="middle" font-size="10.5">per channel</text>
+        <text x="694" y="209" text-anchor="middle" font-size="10.5">in fp32</text>
+
+        <rect x="780" y="158" width="160" height="62" rx="5" fill="#f5f8f7" stroke="#4a5655" stroke-width="1.5"/>
+        <text x="860" y="178" text-anchor="middle" font-weight="600">fp32 pixels</text>
+        <text x="860" y="194" text-anchor="middle" font-size="10.5">(B, 3, H, W)</text>
+        <text x="860" y="209" text-anchor="middle" font-size="10.5">on the GPU → backbone</text>
+
+        <g stroke="#4a5655" stroke-width="1.5" marker-end="url(#arrow1)">
+          <line x1="140" y1="189" x2="154" y2="189"/>
+          <line x1="296" y1="189" x2="310" y2="189"/>
+          <line x1="452" y1="189" x2="466" y2="189"/>
+          <line x1="608" y1="189" x2="622" y2="189"/>
+          <line x1="764" y1="189" x2="778" y2="189"/>
+        </g>
+        <text x="20" y="240" font-size="10.5" fill="#4a5655">Only uint8 values go to the GPU: a quarter of the fp32 bytes.</text>
+        <text x="20" y="255" font-size="10.5" fill="#4a5655">The cast to fp32 comes before the resize (Section 5).</text>
+
+        <!-- constants -->
+        <rect x="624" y="238" width="140" height="54" rx="5" fill="#ffffff" stroke="#057379" stroke-width="1.5"/>
+        <text x="694" y="255" text-anchor="middle" font-weight="600">stored.py</text>
+        <text x="694" y="270" text-anchor="middle" font-size="10">IMAGENET_MEAN_VALUES</text>
+        <text x="694" y="284" text-anchor="middle" font-size="10">IMAGENET_STD_VALUES, fp32</text>
+        <line x1="694" y1="238" x2="694" y2="223" stroke="#4a5655" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#arrow1)"/>
+        <line x1="694" y1="292" x2="694" y2="315" stroke="#4a5655" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#arrow1)"/>
+
+        <!-- T52 comparison -->
+        <line x1="860" y1="223" x2="860" y2="315" stroke="#057379" stroke-width="1.5" stroke-dasharray="4 3" marker-start="url(#arrow1)" marker-end="url(#arrow1)"/>
+        <text x="852" y="262" text-anchor="end" font-size="10.5" font-weight="600" fill="#057379">T52</text>
+        <text x="852" y="277" text-anchor="end" font-size="10.5" fill="#057379">≤ 2e-6</text>
+
+        <!-- CPU lane -->
+        <text x="20" y="308" font-weight="600" font-size="12.5" fill="#4a5655">CPU path: preprocess (Step 2), torch, fp64, one image at a time</text>
+        <rect x="20" y="318" width="120" height="62" rx="5" fill="#f5f8f7" stroke="#4a5655" stroke-width="1.5"/>
+        <text x="80" y="338" text-anchor="middle" font-weight="600">uint8 image</text>
+        <text x="80" y="354" text-anchor="middle" font-size="10.5">(h, w, 3)</text>
+        <text x="80" y="369" text-anchor="middle" font-size="10.5">on the host</text>
+
+        <rect x="156" y="318" width="140" height="62" rx="5" fill="#ffffff" stroke="#4a5655" stroke-width="1.5"/>
+        <text x="226" y="338" text-anchor="middle" font-weight="600">torch fp64</text>
+        <text x="226" y="354" text-anchor="middle" font-size="10.5">permute, / 255</text>
+        <text x="226" y="369" text-anchor="middle" font-size="10.5">→ (1, 3, h, w)</text>
+
+        <rect x="312" y="318" width="296" height="62" rx="5" fill="#ffffff" stroke="#4a5655" stroke-width="1.5"/>
+        <text x="460" y="338" text-anchor="middle" font-weight="600" font-size="11.5">F.interpolate(bilinear, antialias=True)</text>
+        <text x="460" y="354" text-anchor="middle" font-size="10.5">kernel upsample_bilinear2d_aa, fp64</text>
+        <text x="460" y="369" text-anchor="middle" font-size="10.5">→ (1, 3, H, W)</text>
+
+        <rect x="624" y="318" width="140" height="62" rx="5" fill="#ffffff" stroke="#4a5655" stroke-width="1.5"/>
+        <text x="694" y="338" text-anchor="middle" font-weight="600">(x − mean) / std</text>
+        <text x="694" y="354" text-anchor="middle" font-size="10.5">constants widened</text>
+        <text x="694" y="369" text-anchor="middle" font-size="10.5">to fp64</text>
+
+        <rect x="780" y="318" width="160" height="62" rx="5" fill="#ffffff" stroke="#4a5655" stroke-width="1.5"/>
+        <text x="860" y="338" text-anchor="middle" font-weight="600">cast to fp32</text>
+        <text x="860" y="354" text-anchor="middle" font-size="10.5">(1, 3, H, W)</text>
+        <text x="860" y="369" text-anchor="middle" font-size="10.5">on the host</text>
+
+        <g stroke="#4a5655" stroke-width="1.5" marker-end="url(#arrow1)">
+          <line x1="140" y1="349" x2="154" y2="349"/>
+          <line x1="296" y1="349" x2="310" y2="349"/>
+          <line x1="608" y1="349" x2="622" y2="349"/>
+          <line x1="764" y1="349" x2="778" y2="349"/>
+          <line x1="860" y1="380" x2="860" y2="402"/>
+        </g>
+
+        <rect x="780" y="404" width="160" height="48" rx="5" fill="#f5f8f7" stroke="#4a5655" stroke-width="1.5"/>
+        <text x="860" y="424" text-anchor="middle" font-weight="600">inputs.safetensors</text>
+        <text x="860" y="440" text-anchor="middle" font-size="10.5">the stored pixels</text>
+
+        <text x="20" y="412" font-size="11" fill="#4a5655">C6 times both paths on 8 frames of 1080 × 1920 px (Section 8).</text>
+        <text x="20" y="428" font-size="11" fill="#4a5655">The benchmark matrix and the parity tests read the stored pixels; W5 also uses the MLX pixels.</text>
+
+        <!-- legend -->
+        <rect x="20" y="450" width="22" height="14" rx="3" fill="#ffffff" stroke="#057379" stroke-width="1.5"/>
+        <text x="48" y="461" font-size="10.5">Step 6 code</text>
+        <rect x="130" y="450" width="22" height="14" rx="3" fill="#ffffff" stroke="#4a5655" stroke-width="1.5"/>
+        <text x="158" y="461" font-size="10.5">Step 2 code</text>
+        <rect x="240" y="450" width="22" height="14" rx="3" fill="#f5f8f7" stroke="#4a5655" stroke-width="1.5"/>
+        <text x="268" y="461" font-size="10.5">data</text>
+        <line x1="320" y1="457" x2="350" y2="457" stroke="#4a5655" stroke-width="1.5" stroke-dasharray="4 3"/>
+        <text x="358" y="461" font-size="10.5">fixed values that a step reads, or a comparison</text>
+      </g>
+    </svg></div>
+    <figcaption><b>Figure 1.</b> The two preprocessing paths. Top: the MLX path of Step 6. The TF32 check runs first. The weight matrices come from two caches, so the Python loop of <code>resize_weights</code> runs once for each size pair. Bottom: the CPU path of Step 2. It made the stored pixels once, with <code>scripts/make_reference.py</code>. T52 compares the output of the MLX path with the stored pixels of the 12 configurations: largest difference ≤ 2e-6. Both paths read the same fp32 constants from <code>stored.py</code>. The CPU path runs the resize as one call of <code>F.interpolate</code>. The MLX path splits it into two matmuls (Section 4.3).</figcaption>
+  </figure>
+</section>
+
+<section id="filter">
+  <h2>3 The antialias filter widens when the image shrinks</h2>
+  <p>A bilinear resize computes each output pixel as a weighted sum of input pixels. One axis at a time is enough: the 2-D weight of an input pixel is the product of its row weight and its column weight. So one (n_out, n_in) weight matrix for each axis describes the whole resize.</p>
+  <p>The weights of one output pixel come from a triangle filter. Its peak is at the center of the output pixel. Its half-width is the support. A tap is one input pixel with a weight above zero. Two numbers set the filter:</p>
+  <ul>
+    <li><b>scale</b> = n_in / n_out: the width of one output pixel, in input pixels.</li>
+    <li><b>support</b> = max(scale, 1): the half-width of the triangle, in input pixels.</li>
+  </ul>
+  <p>When the image grows (scale ≤ 1), the support is 1. Each output pixel then mixes the two nearest input pixels: plain bilinear interpolation. When the image shrinks (scale &gt; 1), the support grows with the scale. Each output pixel then takes a weighted mean over a window of 2 · support input pixels, the width of two output pixels. The weight falls linearly from the center of the output pixel to zero at the edge of the window. This is the antialias rule. Without it, a shrink from 1920 to 224 px reads only 2 input pixels for each output pixel and skips the other 6 or 7. Fine detail then turns into false patterns (aliasing).</p>
+
+  <figure>
+    <div class="fig"><svg viewBox="0 0 960 330" role="img" aria-labelledby="fig2-title" font-family="-apple-system, Helvetica Neue, Arial, sans-serif">
+      <title id="fig2-title">The weights of one output pixel for three size pairs: enlarge 100 to 448 px, shrink 768 to 512 px, shrink 1080 to 224 px</title>
+      <rect width="960" height="330" fill="#ffffff"/>
+      <g font-size="12" fill="#111414">
+        <text x="20" y="24" font-weight="600" font-size="13">Weights of one output pixel, from resize_weights. Same scale in all panels: 24 px per input pixel.</text>
+
+        <!-- panel a -->
+        <text x="165" y="52" text-anchor="middle" font-weight="600">(a) Enlarge 100 → 448 px</text>
+        <text x="165" y="68" text-anchor="middle" font-size="10.5" fill="#4a5655">scale 0.223, support 1: 2 taps</text>
+        <line x1="35" y1="262" x2="295" y2="262" stroke="#4a5655" stroke-width="1"/>
+        <g stroke="#4a5655">
+          <line x1="42.3" y1="262" x2="42.3" y2="268"/><line x1="66.3" y1="262" x2="66.3" y2="268"/><line x1="90.3" y1="262" x2="90.3" y2="268"/><line x1="114.3" y1="262" x2="114.3" y2="268"/><line x1="138.3" y1="262" x2="138.3" y2="268"/><line x1="162.3" y1="262" x2="162.3" y2="268"/><line x1="186.3" y1="262" x2="186.3" y2="268"/><line x1="210.3" y1="262" x2="210.3" y2="268"/><line x1="234.3" y1="262" x2="234.3" y2="268"/><line x1="258.3" y1="262" x2="258.3" y2="268"/><line x1="282.3" y1="262" x2="282.3" y2="268"/>
+        </g>
+        <path d="M141.0,262 L165.0,92.0 L189.0,262" fill="#9fd3d1" fill-opacity="0.35" stroke="#057379" stroke-width="1.5"/>
+        <rect x="144.3" y="196.0" width="12" height="66.0" fill="#057379"/>
+        <rect x="168.3" y="158.0" width="12" height="104.0" fill="#057379"/>
+        <text x="150.3" y="190" text-anchor="middle" font-size="10">0.388</text>
+        <text x="174.3" y="152" text-anchor="middle" font-size="10">0.612</text>
+        <path d="M162.3,278 V284 H167.7 V278" fill="none" stroke="#e0a336" stroke-width="2"/>
+        <text x="165" y="302" text-anchor="middle" font-size="10.5" fill="#4a5655">one output pixel = 0.223 input pixels</text>
+
+        <!-- panel b -->
+        <text x="480" y="52" text-anchor="middle" font-weight="600">(b) Shrink 768 → 512 px</text>
+        <text x="480" y="68" text-anchor="middle" font-size="10.5" fill="#4a5655">scale 1.5, support 1.5: 3 taps</text>
+        <line x1="350" y1="262" x2="615" y2="262" stroke="#4a5655" stroke-width="1"/>
+        <g stroke="#4a5655">
+          <line x1="366" y1="262" x2="366" y2="268"/><line x1="390" y1="262" x2="390" y2="268"/><line x1="414" y1="262" x2="414" y2="268"/><line x1="438" y1="262" x2="438" y2="268"/><line x1="462" y1="262" x2="462" y2="268"/><line x1="486" y1="262" x2="486" y2="268"/><line x1="510" y1="262" x2="510" y2="268"/><line x1="534" y1="262" x2="534" y2="268"/><line x1="558" y1="262" x2="558" y2="268"/><line x1="582" y1="262" x2="582" y2="268"/><line x1="606" y1="262" x2="606" y2="268"/>
+        </g>
+        <path d="M444.0,262 L480.0,148.7 L516.0,262" fill="#9fd3d1" fill-opacity="0.35" stroke="#057379" stroke-width="1.5"/>
+        <rect x="444.0" y="243.1" width="12" height="18.9" fill="#057379"/>
+        <rect x="468.0" y="167.6" width="12" height="94.4" fill="#057379"/>
+        <rect x="492.0" y="205.3" width="12" height="56.7" fill="#057379"/>
+        <text x="450" y="237" text-anchor="middle" font-size="10">0.111</text>
+        <text x="474" y="161" text-anchor="middle" font-size="10">0.556</text>
+        <text x="498" y="199" text-anchor="middle" font-size="10">0.333</text>
+        <path d="M462.0,278 V284 H498.0 V278" fill="none" stroke="#e0a336" stroke-width="2"/>
+        <text x="480" y="302" text-anchor="middle" font-size="10.5" fill="#4a5655">one output pixel = 1.5 input pixels</text>
+
+        <!-- panel c -->
+        <text x="795" y="52" text-anchor="middle" font-weight="600">(c) Shrink 1080 → 224 px</text>
+        <text x="795" y="68" text-anchor="middle" font-size="10.5" fill="#4a5655">scale 4.82, support 4.82: 9 taps in this row</text>
+        <line x1="660" y1="262" x2="925" y2="262" stroke="#4a5655" stroke-width="1"/>
+        <g stroke="#4a5655">
+          <line x1="665.1" y1="262" x2="665.1" y2="268"/><line x1="689.1" y1="262" x2="689.1" y2="268"/><line x1="713.1" y1="262" x2="713.1" y2="268"/><line x1="737.1" y1="262" x2="737.1" y2="268"/><line x1="761.1" y1="262" x2="761.1" y2="268"/><line x1="785.1" y1="262" x2="785.1" y2="268"/><line x1="809.1" y1="262" x2="809.1" y2="268"/><line x1="833.1" y1="262" x2="833.1" y2="268"/><line x1="857.1" y1="262" x2="857.1" y2="268"/><line x1="881.1" y1="262" x2="881.1" y2="268"/><line x1="905.1" y1="262" x2="905.1" y2="268"/>
+        </g>
+        <path d="M679.3,262 L795.0,226.8 L910.7,262" fill="#9fd3d1" fill-opacity="0.35" stroke="#057379" stroke-width="1.5"/>
+        <rect x="695.1" y="255.4" width="12" height="6.6" fill="#057379"/>
+        <rect x="719.1" y="248.1" width="12" height="13.9" fill="#057379"/>
+        <rect x="743.1" y="240.8" width="12" height="21.2" fill="#057379"/>
+        <rect x="767.1" y="233.5" width="12" height="28.5" fill="#057379"/>
+        <rect x="791.1" y="227.5" width="12" height="34.5" fill="#057379"/>
+        <rect x="815.1" y="234.8" width="12" height="27.2" fill="#057379"/>
+        <rect x="839.1" y="242.1" width="12" height="19.9" fill="#057379"/>
+        <rect x="863.1" y="249.4" width="12" height="12.6" fill="#057379"/>
+        <rect x="887.1" y="256.7" width="12" height="5.3" fill="#057379"/>
+        <text x="797.1" y="221" text-anchor="middle" font-size="10">0.203</text>
+        <path d="M737.1,278 V284 H852.9 V278" fill="none" stroke="#e0a336" stroke-width="2"/>
+        <text x="795" y="302" text-anchor="middle" font-size="10.5" fill="#4a5655">one output pixel = 4.82 input pixels</text>
+      </g>
+    </svg></div>
+    <figcaption><b>Figure 2.</b> The weights of one output pixel near the middle of the axis: row 224 of 448 in (a), row 256 of 512 in (b), row 112 of 224 in (c). Teal bars: the weights of <code>resize_weights</code>, at the centers of the input pixels; each set sums to 1. Light triangle: the filter 1 − |d| / support, divided by the sum of the taps; d is the distance from the center of the output pixel, in input pixels. Ticks: the borders of the input pixels. Amber bracket: the width of one output pixel. The triangle gets wider and lower as the image shrinks, and its area stays near 1. In (c) the 9 weights run from 0.031 to 0.203. Computed by the agent with a NumPy copy of lines 30 to 38 of <code>mlx_preprocess.py</code>.</figcaption>
+  </figure>
+
+  <div class="table-wrap">
+    <table class="first-nowrap">
+      <thead><tr><th>Size pair</th><th>Where</th><th class="num">scale</th><th class="num">support</th><th class="num">Taps per output pixel</th><th class="num">Non-zero share of the matrix</th></tr></thead>
+      <tbody>
+        <tr><td>100 → 448</td><td>T51</td><td class="num">0.223</td><td class="num">1</td><td class="num">1–2</td><td class="num">1.99 %</td></tr>
+        <tr><td>768 → 512</td><td>T51</td><td class="num">1.5</td><td class="num">1.5</td><td class="num">2–3</td><td class="num">0.39 %</td></tr>
+        <tr><td>1080 → 512</td><td>C6, rows at 512 px</td><td class="num">2.11</td><td class="num">2.11</td><td class="num">3–5</td><td class="num">0.39 %</td></tr>
+        <tr><td>1920 → 512</td><td>C6, columns at 512 px</td><td class="num">3.75</td><td class="num">3.75</td><td class="num">6–8</td><td class="num">0.39 %</td></tr>
+        <tr><td>1080 → 224</td><td>T51; C6, rows at 224 px</td><td class="num">4.82</td><td class="num">4.82</td><td class="num">7–10</td><td class="num">0.89 %</td></tr>
+        <tr><td>1920 → 224</td><td>T51; C6, columns at 224 px</td><td class="num">8.57</td><td class="num">8.57</td><td class="num">13–18</td><td class="num">0.89 %</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 2.</b> The resize weights of the four size pairs of T51 and of the C6 frames (1080 × 1920 px). Computed by the agent with a NumPy copy of <code>resize_weights</code>; no committed file holds these values. The lowest tap count of each row sits at the image border, where line 35 or 36 cuts the window. The non-zero share is the count of weights above zero divided by n_out · n_in. More than 98 % of each matrix is zero. The dense matmul still multiplies every zero (Section 4.3).</p>
+</section>
+
+<section id="code">
+  <h2>4 The code</h2>
+
+  <h3>4.1 resize_weights</h3>
+  <pre><code># src/dinov3_apple/mlx_preprocess.py, lines 19 to 39
+@cache
+def resize_weights(n_in: int, n_out: int) -&gt; np.ndarray:
+    """Return the (n_out, n_in) fp64 weights of the bilinear antialiased resize of torch.
+
+    The rule of upsample_bilinear2d_aa: a triangle filter whose support grows with the scale when
+    the image shrinks. Each row sums to 1.
+
+    Args:
+        n_in: The number of input pixels along one axis.
+        n_out: The number of output pixels along the same axis.
+    """
+    scale = n_in / n_out
+    support = max(scale, 1.0)
+    weights = np.zeros((n_out, n_in))
+    for i in range(n_out):
+        center = scale * (i + 0.5)
+        lo = max(int(center - support + 0.5), 0)
+        hi = min(int(center + support + 0.5), n_in)
+        taps = np.maximum(0.0, 1.0 - np.abs((np.arange(lo, hi) - center + 0.5) / support))
+        weights[i, lo:hi] = taps / taps.sum()
+    return weights</code></pre>
+  <ul>
+    <li><b>Line 19.</b> <code>functools.cache</code> keeps the fp64 matrix of each (n_in, n_out) pair. The Python loop runs once for each pair, for example 224 times for 1920 → 224.</li>
+    <li><b>Lines 30 and 31.</b> The two numbers of Section 3. <code>support = max(scale, 1.0)</code> is the antialias rule: the filter widens only when the image shrinks.</li>
+    <li><b>Line 32.</b> The matrix is dense and fp64. <code>np.zeros</code> gives fp64 by default.</li>
+    <li><b>Line 34.</b> The center of output pixel i, in input coordinates. Pixel j of the input covers [j, j + 1], so its center is at j + 0.5. This is the half-pixel rule of <code>F.interpolate</code> with <code>align_corners=False</code>.</li>
+    <li><b>Lines 35 and 36.</b> The window [lo, hi) holds the input pixels inside the support. <code>int(… + 0.5)</code> rounds, as the torch kernel does. The window stops at 0 and at n_in, so it is shorter at the border.</li>
+    <li><b>Line 37.</b> <code>np.arange(lo, hi) - center + 0.5</code> is the distance d from the center of each input pixel to the center of the output pixel. The triangle is 1 − |d| / support. <code>np.maximum(0.0, …)</code> sets a negative value to 0.</li>
+    <li><b>Line 38.</b> The division by the sum makes each row sum to 1. This keeps a flat image flat, also at the border, where the window is shorter. It also lets the resize and the normalization change places: for each channel, resize(a · x + b) = a · resize(x) + b when the weights of each row sum to 1. T51 checks the sum within 1e-12.</li>
+  </ul>
+
+  <h3>4.2 _resize_matrices</h3>
+  <pre><code># src/dinov3_apple/mlx_preprocess.py, lines 42 to 47
+@cache
+def _resize_matrices(h: int, w: int, size: tuple[int, int]) -&gt; tuple[mx.array, mx.array]:
+    """The fp32 matrices of the rows (H, h) and of the columns (w, W) of one size pair."""
+    rows = mx.array(resize_weights(h, size[0]).astype(np.float32))
+    columns = mx.array(resize_weights(w, size[1]).T.astype(np.float32))
+    return rows, columns</code></pre>
+  <ul>
+    <li><b>Line 45.</b> The row matrix keeps the shape (H, h). It multiplies from the left.</li>
+    <li><b>Line 46.</b> <code>.T</code> transposes the column matrix to (w, W). It multiplies from the right. So the resize is rows · image · columns.</li>
+    <li><b>The cast to fp32.</b> NumPy computes in fp64. The matmuls on the GPU run in fp32, so the weights round once to fp32 here.</li>
+    <li><b>The second cache.</b> It keeps the MLX arrays, so a new batch of the same frame size does not copy the matrices again. For the C6 frames the two matrices hold (224 · 1080 + 1920 · 224) · 4 bytes = 2.69 MB at 224 px and (512 · 1080 + 1920 · 512) · 4 bytes = 6.14 MB at 512 px (computed by the agent). The cache never frees them. A process that sees many frame sizes keeps one pair for each size.</li>
+  </ul>
+
+  <h3>4.3 preprocess_frames</h3>
+  <pre><code># src/dinov3_apple/mlx_preprocess.py, lines 50 to 73
+def preprocess_frames(frames: np.ndarray, size: tuple[int, int]) -&gt; mx.array:
+    """Return normalized fp32 pixels (B, 3, H, W) from uint8 RGB frames (B, h, w, 3).
+
+    The uint8 frames go to the GPU: a quarter of the fp32 bytes. The resize matmuls run in fp32.
+
+    Args:
+        frames: The RGB frames as uint8 values, all of one size.
+        size: The input resolution as (H, W).
+
+    Returns:
+        The pixels, divided by 255, resized and normalized, on the GPU.
+
+    Raises:
+        TF32ModeError: If TF32 is on: the resize matmuls run in fp32 (ADR 0005).
+    """
+    if tf32_enabled():
+        raise TF32ModeError("set MLX_ENABLE_TF32=0: the resize matmuls run in fp32")
+    _, h, w, _ = frames.shape
+    rows, columns = _resize_matrices(h, w, tuple(size))
+    x = mx.array(frames).astype(mx.float32).transpose(0, 3, 1, 2) / 255.0
+    x = rows @ x @ columns
+    mean = mx.array(IMAGENET_MEAN_VALUES).reshape(1, 3, 1, 1)
+    std = mx.array(IMAGENET_STD_VALUES).reshape(1, 3, 1, 1)
+    return (x - mean) / std</code></pre>
+  <ul>
+    <li><b>Lines 65 and 66.</b> The TF32 check is the first action. It runs in every dtype mode. Section 6 explains why.</li>
+    <li><b>Line 67.</b> All frames of one batch have one size. The channels are last, as a decoder gives them.</li>
+    <li><b>Line 68.</b> <code>tuple(size)</code>: <code>functools.cache</code> needs arguments that it can hash. A list, for example from a JSON spec, would raise <code>TypeError</code>.</li>
+    <li><b>Line 69.</b> <code>mx.array(frames)</code> copies the uint8 values into MLX memory. Then the cast to fp32, the transpose to channels first (B, 3, h, w) and the division by 255 run on the GPU. The uint8 values are a quarter of the fp32 bytes: 49.8 MB against 199.1 MB for the 8 frames of C6 (8 · 1080 · 1920 · 3 bytes, computed by the agent).</li>
+    <li><b>Line 70.</b> Python reads <code>rows @ x @ columns</code> as <code>(rows @ x) @ columns</code>. The first matmul broadcasts the (H, h) matrix over the batch and the channels: each (h, w) channel becomes (H, w). The second matmul makes (H, W). These two matmuls are the separable resize. The matrices are more than 98 % zeros (Table 2). A gather form with <code>mx.take</code> has the same math (Table 26 of <code>explore.html</code>). The build kept the dense form of the probe.</li>
+    <li><b>Lines 71 to 73.</b> The constants become (1, 3, 1, 1) arrays. They broadcast over the batch, the height and the width. The result is fp32, because all inputs are fp32.</li>
+    <li><b>The return value is lazy.</b> MLX records the operations and runs them at the next <code>mx.eval</code>. C6 calls <code>mx.eval</code> on the result, so its time includes the copy to the GPU and all operations (Section 8).</li>
+  </ul>
+
+  <h3>4.4 The ImageNet constants: one source</h3>
+  <pre><code># src/dinov3_apple/stored.py, lines 27 to 30
+# The ImageNet mean and standard deviation of the normalization, fp32. preprocess.py (torch) and
+# mlx_preprocess.py (MLX) take them from here (D12 of specs/06-speed/plan.html).
+IMAGENET_MEAN_VALUES = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+IMAGENET_STD_VALUES = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+
+# src/dinov3_apple/preprocess.py, lines 31 and 32
+IMAGENET_MEAN = torch.from_numpy(IMAGENET_MEAN_VALUES.copy())
+IMAGENET_STD = torch.from_numpy(IMAGENET_STD_VALUES.copy())</code></pre>
+  <ul>
+    <li><b>Why <code>stored.py</code>.</b> <code>preprocess.py</code> imports torch. <code>mlx_preprocess.py</code> must not import torch (T54). <code>stored.py</code> imports no torch, so both paths can read the constants from it.</li>
+    <li><b>The same fp32 values as before.</b> Before Step 6, <code>preprocess.py</code> made the tensors with <code>torch.tensor([0.485, 0.456, 0.406], dtype=torch.float32)</code> (commit <code>11a45b1</code>). The fp32 values are the same, so the stored pixels do not change. <code>test_imagenet_constants_have_one_source</code> checks that the two NumPy arrays are fp32 and that the torch tensors hold the same values as the arrays (<code>np.array_equal</code>).</li>
+    <li><b><code>.copy()</code>.</b> <code>torch.from_numpy</code> shares the memory of the array. The copy gives the tensor its own memory. A change of the tensor in place then cannot change the constant of <code>stored.py</code>.</li>
+    <li><b>Both paths use the fp32 value, not the decimal value.</b> 0.485 has no exact fp32 value. The CPU path widens the fp32 value to fp64 (Section 4.5). The MLX path computes with the fp32 value. So the two paths normalize with the same number.</li>
+  </ul>
+
+  <h3>4.5 The CPU path for comparison</h3>
+  <pre><code># src/dinov3_apple/preprocess.py, lines 42 to 57, shortened: the docstring is left out
+def preprocess(image: np.ndarray, size: tuple[int, int]) -&gt; torch.Tensor:
+    pixels = torch.from_numpy(image).permute(2, 0, 1).unsqueeze(0).to(torch.float64) / 255.0
+    resized = F.interpolate(pixels, size=size, mode="bilinear", antialias=True)
+    mean = IMAGENET_MEAN.to(torch.float64).view(1, 3, 1, 1)
+    std = IMAGENET_STD.to(torch.float64).view(1, 3, 1, 1)
+    return ((resized - mean) / std).to(torch.float32)</code></pre>
+  <ul>
+    <li><b>fp64 from end to end.</b> The module docstring of <code>preprocess.py</code> gives the reason: an fp32 antialiased resize in torch is off by up to 2.3e-5 for each pixel. In fp64 the error is below 1e-7. So other resize code can match the stored pixels.</li>
+    <li><b>One image.</b> The function takes (h, w, 3) and gives (1, 3, H, W). C6 calls it 8 times for a batch of 8 frames.</li>
+    <li><b>The MLX path differs in three places.</b> It computes in fp32, not fp64. It runs the resize as two matmuls, not as one call of <code>F.interpolate</code>. It takes a batch. The T52 target of 2e-6 allows for the fp32 rounding (Section 9).</li>
+  </ul>
+</section>
+
+<section id="float">
+  <h2>5 Why the resize runs on float values</h2>
+  <p>Many image libraries resize 8-bit pixels and round the result back to 8 bits. Step 2 measured the effect of this rounding on the output of the backbone (Table 3). Pillow resized the 8-bit image, and the backbone ran in fp32 on <code>torch-cpu</code>. The comparison is with the torch float resize, the method of <code>preprocess.py</code>.</p>
+  <div class="table-wrap">
+    <table class="first-nowrap">
+      <thead><tr><th>Resize method</th><th>Measure</th><th class="num">ViT-S/16, 224 px</th><th class="num">ViT-H+/16, 224 px</th><th class="num">ViT-H+/16, 512 px</th></tr></thead>
+      <tbody>
+        <tr><td>Pillow float resize</td><td>Largest pixel difference</td><td class="num">8.2e-6</td><td class="num">8.2e-6</td><td class="num">1.8e-7</td></tr>
+        <tr><td>Pillow float resize</td><td>Patch minimum</td><td class="num">1.000000</td><td class="num">1.000000</td><td class="num">1.000000</td></tr>
+        <tr><td>Pillow 8-bit resize</td><td>Largest pixel difference</td><td class="num">0.0037</td><td class="num">0.0037</td><td class="num">0.0039</td></tr>
+        <tr><td>Pillow 8-bit resize</td><td>Frame</td><td class="num">0.999977</td><td class="num">0.999969</td><td class="num">0.999998</td></tr>
+        <tr><td>Pillow 8-bit resize</td><td>Patch mean</td><td class="num">0.999973</td><td class="num">0.999038</td><td class="num">0.999997</td></tr>
+        <tr><td>Pillow 8-bit resize</td><td>Patch minimum</td><td class="num">0.999904</td><td class="num"><b>0.929001</b></td><td class="num">0.999716</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 3.</b> Preprocessing on <code>torch-cpu</code> in fp32 against the torch float resize. Source: Table 3 of <code>specs/02-reference/explore.html</code> (probe of 2026-11-06, one COCO image of 640 × 480 px). "Patch minimum" is the lowest cosine similarity of one patch embedding to the patch embedding of the torch float resize.</p>
+  <p>The 8-bit resize moves each pixel by at most 0.0039, about one step of 1/255. This is small for the eye. But for ViT-H+/16 at 224 px it drops the patch minimum to 0.929. A parity test with this preprocessing would measure the preprocessing, not the backbone. So the project fixed the rule in Step 2: divide by 255 first, then resize the float values.</p>
+  <p>The MLX path keeps this rule. Line 69 sends uint8 values to the GPU, because they need only a quarter of the bytes. But the same line casts them to fp32 before the resize of line 70. No line rounds the resized values back to 8 bits. The uint8 values are exact input data; only the resize output must stay in float.</p>
+</section>
+
+<section id="tf32">
+  <h2>6 Why TF32 must be off</h2>
+  <p>MLX turns TF32 on by default. With TF32, an fp32 matmul rounds its inputs to a 10-bit mantissa. ADR 0005 gives the size of the effect: for one fp32 matmul against NumPy float64, the TF32 probe of Step 4 gave a largest difference of 7.8e-7 with TF32 off and 7.2e-4 with TF32 on. The T52 target for the pixels is 2e-6. A resize with TF32 on would miss it by far.</p>
+  <p>ADR 0005 turns TF32 off for the fp32 dtype mode of the backbone. Step 6 adds a second reason. The two resize matmuls of line 70 run in fp32 in every dtype mode, because the pixels are always fp32: the backbone casts them later. So <code>preprocess_frames</code> refuses to run when TF32 is on, also in bf16-cast, where the backbone itself runs no fp32 matmul. T53 checks the refusal with a monkeypatched <code>tf32_enabled</code>.</p>
+  <pre><code># src/dinov3_apple/mlx_model.py, lines 64 to 81, shortened: the docstring is left out
+def tf32_enabled(environ: Mapping[str, str] | None = None) -&gt; bool:
+    value = (os.environ if environ is None else environ).get("MLX_ENABLE_TF32")
+    if value is None:
+        return True
+    match = re.match(r"\s*([+-]?\d+)", value)
+    return bool(match and int(match.group(1)))</code></pre>
+  <ul>
+    <li><b>The check reads the variable, not the state of MLX.</b> MLX reads <code>MLX_ENABLE_TF32</code> once, at its first use. The docstring warns: a process that changes the variable after its first <code>mlx</code> matmul defeats the check. So a caller sets <code>MLX_ENABLE_TF32=0</code> before the first <code>mlx</code> import, as <code>tests/conftest.py</code> does (ADR 0005).</li>
+    <li><b>No variable means TF32 on.</b> MLX uses the default 1. So a process without the variable gets <code>TF32ModeError</code> at the first call of <code>preprocess_frames</code>.</li>
+    <li><b>The benchmark workers.</b> <code>worker_env</code> of <code>scripts/bench_speed.py</code> sets <code>MLX_ENABLE_TF32=0</code> for each worker, also for the C6 process.</li>
+    <li><b>Step 7.</b> The API of Step 7 (<code>embed_frames</code>) must decide on TF32 for the preprocessing; it must be off (Section 3.20 of the plan).</li>
+  </ul>
+</section>
+
+<section id="fp16">
+  <h2>7 The fp16 patch embeddings</h2>
+  <p>Decision D13 changes the output side. In the four fp16 and bf16 dtype modes, the patch embeddings reach the host in fp16. This page calls these four modes the half dtype modes. The frame embeddings stay fp32. The fp32 dtype mode gives fp32 for both. A caller who wants fp32 patch embeddings in a half dtype mode sets <code>patch_fp32=True</code>. So fp16 is the default of the half dtype modes, and fp32 is the opt-in (option B of Table 27 of <code>explore.html</code>; the recommendation of its Section 3.13 adds "a parameter for an fp32 output").</p>
+  <pre><code># src/dinov3_apple/mlx_model.py, lines 583 to 587
+def patch_dtype(dtype_mode: str, patch_fp32: bool = False) -&gt; mx.Dtype:
+    """Return the host dtype of the patch embeddings of one dtype mode (D13 of
+    specs/06-speed/plan.html): fp16 in the four fp16 and bf16 dtype modes, else fp32."""
+    half = MLX_DTYPE_MODES[dtype_mode].matmul != mx.float32
+    return mx.float16 if half and not patch_fp32 else mx.float32
+
+# src/dinov3_apple/mlx_model.py, lines 608 to 611 (the body of mlx_embeddings)
+    frame = tokens[:, 0].astype(mx.float32)
+    patches = tokens[:, NUM_PREFIX_TOKENS:].astype(patch_dtype(dtype_mode, patch_fp32))
+    mx.eval(frame, patches)
+    return np.array(frame), np.array(patches)</code></pre>
+  <ul>
+    <li><b>Line 586.</b> A dtype mode is "half" when its matmul dtype is not fp32. This holds for fp16-cast, bf16-cast, fp16-autocast and bf16-autocast.</li>
+    <li><b>fp16 also for the bf16 modes.</b> NumPy has no bf16. bf16 has 7 stored mantissa bits, fp16 has 10. So each bf16 value inside the normal fp16 range converts to fp16 exactly. A bf16 value below the normal fp16 range (below 2<sup>−14</sup>, about 6.1e-5) can lose bits, because fp16 keeps fewer bits there. After the final layer norm no value is above 18 (docstring of <code>mlx_embeddings</code>; Table 27 of <code>explore.html</code>), far below the fp16 maximum of 65,504.</li>
+    <li><b>The cast runs on the GPU.</b> <code>astype</code> runs before <code>np.array</code>, so only the fp16 bytes cross to the host. For a P2 batch: 21.0 MB against 42.0 MB in fp32 (Table 13 of <code>explore.html</code>).</li>
+    <li><b>The same rule in the benchmark worker.</b> <code>time_batch_mlx</code> of <code>mlx_bench.py</code> (lines 93 to 101) uses <code>patch_dtype</code> in the same way. It stops the clock of the frame embeddings before the patch cast. So the patch dtype cannot change the frame time.</li>
+  </ul>
+
+  <div class="table-wrap">
+    <table class="first-nowrap">
+      <thead><tr><th>Priority</th><th>Dtype mode</th><th class="num">Speedup table: output, median [min–max]</th><th class="num">Patch embeddings: median [min–max]</th></tr></thead>
+      <tbody>
+        <tr><td>P1</td><td>fp16-cast</td><td class="num">frame 0.993 [0.953–1.011]</td><td class="num">1.031 [0.995–1.051]</td></tr>
+        <tr><td>P1</td><td>bf16-cast</td><td class="num">frame 1.007 [0.968–1.033]</td><td class="num">1.010 [0.972–1.036]</td></tr>
+        <tr><td>P1</td><td>fp16-autocast</td><td class="num">frame 0.991 [0.968–1.043]</td><td class="num">0.964 [0.942–1.010]</td></tr>
+        <tr><td>P1</td><td>bf16-autocast</td><td class="num">frame 0.997 [0.955–1.028]</td><td class="num">0.965 [0.928–0.995]</td></tr>
+        <tr><td>P2</td><td>fp16-cast</td><td class="num">patch 1.004 [0.958–1.046]</td><td class="num">1.004 [0.958–1.046]</td></tr>
+        <tr><td>P2</td><td>bf16-cast</td><td class="num">patch 1.042 [0.998–1.070]</td><td class="num">1.042 [0.998–1.070]</td></tr>
+        <tr><td>P2</td><td>fp16-autocast</td><td class="num">patch 1.004 [0.989–1.031]</td><td class="num">1.004 [0.989–1.031]</td></tr>
+        <tr><td>P2</td><td>bf16-autocast</td><td class="num">patch 1.005 [0.983–1.013]</td><td class="num">1.005 [0.983–1.013]</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 4.</b> Change ratio C4: throughput with fp16 patch embeddings (form R-fp16) divided by the throughput with fp32 patch embeddings (form R-fp32), compiled forward pass, 5 rounds. Third column: <code>results/speedup-table.md</code>, Table 4; it reads the frame embedding at P1 and the patch embeddings at P2. Fourth column: the field <code>ratio.patch</code> of the C4 lines of <code>results/speed-changes.jsonl</code>. In all 8 lines the frame embeddings of the two forms were bit for bit equal (<code>frame_equal</code>). The fp32 patch embeddings of R-fp32, cast to fp16, were bit for bit equal to the patch embeddings of R-fp16 (<code>patches_equal</code>; <code>run_change_worker</code> of <code>mlx_bench.py</code>, lines 398 to 401). The plan target is 1 ± 0.03 (AC6). P2 bf16-cast gives 1.042, outside the target; its range includes 1.</p>
+  <p>The P1 frame ratios measure only the noise, because the patch dtype does not touch the frame time. The patch ratios at P1 show a pattern. In the autocast modes the tokens are fp32, so the fp16 output adds a cast; the ratio is 0.964 and 0.965. In fp16-cast the tokens are already fp16, so the fp32 output needs the cast; the ratio is 1.031. This is a likely reason; no test isolates the cast. At P2 the cast is a small part of a batch of about 600 ms, and the ratios stay near 1.</p>
+
+  <div class="table-wrap">
+    <table class="first-nowrap">
+      <thead><tr><th>Dtype mode</th><th class="num">Largest extra loss over the model sizes</th><th>Model size of the largest value</th><th>Frame</th></tr></thead>
+      <tbody>
+        <tr><td>fp16-cast</td><td class="num">0</td><td>all measured model sizes</td><td>unchanged</td></tr>
+        <tr><td>bf16-cast</td><td class="num">3.7e-15</td><td>ViT-H+/16 (ViT-7B/16: 3.1e-15; the others 0)</td><td>unchanged</td></tr>
+        <tr><td>fp16-autocast</td><td class="num">2.5e-7</td><td>ViT-H+/16 (lowest: ViT-S/16, 5.3e-8)</td><td>unchanged</td></tr>
+        <tr><td>bf16-autocast</td><td class="num">1.3e-6</td><td>ViT-H+/16 (lowest: ViT-B/16, 1.8e-7)</td><td>unchanged</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 5.</b> The extra parity loss of the fp16 patch embeddings: the fp32-output parity minus the fp16-output parity of the patch mean and the patch 1st percentile. Each row of <code>parity-mlx.md</code> gives the largest value over the two measures and the measured configurations of one model size; this table gives the largest of these values over the six model sizes. Source: <code>results/parity-mlx.md</code>, Section 8, Table 8 (test W4). ViT-L/16 in fp16-cast has 0 measured configurations and ViT-H+/16 in fp16-cast has 6: the others are the expected failures of the fp16 overflow.</p>
+  <p>In the cast modes the tokens are already fp16 or bf16, so the cast to fp16 loses nothing or almost nothing. In the autocast modes the tokens are fp32, and the cast rounds them once. The plan target was an extra loss of at most 1e-7, from a probe value of at most 3e-8 (AC15). The comment of <code>FP16_EXTRA_LOSS</code> in <code>tests/test_mlx_parity.py</code> gives the measured values: the patch mean stays at or below 5.6e-8, below 1e-7. The patch 1st percentile, a tail value, reaches 1.27e-6 for ViT-H+/16 in bf16-autocast. On 2026-11-07 a decision changed W4: the patch mean keeps 1e-7, the patch 1st percentile gets a fault bound of 5e-6 (<code>FP16_EXTRA_LOSS</code> and its comment in <code>tests/test_mlx_parity.py</code>). The gate stays: each finite configuration passes <code>THRESHOLDS[mode]</code> with the fp16 patch embeddings.</p>
+</section>
+
+<section id="c6">
+  <h2>8 C6: the MLX path against the CPU path</h2>
+  <p>C6 is the change ratio of D12 (Table 23 of the plan). As for each change ratio, one process runs both paths in alternation. The process imports torch for the CPU path, so it is not an <code>mlx</code> worker (Table 23 of the plan). <code>run_preprocess_worker</code> of <code>scripts/bench_speed.py</code> (lines 805 to 858) does these actions:</p>
+  <ol>
+    <li>It makes 8 frames of 1080 × 1920 px from the three test images with a Pillow resize.</li>
+    <li>For each input resolution (224 and 512 px), it calls <code>preprocess_frames</code> once and evaluates it. This first call builds the matrices.</li>
+    <li>It runs 5 rounds. In rounds 1, 3 and 5 the CPU path runs first; in rounds 2 and 4 the MLX path runs first.</li>
+    <li>CPU path: <code>preprocess</code> on each of the 8 frames, one at a time. MLX path: <code>mx.eval(preprocess_frames(batch, …))</code> on the batch of 8 uint8 frames. The copy to the GPU is part of the time. The pixels stay on the GPU.</li>
+    <li>It divides each time by 8 and records the milliseconds per frame. The ratio of a round is the CPU time divided by the MLX time.</li>
+  </ol>
+  <p>Neither path decodes a JPEG file. The JPEG decode stays on the CPU in both paths (D12).</p>
+
+  <figure>
+    <div class="fig"><svg viewBox="0 0 960 320" role="img" aria-labelledby="fig3-title" font-family="-apple-system, Helvetica Neue, Arial, sans-serif">
+      <title id="fig3-title">Time per 1080 by 1920 frame of the CPU path and the MLX path at 224 and 512 px, five rounds each, with the time of one image of the P1 forward pass</title>
+      <rect width="960" height="320" fill="#ffffff"/>
+      <g font-size="12" fill="#111414">
+        <text x="20" y="24" font-weight="600" font-size="13">C6: time per 1080 × 1920 frame, batch of 8. Dots: the 5 rounds. Black bar and number: the median in ms.</text>
+
+        <!-- grid -->
+        <g stroke="#d6dedd" stroke-width="1">
+          <line x1="210" y1="58" x2="210" y2="236"/><line x1="360" y1="58" x2="360" y2="236"/><line x1="510" y1="58" x2="510" y2="236"/><line x1="660" y1="58" x2="660" y2="236"/><line x1="810" y1="58" x2="810" y2="236"/>
+          <line x1="20" y1="146" x2="930" y2="146"/>
+        </g>
+
+        <!-- P1 forward pass references -->
+        <rect x="417.3" y="58" width="10.5" height="84" fill="#e0a336" fill-opacity="0.45"/>
+        <line x1="653.1" y1="58" x2="653.1" y2="142" stroke="#e0a336" stroke-width="2" stroke-dasharray="5 3"/>
+        <text x="422" y="50" text-anchor="middle" font-size="10.5" fill="#4a5655">P1 forward pass, one image: 0.69–0.73 ms (half dtype modes)</text>
+        <text x="658" y="50" font-size="10.5" fill="#4a5655">P1, fp32: 1.48 ms</text>
+
+        <!-- row labels -->
+        <text x="200" y="80" text-anchor="end">224 px, CPU path</text>
+        <text x="200" y="115" text-anchor="end">224 px, MLX path</text>
+        <text x="200" y="180" text-anchor="end">512 px, CPU path</text>
+        <text x="200" y="215" text-anchor="end">512 px, MLX path</text>
+
+        <!-- 224 CPU -->
+        <g fill="#4a5655" fill-opacity="0.85">
+          <circle cx="883.9" cy="76" r="5"/><circle cx="740.3" cy="76" r="5"/><circle cx="721.1" cy="76" r="5"/><circle cx="732.8" cy="76" r="5"/><circle cx="716.3" cy="76" r="5"/>
+        </g>
+        <line x1="732.8" y1="66" x2="732.8" y2="86" stroke="#111414" stroke-width="2.5"/>
+        <text x="896" y="80" font-size="11" font-weight="600">1.74</text>
+        <!-- 224 MLX -->
+        <g fill="#057379" fill-opacity="0.85">
+          <circle cx="516.1" cy="111" r="5"/><circle cx="489.1" cy="111" r="5"/><circle cx="444.9" cy="111" r="5"/><circle cx="510.9" cy="111" r="5"/><circle cx="482.9" cy="111" r="5"/>
+        </g>
+        <line x1="489.1" y1="101" x2="489.1" y2="121" stroke="#111414" stroke-width="2.5"/>
+        <text x="528" y="115" font-size="11" font-weight="600">0.93</text>
+        <!-- 512 CPU -->
+        <g fill="#4a5655" fill-opacity="0.85">
+          <circle cx="842.9" cy="176" r="5"/><circle cx="814.0" cy="176" r="5"/><circle cx="824.2" cy="176" r="5"/><circle cx="812.3" cy="176" r="5"/><circle cx="813.5" cy="176" r="5"/>
+        </g>
+        <line x1="814.0" y1="166" x2="814.0" y2="186" stroke="#111414" stroke-width="2.5"/>
+        <text x="855" y="180" font-size="11" font-weight="600">2.01</text>
+        <!-- 512 MLX -->
+        <g fill="#057379" fill-opacity="0.85">
+          <circle cx="661.0" cy="211" r="5"/><circle cx="559.3" cy="211" r="5"/><circle cx="555.4" cy="211" r="5"/><circle cx="518.2" cy="211" r="5"/><circle cx="518.1" cy="211" r="5"/>
+        </g>
+        <line x1="555.4" y1="201" x2="555.4" y2="221" stroke="#111414" stroke-width="2.5"/>
+        <text x="673" y="215" font-size="11" font-weight="600">1.15</text>
+
+        <!-- axis -->
+        <line x1="210" y1="240" x2="930" y2="240" stroke="#4a5655" stroke-width="1"/>
+        <g font-size="11" fill="#4a5655" text-anchor="middle">
+          <text x="210" y="256">0</text><text x="360" y="256">0.5</text><text x="510" y="256">1.0</text><text x="660" y="256">1.5</text><text x="810" y="256">2.0</text>
+        </g>
+        <text x="930" y="256" text-anchor="end" font-size="11" fill="#4a5655">ms per frame</text>
+        <text x="20" y="288" font-size="11" fill="#4a5655">P2 (ViT-H+/16, 512 px): one image of the forward pass needs 74 to 76 ms in the half dtype modes, far outside this scale.</text>
+        <text x="20" y="306" font-size="11" fill="#4a5655">Sources: results/speed-changes.jsonl (change C6) and results/speed-pairs.jsonl (P1 and P2, mlx).</text>
+      </g>
+    </svg></div>
+    <figcaption><b>Figure 3.</b> The C6 times of each round. Grey dots: the CPU path. Teal dots: the MLX path. The amber band and the amber dashed line show the time of one image of the compiled forward pass at P1 (ViT-S/16, 224 px, batch size 8) on <code>mlx</code>: 1 / median throughput of the two paired runs (Table 7). At 224 px, all MLX dots sit to the right of the amber band: the MLX path also costs more than one image of the P1 forward pass in the half dtype modes. The slowest dot of each series is round 1.</figcaption>
+  </figure>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Round</th><th>First path</th><th class="num">224 px: CPU (ms)</th><th class="num">224 px: MLX (ms)</th><th class="num">224 px: ratio</th><th class="num">512 px: CPU (ms)</th><th class="num">512 px: MLX (ms)</th><th class="num">512 px: ratio</th></tr></thead>
+      <tbody>
+        <tr><td>1</td><td>CPU</td><td class="num">2.246</td><td class="num">1.020</td><td class="num">2.201</td><td class="num">2.110</td><td class="num">1.503</td><td class="num">1.403</td></tr>
+        <tr><td>2</td><td>MLX</td><td class="num">1.768</td><td class="num">0.930</td><td class="num">1.900</td><td class="num">2.013</td><td class="num">1.164</td><td class="num">1.729</td></tr>
+        <tr><td>3</td><td>CPU</td><td class="num">1.704</td><td class="num">0.783</td><td class="num">2.176</td><td class="num">2.047</td><td class="num">1.151</td><td class="num">1.778</td></tr>
+        <tr><td>4</td><td>MLX</td><td class="num">1.743</td><td class="num">1.003</td><td class="num">1.737</td><td class="num">2.008</td><td class="num">1.027</td><td class="num">1.954</td></tr>
+        <tr><td>5</td><td>CPU</td><td class="num">1.688</td><td class="num">0.910</td><td class="num">1.855</td><td class="num">2.012</td><td class="num">1.027</td><td class="num">1.959</td></tr>
+        <tr class="group"><td>Median</td><td></td><td class="num">1.743</td><td class="num">0.930</td><td class="num">1.900</td><td class="num">2.013</td><td class="num">1.151</td><td class="num">1.778</td></tr>
+        <tr><td>Probe</td><td></td><td class="num">1.7</td><td class="num">0.65</td><td class="num">–</td><td class="num">2.0</td><td class="num">1.03</td><td class="num">–</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 6.</b> C6 per round, milliseconds per 1080 × 1920 frame. Source: the C6 line of <code>results/speed-changes.jsonl</code> (fields <code>cpu_ms_per_frame</code>, <code>mlx_ms_per_frame</code>, <code>ratios</code>; 2026-11-07, <code>applegpu_g17s</code>). The median row equals Table 4 of <code>results/speedup-table.md</code>. Probe row: Table 13 of <code>explore.html</code> and Table 23 of the plan. The MLX path is faster in each of the 10 rounds, so AC14 holds for the time. The MLX path at 224 px needed 0.93 ms, not the 0.65 ms of the probe.</p>
+
+  <div class="table-wrap">
+    <table class="first-nowrap">
+      <thead><tr><th>Priority configuration</th><th>Dtype mode on mlx</th><th class="num">Throughput (img/s)</th><th class="num">One image (ms)</th><th class="num">CPU path per frame</th><th class="num">MLX path per frame</th></tr></thead>
+      <tbody>
+        <tr><td>P1: ViT-S/16, 224 px, batch size 8</td><td>four half dtype modes</td><td class="num">1,377–1,448</td><td class="num">0.69–0.73</td><td class="num">2.4–2.5 images</td><td class="num">1.3 images</td></tr>
+        <tr><td>P1</td><td>fp32</td><td class="num">677</td><td class="num">1.48</td><td class="num">1.2 images</td><td class="num">0.63 images</td></tr>
+        <tr><td>P2: ViT-H+/16, 512 px, batch size 8</td><td>four half dtype modes</td><td class="num">13.1–13.5</td><td class="num">73.9–76.4</td><td class="num">2.6–2.7 %</td><td class="num">1.5–1.6 %</td></tr>
+        <tr><td>P2</td><td>fp32</td><td class="num">4.2</td><td class="num">238.6</td><td class="num">0.84 %</td><td class="num">0.48 %</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 7.</b> The preprocessing of one 1080 × 1920 frame, against one image of the compiled forward pass on <code>mlx</code>. Throughput: median over the 10 rounds of the two paired runs (for an even count, the lower of the two middle values, as in <code>results/speedup-table.md</code>), frame output at P1 and patch output at P2, from <code>results/speed-pairs.jsonl</code>. One image = 1 / throughput. The last two columns divide the C6 median (1.74 and 0.93 ms at 224 px for P1; 2.01 and 1.15 ms at 512 px for P2) by the time of one image. Computed by the agent.</p>
+  <p>At P1 the CPU path costs 2.4 to 2.5 images of the forward pass in the half dtype modes. The CPU path can run in parallel with the GPU. But one CPU path that runs frame by frame, as in C6, gives at most about 574 frames per second (1,000 / 1.743 ms, computed). The forward pass in the half dtype modes reaches 1,377 to 1,448 img/s. So at P1 the CPU path can limit the throughput (Table 13 of <code>explore.html</code>). The MLX path halves the cost, but it still costs 1.3 images. It runs on the same GPU as the forward pass. At P2 the preprocessing is below 3 % of one image in both paths. This page gives no measurement of a full pipeline from frame to embedding; Step 7 builds it.</p>
+  <p>Two more facts of the build concern <code>preprocess_frames</code>. The benchmark matrix does not use it: it keeps the stored pixels, so the backbone throughput stays comparable with Step 3 (Section 3.6 of the plan). The Learn data at 768 and 1024 px uses <code>preprocess_frames</code> of the three test images (<code>_learn_batch</code> of <code>scripts/bench_speed.py</code>, lines 736 to 749). All 12 throughput lines of that data are finite (<code>results/speed-learn.jsonl</code>; Table 9 of <code>results/speedup-table.md</code>).</p>
+  <p class="note">The plan says that the worker of the Learn data needs no torch (Section 3.6 of the plan). The build does not reach this. <code>_learn_batch</code> reads the test images with <code>load_image</code> of <code>preprocess.py</code> (line 742), and <code>preprocess.py</code> imports torch. The 14 lines of <code>results/speed-learn.jsonl</code> at 768 and 1024 px (12 throughput lines and 2 token-range lines) record <code>torch_imported: true</code>. The 8 lines at 224 and 512 px use the stored pixels and record <code>false</code>. <code>mlx_preprocess.py</code> itself imports no torch (T54); the torch import comes from the caller.</p>
+</section>
+
+<section id="tests">
+  <h2>9 Tests and targets</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Test</th><th>What it compares</th><th class="num">Target</th><th class="num">Probe or measured value</th></tr></thead>
+      <tbody>
+        <tr><td>T51 <code>test_resize_weights_match_torch</code></td><td><code>resize_weights</code> against <code>F.interpolate</code> of an identity basis with <code>antialias=True</code> in fp64, size pairs (1080, 224), (1920, 224), (768, 512), (100, 448)</td><td class="num">≤ 1e-12; each row sums to 1 within 1e-12</td><td class="num">– (reason of the target in Table 21 of the plan: the same rule in fp64)</td></tr>
+        <tr><td>T52 <code>test_preprocess_frames_matches_stored_pixels</code></td><td><code>preprocess_frames</code> of the image files against the stored pixels, 12 configurations; shape (1, 3, H, W), fp32</td><td class="num">≤ 2e-6</td><td class="num">Probe 7.2e-7 to 9.5e-7</td></tr>
+        <tr><td>T53 <code>test_preprocess_frames_refuses_tf32</code></td><td><code>tf32_enabled</code> True (monkeypatch)</td><td class="num"><code>TF32ModeError</code></td><td class="num">–</td></tr>
+        <tr><td>T54 <code>test_mlx_modules_do_not_import_torch</code></td><td><code>mlx_preprocess</code> and the other <code>mlx</code> modules in a fresh process</td><td class="num">output "[]"</td><td class="num">–</td></tr>
+        <tr><td><code>test_imagenet_constants_have_one_source</code></td><td>fp32 dtype of the NumPy arrays; the torch tensors against the NumPy arrays</td><td class="num">equal values (<code>np.array_equal</code>)</td><td class="num">–</td></tr>
+        <tr><td>W5 <code>test_preprocess_frames_parity</code></td><td>ViT-S/16 in fp32 on the pixels of <code>preprocess_frames</code>, 12 configurations</td><td class="num">THRESHOLDS["fp32"]: 0.9999</td><td class="num">Probe: parity 1 − 1e-10 or better</td></tr>
+        <tr><td>T55 <code>test_mlx_embeddings_fp16_patches</code></td><td>Small model in 5 dtype modes: frame fp32; patches fp16 in the half dtype modes, fp32 in fp32 and with <code>patch_fp32=True</code></td><td class="num">bit equality with the fp32 tokens cast to fp16</td><td class="num">–</td></tr>
+        <tr><td>T56 <code>test_time_batch_mlx_gives_fp16_patches</code></td><td>bf16-cast: frame fp32, patches fp16, <code>output_transfer</code> "fp16-patches"</td><td class="num">values equal <code>run_mlx</code> cast to fp16</td><td class="num">–</td></tr>
+        <tr><td>W4 <code>test_fp16_patches_parity</code></td><td>fp16 patch embeddings against the reference output, four half dtype modes, 12 configurations</td><td class="num">THRESHOLDS[mode]; extra loss: patch mean ≤ 1e-7, patch 1st percentile ≤ 5e-6</td><td class="num">Measured: largest 1.3e-6 (Table 5)</td></tr>
+        <tr><td>C6 (AC14)</td><td>Time per 1080 × 1920 frame, MLX path against CPU path</td><td class="num">below the CPU path at 224 and 512 px</td><td class="num">Measured: 0.93 against 1.74 ms; 1.15 against 2.01 ms</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 8.</b> The tests of D12 and D13. Targets: Tables 18, 19 and 21 of the plan, AC14 and AC15, and <code>FP16_EXTRA_LOSS</code> of <code>tests/test_mlx_parity.py</code> for W4. Probe values: Table 13 of <code>explore.html</code> and Table 21 of the plan. The pixel target 2e-6 is about 8 units in the last place of fp32 at 2.64, the largest normalized value; one unit there is 2.4e-7 (Table 21 of the plan). T52 and W5 record their measured values in <code>tests/fixtures/generated/</code>, which git ignores. T51 records no value; it only asserts its targets. So this page gives no measured value for T51, T52 and W5. The Verify stage runs them again and records them in <code>specs/06-speed/verify.html</code>.</p>
+</section>
+
+<section id="surprises">
+  <h2>10 Surprises</h2>
+  <ol>
+    <li class="note"><b>The antialias filter widens when the image shrinks.</b> <code>support = max(scale, 1)</code>. For a 1080p frame to 224 px, each output pixel reads 7 to 10 input pixels along the rows and 13 to 18 along the columns (Table 2). For an enlargement, it reads 2: the filter is then plain bilinear interpolation. A resize without the antialias reads 2 input pixels in every case and skips the rest.</li>
+    <li class="note"><b>A resize of 8-bit pixels moves the patch minimum of ViT-H+/16 to 0.929.</b> The pixels move by only 0.0037 (Table 3, Step 2). So the resize runs on float values. The MLX path still sends uint8 values to the GPU, for a quarter of the bytes. It casts them to fp32 before the resize and never rounds back to 8 bits.</li>
+    <li class="note"><b>The resize matmuls need TF32 off in every dtype mode.</b> This holds also in bf16-cast, where the backbone runs no fp32 matmul. ADR 0005 turns TF32 off only for the fp32 dtype mode. <code>preprocess_frames</code> extends the rule to each process that calls it.</li>
+    <li class="note"><b>At P1 the CPU preprocessing costs more than one image of the forward pass.</b> One 1080p frame needs 1.74 ms on the CPU path. One image of the P1 forward pass needs 0.69 to 0.73 ms in the half dtype modes: the CPU path costs 2.4 to 2.5 images. The MLX path (0.93 ms) also costs more than one image: 1.3. At P2 both paths are below 3 % of one image (Table 7).</li>
+    <li class="note"><b>The build measured the MLX path slower than the probe.</b> At 224 px: 0.93 ms against 0.65 ms in the probe. The CPU path stayed at 1.74 ms (probe 1.7). The ratio still meets AC14 in each of the 10 rounds.</li>
+    <li class="note"><b>Round 1 is the slowest in all four series of C6</b> (2.246, 1.020, 2.110 and 1.503 ms). The CPU path gets no warm-up call before the rounds. The MLX path gets one, and its round 1 at 512 px is still 31 % above the median (1.503 against 1.151 ms, computed). The median hides this.</li>
+    <li class="note"><b>Each resize matrix is more than 98 % zeros.</b> The non-zero share is 0.39 to 1.99 % (Table 2). The dense matmul multiplies every zero. It is still 1.78 to 1.90 times as fast as the CPU path (the median ratios of C6, Table 6).</li>
+    <li class="note"><b>The fp16 patch embeddings save bytes, not time.</b> C4 is 0.991 to 1.042 in the speedup table. At P1 the patch ratio drops to 0.964 and 0.965 in the autocast modes, where the fp16 output adds a cast, and rises to 1.031 in fp16-cast, where the fp32 output needs the cast (Table 4).</li>
+    <li class="note"><b>The fp16 output loses nothing in the cast modes, but more than the probe in the autocast modes.</b> fp16-cast: 0. bf16-cast: at most 3.7e-15. Each bf16 value in the normal fp16 range converts exactly, so the loss is almost 0. It is not exactly 0, so some values changed. A likely reason: values below the normal fp16 range lose bits; no test isolates them. bf16-autocast: up to 1.3e-6 for ViT-H+/16, more than 40 times the probe value of 3e-8 and above the plan target of 1e-7 (computed from Table 5). The docstring of <code>mlx_embeddings</code> still says "at most 3e-8". W4 now uses a fault bound of 5e-6 for the patch 1st percentile.</li>
+    <li class="note"><b>Table 6 of the plan does not list <code>patch_dtype</code>.</b> The build added it as a new public function of <code>mlx_model.py</code>, so that <code>mlx_embeddings</code> and <code>time_batch_mlx</code> share one rule. This page covers it (Section 7).</li>
+    <li class="note"><b>The worker of the Learn data imports torch.</b> The plan wanted a worker without torch at 768 and 1024 px. <code>_learn_batch</code> calls <code>preprocess_frames</code>, but it reads the images with <code>load_image</code> of <code>preprocess.py</code>, which imports torch. The 14 lines at 768 and 1024 px record <code>torch_imported: true</code> (<code>results/speed-learn.jsonl</code>; Section 8). T54 does not see this, because it imports only the modules, not the driver.</li>
+  </ol>
+</section>
+
+<section id="sources">
+  <h2>11 Sources</h2>
+  <ul>
+    <li>Repo code, commit <code>2567808</code>: <code>src/dinov3_apple/mlx_preprocess.py</code> (lines 1 to 73), <code>src/dinov3_apple/stored.py</code> (lines 27 to 30), <code>src/dinov3_apple/preprocess.py</code> (lines 1 to 10 for the module docstring, 31 and 32, 42 to 57), <code>src/dinov3_apple/mlx_model.py</code> (<code>TF32ModeError</code> and <code>tf32_enabled</code>, lines 60 to 81; <code>patch_dtype</code>, lines 583 to 587; <code>mlx_embeddings</code>, lines 590 to 611), <code>src/dinov3_apple/mlx_bench.py</code> (<code>time_batch_mlx</code>, lines 70 to 101; <code>run_change_worker</code>, lines 398 to 401 for <code>frame_equal</code> and <code>patches_equal</code>), <code>scripts/bench_speed.py</code> (<code>learn_plan</code>, lines 375 to 384; <code>preprocess_plan</code>, lines 418 to 421; <code>worker_env</code>, lines 438 to 447; <code>_learn_batch</code>, lines 736 to 749; <code>worker_main</code>, lines 766 to 801; <code>run_preprocess_worker</code>, lines 805 to 858). Commit <code>11a45b1</code> for the constants of <code>preprocess.py</code> before Step 6.</li>
+    <li>Tests: <code>tests/test_mlx_preprocess.py</code> (T51 to T53, W5, <code>test_imagenet_constants_have_one_source</code>), <code>tests/test_mlx_parts.py</code> (T55), <code>tests/test_mlx_environment.py</code> (T54, T56), <code>tests/test_mlx_parity.py</code> (W4, <code>FP16_EXTRA_LOSS</code> and its comment).</li>
+    <li>Spec files: <code>specs/06-speed/plan.html</code> (Table 5, Table 6, Section 3.6, Section 3.19, Section 3.20, Tables 18, 19, 21 and 23, AC6, AC14, AC15), <code>specs/06-speed/explore.html</code> (Section 2.7 with Table 13; Section 3.12 with Table 26, D12; Section 3.13 with Table 27, D13), <code>specs/02-reference/explore.html</code> (Section 3.1 with Table 3; Section 3.3 for the order of the Hugging Face image processor).</li>
+    <li>Decision record: <code>docs/adr/0005-fp32-on-mlx-runs-with-tf32-off.md</code> (the TF32 probe values 7.8e-7 and 7.2e-4).</li>
+    <li>Results: <code>results/speed-changes.jsonl</code> (the C4 lines: <code>ratio</code>, <code>frame_equal</code>, <code>patches_equal</code>; the C6 line: <code>preprocess</code>), <code>results/speedup-table.md</code> (Section 4 with Table 4; Section 8 with Table 9), <code>results/speed-pairs.jsonl</code> (the <code>mlx</code> throughput at P1 and P2), <code>results/parity-mlx.md</code> (Section 8 with Table 8), <code>results/speed-learn.jsonl</code> (the Learn data on the pixels of <code>preprocess_frames</code>: the fields <code>finite</code> and <code>torch_imported</code>).</li>
+    <li>PyTorch: <code>torch.nn.functional.interpolate</code> with <code>mode="bilinear"</code> and <code>antialias=True</code>, kernel <code>upsample_bilinear2d_aa</code>, BSD-3-Clause. Public: <a href="https://github.com/pytorch/pytorch">github.com/pytorch/pytorch</a>.</li>
+    <li>MLX: <code>mx.array</code>, <code>astype</code>, <code>matmul</code> with broadcast, <code>mx.eval</code>, the variable <code>MLX_ENABLE_TF32</code>, MIT. Public: <a href="https://github.com/ml-explore/mlx">github.com/ml-explore/mlx</a>.</li>
+    <li>Computation of the agent for this page: Table 2 and Figure 2 (a NumPy copy of <code>resize_weights</code> on the CPU), the matrix bytes and the frame bytes of Section 4, the times per image and the shares of Table 7 (from <code>results/speed-pairs.jsonl</code> and the C6 line), the 574 frames per second and the batch time of about 600 ms of Section 7 and 8, the 31 % and the factor 40 of Section 10.</li>
+  </ul>
+</section>
+
+<footer class="steps">Previous: <a href="06-3-quantized-weights.html">06-3 Quantized weights</a>.</footer>
+</main>
+</body>
+</html>

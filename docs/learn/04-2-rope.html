@@ -440,6 +440,7 @@ def rotate_half(x: mx.array) -> mx.array:
 xf = x.astype(mx.float32)
 return (xf * cos + rotate_half(xf) * sin).astype(x.dtype)</code></pre>
   <p>Why the rotation encodes the position: after the rotation, the score q · k of two tokens depends, for each pair, on the angle difference θ<sub>q</sub> − θ<sub>k</sub>. The angle difference depends only on the coordinate difference of the two patches. So RoPE gives the attention the relative position of two patches, separately for y and for x (RoFormer, Section 3).</p>
+  <p><b>Step 6: the concat-free form.</b> The code above is the form of Steps 4 and 5. Step 6 keeps the tables of <code>rope_tables</code> and changes only the form of the rotation. <code>rope_layout</code> moves the minus sign of <code>rotate_half</code> into a signed sin table. <code>apply_rope</code> then swaps the two halves with a reversed view, without <code>mx.concatenate</code>. The result is the same bit for bit, and <code>mx.compile</code> fuses the rotation into one kernel. <code>rotate_half</code> now lives only in <code>tests/rope_oracle.py</code>, as the oracle of the tests. <a href="06-1-compiled-forward-pass.html#concat-free">06-1, Section 6</a> explains the concat-free form.</p>
 </section>
 
 <section id="prefix">

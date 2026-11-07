@@ -1,0 +1,811 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Quantized Weights in MLX</title>
+<style>
+/* Explainer page. White page, black text, no dark mode. */
+:root { --bg: #ffffff; --fg: #111414; --muted: #4a5655; --rule: #d6dedd; --panel: #f5f8f7; --accent: #057379; --cls: #057379; --patch: #9fd3d1; --reg: #e0a336; color-scheme: light; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif; }
+main { max-width: 62rem; margin: 0 auto; padding: 40px 20px 64px; display: grid; gap: 1.75rem; }
+main > *, section > * { min-width: 0; }
+h1 { font-size: 1.9rem; line-height: 1.15; margin: 0; }
+h2 { font-size: 1.3rem; margin: 0; }
+h3 { font-size: 1.05rem; margin: 0; }
+section { display: grid; gap: 0.8rem; }
+p, ul, ol { margin: 0; max-width: 46rem; }
+li + li { margin-top: 0.25rem; }
+code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.86em; }
+p code, li code, td code { overflow-wrap: anywhere; }
+pre { margin: 0; background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 0.8rem 1rem; overflow-x: auto; }
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 0.92rem; }
+th, td { text-align: left; vertical-align: top; padding: 0.45rem 0.7rem 0.45rem 0; border-bottom: 1px solid var(--rule); }
+th { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); border-bottom: 1.5px solid var(--fg); }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+tr.group td { background: var(--panel); font-weight: 600; }
+table.first-nowrap td:first-child { white-space: nowrap; }
+.caption, figcaption { font-size: 0.88rem; color: var(--muted); }
+figure { margin: 0; display: grid; gap: 0.4rem; }
+.fig { border: 1px solid var(--rule); border-radius: 6px; padding: 0.5rem; overflow-x: auto; }
+.fig svg { display: block; width: 100%; height: auto; min-width: 640px; }
+.note { border-left: 3px solid var(--accent); padding: 0.3rem 0 0.3rem 0.9rem; }
+nav ol { columns: 2; }
+.steps { font-size: 0.92rem; color: var(--muted); }
+a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+<header>
+  <h1>Quantized Weights in MLX</h1>
+  <p>Explainer for roadmap Step 6. Date: 2026-11-07.</p>
+  <p class="steps">Step 6 explainers: <a href="06-1-compiled-forward-pass.html">1 Compiled forward pass</a> · <a href="06-2-attention-and-batch-size.html">2 Attention and batch size</a> · 3 Quantized weights (this page) · <a href="06-4-preprocessing.html">4 Preprocessing</a>. Step 5: <a href="05-2-model-scaling.html">2 Model scaling, dtype modes and loading</a>.</p>
+  <p class="steps">Previous: <a href="06-2-attention-and-batch-size.html">06-2 Attention and batch size</a> · Next: <a href="06-4-preprocessing.html">06-4 Preprocessing</a></p>
+</header>
+
+<nav>
+  <h2>Contents</h2>
+  <ol>
+    <li><a href="#why">Why this explainer</a></li>
+    <li><a href="#picture">The affine format in one picture</a></li>
+    <li><a href="#bytes">Bytes and shapes</a></li>
+    <li><a href="#predicate">Which modules get quantized weights</a></li>
+    <li><a href="#names">The names of a quantized module</a></li>
+    <li><a href="#loader">The loader</a></li>
+    <li><a href="#skeleton">The placeholder skeleton</a></li>
+    <li><a href="#need">The memory need and the load report</a></li>
+    <li><a href="#parity">Parity: why 4 bits fail in every row</a></li>
+    <li><a href="#time">Memory, not time</a></li>
+    <li><a href="#surprises">Surprises</a></li>
+    <li><a href="#sources">Sources</a></li>
+  </ol>
+</nav>
+
+<section id="why">
+  <h2>1 Why this explainer</h2>
+  <p>Step 6 adds quantized weights to the MLX backbone. The weights of the <code>nn.Linear</code> modules of the blocks become 8-bit or 4-bit integers. Each group of 64 weights of one row gets one scale and one offset. This is the affine format of MLX (D14 of <code>specs/06-speed/plan.html</code>). The loader quantizes each block weight directly after it reads the weight from the file (path L2, D17). The benchmark matrix has quantized rows for ViT-H+/16 and ViT-7B/16 in fp16-autocast and bf16-autocast (D15, D22).</p>
+  <p>This page covers the functions of row <code>06-3-quantized-weights.html</code> in Table 5 of <code>specs/06-speed/plan.html</code>. Table 1 below lists them. Each section quotes the code with its line numbers in commit <code>2567808</code>. Each quote is an exact copy. A quote that leaves out lines says "shortened" in its first line. <a href="06-2-attention-and-batch-size.html">06-2</a> explains <code>quantized_weight_bytes</code>, <code>BenchConfig.bits</code> and the quantized rows of the benchmark driver. <a href="06-1-compiled-forward-pass.html">06-1</a> explains <code>compile_backbone</code>, which runs after the load.</p>
+  <p>The agent that wrote this page ran no test, no model and no GPU job. It read the values from the committed result files of Section 12 with a small CPU-only Python script. Values that the agent computed from these files (ratios, shares, the bytes of one module) carry the mark "our computation".</p>
+  <p>The result in three numbers:</p>
+  <ul>
+    <li><b>Parity.</b> 8 bits pass the thresholds of their dtype mode (<code>THRESHOLDS[mode]</code>) in 72 of 72 test configurations. 4 bits pass in 0 of 72 (<code>results/parity-mlx.md</code>, Table 7).</li>
+    <li><b>Memory.</b> The load peak of ViT-7B/16 falls from 13.53 GB (fp16 or bf16 weights) to 7.33 GB (8 bits) and 3.98 GB (4 bits) (<code>results/speed-matrix.jsonl</code>).</li>
+    <li><b>Time.</b> At P2, quantized ViT-H+/16 gives 0.874 to 0.884 (8 bits) and 0.924 to 0.935 (4 bits) of the unquantized throughput (change ratio C5, <code>results/speedup-table.md</code>, Table 4). Quantized weights save memory, not time.</li>
+  </ul>
+  <p>In this page, 1 GB is 10<sup>9</sup> bytes, as in the result files.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Name</th><th>File, lines</th><th>Job</th><th>Tests (numbers of the plan)</th><th>Section</th></tr></thead>
+      <tbody>
+        <tr class="group"><td colspan="5"><code>src/dinov3_apple/mlx_weights.py</code></td></tr>
+        <tr><td><code>GROUP_SIZE</code> (new)</td><td class="num">45</td><td>64: the number of weights of one row that share one scale and one offset.</td><td>T44</td><td>2</td></tr>
+        <tr><td><code>QUANTIZED_BITS</code> (new)</td><td class="num">46</td><td>(8, 4): the bit widths that the loader accepts.</td><td>T44, T50</td><td>2, 6</td></tr>
+        <tr><td><code>LoadReport.bits</code> (new field)</td><td class="num">79, 86</td><td>None for unquantized weights; 8 or 4 for quantized block weights.</td><td>T46, T49, W3</td><td>8</td></tr>
+        <tr><td><code>required_mlx_load_bytes(model_size, dtype_mode, ratio, bits)</code> (argument <code>bits</code>)</td><td class="num">181–206</td><td>With <code>bits</code>: 1.2 × the quantized weight bytes + 4 GB.</td><td>T42, W3</td><td>8</td></tr>
+        <tr><td><code>block_linear_predicate(bits, group_size)</code> (new)</td><td class="num">209–228</td><td>Returns the class predicate of <code>nn.quantize</code>: a dict for each <code>nn.Linear</code> whose path starts with "layer.", else False.</td><td>T44</td><td>4</td></tr>
+        <tr><td><code>placeholder_skeleton(model)</code> (new)</td><td class="num">231–241</td><td>Replaces each parameter by a zero-stride placeholder with the same shape and dtype.</td><td>T45</td><td>7</td></tr>
+        <tr><td><code>load_mlx_backbone(…, bits, group_size)</code> (arguments <code>bits</code> and <code>group_size</code>)</td><td class="num">244–329</td><td>With <code>bits</code>: checks the bits and the dtype mode, quantizes the skeleton, then quantizes each block weight directly after its read.</td><td>T46, T47, T48, T49, T50, W2, W3</td><td>6</td></tr>
+        <tr class="group"><td colspan="5"><code>src/dinov3_apple/mlx_model.py</code></td></tr>
+        <tr><td><code>linear_parameter_names(model)</code> (changed)</td><td class="num">525–538</td><td>Returns the parameter names of each <code>nn.Linear</code> and each <code>nn.QuantizedLinear</code> module.</td><td>T43</td><td>5</td></tr>
+        <tr><td><code>quantized_weight_names(model)</code> (new)</td><td class="num">541–548</td><td>Returns the name of the weight of each <code>nn.QuantizedLinear</code> module.</td><td>T43</td><td>5</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 1.</b> The Step 6 code that this page explains. "(new)" and "(changed)" compare with commit <code>11a45b1</code>, the last commit before the Step 6 build. The test numbers are those of Tables 18 and 19 of the plan. T42 to T50 are in <code>tests/test_mlx_weights.py</code>; W2 and W3 are in <code>tests/test_mlx_quantized.py</code>. The constants <code>QUANTIZED_MODEL_SIZES</code> and <code>QUANTIZED_MODES</code> (<code>bench.py</code>, lines 57 to 60) belong to <a href="06-2-attention-and-batch-size.html">06-2</a>. The loader imports <code>QUANTIZED_MODES</code>.</p>
+</section>
+
+<section id="picture">
+  <h2>2 The affine format in one picture</h2>
+  <p>Figure 1 follows one row of one block weight. <code>up_proj</code> of ViT-H+/16 maps 1,280 values to 5,120 values. MLX stores its weight as a (5120, 1280) matrix, with one row for each output value. <code>mx.quantize</code> cuts each row into groups of 64 weights. Each group gets its own scale and its own offset.</p>
+  <figure>
+    <div class="fig"><svg viewBox="0 0 960 510" role="img" aria-labelledby="fig1-title" font-family="-apple-system, Helvetica Neue, Arial, sans-serif">
+      <title id="fig1-title">The affine format: one row of up_proj of ViT-H+/16 in 20 groups of 64 weights, the levels of 4 bits and 8 bits in one group, and the packing of the integers into uint32 words</title>
+      <defs><marker id="arrow1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#4a5655"/></marker></defs>
+      <rect width="960" height="510" fill="#ffffff"/>
+      <g font-size="12" fill="#111414">
+        <text x="20" y="24" font-weight="600" font-size="13">One row of the weight W (5120, 1280) of up_proj, ViT-H+/16: 1,280 weights in the matmul dtype = 20 groups of GROUP_SIZE = 64</text>
+
+        <!-- the row: 20 groups of 44 px -->
+        <g stroke="#4a5655" stroke-width="1">
+          <rect x="40" y="44" width="880" height="26" fill="#f5f8f7"/>
+          <path d="M84,44 V70 M128,44 V70 M172,44 V70 M216,44 V70 M260,44 V70 M304,44 V70 M348,44 V70 M392,44 V70 M436,44 V70 M480,44 V70 M524,44 V70 M568,44 V70 M612,44 V70 M656,44 V70 M700,44 V70 M744,44 V70 M788,44 V70 M832,44 V70 M876,44 V70"/>
+        </g>
+        <rect x="128" y="44" width="44" height="26" fill="#9fd3d1" stroke="#057379" stroke-width="2"/>
+        <g font-size="10.5" fill="#4a5655" text-anchor="middle">
+          <text x="62" y="61">1</text><text x="106" y="61">2</text><text x="150" y="61" fill="#111414" font-weight="600">3</text><text x="194" y="61">4</text><text x="898" y="61">20</text>
+        </g>
+        <text x="150" y="86" font-size="11" text-anchor="middle" fill="#057379" font-weight="600">64 weights</text>
+        <text x="600" y="92" font-size="11.5" fill="#4a5655">Each group gets one scale s and one offset β.</text>
+
+        <!-- zoom lines -->
+        <path d="M128,70 L80,128 M172,70 L560,128" stroke="#057379" stroke-width="1" stroke-dasharray="4 3" fill="none"/>
+
+        <!-- 4-bit number line -->
+        <text x="80" y="148" font-weight="600">4 bits: 2⁴ = 16 levels</text>
+        <path d="M80,204 H560" stroke="#111414" stroke-width="1.5"/>
+        <path d="M80.0,196 V212 M112.0,196 V212 M144.0,196 V212 M176.0,196 V212 M208.0,196 V212 M240.0,196 V212 M272.0,196 V212 M304.0,196 V212 M336.0,196 V212 M368.0,196 V212 M400.0,196 V212 M432.0,196 V212 M464.0,196 V212 M496.0,196 V212 M528.0,196 V212 M560.0,196 V212" stroke="#057379" stroke-width="1.5"/>
+        <circle cx="257.6" cy="204" r="5" fill="#e0a336" stroke="#b26b00" stroke-width="1.5"/>
+        <text x="257.6" y="186" text-anchor="middle" font-weight="600" fill="#b26b00">w</text>
+        <path d="M259,222 H270" stroke="#4a5655" stroke-width="1.5" marker-end="url(#arrow1)"/>
+        <text x="290" y="230" font-size="11">round to level q = 6; the error is at most s₄ / 2</text>
+        <text x="80" y="170" font-size="11" fill="#4a5655">level 0 = β</text>
+        <text x="560" y="170" font-size="11" fill="#4a5655" text-anchor="end">level 15 = α</text>
+        <path d="M80,174 V192 M560,174 V192" stroke="#4a5655" stroke-width="1" stroke-dasharray="2 2"/>
+        <path d="M144,214 V222 M176,214 V222 M144,218 H176" stroke="#057379" stroke-width="1"/>
+        <text x="160" y="236" font-size="11" text-anchor="middle" fill="#057379">s₄</text>
+
+        <!-- 8-bit number line -->
+        <text x="80" y="256" font-weight="600">8 bits: 2⁸ = 256 levels, step s₈ = s₄ / 17</text>
+        <path d="M80,271 H560" stroke="#111414" stroke-width="1.5"/>
+        <path d="M80.00,266 V276 M81.88,266 V276 M83.76,266 V276 M85.65,266 V276 M87.53,266 V276 M89.41,266 V276 M91.29,266 V276 M93.18,266 V276 M95.06,266 V276 M96.94,266 V276 M98.82,266 V276 M100.71,266 V276 M102.59,266 V276 M104.47,266 V276 M106.35,266 V276 M108.24,266 V276 M110.12,266 V276 M112.00,266 V276 M113.88,266 V276 M115.76,266 V276 M117.65,266 V276 M119.53,266 V276 M121.41,266 V276 M123.29,266 V276 M125.18,266 V276 M127.06,266 V276 M128.94,266 V276 M130.82,266 V276 M132.71,266 V276 M134.59,266 V276 M136.47,266 V276 M138.35,266 V276 M140.24,266 V276 M142.12,266 V276 M144.00,266 V276 M145.88,266 V276 M147.76,266 V276 M149.65,266 V276 M151.53,266 V276 M153.41,266 V276 M155.29,266 V276 M157.18,266 V276 M159.06,266 V276 M160.94,266 V276 M162.82,266 V276 M164.71,266 V276 M166.59,266 V276 M168.47,266 V276 M170.35,266 V276 M172.24,266 V276 M174.12,266 V276 M176.00,266 V276 M177.88,266 V276 M179.76,266 V276 M181.65,266 V276 M183.53,266 V276 M185.41,266 V276 M187.29,266 V276 M189.18,266 V276 M191.06,266 V276 M192.94,266 V276 M194.82,266 V276 M196.71,266 V276 M198.59,266 V276 M200.47,266 V276 M202.35,266 V276 M204.24,266 V276 M206.12,266 V276 M208.00,266 V276 M209.88,266 V276 M211.76,266 V276 M213.65,266 V276 M215.53,266 V276 M217.41,266 V276 M219.29,266 V276 M221.18,266 V276 M223.06,266 V276 M224.94,266 V276 M226.82,266 V276 M228.71,266 V276 M230.59,266 V276 M232.47,266 V276 M234.35,266 V276 M236.24,266 V276 M238.12,266 V276 M240.00,266 V276 M241.88,266 V276 M243.76,266 V276 M245.65,266 V276 M247.53,266 V276 M249.41,266 V276 M251.29,266 V276 M253.18,266 V276 M255.06,266 V276 M256.94,266 V276 M258.82,266 V276 M260.71,266 V276 M262.59,266 V276 M264.47,266 V276 M266.35,266 V276 M268.24,266 V276 M270.12,266 V276 M272.00,266 V276 M273.88,266 V276 M275.76,266 V276 M277.65,266 V276 M279.53,266 V276 M281.41,266 V276 M283.29,266 V276 M285.18,266 V276 M287.06,266 V276 M288.94,266 V276 M290.82,266 V276 M292.71,266 V276 M294.59,266 V276 M296.47,266 V276 M298.35,266 V276 M300.24,266 V276 M302.12,266 V276 M304.00,266 V276 M305.88,266 V276 M307.76,266 V276 M309.65,266 V276 M311.53,266 V276 M313.41,266 V276 M315.29,266 V276 M317.18,266 V276 M319.06,266 V276 M320.94,266 V276 M322.82,266 V276 M324.71,266 V276 M326.59,266 V276 M328.47,266 V276 M330.35,266 V276 M332.24,266 V276 M334.12,266 V276 M336.00,266 V276 M337.88,266 V276 M339.76,266 V276 M341.65,266 V276 M343.53,266 V276 M345.41,266 V276 M347.29,266 V276 M349.18,266 V276 M351.06,266 V276 M352.94,266 V276 M354.82,266 V276 M356.71,266 V276 M358.59,266 V276 M360.47,266 V276 M362.35,266 V276 M364.24,266 V276 M366.12,266 V276 M368.00,266 V276 M369.88,266 V276 M371.76,266 V276 M373.65,266 V276 M375.53,266 V276 M377.41,266 V276 M379.29,266 V276 M381.18,266 V276 M383.06,266 V276 M384.94,266 V276 M386.82,266 V276 M388.71,266 V276 M390.59,266 V276 M392.47,266 V276 M394.35,266 V276 M396.24,266 V276 M398.12,266 V276 M400.00,266 V276 M401.88,266 V276 M403.76,266 V276 M405.65,266 V276 M407.53,266 V276 M409.41,266 V276 M411.29,266 V276 M413.18,266 V276 M415.06,266 V276 M416.94,266 V276 M418.82,266 V276 M420.71,266 V276 M422.59,266 V276 M424.47,266 V276 M426.35,266 V276 M428.24,266 V276 M430.12,266 V276 M432.00,266 V276 M433.88,266 V276 M435.76,266 V276 M437.65,266 V276 M439.53,266 V276 M441.41,266 V276 M443.29,266 V276 M445.18,266 V276 M447.06,266 V276 M448.94,266 V276 M450.82,266 V276 M452.71,266 V276 M454.59,266 V276 M456.47,266 V276 M458.35,266 V276 M460.24,266 V276 M462.12,266 V276 M464.00,266 V276 M465.88,266 V276 M467.76,266 V276 M469.65,266 V276 M471.53,266 V276 M473.41,266 V276 M475.29,266 V276 M477.18,266 V276 M479.06,266 V276 M480.94,266 V276 M482.82,266 V276 M484.71,266 V276 M486.59,266 V276 M488.47,266 V276 M490.35,266 V276 M492.24,266 V276 M494.12,266 V276 M496.00,266 V276 M497.88,266 V276 M499.76,266 V276 M501.65,266 V276 M503.53,266 V276 M505.41,266 V276 M507.29,266 V276 M509.18,266 V276 M511.06,266 V276 M512.94,266 V276 M514.82,266 V276 M516.71,266 V276 M518.59,266 V276 M520.47,266 V276 M522.35,266 V276 M524.24,266 V276 M526.12,266 V276 M528.00,266 V276 M529.88,266 V276 M531.76,266 V276 M533.65,266 V276 M535.53,266 V276 M537.41,266 V276 M539.29,266 V276 M541.18,266 V276 M543.06,266 V276 M544.94,266 V276 M546.82,266 V276 M548.71,266 V276 M550.59,266 V276 M552.47,266 V276 M554.35,266 V276 M556.24,266 V276 M558.12,266 V276 M560.00,266 V276" stroke="#057379" stroke-width="0.7"/>
+        <circle cx="257.6" cy="271" r="5" fill="#e0a336" stroke="#b26b00" stroke-width="1.5"/>
+        <text x="290" y="296" font-size="11">round to level q = 94; the error is at most s₈ / 2</text>
+
+        <!-- formulas -->
+        <rect x="600" y="122" width="330" height="190" rx="6" fill="#f5f8f7" stroke="#d6dedd"/>
+        <g font-size="12">
+          <text x="614" y="144" font-weight="600">The rules of mx.quantize (affine), b = 8 or 4</text>
+          <text x="614" y="168">α = largest, β = smallest of the 64 weights</text>
+          <text x="614" y="190">scale  s = (α − β) / (2<tspan baseline-shift="super" font-size="9">b</tspan> − 1)</text>
+          <text x="614" y="212">integer  q = round((w − β) / s),  0 … 2<tspan baseline-shift="super" font-size="9">b</tspan> − 1</text>
+          <text x="614" y="234">the matmul uses  ŵ = s · q + β</text>
+          <text x="614" y="256">rounding error  |w − ŵ| ≤ s / 2</text>
+          <text x="614" y="278">s₄ / s₈ = 255 / 15 = 17 for one group</text>
+          <text x="614" y="300" fill="#4a5655" font-size="11">MLX names s "scales" and β "biases".</text>
+        </g>
+
+        <!-- packing -->
+        <text x="20" y="338" font-weight="600" font-size="13">Packing: the integers of one row fill uint32 words, the first integer in the lowest bits</text>
+        <text x="120" y="358" font-size="10.5" fill="#4a5655">bit 31</text>
+        <text x="632" y="358" font-size="10.5" fill="#4a5655" text-anchor="end">bit 0</text>
+        <text x="110" y="383" text-anchor="end" font-weight="600">8 bits</text>
+        <g stroke="#057379" stroke-width="1.5">
+          <rect x="120" y="366" width="128" height="26" fill="#e6f2f2"/><rect x="248" y="366" width="128" height="26" fill="#ffffff"/><rect x="376" y="366" width="128" height="26" fill="#e6f2f2"/><rect x="504" y="366" width="128" height="26" fill="#ffffff"/>
+        </g>
+        <g text-anchor="middle" font-size="11.5"><text x="184" y="383">q₃</text><text x="312" y="383">q₂</text><text x="440" y="383">q₁</text><text x="568" y="383">q₀</text></g>
+        <text x="660" y="383" font-size="11.5">4 integers in each word: weight (5120, 320) uint32</text>
+        <text x="110" y="429" text-anchor="end" font-weight="600">4 bits</text>
+        <g stroke="#057379" stroke-width="1.5">
+          <rect x="120" y="412" width="64" height="26" fill="#e6f2f2"/><rect x="184" y="412" width="64" height="26" fill="#ffffff"/><rect x="248" y="412" width="64" height="26" fill="#e6f2f2"/><rect x="312" y="412" width="64" height="26" fill="#ffffff"/><rect x="376" y="412" width="64" height="26" fill="#e6f2f2"/><rect x="440" y="412" width="64" height="26" fill="#ffffff"/><rect x="504" y="412" width="64" height="26" fill="#e6f2f2"/><rect x="568" y="412" width="64" height="26" fill="#ffffff"/>
+        </g>
+        <g text-anchor="middle" font-size="11.5"><text x="152" y="429">q₇</text><text x="216" y="429">q₆</text><text x="280" y="429">q₅</text><text x="344" y="429">q₄</text><text x="408" y="429">q₃</text><text x="472" y="429">q₂</text><text x="536" y="429">q₁</text><text x="600" y="429">q₀</text></g>
+        <text x="660" y="429" font-size="11.5">8 integers in each word: weight (5120, 160) uint32</text>
+        <text x="120" y="466" font-size="11.5">Next to the packed weight: scales (5120, 20) and biases (the offsets) (5120, 20), both in the matmul dtype. bias (5120) does not change.</text>
+        <text x="120" y="490" font-size="11.5">Bytes for each weight: 2 in fp16 or bf16 · 1 + 4 / 64 = 1.0625 at 8 bits · 0.5 + 4 / 64 = 0.5625 at 4 bits</text>
+      </g>
+    </svg></div>
+    <figcaption><b>Figure 1.</b> The affine format of MLX 0.32.4 (docstring of <code>mx.quantize</code>), for one row of <code>up_proj</code> of ViT-H+/16. The shape comes from <code>MODEL_SHAPES</code> in <code>src/dinov3_apple/flops.py</code> (D = 1,280, FF = 5,120). Top: the row has 1,280 weights, so 20 groups of 64. Middle: one group on a number line from its smallest weight β to its largest weight α. 4 bits give 16 levels, 8 bits give 256 levels. The example weight w lies at 37 % of the range. It rounds to level 6 of the levels 0 to 15, or to level 94 of the levels 0 to 255. Bottom: MLX packs the integers into uint32 words. The scales and the offsets keep the matmul dtype. The figure follows the docstring. The note below the rules gives two details in which the kernel differs.</figcaption>
+  </figure>
+  <p>The affine format has four rules (MLX 0.32.4, docstring of <code>mx.quantize</code>):</p>
+  <ol>
+    <li>α is the largest and β is the smallest of the 64 weights of one group.</li>
+    <li>The scale is s = (α − β) / (2<sup>b</sup> − 1), with b = 8 or 4.</li>
+    <li>Each weight w becomes the integer q = round((w − β) / s), from 0 to 2<sup>b</sup> − 1.</li>
+    <li>The matmul uses ŵ = s · q + β in place of w. The rounding error |w − ŵ| is at most s / 2.</li>
+  </ol>
+  <p>For one group, the 4-bit scale is (2<sup>8</sup> − 1) / (2<sup>4</sup> − 1) = 255 / 15 = 17 times the 8-bit scale (our computation). So the largest rounding error at 4 bits is also 17 times the largest rounding error at 8 bits. Section 9 shows the effect on the parity. The docstring names the integer q "ŵ". This page uses ŵ for the value s · q + β.</p>
+  <p class="note"><b>The kernel differs in two details.</b> The four rules come from the docstring. The Metal kernel <code>affine_quantize</code> of MLX 0.32.4 (<code>mlx/backend/metal/kernels/quantized.h</code> in the installed package) does two things differently. First, β is the end of the range with the larger magnitude. If that end is the largest weight, the scale is negative, and level 0 is the largest weight. Second, the kernel changes s a little, so that the weight 0 falls exactly on a level. Thus the factor 17 and the bound s / 2 are true only approximately for the kernel. The kernel also computes q with the fp32 value of s, and then it stores s in the dtype of the input (our reading of the kernel source).</p>
+  <p>The scale and the offset get the dtype of the input of <code>mx.quantize</code> (the table of modes in the same docstring). The loader casts each weight to the matmul dtype before <code>mx.quantize</code>. So the scales are fp16 in fp16-autocast and bf16 in bf16-autocast. Section 9 shows that bf16-autocast loses more parity than fp16-autocast at 8 bits, and how the scale dtype can cause a part of this loss.</p>
+  <pre><code># src/dinov3_apple/mlx_weights.py, lines 43 to 46
+# Quantized weights (D14 of specs/06-speed/plan.html): the affine format, 8 and 4 bits, one
+# scale and one offset for each group of 64 weights of a row.
+GROUP_SIZE = 64
+QUANTIZED_BITS = (8, 4)</code></pre>
+  <ul>
+    <li><b>Line 45.</b> 64 is the default group size of the affine mode in MLX 0.32.4. D14 of <code>specs/06-speed/explore.html</code> (Section 3.14) compares group size 32, the MX and NV float formats and 6 bits. Its choice: no other format gives a clear parity gain over affine with group size 64.</li>
+    <li><b>Line 46.</b> <code>docs/plan.html</code> names 8 and 4 bits only (D14, option D of <code>explore.html</code>). <code>load_mlx_backbone</code> raises <code>ValueError</code> for any other value, for example 6 (T50).</li>
+  </ul>
+</section>
+
+<section id="bytes">
+  <h2>3 Bytes and shapes</h2>
+  <p>Table 2 shows the parameters of one quantized module. A uint32 word holds 4 integers of 8 bits or 8 integers of 4 bits. So the packed weight has 1,280 / 4 = 320 or 1,280 / 8 = 160 columns. Each group adds one scale and one offset of 2 bytes each: 4 / 64 = 0.0625 bytes for each weight.</p>
+  <div class="table-wrap">
+    <table class="first-nowrap">
+      <thead><tr><th>Parameter</th><th>fp16 or bf16 weights</th><th>8 bits</th><th>4 bits</th></tr></thead>
+      <tbody>
+        <tr><td><code>weight</code></td><td>(5120, 1280), matmul dtype, 13,107,200 bytes</td><td>(5120, 320), uint32, 6,553,600 bytes</td><td>(5120, 160), uint32, 3,276,800 bytes</td></tr>
+        <tr><td><code>scales</code></td><td>–</td><td>(5120, 20), matmul dtype, 204,800 bytes</td><td>(5120, 20), matmul dtype, 204,800 bytes</td></tr>
+        <tr><td><code>biases</code> (the offsets)</td><td>–</td><td>(5120, 20), matmul dtype, 204,800 bytes</td><td>(5120, 20), matmul dtype, 204,800 bytes</td></tr>
+        <tr><td><code>bias</code></td><td>(5120), matmul dtype, 10,240 bytes</td><td>(5120), matmul dtype, 10,240 bytes</td><td>(5120), matmul dtype, 10,240 bytes</td></tr>
+        <tr><td>Bytes for each weight</td><td class="num">2</td><td class="num">1.0625</td><td class="num">0.5625</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 2.</b> The parameters of <code>up_proj</code> of ViT-H+/16 before and after the quantization (our computation from the shapes of <code>MODEL_SHAPES</code> and the rules of Figure 1). The bias does not change: <code>nn.QuantizedLinear</code> keeps the bias of the <code>nn.Linear</code> as it is.</p>
+  <p>Table 9 of the plan applies the same numbers to the whole model. Each block weight takes bits / 8 + 2 · 2 / 64 bytes. All other parameters take 2 bytes. <code>quantized_weight_bytes</code> in <code>bench.py</code> computes the value (<a href="06-2-attention-and-batch-size.html">06-2</a> explains the function):</p>
+  <pre><code># src/dinov3_apple/bench.py, lines 277 and 293 to 297 (shortened: the docstring is left out)
+def quantized_weight_bytes(model_size: str, bits: int, parameters: int | None = None) -&gt; int:
+    ⋮
+    shape = MODEL_SHAPES[model_size]
+    count = _parameter_count(model_size) if parameters is None else parameters
+    ff_matrices = 3 if shape.gated else 2
+    block = shape.blocks * (4 * shape.dim**2 + ff_matrices * shape.dim * shape.ff)
+    return block * (8 * bits + 4) // 64 + (count - block) * 2</code></pre>
+  <p>The block weights are L · (4 D² + 3 D FF) for SwiGLU and L · (4 D² + 2 D FF) for an MLP, without the biases. They are 98.3 % (ViT-S/16) to 99.9 % (ViT-7B/16) of all parameters (Table 9 of the plan). In the two autocast modes the loader keeps the layer norms, LayerScale and the prefix tokens in fp32. So the formula leaves out at most 2.0 MB (ViT-7B/16).</p>
+  <div class="table-wrap">
+    <table class="first-nowrap">
+      <thead><tr><th>Model size</th><th class="num">Parameters</th><th class="num">fp16 or bf16 weights</th><th class="num">8 bits</th><th class="num">4 bits</th><th class="num">Quantized modules</th></tr></thead>
+      <tbody>
+        <tr><td>ViT-H+/16</td><td class="num">840,592,640</td><td class="num">1.681 GB</td><td class="num">0.895 GB</td><td class="num">0.475 GB</td><td class="num">32 × 7 = 224</td></tr>
+        <tr><td>ViT-7B/16</td><td class="num">6,716,035,072</td><td class="num">13.432 GB</td><td class="num">7.141 GB</td><td class="num">3.785 GB</td><td class="num">40 × 7 = 280</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 3.</b> The weight bytes of the two model sizes with quantized rows. Parameters: the header counts of T17 of the plan. 8 bits and 4 bits: Table 9 of the plan (894,753,280; 475,322,880; 7,140,614,144 and 3,785,170,944 bytes). The fp16 and bf16 column is 2 bytes × the parameter count, and the last column is blocks × 7 modules (our computation). 8 bits take 53 % of the fp16 bytes, 4 bits take 28 % (our computation).</p>
+</section>
+
+<section id="predicate">
+  <h2>4 Which modules get quantized weights</h2>
+  <p><code>nn.quantize(model, class_predicate=…)</code> visits each leaf module of the tree (<code>model.leaf_modules()</code>). It calls the predicate with the path and the module. If the predicate returns a dict, <code>nn.quantize</code> calls <code>module.to_quantized(**dict)</code>, and <code>nn.Linear.to_quantized</code> returns an <code>nn.QuantizedLinear</code>. If the predicate returns False, the module stays (MLX 0.32.4, <code>python/mlx/nn/layers/quantized.py</code>). The plan read the MLX source to confirm the dict form (Section 3.5 of the plan).</p>
+  <pre><code># src/dinov3_apple/mlx_weights.py, lines 209 to 228
+def block_linear_predicate(
+    bits: int, group_size: int = GROUP_SIZE
+) -&gt; Callable[[str, nn.Module], dict | bool]:
+    """Return the class predicate of nn.quantize for the block nn.Linear modules (D16).
+
+    The patch embedding keeps the matmul dtype: it is the most sensitive part (probe Q5) and the
+    path of F1 of Step 4. The predicate returns the parameters of each module, so a later mixed
+    row (other bits for one module group) changes only this function.
+
+    Args:
+        bits: 8 or 4.
+        group_size: The number of weights of one row that share one scale and one offset.
+    """
+
+    def predicate(path: str, module: nn.Module) -&gt; dict | bool:
+        if isinstance(module, nn.Linear) and path.startswith("layer."):
+            return {"group_size": group_size, "bits": bits}
+        return False
+
+    return predicate</code></pre>
+  <ul>
+    <li><b>Line 224, first condition.</b> The module must be an <code>nn.Linear</code>. The layer norms and LayerScale stay as they are.</li>
+    <li><b>Line 224, second condition.</b> The path must start with "layer.". The blocks of <code>MlxBackbone</code> live in the list <code>layer</code>, so their paths are <code>layer.0.attention.q_proj</code> to <code>layer.{L − 1}.mlp.down_proj</code>, the Hugging Face names. Each SwiGLU block has 7 such modules: <code>q_proj</code>, <code>k_proj</code>, <code>v_proj</code>, <code>o_proj</code>, <code>gate_proj</code>, <code>up_proj</code> and <code>down_proj</code>. T44 checks 7 · L quantized modules for a SwiGLU small model and 6 · L for an MLP small model.</li>
+    <li><b>The patch embedding stays in the matmul dtype (D16).</b> It is an <code>nn.Linear</code> too (<a href="04-1-patch-embedding.html">04-1</a>), but its path is <code>embeddings.patch_embeddings</code>. D16 gives three reasons. It is the most sensitive part: in probe Q5 the patch embedding alone at 4 bits gave a lower patch 1st percentile than all block weights at 4 bits together (Section 2.6 of <code>explore.html</code>). It holds a small share of the weights: the blocks hold 98.3 % to 99.9 % of all parameters. And a quantized patch embedding is the path of the fault F1 of Step 4 (<a href="04-1-patch-embedding.html#cast">04-1, Section 6</a>). T44 checks that the predicate returns False for <code>embeddings.patch_embeddings</code>.</li>
+    <li><b>Line 225, a dict and not True.</b> With True, <code>nn.quantize</code> would take <code>group_size</code> and <code>bits</code> from its own arguments. The dict carries them per module. The mode stays the MLX default "affine". The docstring names the reason: a later mixed row, for example other bits for one module group, changes only this function. Probe Q5 found that the tested mixed rows also fail at 4 bits (Section 9).</li>
+  </ul>
+</section>
+
+<section id="names">
+  <h2>5 The names of a quantized module</h2>
+  <p><code>linear_parameter_names</code> tells <code>mlx_weights</code> which tensors get the matmul dtype. All other tensors get the stream dtype (<a href="05-2-model-scaling.html">05-2</a>). In Step 5 the function found the modules with <code>isinstance(module, nn.Linear)</code>. <code>nn.quantize</code> replaces each block <code>nn.Linear</code> by an <code>nn.QuantizedLinear</code>. In MLX 0.32.4, <code>nn.QuantizedLinear</code> is a subclass of <code>nn.Module</code>, not of <code>nn.Linear</code>. So the Step 5 form misses every quantized module (F1 of the plan). Step 6 changes one line:</p>
+  <pre><code># commit 11a45b1 (before the Step 6 build), src/dinov3_apple/mlx_model.py, line 457
+        if isinstance(module, nn.Linear)
+# commit 2567808 (Step 6), src/dinov3_apple/mlx_model.py, line 536
+        if isinstance(module, nn.Linear | nn.QuantizedLinear)</code></pre>
+  <pre><code># src/dinov3_apple/mlx_model.py, lines 525 to 548
+def linear_parameter_names(model: nn.Module) -&gt; frozenset[str]:
+    """Return the names of the parameters of each nn.Linear and nn.QuantizedLinear module: the
+    matmul dtype (D2).
+
+    nn.QuantizedLinear is not a subclass of nn.Linear (F1 of specs/06-speed/plan.html): its
+    weight, scales, biases (the offsets) and bias count too. The names come from named_modules()
+    and isinstance, not from name suffixes. All other parameters get the stream dtype.
+    """
+    return frozenset(
+        f"{name}.{leaf}"
+        for name, module in model.named_modules()
+        if isinstance(module, nn.Linear | nn.QuantizedLinear)
+        for leaf in module.parameters()
+    )
+
+
+def quantized_weight_names(model: nn.Module) -&gt; frozenset[str]:
+    """Return the names of the weight of each nn.QuantizedLinear module: the tensors that the
+    quantized load quantizes (D17 of specs/06-speed/plan.html)."""
+    return frozenset(
+        f"{name}.weight"
+        for name, module in model.named_modules()
+        if isinstance(module, nn.QuantizedLinear)
+    )</code></pre>
+  <ul>
+    <li><b>Line 536.</b> <code>isinstance</code> accepts the union type <code>nn.Linear | nn.QuantizedLinear</code>. The patch embedding stays an <code>nn.Linear</code>, so its weight and bias stay in the set.</li>
+    <li><b>Line 537.</b> <code>module.parameters()</code> of an <code>nn.QuantizedLinear</code> has the keys <code>weight</code>, <code>scales</code> and <code>biases</code>, plus <code>bias</code> if the module has a bias. T43 checks this on the small model <code>vits16plus</code>: the names of each quantized module equal its parameters, and <code>bias</code> is there only where the config has a bias (the small configs have no <code>k_proj</code> bias).</li>
+    <li><b>What line 536 prevents.</b> Without it, the file tensor <code>layer.0.attention.q_proj.weight</code> is not in <code>linear</code>. <code>mlx_weights</code> then casts it to the stream dtype, which is fp32 in the autocast modes. <code>mx.quantize</code> then gives fp32 scales and offsets, and the bias stays fp32 too. The strict load accepts all of it, because it checks no dtype (Section 6). The plan gives the cost: fp32 scales cost up to 6 times the dense time (D15, option E, Section 3.5 of the plan).</li>
+    <li><b>Lines 541 to 548.</b> <code>quantized_weight_names</code> gives only the <code>.weight</code> names of the quantized modules. The loader quantizes exactly these tensors. T43 checks 14 names for <code>vits16plus</code> (2 blocks × 7 modules), and that the patch embedding weight is in <code>linear</code> but not in <code>quantized</code>. For ViT-H+/16 the set has 224 names (Table 3).</li>
+    <li><b>The module tree, not name suffixes.</b> Both functions read the type of each module. A rule on the parts of a name cannot tell the two meanings of "bias" apart (the note below).</li>
+  </ul>
+  <p class="note"><b>Two parameters with almost the same name.</b> In an <code>nn.QuantizedLinear</code>, <code>biases</code> holds the offsets β of the groups: shape (5120, 20) for <code>up_proj</code> of ViT-H+/16. <code>bias</code> holds the additive bias of the module from the Hugging Face file: shape (5120). The forward pass of the module calls <code>mx.quantized_matmul</code> with the packed weight, the scales and the offsets, and then adds <code>bias</code> if the module has one (MLX 0.32.4, <code>QuantizedLinear.__call__</code>). This page says "offset" for β and "bias" for the additive bias, as <code>GLOSSARY.md</code> does.</p>
+</section>
+
+<section id="loader">
+  <h2>6 The loader</h2>
+  <p>Figure 2 shows the order of the actions of <code>load_mlx_backbone</code> with <code>bits</code>. The numbers are those of the action list of Section 3.5 of the plan. The run rule, the check of the bits and the memory check come before any file read.</p>
+  <figure>
+    <div class="fig"><svg viewBox="0 0 960 570" role="img" aria-labelledby="fig2-title" font-family="-apple-system, Helvetica Neue, Arial, sans-serif">
+      <title id="fig2-title">The twelve actions of load_mlx_backbone with bits, in four rows: checks, skeleton, the loop of one tensor at a time, and the strict load with the load report</title>
+      <defs><marker id="arrow2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#4a5655"/></marker></defs>
+      <rect width="960" height="570" fill="#ffffff"/>
+      <g font-size="12" fill="#111414">
+        <text x="20" y="24" font-weight="600" font-size="13">load_mlx_backbone(model_size, dtype_mode, bits=8 or 4): the actions in order (Section 3.5 of the plan)</text>
+
+        <!-- row A: checks -->
+        <g stroke-width="1.5">
+          <rect x="20" y="40" width="209" height="66" rx="5" fill="#f5f8f7" stroke="#4a5655"/>
+          <rect x="257" y="40" width="209" height="66" rx="5" fill="#e6f2f2" stroke="#057379"/>
+          <rect x="494" y="40" width="209" height="66" rx="5" fill="#f5f8f7" stroke="#4a5655"/>
+          <rect x="731" y="40" width="209" height="66" rx="5" fill="#e6f2f2" stroke="#057379"/>
+        </g>
+        <g text-anchor="middle">
+          <text x="124.5" y="59" font-weight="600">1 Run rule</text>
+          <text x="124.5" y="76" font-size="10.5">check_run_rule, line 284</text>
+          <text x="124.5" y="92" font-size="10.5">ViT-7B/16 in fp32 stops here</text>
+          <text x="361.5" y="59" font-weight="600">2 Check of the bits</text>
+          <text x="361.5" y="76" font-size="10.5">bits in QUANTIZED_BITS, mode in</text>
+          <text x="361.5" y="90" font-size="10.5">QUANTIZED_MODES, else ValueError</text>
+          <text x="361.5" y="103" font-size="10.5" fill="#4a5655">lines 285–289</text>
+          <text x="598.5" y="59" font-weight="600">3 TF32 check</text>
+          <text x="598.5" y="76" font-size="10.5">fp32 dtype mode only</text>
+          <text x="598.5" y="92" font-size="10.5" fill="#4a5655">lines 290–291</text>
+          <text x="835.5" y="59" font-weight="600">4 Memory check</text>
+          <text x="835.5" y="76" font-size="10.5">required_mlx_load_bytes(…, bits)</text>
+          <text x="835.5" y="90" font-size="10.5">check_free_memory, set_memory_limit</text>
+          <text x="835.5" y="103" font-size="10.5" fill="#4a5655">lines 292–294</text>
+        </g>
+        <g stroke="#4a5655" stroke-width="1.5" fill="none">
+          <path d="M229,73 H253" marker-end="url(#arrow2)"/>
+          <path d="M466,73 H490" marker-end="url(#arrow2)"/>
+          <path d="M703,73 H727" marker-end="url(#arrow2)"/>
+          <path d="M835.5,106 V122 H124.5 V136" marker-end="url(#arrow2)"/>
+        </g>
+
+        <!-- row B: skeleton -->
+        <g stroke-width="1.5">
+          <rect x="20" y="140" width="209" height="66" rx="5" fill="#f5f8f7" stroke="#4a5655"/>
+          <rect x="257" y="140" width="209" height="66" rx="5" fill="#e6f2f2" stroke="#057379"/>
+          <rect x="494" y="140" width="209" height="66" rx="5" fill="#e6f2f2" stroke="#057379"/>
+          <rect x="731" y="140" width="209" height="66" rx="5" fill="#e6f2f2" stroke="#057379"/>
+        </g>
+        <g text-anchor="middle">
+          <text x="124.5" y="159" font-weight="600">5 Skeleton</text>
+          <text x="124.5" y="176" font-size="10.5">MlxBackbone(config, dtype_mode)</text>
+          <text x="124.5" y="190" font-size="10.5">lazy random fp32 weights</text>
+          <text x="124.5" y="203" font-size="10.5" fill="#4a5655">line 297</text>
+          <text x="361.5" y="159" font-weight="600">6 nn.quantize</text>
+          <text x="361.5" y="176" font-size="10.5">block_linear_predicate(bits)</text>
+          <text x="361.5" y="190" font-size="10.5">7 · L QuantizedLinear modules</text>
+          <text x="361.5" y="203" font-size="10.5" fill="#4a5655">lines 298–299</text>
+          <text x="598.5" y="159" font-weight="600">7 Name sets</text>
+          <text x="598.5" y="176" font-size="10.5">linear_parameter_names → linear</text>
+          <text x="598.5" y="190" font-size="10.5">quantized_weight_names → quantized</text>
+          <text x="598.5" y="203" font-size="10.5" fill="#4a5655">lines 300–301</text>
+          <text x="835.5" y="159" font-weight="600">8 Placeholders</text>
+          <text x="835.5" y="176" font-size="10.5">placeholder_skeleton(model)</text>
+          <text x="835.5" y="190" font-size="10.5">drops the lazy random weights</text>
+          <text x="835.5" y="203" font-size="10.5" fill="#4a5655">line 302</text>
+        </g>
+        <g stroke="#4a5655" stroke-width="1.5" fill="none">
+          <path d="M229,173 H253" marker-end="url(#arrow2)"/>
+          <path d="M466,173 H490" marker-end="url(#arrow2)"/>
+          <path d="M703,173 H727" marker-end="url(#arrow2)"/>
+          <path d="M835.5,206 V222 H110 V244" marker-end="url(#arrow2)"/>
+        </g>
+
+        <!-- row C: files and loop -->
+        <rect x="20" y="248" width="180" height="78" rx="5" fill="#f5f8f7" stroke="#4a5655" stroke-width="1.5"/>
+        <g text-anchor="middle">
+          <text x="110" y="268" font-weight="600">9 Lazy files</text>
+          <text x="110" y="285" font-size="10.5">mx.load of each *.safetensors</text>
+          <text x="110" y="299" font-size="10.5">reset the MLX peak</text>
+          <text x="110" y="313" font-size="10.5" fill="#4a5655">lines 303–307</text>
+        </g>
+        <rect x="222" y="240" width="718" height="182" rx="6" fill="none" stroke="#057379" stroke-width="1.5" stroke-dasharray="6 4"/>
+        <text x="236" y="259" font-weight="600" font-size="11.5" fill="#057379">10 One tensor at a time (path L2): for key, array in mlx_weights(tensors, dtypes, linear), lines 309–317</text>
+        <rect x="238" y="300" width="160" height="60" rx="5" fill="#f5f8f7" stroke="#4a5655" stroke-width="1.5"/>
+        <g text-anchor="middle">
+          <text x="318" y="320" font-size="11">pop one fp32 tensor</text>
+          <text x="318" y="335" font-size="11">map the key, cast it</text>
+          <text x="318" y="350" font-size="11">(matmul or stream dtype)</text>
+        </g>
+        <path d="M430,330 L470,302 L510,330 L470,358 Z" fill="#ffffff" stroke="#057379" stroke-width="1.5"/>
+        <text x="470" y="327" font-size="10" text-anchor="middle">key in</text>
+        <text x="470" y="339" font-size="10" text-anchor="middle">quantized?</text>
+        <rect x="532" y="268" width="170" height="48" rx="5" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <g text-anchor="middle">
+          <text x="617" y="287" font-size="11">mx.quantize(array, 64, bits)</text>
+          <text x="617" y="303" font-size="10.5">packed weight, scales, offsets</text>
+        </g>
+        <rect x="720" y="268" width="208" height="48" rx="5" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <g text-anchor="middle">
+          <text x="824" y="287" font-size="11">mx.eval(weight, scales, biases)</text>
+          <text x="824" y="303" font-size="10.5">3 pairs: .weight .scales .biases</text>
+        </g>
+        <rect x="532" y="362" width="170" height="44" rx="5" fill="#f5f8f7" stroke="#4a5655" stroke-width="1.5"/>
+        <g text-anchor="middle">
+          <text x="617" y="380" font-size="11">mx.eval(array)</text>
+          <text x="617" y="396" font-size="10.5">1 pair</text>
+        </g>
+        <g font-size="10.5" fill="#4a5655">
+          <text x="720" y="350">At one time: one fp32 source,</text>
+          <text x="720" y="364">its cast and its quantized output.</text>
+          <text x="720" y="382">Load peak: 1.026 to 1.091 ×</text>
+          <text x="720" y="396">the quantized bytes (Table 4).</text>
+        </g>
+        <text x="492" y="286" font-size="10.5" fill="#057379">yes</text>
+        <text x="492" y="379" font-size="10.5" fill="#4a5655">no</text>
+        <g stroke="#4a5655" stroke-width="1.5" fill="none">
+          <path d="M200,287 H216 V330 H234" marker-end="url(#arrow2)"/>
+          <path d="M398,330 H426" marker-end="url(#arrow2)"/>
+          <path d="M470,302 V292 H528" marker-end="url(#arrow2)"/>
+          <path d="M470,358 V384 H528" marker-end="url(#arrow2)"/>
+          <path d="M702,292 H716" marker-end="url(#arrow2)"/>
+          <path d="M581,422 V436 H124.5 V452" marker-end="url(#arrow2)"/>
+        </g>
+
+        <!-- row D: strict load, report, compile -->
+        <g stroke-width="1.5">
+          <rect x="20" y="456" width="209" height="66" rx="5" fill="#f5f8f7" stroke="#4a5655"/>
+          <rect x="257" y="456" width="209" height="66" rx="5" fill="#e6f2f2" stroke="#057379"/>
+          <rect x="494" y="456" width="209" height="66" rx="5" fill="#ffffff" stroke="#4a5655" stroke-dasharray="4 3"/>
+        </g>
+        <g text-anchor="middle">
+          <text x="124.5" y="475" font-weight="600">11 Strict load</text>
+          <text x="124.5" y="492" font-size="10.5">load_weights(pairs, strict=True)</text>
+          <text x="124.5" y="506" font-size="10.5">then mx.clear_cache()</text>
+          <text x="124.5" y="519" font-size="10.5" fill="#4a5655">lines 318–320</text>
+          <text x="361.5" y="475" font-weight="600">12 Load report</text>
+          <text x="361.5" y="492" font-size="10.5">LoadReport(…, bits=bits)</text>
+          <text x="361.5" y="506" font-size="10.5">record_load_peak(label)</text>
+          <text x="361.5" y="519" font-size="10.5" fill="#4a5655">lines 321–328</text>
+          <text x="598.5" y="475" font-weight="600">Then the caller</text>
+          <text x="598.5" y="492" font-size="10.5">compile_backbone(model)</text>
+          <text x="598.5" y="506" font-size="10.5">after the last weight change (06-1)</text>
+        </g>
+        <g stroke="#4a5655" stroke-width="1.5" fill="none">
+          <path d="M229,489 H253" marker-end="url(#arrow2)"/>
+          <path d="M466,489 H490" marker-end="url(#arrow2)"/>
+        </g>
+
+        <!-- legend -->
+        <rect x="731" y="462" width="16" height="12" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="753" y="472" font-size="11">new or changed in Step 6</text>
+        <rect x="731" y="484" width="16" height="12" fill="#f5f8f7" stroke="#4a5655" stroke-width="1.5"/>
+        <text x="753" y="494" font-size="11">code of Step 5</text>
+        <rect x="731" y="506" width="16" height="12" fill="#ffffff" stroke="#057379" stroke-width="1.5" stroke-dasharray="4 3"/>
+        <text x="753" y="516" font-size="11">the loop of path L2</text>
+        <text x="20" y="552" font-size="11" fill="#4a5655">With bits=None the loader skips actions 2 and 6 and the yes branch. Action 8 runs for every load.</text>
+      </g>
+    </svg></div>
+    <figcaption><b>Figure 2.</b> The quantized load of <code>load_mlx_backbone</code> (path L2 of D17, Figure 2 of the plan). Teal: new or changed code of Step 6. Grey: code of Step 5. Dashed teal frame: the loop of path L2. Dashed grey: the next call of the caller, outside the loader. The skeleton gets <code>nn.quantize</code> first and then the placeholders (Section 7). The loop reads one fp32 tensor, casts it, quantizes it and evaluates the three arrays, then it reads the next tensor. The load-peak values come from <code>results/speed-matrix.jsonl</code> (Table 4).</figcaption>
+  </figure>
+  <pre><code># src/dinov3_apple/mlx_weights.py, lines 244 to 251 and 282 to 329 (shortened: the docstring, lines 252 to 281, is left out)
+def load_mlx_backbone(
+    model_size: str,
+    dtype_mode: str = "fp32",
+    tf32: bool = False,
+    ratio: float = LOAD_RATIO,
+    bits: int | None = None,
+    group_size: int = GROUP_SIZE,
+) -&gt; MlxBackbone:
+    ⋮
+    dtypes = MLX_DTYPE_MODES[dtype_mode]
+    label = f"{model_size} mlx {dtype_mode}" + (f" {bits}-bit" if bits else "")
+    check_run_rule(model_size, dtypes.matmul.size, label)
+    if bits is not None:
+        if bits not in QUANTIZED_BITS:
+            raise ValueError(f"bits must be one of {QUANTIZED_BITS}, not {bits}")
+        if dtype_mode not in QUANTIZED_MODES:
+            raise ValueError(f"quantized bits load in {QUANTIZED_MODES} only, not in {dtype_mode}")
+    if dtypes.matmul == mx.float32 and tf32_enabled() != tf32:
+        raise TF32ModeError(f"set MLX_ENABLE_TF32={int(tf32)} before the first use of mlx")
+    need = required_mlx_load_bytes(model_size, dtype_mode, ratio, bits)
+    check_free_memory(need, label)
+    mx.set_memory_limit(need)  # only a guideline (R13 of Step 4): the loop keeps the peak low
+    folder = weights_dir(model_size)
+    config = MlxConfig.from_hf(json.loads((folder / "config.json").read_text()))
+    model = MlxBackbone(config, dtype_mode)  # the random init stays lazy and is never computed
+    if bits is not None:
+        nn.quantize(model, class_predicate=block_linear_predicate(bits, group_size))
+    linear = linear_parameter_names(model)  # nn.Linear and nn.QuantizedLinear (F1)
+    quantized = quantized_weight_names(model)  # the .weight of each QuantizedLinear
+    placeholder_skeleton(model)  # no lazy random weight of the whole model is left (R50)
+    tensors: dict[str, mx.array] = {}
+    for file in sorted(folder.glob("*.safetensors")):
+        tensors |= mx.load(str(file))  # lazy; a str, not a Path (R18)
+    active_before = mx.get_active_memory()
+    mx.reset_peak_memory()
+    pairs = []
+    for key, array in mlx_weights(tensors, dtypes, linear):
+        if key in quantized:
+            weight, scales, biases = mx.quantize(array, group_size, bits)
+            mx.eval(weight, scales, biases)  # one source, its cast and its quantized output
+            stem = key.removesuffix(".weight")
+            pairs += [(key, weight), (f"{stem}.scales", scales), (f"{stem}.biases", biases)]
+            continue
+        mx.eval(array)  # reads one tensor from its file and casts it
+        pairs.append((key, array))
+    model.load_weights(pairs, strict=True)
+    del pairs
+    mx.clear_cache()  # the freed fp32 buffers leave the MLX cache
+    model.load_report = LoadReport(
+        need_bytes=need,
+        peak_bytes=mx.get_peak_memory() - active_before,
+        cache_bytes=mx.get_cache_memory(),
+        footprint_bytes=read_footprint().current_bytes,
+        bits=bits,
+    )
+    record_load_peak(label, model.load_report.peak_bytes, model.load_report.cache_bytes)
+    return model</code></pre>
+  <ul>
+    <li><b>Line 283.</b> The label gets the bit width, for example "ViT-H+/16 mlx bf16-autocast 8-bit". The memory check and the load-peak line of line 328 use this label.</li>
+    <li><b>Line 284.</b> <code>check_run_rule</code> gets the size of the matmul dtype: 2 bytes in both autocast modes. So ViT-7B/16 loads with <code>bits</code>. In fp32 the run rule stops ViT-7B/16 before any file read (ADR 0008).</li>
+    <li><b>Lines 285 to 289.</b> <code>bits</code> must be in <code>QUANTIZED_BITS</code>, and the dtype mode must be in <code>QUANTIZED_MODES</code>: fp16-autocast or bf16-autocast. Else the loader raises <code>ValueError</code> before any file read (T50). D15, option C chose the two autocast modes. In fp32 the scales would be fp32 (D15, option E). No decision covers the cast modes.</li>
+    <li><b>Line 292.</b> The need uses the quantized bytes (Section 8).</li>
+    <li><b>Line 297.</b> The skeleton holds random weights. <code>nn.Linear</code> makes them with <code>mx.random.uniform</code> in fp32. MLX computes lazily, so these weights do not take memory yet.</li>
+    <li><b>Lines 298 and 299.</b> <code>nn.quantize</code> replaces the block <code>nn.Linear</code> modules (Section 4). The new modules still reference the lazy random weights (Section 7).</li>
+    <li><b>Lines 300 and 301.</b> The two name sets come from the tree after <code>nn.quantize</code>. The order is necessary: before <code>nn.quantize</code> the tree has no <code>nn.QuantizedLinear</code>, and <code>quantized</code> would be empty.</li>
+    <li><b>Line 302.</b> The placeholders replace every parameter (Section 7). The unquantized load (<code>bits=None</code>) runs this line too.</li>
+    <li><b>Lines 303 to 307.</b> <code>mx.load</code> opens each safetensors file lazily: it reads no tensor yet. The loader reads the active memory and resets the MLX peak. So the load peak counts only the work of the loop.</li>
+    <li><b>Lines 309 to 317.</b> This loop is path L2. <code>mlx_weights</code> pops one fp32 tensor and maps its key. It casts the tensor to the matmul dtype if the name is in <code>linear</code>, else to the stream dtype (<a href="05-2-model-scaling.html">05-2</a>). So each block weight arrives in the matmul dtype. For a block weight, <code>mx.quantize</code> gives three arrays: the packed weight (uint32), the scales and the offsets (both in the matmul dtype). <code>mx.eval</code> computes the three together. For a short time, the fp32 source, its cast and the three outputs exist together, for this one tensor only. The file has no tensors with the names <code>.scales</code> and <code>.biases</code>: lines 313 and 314 make these names from the stem of the weight name.</li>
+    <li><b>Line 318.</b> <code>load_weights(strict=True)</code> checks that each name of the skeleton gets an array with the same shape, and that no other name comes in. The placeholders keep the names and the shapes, so the check stays the same. The check does not compare dtypes (MLX 0.32.4, <code>python/mlx/nn/layers/base.py</code>, <code>Module.load_weights</code>). T47 checks the dtypes instead (Section 7).</li>
+    <li><b>Lines 319 and 320.</b> <code>del pairs</code> drops the list. The buffers of the fp32 sources are already free, but MLX keeps them in its cache. <code>mx.clear_cache()</code> empties the cache. The MLX cache after the load is 0 bytes in every quantized load of the matrix (<code>load_report_cache_bytes</code> in <code>results/speed-matrix.jsonl</code>).</li>
+    <li><b>Lines 321 to 328.</b> The load report gets the field <code>bits</code> (Section 8).</li>
+  </ul>
+  <p>T46 compares path L2 with path L1 on the small model <code>vits16plus</code>. Path L1 loads in the matmul dtype and then calls <code>nn.quantize</code>. In both autocast modes and at both bit widths, every parameter of L2 must equal the parameter of L1 bit for bit, with the same dtype. So the loop casts and quantizes in the same order as <code>nn.quantize</code> after a load.</p>
+  <div class="table-wrap">
+    <table class="first-nowrap">
+      <thead><tr><th>Model size</th><th>Bits</th><th class="num">Weight bytes</th><th class="num">Need</th><th class="num">Load-peak target</th><th class="num">Load peak</th><th class="num">Share of the target</th><th class="num">Load peak / weight bytes</th></tr></thead>
+      <tbody>
+        <tr><td>ViT-H+/16</td><td>–</td><td class="num">1.681 GB</td><td class="num">6.02 GB</td><td class="num">–</td><td class="num">1.701 GB</td><td class="num">–</td><td class="num">1.012</td></tr>
+        <tr><td>ViT-H+/16</td><td>8</td><td class="num">0.895 GB</td><td class="num">5.07 GB</td><td class="num">1.113 GB</td><td class="num">0.936 GB</td><td class="num">84.1 %</td><td class="num">1.046</td></tr>
+        <tr><td>ViT-H+/16</td><td>4</td><td class="num">0.475 GB</td><td class="num">4.57 GB</td><td class="num">0.610 GB</td><td class="num">0.518 GB</td><td class="num">85.0 %</td><td class="num">1.091</td></tr>
+        <tr><td>ViT-7B/16</td><td>–</td><td class="num">13.432 GB</td><td class="num">20.12 GB</td><td class="num">–</td><td class="num">13.535 GB</td><td class="num">–</td><td class="num">1.008</td></tr>
+        <tr><td>ViT-7B/16</td><td>8</td><td class="num">7.141 GB</td><td class="num">12.57 GB</td><td class="num">8.770 GB</td><td class="num">7.326 GB</td><td class="num">83.5 %</td><td class="num">1.026</td></tr>
+        <tr><td>ViT-7B/16</td><td>4</td><td class="num">3.785 GB</td><td class="num">8.54 GB</td><td class="num">4.744 GB</td><td class="num">3.979 GB</td><td class="num">83.9 %</td><td class="num">1.051</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 4.</b> The loads of the two autocast modes. Bits "–": fp16 or bf16 weights. Weight bytes: Table 3. Need and load peak: <code>load_report_need_bytes</code> and <code>load_report_peak_bytes</code> of the <code>mlx</code> lines of <code>results/speed-matrix.jsonl</code>. Each value is the same in all 18 lines of its model size and bit width (9 configurations × 2 dtype modes). The need of the quantized rows equals Table 9 of the plan and T42. Load-peak target: Table 9 of the plan and T48; it is 1.2 × the quantized bytes + the largest fp32 tensor + the same tensor in the matmul dtype. The plan gives no target for the unquantized rows in Table 9. The last two columns: our computation.</p>
+  <p>The load peak stays 2.6 to 9.1 % above the quantized weight bytes (our computation). The rest is about the size of the one tensor in the loop: its fp32 source and its cast. ViT-7B/16 never holds its fp32 weights as a whole (ADR 0008). Its 8-bit load peaks at 7.33 GB, its fp16 or bf16 load at 13.53 GB. Its memory check asks for 12.57 GB (8 bits) and 8.54 GB (4 bits) in place of 20.12 GB.</p>
+  <p>The quantization in the loop adds little load time. ViT-7B/16 loads in 1.19 to 1.42 s at 4 bits, in 1.23 to 1.80 s at 8 bits and in 1.38 to 1.82 s with fp16 or bf16 weights. ViT-H+/16 loads in 0.30 to 0.32 s at 4 bits and with fp16 or bf16 weights, and in 0.32 to 0.34 s at 8 bits (<code>load_time_s</code> of the same lines of <code>results/speed-matrix.jsonl</code>).</p>
+</section>
+
+<section id="skeleton">
+  <h2>7 The placeholder skeleton</h2>
+  <p>The skeleton of ViT-7B/16 holds random fp32 weights for the whole model: 4 bytes × 6,716,035,072 parameters = 26.9 GB (our computation; the plan says "about 27 GB"). They stay lazy, so they take no memory. But one <code>mx.eval</code> of the skeleton computes them. That breaks ADR 0008 on a Mac that crashed from out-of-memory before (risk R50 of the plan).</p>
+  <p><code>nn.quantize</code> does not remove the hazard. In MLX 0.32.4, <code>nn.Linear.to_quantized</code> calls <code>QuantizedLinear.from_linear</code>. <code>from_linear</code> makes a new <code>nn.QuantizedLinear</code>. Its constructor makes and quantizes a second random fp32 weight. Then <code>from_linear</code> sets the weight, the scales and the offsets to <code>mx.quantize</code> of the random weight of the old <code>nn.Linear</code>. All of it stays lazy. So after line 299 the packed weight of each quantized module is a lazy graph that still references the full random fp32 weight of its <code>nn.Linear</code>.</p>
+  <pre><code># src/dinov3_apple/mlx_weights.py, lines 231 to 241
+def placeholder_skeleton(model: nn.Module) -&gt; None:
+    """Replace each parameter of a model before a load by a zero-stride placeholder (R50).
+
+    The placeholder has the shape and the dtype of the parameter, so load_weights(strict=True)
+    checks the same names and shapes. An evaluated placeholder holds one value. So an mx.eval of
+    the skeleton, by mistake, allocates bytes, not the random fp32 weights of the whole model
+    (about 27 GB for ViT-7B/16, against ADR 0008).
+    """
+    model.update(
+        tree_map(lambda p: mx.broadcast_to(mx.zeros((), p.dtype), p.shape), model.parameters())
+    )</code></pre>
+  <ul>
+    <li><b>Line 240.</b> <code>tree_map</code> visits each parameter <code>p</code>. <code>mx.zeros((), p.dtype)</code> is one zero value. <code>mx.broadcast_to</code> gives it the shape of <code>p</code> with stride 0. An evaluated placeholder holds one value: 4 bytes or less.</li>
+    <li><b>Line 239.</b> <code>model.update</code> replaces the parameters. The lazy random arrays lose their last reference, and MLX never computes them.</li>
+    <li><b>The dtype of a placeholder.</b> The placeholder keeps the dtype of <code>p</code>. The placeholder of a packed weight is uint32. The placeholder of <code>scales</code> is fp32, because the random source of the skeleton is fp32. The loaded scales are fp16 or bf16. The strict load accepts this change, because it checks no dtype. T47 checks the dtypes after the load: each <code>scales</code>, <code>biases</code> and <code>bias</code> has the matmul dtype, each packed weight is uint32, and the patch embedding weight has the matmul dtype (risk R46).</li>
+    <li><b>The order: first <code>nn.quantize</code>, then the placeholders.</b> The plan sets this order (Figure 2 of the plan). With the opposite order, <code>nn.quantize</code> would make each packed weight, scale and offset as a lazy <code>mx.quantize</code> output of a placeholder. These outputs are full-size arrays, not zero-stride views. So an <code>mx.eval</code> by mistake would again allocate memory for each quantized module (our reading of the MLX code).</li>
+    <li><b>T45.</b> The test uses a small model with the shape of ViT-7B/16 at embedding dimension 1,024 and 8 blocks. After <code>nn.quantize</code> and <code>placeholder_skeleton</code>, an <code>mx.eval</code> of all parameters may grow the active memory by at most 1 MB. The control is the unquantized skeleton of the same config in the fp32 dtype mode, without placeholders. It must grow by at least 0.9 × its fp32 bytes; the plan expects about 335 MB (Table 21 of the plan). So the test shows that it can see the hazard.</li>
+  </ul>
+</section>
+
+<section id="need">
+  <h2>8 The memory need and the load report</h2>
+  <pre><code># src/dinov3_apple/mlx_weights.py, lines 181 to 183 and 201 to 206 (shortened: the docstring, lines 184 to 200, is left out)
+def required_mlx_load_bytes(
+    model_size: str, dtype_mode: str = "fp32", ratio: float = LOAD_RATIO, bits: int | None = None
+) -&gt; int:
+    ⋮
+    if bits is not None:
+        return load_bytes(
+            quantized_weight_bytes(model_size, bits, parameter_count(model_size)), ratio
+        )
+    bytes_per_weight = MLX_DTYPE_MODES[dtype_mode].matmul.size
+    return load_bytes(parameter_count(model_size) * bytes_per_weight, ratio)</code></pre>
+  <ul>
+    <li><b>Lines 201 to 204.</b> With <code>bits</code>, the weight bytes are <code>quantized_weight_bytes</code> of the parameter count from the safetensors headers. <code>load_bytes</code> (<code>memory.py</code>, its return on line 137) returns round(1.2 × the weight bytes) + 4 × 10<sup>9</sup> (<code>LOAD_RATIO</code> and <code>LOAD_RESERVE_BYTES</code>, lines 20 and 21).</li>
+    <li><b>The dtype mode does not enter.</b> Both autocast modes have 2-byte scales and offsets, and the loader accepts no other dtype mode with <code>bits</code>.</li>
+    <li><b>T42</b> pins the values: ViT-H+/16 5,073,703,936 bytes (8 bits) and 4,570,387,456 bytes (4 bits); ViT-7B/16 12,568,736,973 and 8,542,205,133 bytes.</li>
+    <li><b>The reserve of 4 GB is most of the need of ViT-H+/16.</b> 8 bits lower its need only from 6.02 GB to 5.07 GB (Table 4). For ViT-7B/16 the drop is large: from 20.12 GB to 12.57 GB.</li>
+    <li><b>Line 294.</b> The need is also the MLX memory limit of the load. The limit is only a guideline (R13 of Step 4). The loop of path L2 keeps the peak low.</li>
+  </ul>
+  <pre><code># src/dinov3_apple/mlx_weights.py, lines 69 to 86
+@dataclass(frozen=True)
+class LoadReport:
+    """The memory of one mlx load (D5 of specs/05-all-sizes/explore.html).
+
+    Attributes:
+        need_bytes: The need of the memory check and the MLX memory limit of the load.
+        peak_bytes: The load peak: the largest MLX active memory during the load, minus the
+            active memory before the load. It does not include the MLX cache.
+        cache_bytes: The MLX cache memory after the load.
+        footprint_bytes: The process footprint after the load.
+        bits: None for unquantized weights; 8 or 4 for quantized block weights.
+    """
+
+    need_bytes: int
+    peak_bytes: int
+    cache_bytes: int
+    footprint_bytes: int
+    bits: int | None = None</code></pre>
+  <ul>
+    <li><b>Line 86.</b> <code>bits</code> has the default None. So the unquantized loads of Step 5 make the same report as before.</li>
+    <li><b>The checks.</b> T46 asserts <code>load_report.bits == bits</code> for path L2 and None for path L1. W3 asserts it for each quantized load with the gated weights, next to "lower bound ≤ load peak ≤ target" and a cache of 0 bytes. T49 checks that the backbone slot of the tests fails a quantized load with a load peak outside its band.</li>
+    <li><b>The result lines.</b> The benchmark worker writes the fields of the report into each result line: <code>load_report_need_bytes</code>, <code>load_report_peak_bytes</code> and <code>load_report_cache_bytes</code>. Table 4 reads them. The field <code>bits</code> of a result line comes from <code>BenchConfig.bits</code> (<a href="06-2-attention-and-batch-size.html">06-2</a>).</li>
+  </ul>
+</section>
+
+<section id="parity">
+  <h2>9 Parity: why 4 bits fail in every row</h2>
+  <p>ADR 0003 has no thresholds for quantized weights. D18 of the plan (ADR 0011 of the Close stage) sets two rules:</p>
+  <ul>
+    <li><b>In the tests: report only, with a fault bound.</b> <code>test_quantized</code> (W2) records the parity against the reference output and against the unquantized output of the same dtype mode. It asserts only the fault bound of Table 21 of the plan: at 8 bits frame ≥ 0.99, patch mean ≥ 0.99 and patch 1st percentile ≥ 0.90; at 4 bits frame ≥ 0.75 and patch mean ≥ 0.75 (<code>FAULT_BOUND</code>, <code>tests/test_mlx_quantized.py</code>, lines 35 to 38).</li>
+    <li><b>In the speedup table: the thresholds of the dtype mode.</b> A quantized row is valid only if image 0 passes <code>THRESHOLDS[mode]</code> (<code>src/dinov3_apple/parity.py</code>).</li>
+  </ul>
+  <div class="table-wrap">
+    <table class="first-nowrap">
+      <thead><tr><th>Model size</th><th>Dtype mode</th><th class="num">Bits</th><th class="num">Pass</th><th class="num">Frame</th><th class="num">Patch mean</th><th class="num">Patch 1st percentile</th><th class="num">Patch 1st percentile against the unquantized output</th></tr></thead>
+      <tbody>
+        <tr class="group"><td colspan="8">Thresholds: fp16-autocast 0.999 / 0.999 / 0.99; bf16-autocast 0.998 / 0.995 / 0.96</td></tr>
+        <tr><td>ViT-S/16</td><td>fp16-autocast</td><td class="num">8</td><td class="num">12 of 12</td><td class="num">0.999392</td><td class="num">0.999818</td><td class="num">0.999441</td><td class="num">0.999440</td></tr>
+        <tr><td>ViT-S/16</td><td>fp16-autocast</td><td class="num">4</td><td class="num">0 of 12</td><td class="num"><b>0.861780</b></td><td class="num"><b>0.940549</b></td><td class="num"><b>0.903443</b></td><td class="num">0.903631</td></tr>
+        <tr><td>ViT-S/16</td><td>bf16-autocast</td><td class="num">8</td><td class="num">12 of 12</td><td class="num">0.998484</td><td class="num">0.999458</td><td class="num">0.998767</td><td class="num">0.998820</td></tr>
+        <tr><td>ViT-S/16</td><td>bf16-autocast</td><td class="num">4</td><td class="num">0 of 12</td><td class="num"><b>0.863331</b></td><td class="num"><b>0.940645</b></td><td class="num"><b>0.903103</b></td><td class="num">0.903360</td></tr>
+        <tr><td>ViT-H+/16</td><td>fp16-autocast</td><td class="num">8</td><td class="num">12 of 12</td><td class="num">0.999954</td><td class="num">0.999790</td><td class="num">0.998918</td><td class="num">0.998775</td></tr>
+        <tr><td>ViT-H+/16</td><td>fp16-autocast</td><td class="num">4</td><td class="num">0 of 12</td><td class="num"><b>0.987205</b></td><td class="num"><b>0.961082</b></td><td class="num"><b>0.757351</b></td><td class="num">0.752912</td></tr>
+        <tr><td>ViT-H+/16</td><td>bf16-autocast</td><td class="num">8</td><td class="num">12 of 12</td><td class="num">0.999877</td><td class="num">0.998980</td><td class="num">0.983976</td><td class="num">0.995660</td></tr>
+        <tr><td>ViT-H+/16</td><td>bf16-autocast</td><td class="num">4</td><td class="num">0 of 12</td><td class="num"><b>0.987078</b></td><td class="num"><b>0.960276</b></td><td class="num"><b>0.749771</b></td><td class="num">0.759336</td></tr>
+        <tr><td>ViT-7B/16</td><td>fp16-autocast</td><td class="num">8</td><td class="num">12 of 12</td><td class="num">0.999967</td><td class="num">0.999931</td><td class="num">0.999337</td><td class="num">0.999678</td></tr>
+        <tr><td>ViT-7B/16</td><td>fp16-autocast</td><td class="num">4</td><td class="num">0 of 12</td><td class="num"><b>0.993235</b></td><td class="num"><b>0.987466</b></td><td class="num"><b>0.933929</b></td><td class="num">0.934982</td></tr>
+        <tr><td>ViT-7B/16</td><td>bf16-autocast</td><td class="num">8</td><td class="num">12 of 12</td><td class="num">0.999893</td><td class="num">0.998698</td><td class="num">0.983754</td><td class="num">0.998212</td></tr>
+        <tr><td>ViT-7B/16</td><td>bf16-autocast</td><td class="num">4</td><td class="num">0 of 12</td><td class="num"><b>0.993112</b></td><td class="num"><b>0.986591</b></td><td class="num"><b>0.910137</b></td><td class="num">0.939965</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 5.</b> Parity of the quantized weights from the tests W2 (<code>results/parity-mlx.md</code>, Table 7; thresholds: Table 3 of the same file). Each row is the minimum over 12 configurations: 3 test images × 4 input resolutions. "Pass" counts the configurations that pass <code>THRESHOLDS[mode]</code>. Bold: below the threshold of the dtype mode. The last column compares with the unquantized <code>mlx</code> output of the same dtype mode, not with the reference output.</p>
+  <p>Every 4-bit row of Table 5 fails all three thresholds. The frame value alone fails every 4-bit row: 0.861780 to 0.993235 in the tests, and 0.992172 to 0.994344 in the 72 quantized 4-bit rows of the speedup table (image 0, <code>results/speedup-table.md</code>, Table 3). The frame thresholds are 0.999 (fp16) and 0.998 (bf16). Three facts explain the result:</p>
+  <ol>
+    <li><b>The thresholds are made for half-precision rounding.</b> The frame may lose 0.001 of cosine in fp16 and 0.002 in bf16 (1 − threshold). The 8-bit rows use at most 60.8 % (fp16) and 75.8 % (bf16) of this budget, both in ViT-S/16 (our computation from Table 5).</li>
+    <li><b>4 bits round 17 times coarser (Section 2).</b> For a small error, 1 − cos grows with the square of the error. So 17 times the error gives about 17² = 289 times the loss. In the fp16-autocast rows of Table 5, the 4-bit frame loss is 205 to 278 times the 8-bit frame loss. In the bf16-autocast rows it is 64 to 105 times, because the bf16 rounding adds a loss that does not depend on the bits (our computation and our estimate).</li>
+    <li><b>So the 4-bit loss is far above the budget.</b> The 4-bit frame loss is 3.4 (ViT-7B/16, bf16-autocast) to 138 (ViT-S/16, fp16-autocast) times the frame budget (our computation). No 4-bit row can pass.</li>
+  </ol>
+  <p>Over the three model sizes of Table 5, the loss at 4 bits falls with the model size. The 4-bit frame value is 0.86 for ViT-S/16, 0.987 for ViT-H+/16 and 0.993 for ViT-7B/16 (Table 5). But even ViT-7B/16 stays far below the frame threshold.</p>
+  <p>No single weak module group causes the failure. Probe Q5 (ViT-H+/16, bf16-autocast) quantized one module group at a time to 4 bits: q, k, v and o; gate and up; down. Each group alone failed. Rows with all blocks at 4 bits and some modules at 8 bits failed too. The patch embedding alone at 4 bits was worse than all blocks at 4 bits (Section 2.6 of <code>explore.html</code>). D16 keeps the patch embedding unquantized, so the 4-bit rows of Step 6 lose parity only in the blocks.</p>
+  <p>At 8 bits, bf16-autocast loses more than fp16-autocast. Against its own unquantized output, the patch 1st percentile of ViT-H+/16 is 0.998775 in fp16-autocast and 0.995660 in bf16-autocast (Table 5). Over the three model sizes, the bf16 loss (1 − value) is 2.1 to 5.6 times the fp16 loss at 8 bits, but 0.92 to 1.00 times at 4 bits (our computation from the last column of Table 5).</p>
+  <p>The rounding of the scale can cause a part of this loss (our reading of the kernel source, Section 2). The kernel computes q with the fp32 scale. Then it stores the scale in the matmul dtype. The rounding error of the stored scale moves ŵ by up to q times that error. bf16 keeps 8 significant bits, fp16 keeps 11. At 8 bits q goes up to 255, so the bf16 rounding of s can move ŵ by up to about one step s. The fp16 rounding moves ŵ by up to about s / 8. At 4 bits q goes up to 15 only, so this error stays small against the 17 times larger step. The quantized matmul also rounds ŵ = s · q + β to the matmul dtype before the multiply-adds. Step 6 did not measure these roundings one by one.</p>
+  <p>The 8-bit margin is small for ViT-S/16. Its bf16-autocast frame value 0.998484 is only 0.000484 above the threshold 0.998. ViT-S/16 has no quantized rows in the benchmark matrix (<code>QUANTIZED_MODEL_SIZES</code>), only in the tests.</p>
+</section>
+
+<section id="time">
+  <h2>10 Memory, not time</h2>
+  <p>Quantized weights take fewer bytes. But in Step 6 they do not make the forward pass faster. Change ratio C5 measures this at P2 (ViT-H+/16, 512 px, batch size 8, patch embeddings). It runs three configurations: unquantized, 8 bits and 4 bits. Each configuration runs in its own subprocess, in alternation, for 5 rounds (Table 23 of the plan).</p>
+  <div class="table-wrap">
+    <table class="first-nowrap">
+      <thead><tr><th>Dtype mode</th><th>Form</th><th class="num">Throughput (img/s)</th><th class="num">Change ratio, median [min–max]</th><th class="num">MLX peak</th><th class="num">Peak memory</th><th class="num">Load peak</th></tr></thead>
+      <tbody>
+        <tr><td>fp16-autocast</td><td>unquantized</td><td class="num">15.98</td><td class="num">–</td><td class="num">2.76 GB</td><td class="num">3.28 GB</td><td class="num">1.70 GB</td></tr>
+        <tr><td>fp16-autocast</td><td>8 bits</td><td class="num">14.03</td><td class="num">0.884 [0.878–0.893]</td><td class="num">1.98 GB</td><td class="num">2.50 GB</td><td class="num">0.94 GB</td></tr>
+        <tr><td>fp16-autocast</td><td>4 bits</td><td class="num">14.85</td><td class="num">0.935 [0.909–0.988]</td><td class="num">1.54 GB</td><td class="num">2.10 GB</td><td class="num">0.52 GB</td></tr>
+        <tr><td>bf16-autocast</td><td>unquantized</td><td class="num">15.51</td><td class="num">–</td><td class="num">2.76 GB</td><td class="num">3.28 GB</td><td class="num">1.70 GB</td></tr>
+        <tr><td>bf16-autocast</td><td>8 bits</td><td class="num">13.73</td><td class="num">0.874 [0.872–0.943]</td><td class="num">1.98 GB</td><td class="num">2.50 GB</td><td class="num">0.94 GB</td></tr>
+        <tr><td>bf16-autocast</td><td>4 bits</td><td class="num">14.20</td><td class="num">0.924 [0.879–0.968]</td><td class="num">1.54 GB</td><td class="num">2.10 GB</td><td class="num">0.52 GB</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 6.</b> Change ratio C5 at P2. Change ratios: <code>results/speedup-table.md</code>, Table 4 (the median of the 5 ratios of the rounds). Throughput (patch embeddings), MLX peak of the timed batches (<code>mlx_timed_peak_bytes</code>), peak memory (<code>peak_bytes</code>) and load peak: the 30 C5 lines of <code>results/speed-changes.jsonl</code>. The throughput is the median of the 5 rounds (our computation). The memory values are the same within 1 MB in all 5 rounds.</p>
+  <p>The MLX peak falls by 0.78 GB at 8 bits and by 1.21 GB at 4 bits. The weight bytes fall by 0.79 GB and 1.21 GB (Table 3). So the saving is the saving of weight bytes (our computation). The throughput falls by 11.6 to 12.6 % at 8 bits and by 6.5 to 7.6 % at 4 bits (our computation: 1 − the change ratio).</p>
+  <p>The benchmark matrix shows the same for ViT-7B/16. Figure 3 shows one configuration. Table 7 shows three.</p>
+  <figure>
+    <div class="fig"><svg viewBox="0 0 960 290" role="img" aria-labelledby="fig3-title" font-family="-apple-system, Helvetica Neue, Arial, sans-serif">
+      <title id="fig3-title">ViT-7B/16 at 224 px, batch size 8, bf16-autocast: the MLX peak falls from 14.16 GB to 8.08 GB and 4.85 GB, the throughput falls from 11.75 to 10.47 and 10.57 images per second</title>
+      <rect width="960" height="290" fill="#ffffff"/>
+      <g font-size="12" fill="#111414">
+        <text x="20" y="24" font-weight="600" font-size="13">ViT-7B/16, 224 px, batch size 8, bf16-autocast: one paired round of the matrix</text>
+        <text x="150" y="54" font-weight="600">MLX peak of the timed batches (GB)</text>
+        <text x="600" y="54" font-weight="600">Throughput, patch embeddings (img/s)</text>
+
+        <!-- grid left: 0..16 GB over 300 px -->
+        <g stroke="#d6dedd" stroke-width="1">
+          <path d="M150,66 V230 M225,66 V230 M300,66 V230 M375,66 V230 M450,66 V230"/>
+          <path d="M600,66 V230 M675,66 V230 M750,66 V230 M825,66 V230 M900,66 V230"/>
+        </g>
+        <g font-size="10.5" fill="#4a5655" text-anchor="middle">
+          <text x="150" y="246">0</text><text x="225" y="246">4</text><text x="300" y="246">8</text><text x="375" y="246">12</text><text x="450" y="246">16</text>
+          <text x="600" y="246">0</text><text x="675" y="246">3</text><text x="750" y="246">6</text><text x="825" y="246">9</text><text x="900" y="246">12</text>
+        </g>
+
+        <!-- row labels -->
+        <g text-anchor="end" font-weight="600">
+          <text x="140" y="96">bf16 weights</text>
+          <text x="140" y="151">8 bits</text>
+          <text x="140" y="206">4 bits</text>
+        </g>
+
+        <!-- memory bars: weight bytes (teal) + rest of the MLX peak (light) -->
+        <rect x="150" y="78" width="251.8" height="28" fill="#057379"/>
+        <rect x="401.8" y="78" width="13.7" height="28" fill="#9fd3d1"/>
+        <text x="421" y="97">14.16</text>
+        <rect x="150" y="133" width="133.9" height="28" fill="#057379"/>
+        <rect x="283.9" y="133" width="17.6" height="28" fill="#9fd3d1"/>
+        <text x="307" y="152">8.08</text>
+        <rect x="150" y="188" width="71.0" height="28" fill="#057379"/>
+        <rect x="221.0" y="188" width="19.9" height="28" fill="#9fd3d1"/>
+        <text x="247" y="207">4.85</text>
+
+        <!-- throughput bars: 0..12 img/s over 300 px -->
+        <rect x="600" y="78" width="293.8" height="28" fill="#4a5655"/>
+        <text x="886" y="97" text-anchor="end" fill="#ffffff" font-weight="600">11.75</text>
+        <rect x="600" y="133" width="261.8" height="28" fill="#4a5655"/>
+        <text x="854" y="152" text-anchor="end" fill="#ffffff" font-weight="600">10.47 (0.891)</text>
+        <rect x="600" y="188" width="264.3" height="28" fill="#4a5655"/>
+        <text x="857" y="207" text-anchor="end" fill="#ffffff" font-weight="600">10.57 (0.900)</text>
+
+        <!-- legend -->
+        <rect x="150" y="262" width="16" height="12" fill="#057379"/>
+        <text x="172" y="272" font-size="11">weight bytes (Table 3)</text>
+        <rect x="330" y="262" width="16" height="12" fill="#9fd3d1"/>
+        <text x="352" y="272" font-size="11">rest of the MLX peak</text>
+        <rect x="600" y="262" width="16" height="12" fill="#4a5655"/>
+        <text x="622" y="272" font-size="11">throughput (ratio to the bf16 weights)</text>
+      </g>
+    </svg></div>
+    <figcaption><b>Figure 3.</b> Memory and throughput of one configuration of ViT-7B/16 (<code>mlx_timed_peak_bytes</code> and the patch throughput of the paired group of <code>results/speed-matrix.jsonl</code>). The ratios are the "Ratio to unquantized" of <code>results/speedup-table.md</code>, Table 3. The MLX peak falls to 57 % and 34 %; the throughput falls to 0.891 and 0.900.</figcaption>
+  </figure>
+  <div class="table-wrap">
+    <table class="first-nowrap">
+      <thead><tr><th>Input resolution, batch size</th><th class="num">MLX peak: bf16 / 8 bits / 4 bits</th><th class="num">Throughput (img/s): bf16 / 8 bits / 4 bits</th><th class="num">Ratio to unquantized: 8 bits / 4 bits</th></tr></thead>
+      <tbody>
+        <tr><td>224 px, batch size 1</td><td class="num">13.61 / 7.55 / 4.39 GB</td><td class="num">8.38 / 7.80 / 8.48</td><td class="num">0.931 / 1.013</td></tr>
+        <tr><td>224 px, batch size 8</td><td class="num">14.16 / 8.08 / 4.85 GB</td><td class="num">11.75 / 10.47 / 10.57</td><td class="num">0.891 / 0.900</td></tr>
+        <tr><td>512 px, batch size 8</td><td class="num">14.85 / 8.49 / 5.20 GB</td><td class="num">1.97 / 1.85 / 1.98</td><td class="num">0.942 / 1.004</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 7.</b> ViT-7B/16 in bf16-autocast, patch embeddings, one paired round of the matrix. MLX peak and throughput: <code>results/speed-matrix.jsonl</code>. Ratio: <code>results/speedup-table.md</code>, Table 3. The 4-bit rows are not valid (Section 9), so the speedup table gives them no verdict.</p>
+  <p>Over all 72 quantized rows of each bit width in Table 3 of the speedup table, the ratio to unquantized is (our computation; for an even count, the median is the lower middle value, as in the speedup table):</p>
+  <ul>
+    <li><b>8 bits:</b> 0.798 to 1.105, median 0.911. 66 of 72 rows are below 1. All 36 rows of ViT-H+/16 are below 1 (0.798 to 0.953).</li>
+    <li><b>4 bits:</b> 0.864 to 1.105, median 0.966. 57 of 72 rows are below 1.</li>
+  </ul>
+  <p>The rows that are not below 1 are single paired rounds of ViT-7B/16, plus two 4-bit rows of ViT-H+/16 at 448 px and batch size 32. The matrix runs one paired round for each configuration (D20, option a), and Step 6 did not repeat these rows. The same configuration can disagree between the two dtype modes: at 224 px and batch size 32, the 8-bit ratio of ViT-7B/16 is 0.888 in fp16-autocast and 1.105 in bf16-autocast. C5, with 5 rounds in alternation, is the stronger measurement.</p>
+  <h3>10.1 Why fewer bytes do not give more speed</h3>
+  <p>A matmul of an (M, K) input with a (K, N) weight does 2 · M · K · N FLOPs and reads K · N weights. Each weight serves M rows. Here M is the number of tokens in the batch. One image has T = 5 + (side / 16)² tokens (Section 2 of the plan). So M = 201 at 224 px and batch size 1, and M = 8 × 1,029 = 8,232 at P2 (our computation). With so many rows for each weight, the GPU spends its time on the multiply-adds, not on the reads of the weights (our reading). Fewer weight bytes then save little time. The quantized matmul also does extra work: it unpacks each integer from its uint32 word and computes s · q + β before the multiply-adds. Section 2 of the plan states the result: on this Mac, the quantized matmul does not win at the token counts of DINOv3.</p>
+  <p>A quantized weight saves time when the matmul waits for the weight bytes, for example in a language model that makes one token at a time (M = 1). The benchmark matrix never runs with so few tokens: one image at 224 px already has 201 tokens. Even there, ViT-7B/16 at 8 bits is slower than with bf16 weights (0.931, Table 7).</p>
+  <p>4 bits are faster than 8 bits in C5 (0.924 to 0.935 against 0.874 to 0.884), but slower than the unquantized weights. Step 6 did not measure the reason.</p>
+  <p>The quantized rows stay inside the mission rule "speedup above 1" (answer 5 in Table 2 of the plan). Of the 72 valid 8-bit rows, 16 have the verdict "above 1" (2 of them inside the noise) and 56 "not above 1" (<code>results/speedup-table.md</code>, Table 3). <code>verify.html</code> gives the reason for each row that is not above 1 or not valid (AC10 of the plan), for example "quantized weights save memory, not time".</p>
+  <p>The gain of quantized weights is memory. At 8 bits the weights take 53 % of the fp16 bytes, and all 72 rows keep the parity of their dtype mode. For ViT-7B/16, the MLX peak falls from 13.61 to 14.85 GB to 7.55 to 8.49 GB in the rows of Table 7.</p>
+</section>
+
+<section id="surprises">
+  <h2>11 Surprises</h2>
+  <ul>
+    <li class="note"><b><code>nn.QuantizedLinear</code> is not an <code>nn.Linear</code>.</b> In MLX 0.32.4 it is a subclass of <code>nn.Module</code> only. So every <code>isinstance(module, nn.Linear)</code> check misses the quantized modules. <code>linear_parameter_names</code> now accepts both types (F1, T43). Without the change, the block weights get the stream dtype (fp32 in the autocast modes), and the scales become fp32.</li>
+    <li class="note"><b><code>biases</code> (the offsets) and <code>bias</code> are two parameters.</b> MLX names the offsets β of the groups <code>biases</code>, shape (N, K / 64). The additive bias of the module stays <code>bias</code>, shape (N). A quantized module with a bias has four parameters: <code>weight</code>, <code>scales</code>, <code>biases</code> and <code>bias</code>. A rule on the parts of a name cannot tell them apart; the code reads the module tree.</li>
+    <li class="note"><b>The strict load checks no dtype.</b> <code>load_weights(strict=True)</code> checks names, the array type and shapes. The placeholder of each scale is fp32, and the loaded scale is fp16 or bf16; the load accepts it. A wrong cast would pass the same way. T47 checks the dtypes (R46).</li>
+    <li class="note"><b>The lazy skeleton holds random fp32 weights of the whole model.</b> For ViT-7B/16 that is 26.9 GB. <code>nn.quantize</code> keeps them referenced, through the lazy <code>mx.quantize</code> of each <code>nn.Linear</code> weight. One <code>mx.eval</code> of the skeleton would compute them. <code>placeholder_skeleton</code> after <code>nn.quantize</code> drops all of them; T45 limits the evaluation of the skeleton to 1 MB (R50).</li>
+    <li class="note"><b>4 bits fail in every row.</b> 0 of 72 test configurations pass <code>THRESHOLDS[mode]</code> (<code>results/parity-mlx.md</code>, Table 7), and 0 of 72 quantized 4-bit rows of the speedup table are valid. The frame value alone fails each row: 4 bits round 17 times coarser than 8 bits, and the loss grows with the square of the error.</li>
+    <li class="note"><b>The patch embedding alone at 4 bits is the worst part.</b> In probe Q5 (ViT-H+/16) it gave a lower patch 1st percentile than all block weights at 4 bits together. But it holds only 0.12 % of the parameters of ViT-H+/16: 1,280 × 768 + 1,280 = 984,320 of 840,592,640 (our computation). D16 keeps it in the matmul dtype. Each module group of the blocks alone at 4 bits fails too.</li>
+    <li class="note"><b>Quantized weights save memory, not time.</b> At P2 the throughput ratio is 0.874 to 0.884 at 8 bits and 0.924 to 0.935 at 4 bits (C5). The MLX peak falls by the saving of weight bytes. In the benchmark matrix each weight serves at least 201 tokens, so the matmul does not wait for the weight bytes (our reading).</li>
+    <li class="note"><b>4 bits are faster than 8 bits.</b> In C5 the 4-bit ratio is 0.05 higher than the 8-bit ratio in both dtype modes (our computation). Both stay below 1. Step 6 did not measure the reason.</li>
+    <li class="note"><b>The quantization in the loader costs little load time.</b> ViT-7B/16 loads in 1.19 to 1.42 s at 4 bits and in 1.38 to 1.82 s with fp16 or bf16 weights. ViT-H+/16 loads in 0.32 to 0.34 s at 8 bits and in 0.30 to 0.32 s with fp16 or bf16 weights (<code>results/speed-matrix.jsonl</code>). Step 6 did not measure where the load time goes.</li>
+    <li class="note"><b>The kernel does not follow the docstring exactly.</b> The docstring of <code>mx.quantize</code> takes the smallest weight as the offset. The Metal kernel of MLX 0.32.4 takes the end of the range with the larger magnitude, can use a negative scale, and moves the levels so that 0 falls on a level. It also stores the scale in the matmul dtype after it computed q with the fp32 scale (our reading of the kernel source, Section 2).</li>
+  </ul>
+</section>
+
+<section id="sources">
+  <h2>12 Sources</h2>
+  <ul>
+    <li>Repo code, commit <code>2567808</code>: <code>src/dinov3_apple/mlx_weights.py</code> (lines 43 to 46, 69 to 86, 181 to 206, 209 to 228, 231 to 241, 244 to 329), <code>src/dinov3_apple/mlx_model.py</code> (lines 525 to 548; the form before Step 6 in commit <code>11a45b1</code>, line 457), <code>src/dinov3_apple/bench.py</code> (<code>QUANTIZED_MODEL_SIZES</code>, <code>QUANTIZED_MODES</code>, lines 57 to 60; <code>quantized_weight_bytes</code>, lines 277 to 297), <code>src/dinov3_apple/memory.py</code> (<code>LOAD_RATIO</code>, <code>LOAD_RESERVE_BYTES</code>, <code>load_bytes</code>), <code>src/dinov3_apple/parity.py</code> (<code>THRESHOLDS</code>), <code>src/dinov3_apple/flops.py</code> (<code>MODEL_SHAPES</code>).</li>
+    <li>Tests: <code>tests/test_mlx_weights.py</code> (T42 to T50), <code>tests/test_mlx_quantized.py</code> (W2, W3, <code>FAULT_BOUND</code>).</li>
+    <li>Spec files: <code>specs/06-speed/plan.html</code> (Sections 2, 3.5 and 3.9; Tables 2, 3, 5, 6, 9, 16, 18, 19, 21, 23 and 27; Figure 2; risks R46 and R50 of Table 15), <code>specs/06-speed/explore.html</code> (Section 2.6 with probe Q5; Sections 3.14 to 3.18, decisions D14 to D18).</li>
+    <li>Results: <code>results/parity-mlx.md</code> (Tables 3 and 7), <code>results/speedup-table.md</code> (Table 3, quantized rows; Table 4, change ratios), <code>results/speed-changes.jsonl</code> (the 30 lines of change C5), <code>results/speed-matrix.jsonl</code> (the 108 <code>mlx</code> lines of ViT-H+/16 and ViT-7B/16 in fp16-autocast and bf16-autocast: 36 unquantized, 72 quantized).</li>
+    <li>MLX 0.32.4 (MIT license): the docstring of <code>mx.quantize</code> (the affine rules, the table of modes, the packing), <code>python/mlx/nn/layers/quantized.py</code> (<code>nn.quantize</code>, <code>QuantizedLinear</code>, <code>QuantizedLinear.from_linear</code>), <code>python/mlx/nn/layers/linear.py</code> (<code>Linear.to_quantized</code>), <code>python/mlx/nn/layers/base.py</code> (<code>Module.load_weights</code>), <code>mlx/backend/metal/kernels/quantized.h</code> (the kernel <code>affine_quantize</code> and the helper <code>dequantize</code>, a header of the installed package). Public: <a href="https://github.com/ml-explore/mlx">github.com/ml-explore/mlx</a>.</li>
+    <li>ADRs: <code>docs/adr/0003-separate-parity-thresholds-for-bf16.md</code>, <code>docs/adr/0008-vit-7b-fp32-weights-of-one-block-at-a-time.md</code>. ADR 0011 comes with the Close stage of Step 6 (Table 16 of the plan).</li>
+    <li>Computation of the agent for this page: the shapes and bytes of Table 2; the fp16 column, the shares and the module counts of Table 3; the last two columns of Table 4 and the share above the quantized bytes; the budget shares and loss ratios of Section 9, also the ratios of the bf16 loss to the fp16 loss; the drop of the throughput in Section 10; the medians of the throughput in Table 6; the summary of the ratios to unquantized in Section 10; the token counts M.</li>
+  </ul>
+</section>
+
+<footer class="steps">Previous: <a href="06-2-attention-and-batch-size.html">06-2 Attention and batch size</a> · Next: <a href="06-4-preprocessing.html">06-4 Preprocessing</a>.</footer>
+</main>
+</body>
+</html>

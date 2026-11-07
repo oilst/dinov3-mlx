@@ -1,0 +1,1686 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Attention Cost and Batch Size</title>
+<style>
+/* Explainer page. White page, black text, no dark mode. */
+:root { --bg: #ffffff; --fg: #111414; --muted: #4a5655; --rule: #d6dedd; --panel: #f5f8f7; --accent: #057379; --cls: #057379; --patch: #9fd3d1; --reg: #e0a336; color-scheme: light; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif; }
+main { max-width: 62rem; margin: 0 auto; padding: 40px 20px 64px; display: grid; gap: 1.75rem; }
+main > *, section > * { min-width: 0; }
+h1 { font-size: 1.9rem; line-height: 1.15; margin: 0; }
+h2 { font-size: 1.3rem; margin: 0; }
+h3 { font-size: 1.05rem; margin: 0; }
+section { display: grid; gap: 0.8rem; }
+p, ul, ol { margin: 0; max-width: 46rem; }
+li + li { margin-top: 0.25rem; }
+code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.86em; }
+p code, li code, td code { overflow-wrap: anywhere; }
+pre { margin: 0; background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 0.8rem 1rem; overflow-x: auto; }
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 0.92rem; }
+th, td { text-align: left; vertical-align: top; padding: 0.45rem 0.7rem 0.45rem 0; border-bottom: 1px solid var(--rule); }
+th { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); border-bottom: 1.5px solid var(--fg); }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+tr.group td { background: var(--panel); font-weight: 600; }
+table.first-nowrap td:first-child { white-space: nowrap; }
+.caption, figcaption { font-size: 0.88rem; color: var(--muted); }
+figure { margin: 0; display: grid; gap: 0.4rem; }
+.fig { border: 1px solid var(--rule); border-radius: 6px; padding: 0.5rem; overflow-x: auto; }
+.fig svg { display: block; width: 100%; height: auto; min-width: 640px; }
+.note { border-left: 3px solid var(--accent); padding: 0.3rem 0 0.3rem 0.9rem; }
+nav ol { columns: 2; }
+.steps { font-size: 0.92rem; color: var(--muted); }
+a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+<header>
+  <h1>Attention Cost and Batch Size</h1>
+  <p>Explainer for roadmap Step 6. Date: 2026-11-07.</p>
+  <p class="steps">Step 6 explainers: <a href="06-1-compiled-forward-pass.html">1 Compiled forward pass</a> · 2 Attention cost, batch size and the measurement (this page) · <a href="06-3-quantized-weights.html">3 Quantized weights</a> · <a href="06-4-preprocessing.html">4 Preprocessing</a>. Step 3: <a href="03-where-the-compute-goes.html">Where the compute goes</a>.</p>
+  <p class="steps">Previous: <a href="06-1-compiled-forward-pass.html">06-1 Compiled forward pass</a> · Next: <a href="06-3-quantized-weights.html">06-3 Quantized weights</a></p>
+</header>
+
+<nav>
+  <h2>Contents</h2>
+  <ol>
+    <li><a href="#why">Why this explainer</a></li>
+    <li><a href="#terms">Two terms of the cost</a></li>
+    <li><a href="#highres">The cost at high input resolution, measured</a></li>
+    <li><a href="#limit">The GPU matmul limit</a></li>
+    <li><a href="#nax">Neural Accelerators on and off</a></li>
+    <li><a href="#batch">The best batch size</a></li>
+    <li><a href="#profile">The P1 profile</a></li>
+    <li><a href="#measure">The measurement code</a></li>
+    <li><a href="#speedup">The speedup table and the pass rule</a></li>
+    <li><a href="#lock">The GPU lock</a></li>
+    <li><a href="#surprises">Surprises</a></li>
+    <li><a href="#sources">Sources</a></li>
+  </ol>
+</nav>
+
+<section id="why">
+  <h2>1 Why this explainer</h2>
+  <p>Step 6 makes the MLX backbone fast. It then measures the speedup of <code>mlx</code> against <code>torch-mps</code> in every configuration of the benchmark matrix. This page explains the DINOv3 part of that work: how the cost of one image grows with the input resolution, and how the batch size changes the throughput. It also explains the measurement: the workers, the result lines, the speedup table with the pass rule of D21, and the GPU lock.</p>
+  <p>This page covers the functions of row <code>06-2-attention-and-batch-size.html</code> in Table 5 of <code>specs/06-speed/plan.html</code>. Table 1 lists them. It also lists some public names of the same files that no row of Table 5 names. The line numbers are those of commit <code>2567808</code>, the last commit of the Build stage. Each quote is an exact copy of the lines that its first line names. A quote marked "shortened" leaves out lines; "..." marks the gap.</p>
+  <p>The agent that wrote this page ran no test, no model and no GPU work. It read the numbers from the committed result files of Section 12 with a small CPU script. It computed the FLOPs of one image with the formula of <code>flops.image_flops</code>. It computed the reached TFLOP/s as throughput × GFLOP per image / 1000 (Section 7 of <a href="03-where-the-compute-goes.html">03</a>). All times are UTC on 2026-11-07.</p>
+  <p>The result in six numbers:</p>
+  <ul>
+    <li><b>The quadratic term.</b> For ViT-S/16 the SDPA share of the FLOPs grows from 7.9 % at 224 px to 63.7 % at 1024 px. But the median batch time grows only 30.91 times while the FLOPs grow 51.78 times (bf16-cast, batch size 8, one session). For ViT-H+/16 the time grows a little faster than the FLOPs from 512 to 1024 px: 5.48 against 5.07.</li>
+    <li><b>The GPU matmul limit.</b> In bf16-cast at batch size 8, ViT-L/16 reaches about 29 TFLOP/s on both backends: <code>mlx</code> 26.7 to 28.0, <code>torch-mps</code> 29.4 to 29.9. Where both backends reach the same limit, the speedup stays near 1.</li>
+    <li><b>The Neural Accelerators.</b> They give 1.87 to 1.88 times the throughput at P1 and 2.79 to 2.82 times at P2.</li>
+    <li><b>The batch size.</b> ViT-S/16 at 224 px gives 22 % of its best throughput at batch size 1 and 82 % at batch size 8. From batch size 32 to 256 it stays within 2.4 % of the best. ViT-H+/16 at 512 px is flat within 8 % from batch size 1 to 16.</li>
+    <li><b>The pass rule D21.</b> At P1, fp32 is above 1 (1.067); fp16 and bf16 are not above 1 (0.867 and 0.878). At P2 all three dtypes are above 1 (1.092, 1.032 and 1.013). In the matrix, 140 of 306 paired cells are above 1, 166 are not above 1, and 18 cells are empty by ADR 0008.</li>
+    <li><b>The GPU lock.</b> All 941 lines of the six <code>results/speed-*.jsonl</code> files have an empty <code>other_heavy_jobs_seen</code> list: no heavy job outside the GPU lock ran before or after a worker.</li>
+  </ul>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Name</th><th>File, lines</th><th>Job</th><th>Tests (numbers of the plan)</th><th>Section</th></tr></thead>
+      <tbody>
+        <tr class="group"><td colspan="5"><code>src/dinov3_apple/bench.py</code></td></tr>
+        <tr><td><code>QUANTIZED_MODEL_SIZES</code>, <code>QUANTIZED_MODES</code> (new)</td><td class="num">59–60</td><td>The model sizes with quantized rows (ViT-H+/16, ViT-7B/16) and the two dtype modes that load quantized weights (fp16-autocast, bf16-autocast).</td><td>T21 <code>test_matrix_plan_pairs_each_configuration</code></td><td>8.1</td></tr>
+        <tr><td><code>BenchConfig.bits</code> (new field), <code>BenchConfig.key</code> (changed)</td><td class="num">121, 124–136</td><td>None, 8 or 4. Part of the key, before <code>repeat</code> (D22).</td><td>T15 <code>test_bench_config_key_has_bits</code></td><td>8.1</td></tr>
+        <tr><td><code>line_key(line)</code> (changed)</td><td class="num">146–157</td><td>Returns the key of one JSON line. A line without <code>bits</code> reads as None.</td><td>T15</td><td>8.1</td></tr>
+        <tr><td><code>_modes(model_size, backend)</code> (changed)</td><td class="num">168–179</td><td>Returns the dtype modes of one model size on one backend. ViT-7B/16: 2 on <code>torch-mps</code>, 4 on <code>mlx</code> (D23).</td><td>T18 <code>test_modes_by_backend</code></td><td>8.1</td></tr>
+        <tr><td><code>bench_configurations(..., compile)</code> (changed)</td><td class="num">182–217</td><td>Gives compile rows without <code>priority</code> too (D9).</td><td>T19 <code>test_bench_configurations_compile_outside_priority</code></td><td>8.1</td></tr>
+        <tr><td><code>quantized_weight_bytes(model_size, bits, parameters)</code> (new)</td><td class="num">277–297</td><td>Returns the weight bytes with quantized block weights (Table 9 of the plan).</td><td>T17 <code>test_quantized_weight_bytes</code></td><td>8.2</td></tr>
+        <tr><td><code>required_bench_bytes(config, activation_factor, backend)</code> (changed)</td><td class="num">300–336</td><td>Returns the memory need of one configuration on one backend. No score term on <code>mlx</code> (D8).</td><td>T16 <code>test_required_bench_bytes_by_backend</code></td><td>3, 8.2</td></tr>
+        <tr><td><code>LINE_FIELDS</code> (changed)</td><td class="num">437–477</td><td>The fields of a result line. Step 6 adds <code>bits</code>, <code>compile_trace_s</code> and <code>load_footprint_peak_bytes</code>.</td><td>T12 <code>test_line_fields_name_the_load_footprint_peak</code></td><td>8.4</td></tr>
+        <tr><td><code>PAIR_FIELDS</code> (new)</td><td class="num">479–487</td><td>The pairing fields of a Step 6 line. No code reads it (Section 8.4).</td><td>–</td><td>8.4</td></tr>
+        <tr><td><code>MLX_FIELDS</code> (new)</td><td class="num">489–504</td><td>The fields of an <code>mlx</code> worker of Step 6, on top of <code>LINE_FIELDS</code>.</td><td>T30 <code>test_mlx_worker_records_versions_and_compile_fields</code></td><td>8.4</td></tr>
+        <tr><td><code>result_line(..., backend)</code> (changed)</td><td class="num">550–580</td><td>Returns one JSON line. The backend is an argument; before Step 6 every line said "torch-mps".</td><td>T20 <code>test_result_line_takes_the_backend</code></td><td>8.4</td></tr>
+        <tr class="group"><td colspan="5"><code>src/dinov3_apple/mlx_bench.py</code> (new module; the functions come from <code>scripts/bench_mlx_port.py</code> and <code>tests/test_mlx_parts.py</code>)</td></tr>
+        <tr><td><code>output_transfer(frame, patches)</code></td><td class="num">49–60</td><td>Returns how an output moved to the host: "native", "view-uint16" or "fp16-patches".</td><td>T56 <code>test_time_batch_mlx_gives_fp16_patches</code></td><td>8.3</td></tr>
+        <tr><td><code>host_to_fp32(host)</code></td><td class="num">63–67</td><td>Returns fp32 values of a host output. It reads the bf16 bits (uint16) of the Step 5 lines.</td><td>T56</td><td>8.3</td></tr>
+        <tr><td><code>time_batch_mlx(forward, batch, dtype_mode, patch_fp32)</code></td><td class="num">70–101</td><td>Runs one batch host to host. Returns the device time, the frame time and the patch time.</td><td>T56</td><td>8.3</td></tr>
+        <tr><td><code>load_report_fields(load_report)</code></td><td class="num">117–122</td><td>Returns the four <code>load_report_*</code> fields of a line.</td><td>T30</td><td>8.3</td></tr>
+        <tr><td><code>run_mlx_worker(config, ...)</code> (changed on the move)</td><td class="num">136–256</td><td>The <code>mlx</code> worker: load, compile, first call, validity, MLX limit, warm-up, timed batches, fields.</td><td>T29 <code>test_mlx_worker_raises_the_limit_to_the_bench_need</code>, T30</td><td>8.3</td></tr>
+        <tr><td><code>mlx_block_parts(block)</code></td><td class="num">259–294</td><td>Returns the 11 parts of one MLX block, for the part tests and the P1 profile.</td><td><code>test_mlx_block_part</code>, <code>test_profile_worker_parts</code></td><td>7, 8.5</td></tr>
+        <tr><td><code>run_profile_worker(config, bench_dir)</code> (not in Table 5)</td><td class="num">500–603</td><td>The P1 profile: host share, part times, kernel counts, throughput at batch sizes 8 and 32.</td><td><code>test_profile_worker_parts</code></td><td>7</td></tr>
+        <tr><td><code>run_token_range_worker(config, pixels)</code> (not in Table 5)</td><td class="num">606–629</td><td>Returns the largest value of the token range above 512 px.</td><td>–</td><td>3</td></tr>
+        <tr><td><code>phase</code>, <code>batch_file_name</code>, <code>change_forms</code>, <code>run_change_worker</code> (not in Table 5)</td><td class="num">104–114, 125–133, 327–360, 363–457</td><td>The loop of one time budget, the name of the per-batch file, and the forms and the worker of the change ratios (<a href="06-1-compiled-forward-pass.html">06-1</a>).</td><td><code>test_change_worker_forms</code></td><td>8.3</td></tr>
+        <tr class="group"><td colspan="5"><code>src/dinov3_apple/speedup.py</code> (new module)</td></tr>
+        <tr><td><code>NOISE</code></td><td class="num">22</td><td>0.03: the spread inside one arm of the probe paired-noise.</td><td>T26 <code>test_pass_rule</code></td><td>9.1</td></tr>
+        <tr><td><code>pass_verdict(run_medians, pooled_median)</code></td><td class="num">37–44</td><td>The verdict of D21 at P1 and P2.</td><td>T26</td><td>9.1</td></tr>
+        <tr><td><code>single_verdict(ratio)</code></td><td class="num">47–51</td><td>The verdict of D21 outside P1 and P2, with the mark "inside the noise".</td><td>T26</td><td>9.1</td></tr>
+        <tr><td><code>spread_between_runs(run_medians)</code></td><td class="num">54–56</td><td>(largest run median − smallest run median) / smallest run median.</td><td>T26 <code>test_pass_rule</code></td><td>9.1</td></tr>
+        <tr><td><code>PairRow</code>, <code>pair_rows(lines)</code> (not in Table 5)</td><td class="num">283–305, 319–372</td><td>The 12 verdict rows of the paired runs at P1 and P2.</td><td><code>test_pair_rows_take_both_runs</code></td><td>9.1</td></tr>
+        <tr><td><code>SpeedupRow</code></td><td class="num">94–128</td><td>One row of the matrix section or of the quantized section of the speedup table.</td><td>T25, T27</td><td>9.2</td></tr>
+        <tr><td><code>speedup_rows(lines)</code></td><td class="num">253–267</td><td>Applies ADR 0004 on both sides in each cell. Adds the quantized rows next to the main row.</td><td>T25 <code>test_speedup_rows_follow_adr_0004_on_both_sides</code></td><td>9.2</td></tr>
+        <tr><td><code>matrix_cells(lines)</code>, <code>autocast_over_cast(lines)</code> (not in Table 5)</td><td class="num">270–280, 375–398</td><td>The 324 cells of the matrix section; autocast / cast on <code>mlx</code> (C3, R30).</td><td>T27 <code>test_speedup_table_covers_every_configuration</code></td><td>9.2</td></tr>
+        <tr><td><code>compile_check(matrix_lines, step3_lines)</code></td><td class="num">401–434</td><td>Lists each group whose compiled <code>torch-mps</code> row is below the Step 3 eager median.</td><td>T28 <code>test_compile_check_lists_slow_compile_rows</code></td><td>9.3</td></tr>
+        <tr class="group"><td colspan="5"><code>src/dinov3_apple/gpu_lock.py</code> (new module)</td></tr>
+        <tr><td><code>HEAVY_JOB_PATTERN</code></td><td class="num">39–42</td><td>The regular expression of the command lines of heavy jobs.</td><td>T1 <code>test_heavy_job_pattern_matches_the_job_names</code></td><td>10</td></tr>
+        <tr><td><code>LOCK_PATH</code>, <code>LOCK_REGISTRY</code>, <code>LOCK_ENV</code> (and <code>LOG_PATH</code>, <code>POLL_S</code>)</td><td class="num">43–47</td><td>The lock file, the registry folder, the environment variable of the holder, the lock log and the poll time.</td><td>T2 to T6</td><td>10</td></tr>
+        <tr><td><code>GpuLockTimeoutError</code></td><td class="num">50–51</td><td>A wait that takes longer than its time limit.</td><td>T7 <code>test_heavy_job_timeout_ends_a_wait</code></td><td>10</td></tr>
+        <tr><td><code>registered_processes</code> (not in Table 5)</td><td class="num">96–114</td><td>Returns the registry entries of processes that still run. Removes the other entries.</td><td>T5 <code>test_two_waiters_enter_one_after_the_other</code></td><td>10</td></tr>
+        <tr><td><code>other_heavy_jobs(pattern, registry)</code></td><td class="num">117–144</td><td>Returns the command lines of the heavy jobs outside the GPU lock.</td><td>T3, T9 <code>test_driver_records_other_heavy_jobs</code></td><td>10</td></tr>
+        <tr><td><code>heavy_job(label, ..., timeout_s, log_path)</code></td><td class="num">171–245</td><td>Holds the GPU lock, then waits until no heavy job outside the lock runs.</td><td>T2 to T7</td><td>10</td></tr>
+        <tr><td><code>main(argv)</code></td><td class="num">248–287</td><td>The command line: runs one command under the GPU lock and returns its exit code.</td><td><code>test_gpu_lock_command_runs_the_command</code>, T7</td><td>10</td></tr>
+        <tr class="group"><td colspan="5">Other files</td></tr>
+        <tr><td><code>machine.VERSIONED_PACKAGES</code> (changed)</td><td class="num">17</td><td>Adds "mlx-metal" to the versions of each line (D19).</td><td>T31 <code>test_versions_include_mlx_metal</code></td><td>5</td></tr>
+        <tr><td>Field <code>load_footprint_peak_bytes</code> of <code>torch_bench.run_worker</code> (renamed)</td><td class="num">133, 180</td><td>The lifetime maximum of the process footprint after the load. It was <code>load_peak_bytes</code> (F17).</td><td>T12, T13, <code>test_worker_writes_all_fields</code></td><td>8.4</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 1.</b> The Step 6 code that this page explains. Rows marked "(not in Table 5)" are public names of the same files that no row of Table 5 of the plan names. "(new)" and "(changed)" compare with commit <code>11a45b1</code>, the last commit before the Step 6 build. <code>torch_bench.py</code> holds the name <code>load_footprint_peak_bytes</code> in line 180; line 133 computes the value. <a href="06-1-compiled-forward-pass.html">06-1</a> explains <code>compile_backbone</code>, which the worker calls. <a href="06-3-quantized-weights.html">06-3</a> explains the quantized loader, which the worker calls with <code>bits</code>.</p>
+</section>
+
+<section id="terms">
+  <h2>2 Two terms of the cost</h2>
+  <p>One square image of side s pixels gives T = 5 + (s / 16)² tokens: 1 CLS token, 4 register tokens and (s / 16)² patch tokens. <code>part_flops</code> of Step 3 counts the FLOPs of one block for B images:</p>
+  <pre><code># src/dinov3_apple/flops.py, lines 73 to 81
+    bt, d, f = batch_size * num_tokens, shape.dim, shape.ff
+    ff_in_matrices = 2 if shape.gated else 1
+    flops = dict.fromkeys(PART_NAMES, 0)
+    flops[&quot;qkv_proj&quot;] = 3 * 2 * bt * d * d
+    flops[&quot;sdpa&quot;] = 4 * batch_size * num_tokens * num_tokens * d
+    flops[&quot;o_proj&quot;] = 2 * bt * d * d
+    flops[&quot;ff_in&quot;] = ff_in_matrices * 2 * bt * d * f
+    flops[&quot;ff_out&quot;] = 2 * bt * f * d
+    return flops</code></pre>
+  <ul>
+    <li><b>The linear term.</b> <code>qkv_proj</code>, <code>o_proj</code>, <code>ff_in</code> and <code>ff_out</code> multiply each of the B · T token rows with a weight matrix. Their FLOPs are 2 · B · T · (4 D² + (k + 1) D F), with k = 2 for SwiGLU and k = 1 for the MLP. They grow as T.</li>
+    <li><b>The quadratic term.</b> <code>sdpa</code> computes the scores Q Kᵀ (2 · T² · D for each image) and the weighted sum of V (again 2 · T² · D). Its FLOPs are 4 · B · T² · D. They grow as T².</li>
+    <li><b>The share.</b> The ratio of the two terms is 2 T / (4 D + (k + 1) F) for each block, so the SDPA share grows with T and falls with D. For ViT-S/16 at 224 px it is 2 × 201 / (12 × 384) = 0.087. <code>image_flops</code> adds the patch embedding to the L blocks and returns the share.</li>
+  </ul>
+  <figure>
+    <div class="fig"><svg viewBox="0 0 960 430" role="img" aria-labelledby="fig1-title" font-family="-apple-system, Helvetica Neue, Arial, sans-serif">
+<title id="fig1-title">SDPA share of the FLOPs of one image against the input resolution, six model sizes</title>
+<rect width="960" height="430" fill="#ffffff"/>
+<rect x="380.7" y="50" width="389.3" height="310" fill="#f5f8f7"/>
+<text x="762" y="68" text-anchor="end" font-size="11.5" fill="#4a5655">Above 512 px: Learn data only (D11), no parity</text>
+<line x1="80" y1="360.0" x2="770" y2="360.0" stroke="#d6dedd" stroke-width="1"/>
+<text x="72" y="364.0" text-anchor="end" font-size="11.5" fill="#111414">0 %</text>
+<line x1="80" y1="315.7" x2="770" y2="315.7" stroke="#d6dedd" stroke-width="1"/>
+<text x="72" y="319.7" text-anchor="end" font-size="11.5" fill="#111414">10 %</text>
+<line x1="80" y1="271.4" x2="770" y2="271.4" stroke="#d6dedd" stroke-width="1"/>
+<text x="72" y="275.4" text-anchor="end" font-size="11.5" fill="#111414">20 %</text>
+<line x1="80" y1="227.1" x2="770" y2="227.1" stroke="#d6dedd" stroke-width="1"/>
+<text x="72" y="231.1" text-anchor="end" font-size="11.5" fill="#111414">30 %</text>
+<line x1="80" y1="182.9" x2="770" y2="182.9" stroke="#d6dedd" stroke-width="1"/>
+<text x="72" y="186.9" text-anchor="end" font-size="11.5" fill="#111414">40 %</text>
+<line x1="80" y1="138.6" x2="770" y2="138.6" stroke="#d6dedd" stroke-width="1"/>
+<text x="72" y="142.6" text-anchor="end" font-size="11.5" fill="#111414">50 %</text>
+<line x1="80" y1="94.3" x2="770" y2="94.3" stroke="#d6dedd" stroke-width="1"/>
+<text x="72" y="98.3" text-anchor="end" font-size="11.5" fill="#111414">60 %</text>
+<line x1="80" y1="50.0" x2="770" y2="50.0" stroke="#d6dedd" stroke-width="1"/>
+<text x="72" y="54.0" text-anchor="end" font-size="11.5" fill="#111414">70 %</text>
+<line x1="114.5" y1="360" x2="114.5" y2="365" stroke="#111414"/>
+<text x="114.5" y="380" text-anchor="middle" font-size="11.5" fill="#111414">224 px</text>
+<text x="114.5" y="395" text-anchor="middle" font-size="10.5" fill="#4a5655">T = 201</text>
+<line x1="290.1" y1="360" x2="290.1" y2="365" stroke="#111414"/>
+<text x="290.1" y="380" text-anchor="middle" font-size="11.5" fill="#111414">448 px</text>
+<text x="290.1" y="395" text-anchor="middle" font-size="10.5" fill="#4a5655">T = 789</text>
+<line x1="340.3" y1="360" x2="340.3" y2="365" stroke="#111414"/>
+<text x="340.3" y="380" text-anchor="middle" font-size="11.5" fill="#111414">512 px</text>
+<text x="340.3" y="395" text-anchor="middle" font-size="10.5" fill="#4a5655">T = 1,029</text>
+<line x1="541.0" y1="360" x2="541.0" y2="365" stroke="#111414"/>
+<text x="541.0" y="380" text-anchor="middle" font-size="11.5" fill="#111414">768 px</text>
+<text x="541.0" y="395" text-anchor="middle" font-size="10.5" fill="#4a5655">T = 2,309</text>
+<line x1="741.8" y1="360" x2="741.8" y2="365" stroke="#111414"/>
+<text x="741.8" y="380" text-anchor="middle" font-size="11.5" fill="#111414">1024 px</text>
+<text x="741.8" y="395" text-anchor="middle" font-size="10.5" fill="#4a5655">T = 4,101</text>
+<line x1="80" y1="360" x2="770" y2="360" stroke="#111414" stroke-width="1.2"/>
+<text x="425.0" y="418" text-anchor="middle" font-size="12" fill="#111414">Input resolution (square image) and token count T = 5 + (side / 16)²</text>
+<text x="22" y="205.0" font-size="12" fill="#111414" transform="rotate(-90 22 205.0)" text-anchor="middle">SDPA share of the FLOPs of one image</text>
+<polyline points="114.5,325.0 290.1,248.4 340.3,224.5 541.0,139.9 741.8,77.9" fill="none" stroke="#0a3f42" stroke-width="2.2"/>
+<circle cx="114.5" cy="325.0" r="3.6" fill="#0a3f42"><title>ViT-S/16, 224 px: 7.9 %</title></circle>
+<circle cx="290.1" cy="248.4" r="3.6" fill="#0a3f42"><title>ViT-S/16, 448 px: 25.2 %</title></circle>
+<circle cx="340.3" cy="224.5" r="3.6" fill="#0a3f42"><title>ViT-S/16, 512 px: 30.6 %</title></circle>
+<circle cx="541.0" cy="139.9" r="3.6" fill="#0a3f42"><title>ViT-S/16, 768 px: 49.7 %</title></circle>
+<circle cx="741.8" cy="77.9" r="3.6" fill="#0a3f42"><title>ViT-S/16, 1024 px: 63.7 %</title></circle>
+<text x="751.8" y="81.9" font-size="12" fill="#111414">ViT-S/16 63.7 %</text>
+<polyline points="114.5,333.0 290.1,270.1 340.3,249.7 541.0,170.9 741.8,108.0" fill="none" stroke="#057379" stroke-width="2.2"/>
+<circle cx="114.5" cy="333.0" r="3.6" fill="#057379"><title>ViT-S+/16, 224 px: 6.1 %</title></circle>
+<circle cx="290.1" cy="270.1" r="3.6" fill="#057379"><title>ViT-S+/16, 448 px: 20.3 %</title></circle>
+<circle cx="340.3" cy="249.7" r="3.6" fill="#057379"><title>ViT-S+/16, 512 px: 24.9 %</title></circle>
+<circle cx="541.0" cy="170.9" r="3.6" fill="#057379"><title>ViT-S+/16, 768 px: 42.7 %</title></circle>
+<circle cx="741.8" cy="108.0" r="3.6" fill="#057379"><title>ViT-S+/16, 1024 px: 56.9 %</title></circle>
+<text x="751.8" y="112.0" font-size="12" fill="#111414">ViT-S+/16 56.9 %</text>
+<polyline points="114.5,341.4 290.1,295.8 340.3,279.4 541.0,213.0 741.8,152.3" fill="none" stroke="#2f8f94" stroke-width="2.2"/>
+<circle cx="114.5" cy="341.4" r="3.6" fill="#2f8f94"><title>ViT-B/16, 224 px: 4.2 %</title></circle>
+<circle cx="290.1" cy="295.8" r="3.6" fill="#2f8f94"><title>ViT-B/16, 448 px: 14.5 %</title></circle>
+<circle cx="340.3" cy="279.4" r="3.6" fill="#2f8f94"><title>ViT-B/16, 512 px: 18.2 %</title></circle>
+<circle cx="541.0" cy="213.0" r="3.6" fill="#2f8f94"><title>ViT-B/16, 768 px: 33.2 %</title></circle>
+<circle cx="741.8" cy="152.3" r="3.6" fill="#2f8f94"><title>ViT-B/16, 1024 px: 46.9 %</title></circle>
+<text x="751.8" y="156.3" font-size="12" fill="#111414">ViT-B/16 46.9 %</text>
+<polyline points="114.5,345.8 290.1,309.5 340.3,296.7 541.0,239.1 741.8,182.9" fill="none" stroke="#5aa9ad" stroke-width="2.2"/>
+<circle cx="114.5" cy="345.8" r="3.6" fill="#5aa9ad"><title>ViT-L/16, 224 px: 3.2 %</title></circle>
+<circle cx="290.1" cy="309.5" r="3.6" fill="#5aa9ad"><title>ViT-L/16, 448 px: 11.4 %</title></circle>
+<circle cx="340.3" cy="296.7" r="3.6" fill="#5aa9ad"><title>ViT-L/16, 512 px: 14.3 %</title></circle>
+<circle cx="541.0" cy="239.1" r="3.6" fill="#5aa9ad"><title>ViT-L/16, 768 px: 27.3 %</title></circle>
+<circle cx="741.8" cy="182.9" r="3.6" fill="#5aa9ad"><title>ViT-L/16, 1024 px: 40.0 %</title></circle>
+<text x="751.8" y="186.9" font-size="12" fill="#111414">ViT-L/16 40.0 %</text>
+<polyline points="114.5,351.6 290.1,328.6 340.3,319.7 541.0,278.5 741.8,233.3" fill="none" stroke="#86c4c6" stroke-width="2.2"/>
+<circle cx="114.5" cy="351.6" r="3.6" fill="#86c4c6"><title>ViT-H+/16, 224 px: 1.9 %</title></circle>
+<circle cx="290.1" cy="328.6" r="3.6" fill="#86c4c6"><title>ViT-H+/16, 448 px: 7.1 %</title></circle>
+<circle cx="340.3" cy="319.7" r="3.6" fill="#86c4c6"><title>ViT-H+/16, 512 px: 9.1 %</title></circle>
+<circle cx="541.0" cy="278.5" r="3.6" fill="#86c4c6"><title>ViT-H+/16, 768 px: 18.4 %</title></circle>
+<circle cx="741.8" cy="233.3" r="3.6" fill="#86c4c6"><title>ViT-H+/16, 1024 px: 28.6 %</title></circle>
+<text x="751.8" y="237.3" font-size="12" fill="#111414">ViT-H+/16 28.6 %</text>
+<polyline points="114.5,355.6 290.1,343.6 340.3,338.7 541.0,315.3 741.8,286.0" fill="none" stroke="#a9d6d7" stroke-width="2.2"/>
+<circle cx="114.5" cy="355.6" r="3.6" fill="#a9d6d7"><title>ViT-7B/16, 224 px: 1.0 %</title></circle>
+<circle cx="290.1" cy="343.6" r="3.6" fill="#a9d6d7"><title>ViT-7B/16, 448 px: 3.7 %</title></circle>
+<circle cx="340.3" cy="338.7" r="3.6" fill="#a9d6d7"><title>ViT-7B/16, 512 px: 4.8 %</title></circle>
+<circle cx="541.0" cy="315.3" r="3.6" fill="#a9d6d7"><title>ViT-7B/16, 768 px: 10.1 %</title></circle>
+<circle cx="741.8" cy="286.0" r="3.6" fill="#a9d6d7"><title>ViT-7B/16, 1024 px: 16.7 %</title></circle>
+<text x="751.8" y="290.0" font-size="12" fill="#111414">ViT-7B/16 16.7 %</text>
+</svg></div>
+    <figcaption><b>Figure 1.</b> The SDPA share of the FLOPs of one square image, from <code>flops.image_flops</code> (Table 4 of <code>specs/06-speed/plan.html</code>; Figure 3 of <code>explore.html</code>). The share grows with the token count, because the SDPA FLOPs grow as T² and the other FLOPs as T. It falls with the embedding dimension D. The benchmark matrix stops at 512 px. There the share is 4.8 % (ViT-7B/16) to 30.6 % (ViT-S/16). The grey band holds the input resolutions of the Learn data only (D11).</figcaption>
+  </figure>
+  <p>The FLOP count is not the time. The SDPA kernel and the matmul kernels reach different rates, and the parts without FLOPs (the layer norms, RoPE, LayerScale, the activation and the casts) also take time. Section 3 gives the measured time.</p>
+  <p>The memory follows a different rule. A plain attention computes the full score matrix: B · heads · T² values for each block. <code>required_bench_bytes</code> of Step 3 counts this term for <code>torch-mps</code>. The MLX SDPA kernel (<code>mx.fast.scaled_dot_product_attention</code>) holds no T² buffer. The probe sdpa measured at most 0.012 MB of extra memory in all 139 cells, also in a cell where an fp32 score matrix would need 54.4 GB (Figure 3 of <code>explore.html</code>). So the <code>mlx</code> need has no score term (D8, Section 8.2).</p>
+</section>
+
+<section id="highres">
+  <h2>3 The cost at high input resolution, measured</h2>
+  <p>The benchmark matrix stops at 512 px. Build step 11 measured 768 and 1024 px for this page only (D11): ViT-S/16 in fp32 and bf16-cast, ViT-H+/16 in bf16-cast, batch sizes 1 and 8, compiled forward pass. The pixels come from <code>preprocess_frames</code> of the three test images. No reference output exists above 512 px, so the check is "finite only". All 12 rows are finite (Table 9 of <code>results/speedup-table.md</code>). Table 2 puts these rows next to the matrix rows of the same configurations.</p>
+  <div class="table-wrap"><table class="first-nowrap">
+<thead><tr><th>Model size, dtype mode</th><th class="num">Input resolution</th><th class="num">Tokens T</th><th class="num">GFLOP per image</th><th class="num">SDPA share</th><th class="num">Batch size 1 (img/s)</th><th class="num">Batch size 8 (img/s)</th><th class="num">Batch size 8, reached TFLOP/s</th><th class="num">Batch size 8, MLX peak (GB)</th><th>File</th></tr></thead><tbody>
+<tr class="group"><td colspan="10">ViT-S/16, fp32</td></tr>
+<tr><td>ViT-S/16, fp32</td><td class="num">224 px</td><td class="num">201</td><td class="num">9.4</td><td class="num">7.9 %</td><td class="num">333.2</td><td class="num">905.6</td><td class="num">8.5</td><td class="num">0.52</td><td><code>speed-matrix.jsonl</code></td></tr>
+<tr><td>ViT-S/16, fp32</td><td class="num">448 px</td><td class="num">789</td><td class="num">45.4</td><td class="num">25.2 %</td><td class="num">130.3</td><td class="num">164.7</td><td class="num">7.5</td><td class="num">1.77</td><td><code>speed-matrix.jsonl</code></td></tr>
+<tr><td>ViT-S/16, fp32</td><td class="num">512 px</td><td class="num">1,029</td><td class="num">63.8</td><td class="num">30.6 %</td><td class="num">99.7</td><td class="num">102.0</td><td class="num">6.5</td><td class="num">2.10</td><td><code>speed-matrix.jsonl</code></td></tr>
+<tr><td>ViT-S/16, fp32</td><td class="num">768 px</td><td class="num">2,309</td><td class="num">197.7</td><td class="num">49.7 %</td><td class="num">36.0</td><td class="num">36.9</td><td class="num">7.3</td><td class="num">2.00</td><td><code>speed-learn.jsonl</code></td></tr>
+<tr><td>ViT-S/16, fp32</td><td class="num">1024 px</td><td class="num">4,101</td><td class="num">486.6</td><td class="num">63.7 %</td><td class="num">16.2</td><td class="num">15.7</td><td class="num">7.6</td><td class="num">1.97</td><td><code>speed-learn.jsonl</code></td></tr>
+<tr class="group"><td colspan="10">ViT-S/16, bf16-cast</td></tr>
+<tr><td>ViT-S/16, bf16-cast</td><td class="num">224 px</td><td class="num">201</td><td class="num">9.4</td><td class="num">7.9 %</td><td class="num">524.5</td><td class="num">1,893.0</td><td class="num">17.8</td><td class="num">0.32</td><td><code>speed-matrix.jsonl</code></td></tr>
+<tr><td>ViT-S/16, bf16-cast</td><td class="num">448 px</td><td class="num">789</td><td class="num">45.4</td><td class="num">25.2 %</td><td class="num">265.6</td><td class="num">413.9</td><td class="num">18.8</td><td class="num">1.14</td><td><code>speed-matrix.jsonl</code></td></tr>
+<tr><td>ViT-S/16, bf16-cast</td><td class="num">512 px</td><td class="num">1,029</td><td class="num">63.8</td><td class="num">30.6 %</td><td class="num">227.9</td><td class="num">249.3</td><td class="num">15.9</td><td class="num">1.19</td><td><code>speed-matrix.jsonl</code></td></tr>
+<tr><td>ViT-S/16, bf16-cast</td><td class="num">768 px</td><td class="num">2,309</td><td class="num">197.7</td><td class="num">49.7 %</td><td class="num">99.0</td><td class="num">107.3</td><td class="num">21.2</td><td class="num">1.11</td><td><code>speed-learn.jsonl</code></td></tr>
+<tr><td>ViT-S/16, bf16-cast</td><td class="num">1024 px</td><td class="num">4,101</td><td class="num">486.6</td><td class="num">63.7 %</td><td class="num">48.0</td><td class="num">49.5</td><td class="num">24.1</td><td class="num">1.20</td><td><code>speed-learn.jsonl</code></td></tr>
+<tr class="group"><td colspan="10">ViT-H+/16, bf16-cast</td></tr>
+<tr><td>ViT-H+/16, bf16-cast</td><td class="num">224 px</td><td class="num">201</td><td class="num">344.2</td><td class="num">1.9 %</td><td class="num">53.6</td><td class="num">81.3</td><td class="num">28.0</td><td class="num">2.49</td><td><code>speed-matrix.jsonl</code></td></tr>
+<tr><td>ViT-H+/16, bf16-cast</td><td class="num">448 px</td><td class="num">789</td><td class="num">1,427.3</td><td class="num">7.1 %</td><td class="num">21.6</td><td class="num">22.6</td><td class="num">32.2</td><td class="num">2.59</td><td><code>speed-matrix.jsonl</code></td></tr>
+<tr><td>ViT-H+/16, bf16-cast</td><td class="num">512 px</td><td class="num">1,029</td><td class="num">1,901.9</td><td class="num">9.1 %</td><td class="num">14.6</td><td class="num">14.3</td><td class="num">27.2</td><td class="num">2.61</td><td><code>speed-matrix.jsonl</code></td></tr>
+<tr><td>ViT-H+/16, bf16-cast</td><td class="num">768 px</td><td class="num">2,309</td><td class="num">4,751.9</td><td class="num">18.4 %</td><td class="num">6.2</td><td class="num">6.0</td><td class="num">28.3</td><td class="num">3.21</td><td><code>speed-learn.jsonl</code></td></tr>
+<tr><td>ViT-H+/16, bf16-cast</td><td class="num">1024 px</td><td class="num">4,101</td><td class="num">9,643.9</td><td class="num">28.6 %</td><td class="num">3.2</td><td class="num">3.0</td><td class="num">28.9</td><td class="num">3.55</td><td><code>speed-learn.jsonl</code></td></tr>
+</tbody></table></div>
+  <p class="caption"><b>Table 2.</b> The compiled forward pass on <code>mlx</code> from 224 to 1024 px, frame output. Rows at 224, 448 and 512 px: the matrix run, 14:09 to 16:43 UTC (<code>results/speed-matrix.jsonl</code>). Rows at 768 and 1024 px: the Learn data, 19:24 to 19:29 UTC (<code>results/speed-learn.jsonl</code>). GFLOP per image and the SDPA share: <code>flops.image_flops</code>. Reached TFLOP/s = throughput × GFLOP per image / 1000. MLX peak: the field <code>mlx_timed_peak_bytes</code>, the largest MLX allocation of the timed batches. It includes the weights. The two runs ran at different times, and the throughput of this Mac changes between sessions (Section 6). So compare a ratio across the two files with care. Table 3 gives ratios inside one session.</p>
+  <figure>
+    <div class="fig"><svg viewBox="0 0 960 500" role="img" aria-labelledby="fig2-title" font-family="-apple-system, Helvetica Neue, Arial, sans-serif">
+<title id="fig2-title">Reached TFLOP/s of the compiled forward pass at batch size 8 against the input resolution</title>
+<rect width="960" height="500" fill="#ffffff"/>
+<line x1="80" y1="370.0" x2="720" y2="370.0" stroke="#d6dedd" stroke-width="1"/>
+<text x="72" y="374.0" text-anchor="end" font-size="11.5" fill="#111414">0</text>
+<line x1="80" y1="324.2" x2="720" y2="324.2" stroke="#d6dedd" stroke-width="1"/>
+<text x="72" y="328.2" text-anchor="end" font-size="11.5" fill="#111414">5</text>
+<line x1="80" y1="278.3" x2="720" y2="278.3" stroke="#d6dedd" stroke-width="1"/>
+<text x="72" y="282.3" text-anchor="end" font-size="11.5" fill="#111414">10</text>
+<line x1="80" y1="232.5" x2="720" y2="232.5" stroke="#d6dedd" stroke-width="1"/>
+<text x="72" y="236.5" text-anchor="end" font-size="11.5" fill="#111414">15</text>
+<line x1="80" y1="186.7" x2="720" y2="186.7" stroke="#d6dedd" stroke-width="1"/>
+<text x="72" y="190.7" text-anchor="end" font-size="11.5" fill="#111414">20</text>
+<line x1="80" y1="140.8" x2="720" y2="140.8" stroke="#d6dedd" stroke-width="1"/>
+<text x="72" y="144.8" text-anchor="end" font-size="11.5" fill="#111414">25</text>
+<line x1="80" y1="95.0" x2="720" y2="95.0" stroke="#d6dedd" stroke-width="1"/>
+<text x="72" y="99.0" text-anchor="end" font-size="11.5" fill="#111414">30</text>
+<line x1="80" y1="49.2" x2="720" y2="49.2" stroke="#d6dedd" stroke-width="1"/>
+<text x="72" y="53.2" text-anchor="end" font-size="11.5" fill="#111414">35</text>
+<line x1="112.0" y1="370" x2="112.0" y2="375" stroke="#111414"/>
+<text x="112.0" y="390" text-anchor="middle" font-size="11.5" fill="#111414">224 px</text>
+<line x1="274.9" y1="370" x2="274.9" y2="375" stroke="#111414"/>
+<text x="274.9" y="390" text-anchor="middle" font-size="11.5" fill="#111414">448 px</text>
+<line x1="321.5" y1="370" x2="321.5" y2="375" stroke="#111414"/>
+<text x="321.5" y="390" text-anchor="middle" font-size="11.5" fill="#111414">512 px</text>
+<line x1="507.6" y1="370" x2="507.6" y2="375" stroke="#111414"/>
+<text x="507.6" y="390" text-anchor="middle" font-size="11.5" fill="#111414">768 px</text>
+<line x1="693.8" y1="370" x2="693.8" y2="375" stroke="#111414"/>
+<text x="693.8" y="390" text-anchor="middle" font-size="11.5" fill="#111414">1024 px</text>
+<line x1="80" y1="370" x2="720" y2="370" stroke="#111414" stroke-width="1.2"/>
+<text x="400.0" y="414" text-anchor="middle" font-size="12" fill="#111414">Input resolution</text>
+<text x="22" y="205.0" font-size="12" fill="#111414" transform="rotate(-90 22 205.0)" text-anchor="middle">Reached TFLOP/s (frame output)</text>
+<line x1="80" y1="104.2" x2="693.8" y2="104.2" stroke="#111414" stroke-width="1.2" stroke-dasharray="6 4"/>
+<polyline points="112.0,292.0 274.9,301.4 321.5,310.3" fill="none" stroke="#4a5655" stroke-width="2"/>
+<circle cx="112.0" cy="292.0" r="4.5" fill="#4a5655"><title>ViT-S/16 fp32, 224 px, matrix run: 8.5 TFLOP/s</title></circle>
+<circle cx="274.9" cy="301.4" r="4.5" fill="#4a5655"><title>ViT-S/16 fp32, 448 px, matrix run: 7.5 TFLOP/s</title></circle>
+<circle cx="321.5" cy="310.3" r="4.5" fill="#4a5655"><title>ViT-S/16 fp32, 512 px, matrix run: 6.5 TFLOP/s</title></circle>
+<polyline points="507.6,303.1 693.8,300.0" fill="none" stroke="#4a5655" stroke-width="1.6" stroke-dasharray="5 4"/>
+<circle cx="507.6" cy="303.1" r="4.5" fill="#ffffff" stroke="#4a5655" stroke-width="2"><title>ViT-S/16 fp32, 768 px, Learn session: 7.3 TFLOP/s</title></circle>
+<circle cx="693.8" cy="300.0" r="4.5" fill="#ffffff" stroke="#4a5655" stroke-width="2"><title>ViT-S/16 fp32, 1024 px, Learn session: 7.6 TFLOP/s</title></circle>
+<text x="705.8" y="304.0" font-size="12" fill="#111414">ViT-S/16 fp32</text>
+<polyline points="112.0,207.0 274.9,197.6 321.5,224.2" fill="none" stroke="#057379" stroke-width="2"/>
+<circle cx="112.0" cy="207.0" r="4.5" fill="#057379"><title>ViT-S/16 bf16-cast, 224 px, matrix run: 17.8 TFLOP/s</title></circle>
+<circle cx="274.9" cy="197.6" r="4.5" fill="#057379"><title>ViT-S/16 bf16-cast, 448 px, matrix run: 18.8 TFLOP/s</title></circle>
+<circle cx="321.5" cy="224.2" r="4.5" fill="#057379"><title>ViT-S/16 bf16-cast, 512 px, matrix run: 15.9 TFLOP/s</title></circle>
+<polyline points="112.0,237.7 507.6,175.6 693.8,149.3" fill="none" stroke="#057379" stroke-width="1.6" stroke-dasharray="5 4"/>
+<circle cx="112.0" cy="237.7" r="4.5" fill="#ffffff" stroke="#057379" stroke-width="2"><title>ViT-S/16 bf16-cast, 224 px, Learn session: 14.4 TFLOP/s</title></circle>
+<circle cx="507.6" cy="175.6" r="4.5" fill="#ffffff" stroke="#057379" stroke-width="2"><title>ViT-S/16 bf16-cast, 768 px, Learn session: 21.2 TFLOP/s</title></circle>
+<circle cx="693.8" cy="149.3" r="4.5" fill="#ffffff" stroke="#057379" stroke-width="2"><title>ViT-S/16 bf16-cast, 1024 px, Learn session: 24.1 TFLOP/s</title></circle>
+<text x="705.8" y="153.3" font-size="12" fill="#111414">ViT-S/16 bf16-cast</text>
+<polyline points="112.0,113.6 274.9,74.5 321.5,120.5" fill="none" stroke="#b26b00" stroke-width="2"/>
+<circle cx="112.0" cy="113.6" r="4.5" fill="#b26b00"><title>ViT-H+/16 bf16-cast, 224 px, matrix run: 28.0 TFLOP/s</title></circle>
+<circle cx="274.9" cy="74.5" r="4.5" fill="#b26b00"><title>ViT-H+/16 bf16-cast, 448 px, matrix run: 32.2 TFLOP/s</title></circle>
+<circle cx="321.5" cy="120.5" r="4.5" fill="#b26b00"><title>ViT-H+/16 bf16-cast, 512 px, matrix run: 27.2 TFLOP/s</title></circle>
+<polyline points="321.5,84.1 507.6,110.5 693.8,104.9" fill="none" stroke="#b26b00" stroke-width="1.6" stroke-dasharray="5 4"/>
+<circle cx="321.5" cy="84.1" r="4.5" fill="#ffffff" stroke="#b26b00" stroke-width="2"><title>ViT-H+/16 bf16-cast, 512 px, Learn session: 31.2 TFLOP/s</title></circle>
+<circle cx="507.6" cy="110.5" r="4.5" fill="#ffffff" stroke="#b26b00" stroke-width="2"><title>ViT-H+/16 bf16-cast, 768 px, Learn session: 28.3 TFLOP/s</title></circle>
+<circle cx="693.8" cy="104.9" r="4.5" fill="#ffffff" stroke="#b26b00" stroke-width="2"><title>ViT-H+/16 bf16-cast, 1024 px, Learn session: 28.9 TFLOP/s</title></circle>
+<text x="705.8" y="108.9" font-size="12" fill="#111414">ViT-H+/16 bf16-cast</text>
+<g font-size="11.5" fill="#111414">
+<circle cx="86" cy="440" r="4.5" fill="#111414"/><text x="98" y="444">filled: matrix run, 14:09 to 16:43 UTC (results/speed-matrix.jsonl)</text>
+<circle cx="86" cy="462" r="4.5" fill="#ffffff" stroke="#111414" stroke-width="2"/><text x="98" y="466">open: Learn session, 19:24 to 19:32 UTC (results/speed-learn.jsonl; at 224 and 512 px the rows with the Neural Accelerators on)</text>
+<line x1="80" y1="484" x2="94" y2="484" stroke="#111414" stroke-width="1.2" stroke-dasharray="6 4"/><text x="98" y="488">about 29 TFLOP/s: ViT-L/16, bf16-cast, batch size 8, on both backends (Section 4)</text>
+</g>
+</svg></div>
+    <figcaption><b>Figure 2.</b> Reached TFLOP/s of the compiled forward pass at batch size 8. Filled points and solid lines: the matrix run. Open points and dashed lines: the Learn session. The Learn session has rows at 224 px (ViT-S/16) and at 512 px (ViT-H+/16) from the pairs with the Neural Accelerators on (Section 5); they ran at 19:29 to 19:31 UTC, a few minutes after the 768 and 1024 px rows. The dashed black line marks the level that ViT-L/16 reaches on both backends (Section 4). ViT-S/16 in bf16-cast reaches a higher rate at high input resolution. ViT-H+/16 stays near the limit. fp32 stays at 6.5 to 8.5 TFLOP/s.</figcaption>
+  </figure>
+  <div class="table-wrap"><table class="first-nowrap">
+<thead><tr><th>Model size</th><th class="num">Base row</th><th class="num">Row</th><th class="num">Time ratio</th><th class="num">FLOP ratio</th><th class="num">Probe highres, eager</th></tr></thead><tbody>
+<tr><td>ViT-S/16</td><td class="num">224 px, 5.2 ms</td><td class="num">768 px, 74.5 ms</td><td class="num">14.24</td><td class="num">21.04</td><td class="num">–</td></tr>
+<tr><td>ViT-S/16</td><td class="num">224 px, 5.2 ms</td><td class="num">1024 px, 161.6 ms</td><td class="num">30.91</td><td class="num">51.78</td><td class="num">–</td></tr>
+<tr><td>ViT-H+/16</td><td class="num">512 px, 485.6 ms</td><td class="num">768 px, 1,338.5 ms</td><td class="num">2.76</td><td class="num">2.50</td><td class="num">–</td></tr>
+<tr><td>ViT-H+/16</td><td class="num">512 px, 485.6 ms</td><td class="num">1024 px, 2,659.2 ms</td><td class="num">5.48</td><td class="num">5.07</td><td class="num">5.55</td></tr>
+</tbody></table></div>
+  <p class="caption"><b>Table 3.</b> Time ratios inside the Learn session, bf16-cast, batch size 8 (<code>results/speed-learn.jsonl</code>). Each cell gives the input resolution and the median batch time. Base rows: the round-1 rows with the Neural Accelerators on, at 224 px for ViT-S/16 and at 512 px for ViT-H+/16. Median batch time: the field <code>frame.median_s</code>, host to host. FLOP ratio: <code>flops.image_flops</code>. The probe highres of <code>explore.html</code> (eager, Table 9) gave 5.55 for ViT-H+/16 at batch size 8 from 512 to 1024 px, and 6.18 for ViT-S/16 in bf16-cast at batch size 8 against a FLOP ratio of 7.62.</p>
+  <p>Five facts follow from Tables 2 and 3:</p>
+  <ol>
+    <li><b>For ViT-S/16 the time grows less than the FLOPs.</b> From 224 to 1024 px the FLOPs grow 51.78 times, but the median batch time grows only 30.91 times. The reached TFLOP/s rises from 14.4 to 24.1 in the Learn session. At 224 px the matmuls of ViT-S/16 are small (D = 384), and they reach a low rate. At 1024 px, 63.7 % of the FLOPs are in SDPA. The probe sdpa measured the fp16 SDPA kernel at the head shape of ViT-H+/16 (head dimension 64, the same as ViT-S/16; batch size 8) at 41.9 TFLOP/s for T = 1,029 and at about 57 TFLOP/s for T = 4,101 and more (Figure 3 of <code>explore.html</code>). These rows run in bf16-cast, and the bf16 kernel is slower at large T (R45, next item). So the fp16 rates are an upper limit here. But the measured rate of the whole forward pass still rises with T. So the quadratic term costs ViT-S/16 less time than its FLOPs predict.</li>
+    <li><b>For ViT-H+/16 in bf16 the time grows a little more than the FLOPs.</b> From 512 to 1024 px the FLOPs grow 5.07 times and the time 5.48 times. The reached TFLOP/s falls from 31.2 to 28.9. This agrees with R45: in bf16 the SDPA kernel is slower at large T, 35 TFLOP/s against 57 TFLOP/s in fp16 at T = 9,221 (probe sdpa). The Learn data has no fp16 row above 512 px, so it cannot compare fp16 and bf16 directly. In the matrix at T = 1,029, fp16-cast and bf16-cast of ViT-S/16 give about the same throughput (263.2 and 249.3 img/s at batch size 8, 265.3 and 266.2 img/s at batch size 32; Table 5 of <code>results/speedup-table.md</code>).</li>
+    <li><b>At high input resolution, batch size 1 fills the GPU.</b> ViT-S/16 in bf16-cast at 1024 px gives 48.0 img/s at batch size 1 and 49.5 img/s at batch size 8. ViT-H+/16 at 768 px gives 6.2 img/s at batch size 1 and 6.0 img/s at batch size 8. At 224 px the same ViT-S/16 row gives 524.5 img/s at batch size 1 and 1,893.0 img/s at batch size 8.</li>
+    <li><b>No T² buffer.</b> ViT-S/16 in fp32 at 1024 px and batch size 8 has an MLX peak of 1.97 GB. One fp32 score matrix of one block would hold 8 × 6 × 4,101² × 4 B = 3.23 GB. ViT-H+/16 in bf16-cast at 1024 px and batch size 8 has an MLX peak of 3.55 GB, with the weights. One bf16 score matrix of one block would hold 8 × 20 × 4,101² × 2 B = 5.38 GB. Each MLX peak is below one score matrix.</li>
+    <li><b>The token range stays below the fp16 maximum.</b> <code>run_token_range_worker</code> ran the eager token range of ViT-H+/16 in bf16-autocast on image 0. The largest value is 52,389.4 at 768 px and 52,784.1 at 1024 px (<code>results/speed-learn.jsonl</code>), below 65,504. At 512 px it was 52,312 (Table 9 of <code>explore.html</code>). So fp16-autocast is predicted to stay valid at high input resolution. Only a reference output above 512 px can confirm it.</li>
+  </ol>
+</section>
+
+<section id="limit">
+  <h2>4 The GPU matmul limit</h2>
+  <p>The reached TFLOP/s shows how close a configuration comes to the limit of the GPU. Table 4 gives the highest reached TFLOP/s of each model size on each backend, over the valid compiled rows of the matrix.</p>
+  <div class="table-wrap"><table class="first-nowrap">
+<thead><tr><th>Model size</th><th class="num">D</th><th class="num">mlx, fp16 or bf16</th><th class="num">torch-mps, fp16 or bf16</th><th class="num">mlx, fp32</th><th class="num">torch-mps, fp32</th></tr></thead><tbody>
+<tr><td>ViT-S/16</td><td class="num">384</td><td class="num"><b>18.8</b><br><span class="caption">bf16-cast, 448 px, b8</span></td><td class="num"><b>22.3</b><br><span class="caption">bf16-cast, 448 px, b8</span></td><td class="num"><b>10.4</b><br><span class="caption">fp32, 224 px, b32</span></td><td class="num"><b>9.5</b><br><span class="caption">fp32, 448 px, b32</span></td></tr>
+<tr><td>ViT-S+/16</td><td class="num">384</td><td class="num"><b>21.1</b><br><span class="caption">bf16-cast, 512 px, b8</span></td><td class="num"><b>23.0</b><br><span class="caption">bf16-cast, 512 px, b8</span></td><td class="num"><b>7.8</b><br><span class="caption">fp32, 512 px, b8</span></td><td class="num"><b>7.6</b><br><span class="caption">fp32, 448 px, b8</span></td></tr>
+<tr><td>ViT-B/16</td><td class="num">768</td><td class="num"><b>25.9</b><br><span class="caption">fp16-cast, 512 px, b8</span></td><td class="num"><b>25.8</b><br><span class="caption">bf16-cast, 512 px, b8</span></td><td class="num"><b>8.5</b><br><span class="caption">fp32, 224 px, b32</span></td><td class="num"><b>8.5</b><br><span class="caption">fp32, 224 px, b8</span></td></tr>
+<tr><td>ViT-L/16</td><td class="num">1,024</td><td class="num"><b>28.0</b><br><span class="caption">bf16-cast, 512 px, b8</span></td><td class="num"><b>29.9</b><br><span class="caption">bf16-cast, 224 px, b8</span></td><td class="num"><b>9.0</b><br><span class="caption">fp32, 224 px, b32</span></td><td class="num"><b>9.5</b><br><span class="caption">fp32, 224 px, b8</span></td></tr>
+<tr><td>ViT-H+/16</td><td class="num">1,280</td><td class="num"><b>32.3</b><br><span class="caption">fp16-cast, 448 px, b8</span></td><td class="num"><b>33.0</b><br><span class="caption">bf16-cast, 224 px, b8</span></td><td class="num"><b>10.1</b><br><span class="caption">fp32, 448 px, b8</span></td><td class="num"><b>9.7</b><br><span class="caption">fp32, 512 px, b1</span></td></tr>
+<tr><td>ViT-7B/16</td><td class="num">4,096</td><td class="num"><b>32.9</b><br><span class="caption">bf16-cast, 224 px, b8</span></td><td class="num"><b>35.0</b><br><span class="caption">bf16-cast, 224 px, b8</span></td><td class="num">– (ADR 0008)</td><td class="num">– (ADR 0008)</td></tr>
+</tbody></table></div>
+  <p class="caption"><b>Table 4.</b> The highest reached TFLOP/s (frame output) over the valid, unquantized, compiled rows of <code>results/speed-matrix.jsonl</code> (phases "matrix" and "compile-check"). Under each value: the dtype mode, the input resolution and the batch size of that row. GFLOP per image: <code>flops.image_flops</code>. ViT-7B/16 has no fp32 row on either backend (ADR 0008). The fp16-cast rows of ViT-L/16 are not valid (fp16 overflow, <a href="05-3-numeric-range.html">05-3</a>), so its fp16 and bf16 column is bf16-cast.</p>
+  <p>At ViT-L/16 and batch size 8, the fastest valid fp16 or bf16 row is bf16-cast on both backends. <code>mlx</code> reaches 26.7, 28.0 and 28.0 TFLOP/s at 224, 448 and 512 px. <code>torch-mps</code> reaches 29.9, 29.7 and 29.4 TFLOP/s. So both backends end near about 29 TFLOP/s. In fp32 the highest values of the model sizes lie between 7.6 and 10.4 TFLOP/s on both backends. The larger model sizes reach a little more in fp16 and bf16: 32.3 to 35.0 TFLOP/s for ViT-H+/16 and ViT-7B/16.</p>
+  <p>The probe sdpa measured about 57 TFLOP/s for the fp16 SDPA kernel at large T, "which is the matmul rate" (Figure 3 of <code>explore.html</code>). The whole forward pass reaches about half of that. The parts without FLOPs (the layer norms, RoPE, LayerScale, the activation, the casts) and the copy of the output to the host take time but add no FLOPs.</p>
+  <p class="note">The consequence for the speedup: when both backends reach the same rate, the paired ratio stays near 1. Over the matrix, the paired ratios of ViT-L/16 lie between 0.844 and 1.205, and those of ViT-H+/16 between 0.796 and 1.402 (Table 11). The large gains of <code>mlx</code> are at batch size 1 of the small model sizes, where <code>torch-mps</code> has a larger fixed cost for each forward pass (<a href="04-5-mlp.html">04-5</a>): ViT-S/16 at 224 px and batch size 1 gives 1.355 to 1.465 in fp16 and bf16.</p>
+</section>
+
+<section id="nax">
+  <h2>5 Neural Accelerators on and off</h2>
+  <p>The GPU of this Mac (Apple M5 Max, architecture <code>applegpu_g17s</code>) has Neural Accelerators: matrix-multiply units in each GPU core. MLX 0.32.4 uses them through the NAX kernels. The environment variable <code>MLX_METAL_GPU_ARCH=applegpu_g16s</code> turns the NAX kernels off. Build step 11 ran workers with the Neural Accelerators on and off at P1 and at P2, in bf16-cast, in alternation: two pairs (two rounds of one "on" worker and one "off" worker) at each priority configuration (<code>results/speed-learn.jsonl</code>, phase "nax").</p>
+  <div class="table-wrap"><table>
+<thead><tr><th>Priority configuration, bf16-cast</th><th class="num">Round</th><th class="num">On (img/s)</th><th class="num">Off (img/s)</th><th class="num">On / off</th><th><code>mlx_architecture</code> on / off</th><th class="num">MLX peak on and off (B)</th></tr></thead><tbody>
+<tr><td>P1: ViT-S/16, 224 px, batch size 8, frame output</td><td class="num">1</td><td class="num">1,536.19</td><td class="num">817.35</td><td class="num">1.88</td><td><code>applegpu_g17s</code> / <code>applegpu_g16s</code></td><td class="num">323,591,956</td></tr>
+<tr><td>P1: ViT-S/16, 224 px, batch size 8, frame output</td><td class="num">2</td><td class="num">1,538.02</td><td class="num">824.44</td><td class="num">1.87</td><td><code>applegpu_g17s</code> / <code>applegpu_g16s</code></td><td class="num">323,591,956</td></tr>
+<tr><td>P2: ViT-H+/16, 512 px, batch size 8, patch output</td><td class="num">1</td><td class="num">16.40</td><td class="num">5.81</td><td class="num">2.82</td><td><code>applegpu_g17s</code> / <code>applegpu_g16s</code></td><td class="num">2,609,270,792</td></tr>
+<tr><td>P2: ViT-H+/16, 512 px, batch size 8, patch output</td><td class="num">2</td><td class="num">16.39</td><td class="num">5.88</td><td class="num">2.79</td><td><code>applegpu_g17s</code> / <code>applegpu_g16s</code></td><td class="num">2,609,270,792</td></tr>
+</tbody></table></div>
+  <p class="caption"><b>Table 5.</b> Throughput with the Neural Accelerators on and off, compiled forward pass, bf16-cast, 19:29 to 19:32 UTC (<code>results/speed-learn.jsonl</code>). P1 uses the frame output, P2 the patch output. The off rows record the architecture <code>applegpu_g16s</code>, the value that the switch sets. The MLX peak is the same with and without the NAX kernels. The probes nax-ab of <code>explore.html</code> (Table 8) gave 1.81 at P1 and 2.69 at P2.</p>
+  <ul>
+    <li><b>The Neural Accelerators give most of the throughput at P2.</b> With them off, ViT-H+/16 at P2 reaches 5.81 img/s, that is 11.1 TFLOP/s (frame output). With them on it reaches 16.41 img/s, 31.2 TFLOP/s.</li>
+    <li><b>The rates show that <code>torch-mps</code> also uses the matrix units.</b> <code>torch-mps</code> reaches 27.8 TFLOP/s at P2 in bf16-cast in the matrix, and up to 35.0 TFLOP/s in other configurations (Table 4). <code>mlx</code> without the NAX kernels reaches 11.1. This is a conclusion from the rates only: the result files do not record which kernels <code>torch-mps</code> runs.</li>
+    <li><b>The record.</b> Each line records the versions of <code>VERSIONED_PACKAGES</code> and the field <code>mlx_architecture</code> (D19). Step 6 adds "mlx-metal", an indirect dependency of mlx (0.32.4 in <code>uv.lock</code>). All Step 6 lines record mlx 0.32.4, mlx-metal 0.32.4 and macOS 26.5.2.</li>
+    <li><b>The fingerprint test.</b> The report-only test T57 (<code>test_mlx_sdpa_nax_fingerprint</code>) measures the share of fp16 and bf16 SDPA outputs that differ from the float64 result rounded once. The probe nax-record gave 54.5 % (fp16) and 12.6 % (bf16) with the Neural Accelerators on, and 0.21 % and 0.023 % with them off (Section 3.7 of the plan). The NAX kernels use relaxed precision. A new MLX version that changes this shows in the next default session.</li>
+  </ul>
+  <pre><code># src/dinov3_apple/machine.py, line 17
+VERSIONED_PACKAGES = [&quot;torch&quot;, &quot;transformers&quot;, &quot;mlx&quot;, &quot;mlx-metal&quot;, &quot;numpy&quot;, &quot;safetensors&quot;]</code></pre>
+</section>
+
+<section id="batch">
+  <h2>6 The best batch size</h2>
+  <p>The best batch size is the batch size with the highest throughput for one model size, input resolution and dtype mode. A small batch does not fill the GPU at a small input resolution: each kernel has too little work, and the fixed cost of each forward pass (the start of each kernel, the copy to the host, the synchronization of <code>mx.eval</code>) counts more. The sweep of build step 10 (D10 option c) measures the throughput of the compiled forward pass in bf16-cast at more batch sizes than the matrix: ViT-S/16 at 224 px (batch sizes 1 to 256) and ViT-H+/16 at 512 px (batch sizes 1 to 16). Each point is one worker. The driver ran 2 rounds and rotated the order of the workers in round 2.</p>
+  <figure>
+    <div class="fig"><svg viewBox="0 0 960 470" role="img" aria-labelledby="fig3-title" font-family="-apple-system, Helvetica Neue, Arial, sans-serif">
+<title id="fig3-title">Batch-size sweep, compiled mlx in bf16-cast, two rounds</title>
+<rect width="960" height="470" fill="#ffffff"/>
+<text x="60" y="34" font-size="13" font-weight="600" fill="#111414">ViT-S/16, 224 px, frame output</text>
+<line x1="60" y1="340.0" x2="440" y2="340.0" stroke="#d6dedd"/>
+<text x="54" y="344.0" text-anchor="end" font-size="11" fill="#111414">0</text>
+<line x1="60" y1="286.2" x2="440" y2="286.2" stroke="#d6dedd"/>
+<text x="54" y="290.2" text-anchor="end" font-size="11" fill="#111414">500</text>
+<line x1="60" y1="232.3" x2="440" y2="232.3" stroke="#d6dedd"/>
+<text x="54" y="236.3" text-anchor="end" font-size="11" fill="#111414">1,000</text>
+<line x1="60" y1="178.5" x2="440" y2="178.5" stroke="#d6dedd"/>
+<text x="54" y="182.5" text-anchor="end" font-size="11" fill="#111414">1,500</text>
+<line x1="60" y1="124.6" x2="440" y2="124.6" stroke="#d6dedd"/>
+<text x="54" y="128.6" text-anchor="end" font-size="11" fill="#111414">2,000</text>
+<line x1="60" y1="70.8" x2="440" y2="70.8" stroke="#d6dedd"/>
+<text x="54" y="74.8" text-anchor="end" font-size="11" fill="#111414">2,500</text>
+<line x1="60" y1="340" x2="440" y2="340" stroke="#111414" stroke-width="1.2"/>
+<text x="80.0" y="358" text-anchor="middle" font-size="11" fill="#111414">1</text>
+<text x="207.5" y="358" text-anchor="middle" font-size="11" fill="#111414">8</text>
+<text x="292.5" y="358" text-anchor="middle" font-size="11" fill="#111414">32</text>
+<text x="335.0" y="358" text-anchor="middle" font-size="11" fill="#111414">64</text>
+<text x="377.5" y="358" text-anchor="middle" font-size="11" fill="#111414">128</text>
+<text x="420.0" y="358" text-anchor="middle" font-size="11" fill="#111414">256</text>
+<text x="250.0" y="378" text-anchor="middle" font-size="12" fill="#111414">Batch size (log scale)</text>
+<polyline points="80.0,281.3 207.5,121.9 292.5,81.9 335.0,75.5 377.5,77.2 420.0,80.1" fill="none" stroke="#057379" stroke-width="2"/>
+<circle cx="80.0" cy="281.3" r="4.5" fill="#057379" stroke="#057379" stroke-width="2"><title>round 1, batch size 1: 545.5 img/s, start 19:19:17 UTC</title></circle>
+<circle cx="207.5" cy="121.9" r="4.5" fill="#057379" stroke="#057379" stroke-width="2"><title>round 1, batch size 8: 2025.0 img/s, start 19:19:30 UTC</title></circle>
+<circle cx="292.5" cy="81.9" r="4.5" fill="#057379" stroke="#057379" stroke-width="2"><title>round 1, batch size 32: 2397.0 img/s, start 19:19:43 UTC</title></circle>
+<circle cx="335.0" cy="75.5" r="4.5" fill="#057379" stroke="#057379" stroke-width="2"><title>round 1, batch size 64: 2455.8 img/s, start 19:19:56 UTC</title></circle>
+<circle cx="377.5" cy="77.2" r="4.5" fill="#057379" stroke="#057379" stroke-width="2"><title>round 1, batch size 128: 2440.5 img/s, start 19:20:09 UTC</title></circle>
+<circle cx="420.0" cy="80.1" r="4.5" fill="#057379" stroke="#057379" stroke-width="2"><title>round 1, batch size 256: 2413.4 img/s, start 19:20:21 UTC</title></circle>
+<polyline points="80.0,283.9 207.5,181.4 292.5,155.6 335.0,153.9 377.5,156.2 420.0,110.8" fill="none" stroke="#b26b00" stroke-width="2" stroke-dasharray="5 4"/>
+<circle cx="80.0" cy="283.9" r="4.5" fill="#ffffff" stroke="#b26b00" stroke-width="2"><title>round 2, batch size 1: 520.5 img/s, start 19:23:44 UTC</title></circle>
+<circle cx="207.5" cy="181.4" r="4.5" fill="#ffffff" stroke="#b26b00" stroke-width="2"><title>round 2, batch size 8: 1473.1 img/s, start 19:23:58 UTC</title></circle>
+<circle cx="292.5" cy="155.6" r="4.5" fill="#ffffff" stroke="#b26b00" stroke-width="2"><title>round 2, batch size 32: 1712.6 img/s, start 19:24:11 UTC</title></circle>
+<circle cx="335.0" cy="153.9" r="4.5" fill="#ffffff" stroke="#b26b00" stroke-width="2"><title>round 2, batch size 64: 1727.7 img/s, start 19:24:23 UTC</title></circle>
+<circle cx="377.5" cy="156.2" r="4.5" fill="#ffffff" stroke="#b26b00" stroke-width="2"><title>round 2, batch size 128: 1706.5 img/s, start 19:24:36 UTC</title></circle>
+<circle cx="420.0" cy="110.8" r="4.5" fill="#ffffff" stroke="#b26b00" stroke-width="2"><title>round 2, batch size 256: 2128.6 img/s, start 19:21:56 UTC</title></circle>
+<text x="540" y="34" font-size="13" font-weight="600" fill="#111414">ViT-H+/16, 512 px, patch output</text>
+<line x1="540" y1="340.0" x2="920" y2="340.0" stroke="#d6dedd"/>
+<text x="534" y="344.0" text-anchor="end" font-size="11" fill="#111414">0</text>
+<line x1="540" y1="293.3" x2="920" y2="293.3" stroke="#d6dedd"/>
+<text x="534" y="297.3" text-anchor="end" font-size="11" fill="#111414">4</text>
+<line x1="540" y1="246.7" x2="920" y2="246.7" stroke="#d6dedd"/>
+<text x="534" y="250.7" text-anchor="end" font-size="11" fill="#111414">8</text>
+<line x1="540" y1="200.0" x2="920" y2="200.0" stroke="#d6dedd"/>
+<text x="534" y="204.0" text-anchor="end" font-size="11" fill="#111414">12</text>
+<line x1="540" y1="153.3" x2="920" y2="153.3" stroke="#d6dedd"/>
+<text x="534" y="157.3" text-anchor="end" font-size="11" fill="#111414">16</text>
+<line x1="540" y1="106.7" x2="920" y2="106.7" stroke="#d6dedd"/>
+<text x="534" y="110.7" text-anchor="end" font-size="11" fill="#111414">20</text>
+<line x1="540" y1="60.0" x2="920" y2="60.0" stroke="#d6dedd"/>
+<text x="534" y="64.0" text-anchor="end" font-size="11" fill="#111414">24</text>
+<line x1="540" y1="340" x2="920" y2="340" stroke="#111414" stroke-width="1.2"/>
+<text x="560.0" y="358" text-anchor="middle" font-size="11" fill="#111414">1</text>
+<text x="645.0" y="358" text-anchor="middle" font-size="11" fill="#111414">2</text>
+<text x="730.0" y="358" text-anchor="middle" font-size="11" fill="#111414">4</text>
+<text x="815.0" y="358" text-anchor="middle" font-size="11" fill="#111414">8</text>
+<text x="900.0" y="358" text-anchor="middle" font-size="11" fill="#111414">16</text>
+<text x="730.0" y="378" text-anchor="middle" font-size="12" fill="#111414">Batch size (log scale)</text>
+<polyline points="560.0,117.6 645.0,98.6 730.0,98.6 815.0,101.8 900.0,110.1" fill="none" stroke="#057379" stroke-width="2"/>
+<circle cx="560.0" cy="117.6" r="4.5" fill="#057379" stroke="#057379" stroke-width="2"><title>round 1, batch size 1: 19.1 img/s, start 19:20:34 UTC</title></circle>
+<circle cx="645.0" cy="98.6" r="4.5" fill="#057379" stroke="#057379" stroke-width="2"><title>round 1, batch size 2: 20.7 img/s, start 19:20:47 UTC</title></circle>
+<circle cx="730.0" cy="98.6" r="4.5" fill="#057379" stroke="#057379" stroke-width="2"><title>round 1, batch size 4: 20.7 img/s, start 19:21:00 UTC</title></circle>
+<circle cx="815.0" cy="101.8" r="4.5" fill="#057379" stroke="#057379" stroke-width="2"><title>round 1, batch size 8: 20.4 img/s, start 19:21:13 UTC</title></circle>
+<circle cx="900.0" cy="110.1" r="4.5" fill="#057379" stroke="#057379" stroke-width="2"><title>round 1, batch size 16: 19.7 img/s, start 19:21:28 UTC</title></circle>
+<polyline points="560.0,142.3 645.0,131.1 730.0,137.0 815.0,153.5 900.0,171.4" fill="none" stroke="#b26b00" stroke-width="2" stroke-dasharray="5 4"/>
+<circle cx="560.0" cy="142.3" r="4.5" fill="#ffffff" stroke="#b26b00" stroke-width="2"><title>round 2, batch size 1: 16.9 img/s, start 19:22:09 UTC</title></circle>
+<circle cx="645.0" cy="131.1" r="4.5" fill="#ffffff" stroke="#b26b00" stroke-width="2"><title>round 2, batch size 2: 17.9 img/s, start 19:22:22 UTC</title></circle>
+<circle cx="730.0" cy="137.0" r="4.5" fill="#ffffff" stroke="#b26b00" stroke-width="2"><title>round 2, batch size 4: 17.4 img/s, start 19:22:34 UTC</title></circle>
+<circle cx="815.0" cy="153.5" r="4.5" fill="#ffffff" stroke="#b26b00" stroke-width="2"><title>round 2, batch size 8: 16.0 img/s, start 19:22:48 UTC</title></circle>
+<circle cx="900.0" cy="171.4" r="4.5" fill="#ffffff" stroke="#b26b00" stroke-width="2"><title>round 2, batch size 16: 14.5 img/s, start 19:23:06 UTC</title></circle>
+<text x="60" y="448" font-size="12" fill="#111414">Y axis: throughput (img/s). Each point is one worker: a warm-up of at least 3 batches and 2 s, then at least 30 timed batches and 10 s.</text>
+<g font-size="12" fill="#111414"><circle cx="66" cy="422" r="4.5" fill="#057379" stroke="#057379" stroke-width="2"/><text x="78" y="426">round 1, 19:19 to 19:21 UTC</text>
+<circle cx="330" cy="422" r="4.5" fill="#ffffff" stroke="#b26b00" stroke-width="2"/><text x="342" y="426">round 2, 19:21 to 19:24 UTC (the Mac was slower; Section 6)</text></g>
+</svg></div>
+    <figcaption><b>Figure 3.</b> The batch-size sweep (<code>results/speed-sweep.jsonl</code>). Filled teal: round 1. Open amber: round 2. Inside round 1, ViT-S/16 rises from 545.5 img/s at batch size 1 to 2,455.8 img/s at batch size 64 and stays within 2.4 % of that up to batch size 256. ViT-H+/16 stays between 19.1 and 20.7 img/s. Round 2 ran 4.6 to 30.1 % slower than round 1 for the same configurations, with the same machine state (Table 6).</figcaption>
+  </figure>
+  <div class="table-wrap"><table>
+<thead><tr><th class="num">Batch size</th><th class="num">Round 1: img/s (start, UTC)</th><th class="num">Round 2: img/s (start, UTC)</th><th class="num">Round 2 / round 1</th><th class="num">Round 1: share of the best</th><th class="num">Round 1: median batch time</th></tr></thead><tbody>
+<tr class="group"><td colspan="6">ViT-S/16, 224 px, frame output</td></tr>
+<tr><td class="num">1</td><td class="num">545.5 (19:19:17)</td><td class="num">520.5 (19:23:44)</td><td class="num">0.954</td><td class="num">22.2 %</td><td class="num">1.82 ms</td></tr>
+<tr><td class="num">8</td><td class="num">2,025.0 (19:19:30)</td><td class="num">1,473.1 (19:23:58)</td><td class="num">0.727</td><td class="num">82.5 %</td><td class="num">3.95 ms</td></tr>
+<tr><td class="num">32</td><td class="num">2,397.0 (19:19:43)</td><td class="num">1,712.6 (19:24:11)</td><td class="num">0.714</td><td class="num">97.6 %</td><td class="num">13.41 ms</td></tr>
+<tr><td class="num">64</td><td class="num">2,455.8 (19:19:56)</td><td class="num">1,727.7 (19:24:23)</td><td class="num">0.704</td><td class="num">100.0 %</td><td class="num">26.05 ms</td></tr>
+<tr><td class="num">128</td><td class="num">2,440.5 (19:20:09)</td><td class="num">1,706.5 (19:24:36)</td><td class="num">0.699</td><td class="num">99.4 %</td><td class="num">52.23 ms</td></tr>
+<tr><td class="num">256</td><td class="num">2,413.4 (19:20:21)</td><td class="num">2,128.6 (19:21:56)</td><td class="num">0.882</td><td class="num">98.3 %</td><td class="num">105.80 ms</td></tr>
+<tr class="group"><td colspan="6">ViT-H+/16, 512 px, patch output</td></tr>
+<tr><td class="num">1</td><td class="num">19.1 (19:20:34)</td><td class="num">16.9 (19:22:09)</td><td class="num">0.889</td><td class="num">92.2 %</td><td class="num">52.27 ms</td></tr>
+<tr><td class="num">2</td><td class="num">20.7 (19:20:47)</td><td class="num">17.9 (19:22:22)</td><td class="num">0.866</td><td class="num">100.0 %</td><td class="num">96.41 ms</td></tr>
+<tr><td class="num">4</td><td class="num">20.7 (19:21:00)</td><td class="num">17.4 (19:22:34)</td><td class="num">0.841</td><td class="num">100.0 %</td><td class="num">193.42 ms</td></tr>
+<tr><td class="num">8</td><td class="num">20.4 (19:21:13)</td><td class="num">16.0 (19:22:48)</td><td class="num">0.783</td><td class="num">98.7 %</td><td class="num">391.48 ms</td></tr>
+<tr><td class="num">16</td><td class="num">19.7 (19:21:28)</td><td class="num">14.5 (19:23:06)</td><td class="num">0.733</td><td class="num">95.2 %</td><td class="num">809.98 ms</td></tr>
+</tbody></table></div>
+  <p class="caption"><b>Table 6.</b> The batch-size sweep, compiled <code>mlx</code>, bf16-cast (<code>results/speed-sweep.jsonl</code>). Round 2 started with ViT-S/16 at batch size 256 (19:21:56 UTC), then ran ViT-H+/16, then ViT-S/16 from batch size 1 to 128. All 22 lines record AC power, a 94 W adapter, Low Power Mode off, no thermal warning and an empty <code>other_heavy_jobs_seen</code>. "Share of the best": the throughput / the highest throughput of the same model size in round 1. The median batch time is the latency of one batch.</p>
+  <p>Five facts follow:</p>
+  <ol>
+    <li><b>ViT-S/16 at 224 px needs a batch of 32 or more.</b> Batch size 1 gives 22 % of the round-1 best, batch size 8 gives 82 %. From batch size 32 to 256 the throughput stays within 2.4 %. Round 2 gives the same picture after its first worker: batch size 64 is again the best of the later workers (1,727.7 img/s), and 32 to 128 stay within 1.3 %.</li>
+    <li><b>ViT-H+/16 at 512 px is flat.</b> One image already has 1,029 tokens and 1,901.9 GFLOP. In round 1 the throughput stays within 8 % from batch size 1 to 16.</li>
+    <li><b>The batch size trades latency for throughput.</b> ViT-S/16 at batch size 8 needs 3.95 ms for one batch. At batch size 64 one batch needs 26.05 ms for 21 % more throughput (round 1).</li>
+    <li><b>The P1 profile agrees.</b> In one process, without the copy to the host, the compiled forward pass of ViT-S/16 at 224 px gives 2,089.1 img/s at batch size 8 and 2,768.6 img/s at batch size 32 in fp16-cast (2,126.2 and 2,779.4 in bf16-cast; <code>results/speed-profile-p1.jsonl</code>). Batch size 32 gives 1.31 to 1.33 times the throughput of batch size 8.</li>
+    <li><b>The speed of the Mac changed between the rounds.</b> Round 2 ran slower than round 1 for each configuration. The loss grew during round 2, except at batch size 1: −11.8 % for its first worker (ViT-S/16, batch size 256) and −30.1 % for its last worker (ViT-S/16, batch size 128), but only −4.6 % for ViT-S/16 at batch size 1. The machine-state fields show no change. Table 6 of <code>results/speedup-table.md</code> gives <code>np.median</code> of the two rounds, that is the mean of two values. So its highest median is at batch size 256 (ViT-S/16) and at batch size 2 (ViT-H+/16): batch size 256 ran first in round 2, before most of the loss. In round 1, and among the later workers of round 2, batch size 64 is the best for ViT-S/16.</li>
+  </ol>
+  <p>The matrix gives a best batch size for each model size, input resolution and dtype mode from batch sizes 1, 8 and 32 (Table 5 of <code>results/speedup-table.md</code>). The three batch sizes of one cell ran in three different paired groups, at different times. So the drift of the speed of the Mac also enters the best batch size of the matrix. For example, ViT-S/16 at 224 px is best at batch size 32 in fp16-cast (1,899.8 img/s) but at batch size 8 in bf16-cast (1,893.0 img/s against 1,794.4 img/s at batch size 32).</p>
+</section>
+
+<section id="profile">
+  <h2>7 The P1 profile</h2>
+  <p>At P1 (ViT-S/16, 224 px, batch size 8, frame embedding) <code>mlx</code> is slower than <code>torch.compile</code> in fp16 and bf16: the speedup is 0.867 and 0.878 (Section 9). The plan asked for one profile of the compiled forward pass at P1 (Table 12 of the plan, R49). <code>run_profile_worker</code> measures four things in one process for each dtype mode:</p>
+  <pre><code># src/dinov3_apple/mlx_bench.py, lines 519 to 538
+    for _ in range(5):
+        mx.eval(forward(batch))
+    call_s, eval_s, gap_s = [], [], []
+    last_end = None
+    for _ in range(50):
+        start = time.perf_counter()
+        if last_end is not None:
+            gap_s.append(start - last_end)
+        tokens = forward(batch)
+        called = time.perf_counter()
+        mx.eval(tokens)
+        last_end = time.perf_counter()
+        call_s.append(called - start)
+        eval_s.append(last_end - start)
+    host = {
+        &quot;call_median_s&quot;: float(np.median(call_s)),
+        &quot;eval_median_s&quot;: float(np.median(eval_s)),
+        &quot;gap_median_s&quot;: float(np.median(gap_s)),
+        &quot;host_share&quot;: float(np.median(call_s) / np.median(eval_s)),
+    }</code></pre>
+  <ul>
+    <li><b>Host share.</b> For 50 calls: the time of the compiled call before <code>mx.eval</code> (Python replays the trace and gets lazy outputs; MLX encodes and runs the kernels only inside <code>mx.eval</code>), the time to the end of <code>mx.eval</code>, and the gap between two calls. host share = median call time / median time to the end of <code>mx.eval</code>.</li>
+    <li><b>Parts of block 1.</b> The 11 parts of <code>mlx_block_parts</code>, each alone and compiled: 3 warm-up and 20 calls with <code>mx.eval</code> after each (<code>_median_time</code>), and, report only, 20 calls with one <code>mx.eval</code> at the end (<code>_queued_time</code>). The queued time leaves out the wait of each <code>mx.eval</code>.</li>
+    <li><b>Kernels.</b> <code>_count_kernels</code> exports the graph of one forward pass with <code>mx.export_to_dot</code>, without an evaluation, and counts its operation nodes. One node is about one kernel.</li>
+    <li><b>Batch size.</b> The compiled throughput at batch sizes 8 and 32 (Section 6).</li>
+  </ul>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Measure</th><th class="num">fp16-cast</th><th class="num">bf16-cast</th></tr></thead>
+      <tbody>
+        <tr><td>Compiled call before <code>mx.eval</code>, median of 50</td><td class="num">0.135 ms</td><td class="num">0.124 ms</td></tr>
+        <tr><td>Call to the end of <code>mx.eval</code>, median of 50</td><td class="num">3.828 ms</td><td class="num">3.752 ms</td></tr>
+        <tr><td>Gap between two calls, median</td><td class="num">0.002 ms</td><td class="num">0.001 ms</td></tr>
+        <tr><td>Host share</td><td class="num">0.035</td><td class="num">0.033</td></tr>
+        <tr><td>Kernels of one forward pass: compiled / eager</td><td class="num">637 / 841</td><td class="num">637 / 841</td></tr>
+        <tr><td>Block 1 compiled, <code>mx.eval</code> after each call</td><td class="num">0.493 ms</td><td class="num">0.491 ms</td></tr>
+        <tr><td>Block 1 compiled, queued</td><td class="num">0.276 ms</td><td class="num">0.259 ms</td></tr>
+        <tr><td>Throughput at batch size 8 / 32</td><td class="num">2,089.1 / 2,768.6 img/s</td><td class="num">2,126.2 / 2,779.4 img/s</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 7.</b> The P1 profile, ViT-S/16, 224 px, compiled forward pass with the concat-free RoPE (<code>results/speed-profile-p1.jsonl</code>, the two lines with queued part times, 13:28 UTC; section 7 of <code>results/speedup-table.md</code>). The file also holds two earlier lines without queued part times. Their host times differ by 0.051 ms or less from the values here.</p>
+  <div class="table-wrap"><table>
+<thead><tr><th>Part</th><th class="num">mlx fp16-cast (ms)</th><th class="num">queued (ms)</th><th class="num">mlx bf16-cast (ms)</th><th class="num">queued (ms)</th><th class="num">torch-mps fp16-cast, eager, Step 3 (ms)</th></tr></thead><tbody>
+<tr><td><code>norm1</code></td><td class="num">0.1833</td><td class="num">0.0210</td><td class="num">0.1744</td><td class="num">0.0209</td><td class="num">0.0104</td></tr>
+<tr><td><code>qkv_proj</code></td><td class="num">0.2285</td><td class="num">0.0620</td><td class="num">0.2249</td><td class="num">0.0470</td><td class="num">0.0837</td></tr>
+<tr><td><code>rope</code></td><td class="num">0.2026</td><td class="num">0.0599</td><td class="num">0.2062</td><td class="num">0.0668</td><td class="num">0.1757</td></tr>
+<tr><td><code>sdpa</code></td><td class="num">0.1768</td><td class="num">0.0227</td><td class="num">0.1797</td><td class="num">0.0227</td><td class="num">0.0294</td></tr>
+<tr><td><code>o_proj</code></td><td class="num">0.1804</td><td class="num">0.0328</td><td class="num">0.1725</td><td class="num">0.0216</td><td class="num">0.0402</td></tr>
+<tr><td><code>layer_scale1</code></td><td class="num">0.1740</td><td class="num">0.0122</td><td class="num">0.1753</td><td class="num">0.0139</td><td class="num">0.0336</td></tr>
+<tr><td><code>norm2</code></td><td class="num">0.1776</td><td class="num">0.0212</td><td class="num">0.1784</td><td class="num">0.0221</td><td class="num">0.0103</td></tr>
+<tr><td><code>ff_in</code></td><td class="num">0.2229</td><td class="num">0.0865</td><td class="num">0.2155</td><td class="num">0.0884</td><td class="num">0.0734</td></tr>
+<tr><td><code>activation</code></td><td class="num">0.1948</td><td class="num">0.0558</td><td class="num">0.1828</td><td class="num">0.0324</td><td class="num">0.0150</td></tr>
+<tr><td><code>ff_out</code></td><td class="num">0.2090</td><td class="num">0.0433</td><td class="num">0.2284</td><td class="num">0.0463</td><td class="num">0.0703</td></tr>
+<tr><td><code>layer_scale2</code></td><td class="num">0.1625</td><td class="num">0.0115</td><td class="num">0.1940</td><td class="num">0.0143</td><td class="num">0.0335</td></tr>
+<tr class="group"><td>Sum of the 11 parts</td><td class="num">2.1124</td><td class="num">0.4289</td><td class="num">2.1321</td><td class="num">0.3964</td><td class="num">0.5755</td></tr>
+</tbody></table></div>
+  <p class="caption"><b>Table 8.</b> The parts of block 1 at P1, each alone (Table 8 of <code>results/speedup-table.md</code>). <code>mlx</code>: compiled. The <code>torch-mps</code> column is the eager Step 3 line of <code>results/block-profile-torch-mps.jsonl</code>, not <code>torch.compile</code>, and that file has no bf16-cast line (Table 12 of the plan states this limit). The last row is our sum.</p>
+  <p>What the profile shows:</p>
+  <ul>
+    <li><b>Python does not make P1 slow.</b> The host share is 3.3 to 3.5 %. The gap between two calls is 1 to 2 µs. So the GPU does not wait for the Python call. The CPU time that encodes the kernels inside <code>mx.eval</code> is part of the time to the end of <code>mx.eval</code>; the profile does not measure it alone.</li>
+    <li><b>The GPU time is in the blocks.</b> Block 1, compiled and queued, takes 0.276 ms (fp16-cast) and 0.259 ms (bf16-cast). 12 blocks then take about 3.1 to 3.3 ms of the 3.75 to 3.83 ms of one forward pass.</li>
+    <li><b>Many small kernels.</b> One compiled forward pass has 637 operation nodes. That is on average 6.0 µs of GPU time for each node (3.828 ms / 637). At P1 each matmul has only 8 × 201 = 1,608 token rows and D = 384.</li>
+    <li><b>Each part alone mostly measures the wait.</b> With <code>mx.eval</code> after each call, each part takes 0.16 to 0.23 ms. Table 7 of <code>explore.html</code> measured 0.16 to 0.17 ms of evaluation overhead in each such value. The queued times are 0.0115 to 0.0884 ms.</li>
+    <li><b>The limit of the profile.</b> The profile has no part times of <code>torch.compile</code>. So it cannot name the part where <code>torch.compile</code> is faster. No fix entered: the speedup table has no change ratio C7 (Table 4 of <code>results/speedup-table.md</code>). Without a fix, Table 12 of the plan asks <code>verify.html</code> to give the profile as the reason of each P1 row that is not above 1.</li>
+  </ul>
+  <p>The profile uses <code>mlx_block_parts</code>, which Section 8.5 explains.</p>
+</section>
+
+<section id="measure">
+  <h2>8 The measurement code</h2>
+  <p>Figure 4 shows the path of one measurement. The driver <code>scripts/bench_speed.py</code> takes the GPU lock, plans the workers, and runs each worker in its own subprocess. Each worker loads one configuration, times it and prints one JSON line. The driver adds the pairing fields and appends the line to a result file. <code>speedup.py</code> reads the result files, and <code>scripts/speedup_table.py</code> writes <code>results/speedup-table.md</code>.</p>
+  <figure>
+    <div class="fig"><svg viewBox="0 0 960 510" role="img" aria-labelledby="fig4-title" font-family="-apple-system, Helvetica Neue, Arial, sans-serif">
+      <title id="fig4-title">The path of one measurement: driver, worker subprocess, result line, speedup table</title>
+      <defs><marker id="arrow4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#4a5655"/></marker></defs>
+      <rect width="960" height="510" fill="#ffffff"/>
+      <g font-size="12" fill="#111414">
+        <text x="20" y="22" font-weight="600" font-size="13">Driver process: scripts/bench_speed.py, one heavy job</text>
+        <rect x="20" y="40" width="140" height="80" rx="5" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="90" y="60" text-anchor="middle" font-weight="600">main(argv)</text>
+        <text x="90" y="77" text-anchor="middle" font-size="10.5">dry run: no lock</text>
+        <text x="90" y="93" text-anchor="middle" font-size="10.5">MLX_DISABLE_COMPILE</text>
+        <text x="90" y="107" text-anchor="middle" font-size="10.5">is set: stop (R42)</text>
+        <rect x="176" y="40" width="124" height="80" rx="5" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="238" y="64" text-anchor="middle" font-weight="600">heavy_job</text>
+        <text x="238" y="82" text-anchor="middle" font-size="10.5">the GPU lock</text>
+        <text x="238" y="97" text-anchor="middle" font-size="10.5">(Section 10)</text>
+        <rect x="316" y="40" width="150" height="80" rx="5" fill="#f5f8f7" stroke="#4a5655" stroke-width="1.5"/>
+        <text x="391" y="64" text-anchor="middle" font-weight="600">Plan the workers</text>
+        <text x="391" y="82" text-anchor="middle" font-size="10.5">paired groups or rounds,</text>
+        <text x="391" y="97" text-anchor="middle" font-size="10.5">_modes, rotated order</text>
+        <rect x="482" y="30" width="458" height="152" rx="5" fill="#f5f8f7" stroke="#057379" stroke-width="1.5"/>
+        <text x="496" y="50" font-weight="600">For each worker, one after the other (run_specs):</text>
+        <text x="496" y="70" font-size="11.5">1  machine-state check: AC power, no Low Power Mode</text>
+        <text x="496" y="88" font-size="11.5">2  memory check: required_bench_bytes(config, backend=...)</text>
+        <text x="496" y="106" font-size="11.5">3  other_heavy_jobs() before the worker</text>
+        <text x="496" y="124" font-size="11.5">4  run_worker_subprocess: the worker in a new process</text>
+        <text x="496" y="142" font-size="11.5">5  other_heavy_jobs() after the worker</text>
+        <text x="496" y="160" font-size="11.5">6  spec_line: result_line(..., backend) + the pairing fields</text>
+        <text x="496" y="176" font-size="10.5" fill="#4a5655">A worker that does not fit gives a "skipped" line; the run goes on.</text>
+        <text x="150" y="196" font-size="10.5" fill="#4a5655">one JSON line for each worker, appended</text>
+        <text x="604" y="214" font-size="10.5" fill="#4a5655">new process</text>
+        <text x="772" y="214" font-size="10.5" fill="#4a5655">JSON line on stdout</text>
+
+        <rect x="120" y="236" width="820" height="96" rx="6" fill="#f5f8f7" stroke="#d6dedd"/>
+        <g font-size="10.5" text-anchor="middle">
+          <rect x="130" y="248" width="125" height="74" rx="5" fill="#ffffff" stroke="#4a5655" stroke-width="1.3"/>
+          <text x="192" y="268" font-weight="600" font-size="11.5">load_mlx_backbone</text>
+          <text x="192" y="286">MLX limit =</text>
+          <text x="192" y="301">the load need</text>
+          <rect x="265" y="248" width="125" height="74" rx="5" fill="#ffffff" stroke="#4a5655" stroke-width="1.3"/>
+          <text x="327" y="268" font-weight="600" font-size="11.5">compile_backbone</text>
+          <text x="327" y="286">the compiled</text>
+          <text x="327" y="301">forward pass (06-1)</text>
+          <rect x="400" y="248" width="125" height="74" rx="5" fill="#ffffff" stroke="#057379" stroke-width="1.5"/>
+          <text x="462" y="268" font-weight="600" font-size="11.5">first call</text>
+          <text x="462" y="286">compile_trace_s,</text>
+          <text x="462" y="301">first_call_s</text>
+          <rect x="535" y="248" width="125" height="74" rx="5" fill="#ffffff" stroke="#4a5655" stroke-width="1.3"/>
+          <text x="597" y="268" font-weight="600" font-size="11.5">check_validity</text>
+          <text x="597" y="286">image 0 against</text>
+          <text x="597" y="301">the reference file</text>
+          <rect x="670" y="248" width="125" height="74" rx="5" fill="#ffffff" stroke="#057379" stroke-width="1.5"/>
+          <text x="732" y="268" font-weight="600" font-size="11.5">mx.set_memory_limit</text>
+          <text x="732" y="286">the benchmark</text>
+          <text x="732" y="301">need (D8)</text>
+          <rect x="805" y="248" width="125" height="74" rx="5" fill="#ffffff" stroke="#057379" stroke-width="1.5"/>
+          <text x="867" y="268" font-weight="600" font-size="11.5">warm-up, timed</text>
+          <text x="867" y="286">time_batch_mlx;</text>
+          <text x="867" y="301">MLX peak reset</text>
+        </g>
+        <text x="130" y="352" font-weight="600" font-size="13">Worker subprocess, one configuration. mlx: run_mlx_worker. torch-mps: torch_bench.run_worker (Step 3)</text>
+
+        <text x="250" y="386" font-weight="600" font-size="13">Tables: no GPU, no model</text>
+        <rect x="20" y="396" width="200" height="70" rx="5" fill="#f5f8f7" stroke="#4a5655" stroke-width="1.5"/>
+        <text x="120" y="418" text-anchor="middle" font-weight="600">results/speed-*.jsonl</text>
+        <text x="120" y="436" text-anchor="middle" font-size="10.5">matrix, pairs, sweep,</text>
+        <text x="120" y="451" text-anchor="middle" font-size="10.5">learn, profile-p1, changes</text>
+        <rect x="250" y="396" width="400" height="70" rx="5" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="450" y="418" text-anchor="middle" font-weight="600">speedup.py</text>
+        <text x="450" y="436" text-anchor="middle" font-size="10.5">speedup_rows, pair_rows, compile_check (ADR 0004 on both sides)</text>
+        <text x="450" y="451" text-anchor="middle" font-size="10.5">pass_verdict, single_verdict, spread_between_runs (D21)</text>
+        <rect x="680" y="396" width="260" height="70" rx="5" fill="#f5f8f7" stroke="#4a5655" stroke-width="1.5"/>
+        <text x="810" y="418" text-anchor="middle" font-weight="600">scripts/speedup_table.py</text>
+        <text x="810" y="436" text-anchor="middle" font-size="10.5">writes results/speedup-table.md</text>
+        <text x="810" y="451" text-anchor="middle" font-size="10.5">(sections 1 to 8)</text>
+        <text x="20" y="496" font-size="11.5" fill="#4a5655">Teal outline: code that this page explains. Grey outline: code of other explainers, of earlier steps or of the scripts, and data files.</text>
+      </g>
+      <g stroke="#4a5655" stroke-width="1.5" fill="none">
+        <path d="M160,80 H172" marker-end="url(#arrow4)"/>
+        <path d="M300,80 H312" marker-end="url(#arrow4)"/>
+        <path d="M466,80 H478" marker-end="url(#arrow4)"/>
+        <path d="M680,182 V232" marker-end="url(#arrow4)"/>
+        <path d="M760,236 V186" marker-end="url(#arrow4)"/>
+        <path d="M500,182 V200 H60 V392" marker-end="url(#arrow4)"/>
+        <path d="M255,285 H261" marker-end="url(#arrow4)"/>
+        <path d="M390,285 H396" marker-end="url(#arrow4)"/>
+        <path d="M525,285 H531" marker-end="url(#arrow4)"/>
+        <path d="M660,285 H666" marker-end="url(#arrow4)"/>
+        <path d="M795,285 H801" marker-end="url(#arrow4)"/>
+        <path d="M220,431 H246" marker-end="url(#arrow4)"/>
+        <path d="M650,431 H676" marker-end="url(#arrow4)"/>
+      </g>
+    </svg></div>
+    <figcaption><b>Figure 4.</b> The path of one measurement. Top: the driver process holds the GPU lock for the whole run and runs the workers one after the other. Middle: one worker subprocess holds one configuration; it inherits <code>DINOV3_GPU_LOCK</code> and does not wait for its driver. Bottom: the tables need no GPU. The <code>torch-mps</code> worker is <code>torch_bench.run_worker</code> of Step 3 with <code>torch.compile</code>; only its field name <code>load_footprint_peak_bytes</code> is new.</figcaption>
+  </figure>
+
+  <h3>8.1 The key of a configuration, the modes and the compile rows</h3>
+  <pre><code># src/dinov3_apple/bench.py, lines 57 to 60
+# Quantized weights (D14 to D16 of specs/06-speed/plan.html): the model sizes of the quantized rows
+# and the dtype modes that load quantized weights.
+QUANTIZED_MODEL_SIZES = [&quot;ViT-H+/16&quot;, &quot;ViT-7B/16&quot;]
+QUANTIZED_MODES = [&quot;fp16-autocast&quot;, &quot;bf16-autocast&quot;]</code></pre>
+  <pre><code># src/dinov3_apple/bench.py, lines 98 to 157
+@dataclass(frozen=True)
+class BenchConfig:
+    &quot;&quot;&quot;One configuration of the benchmark matrix. The output is not part of it (D3).
+
+    Attributes:
+        run: &quot;B1&quot; to &quot;B4&quot; (Table 2 of the plan).
+        model_size: A key of MODEL_IDS.
+        dtype_mode: A name of DTYPE_MODE_NAMES.
+        side: The square input resolution in pixels.
+        batch_size: The batch size.
+        compile: True to wrap the backbone with torch.compile (torch-mps) or to run the compiled
+            forward pass (mlx, D7 of specs/06-speed/plan.html).
+        bits: None for unquantized weights; 8 or 4 for quantized block weights (mlx, D22).
+        repeat: 0 for the main run, 1 and 2 for the repeats of B2. It stays the last field of the
+            key (add_rounds).
+    &quot;&quot;&quot;
+
+    run: str
+    model_size: str
+    dtype_mode: str
+    side: int
+    batch_size: int
+    compile: bool = False
+    bits: int | None = None
+    repeat: int = 0
+
+    @property
+    def key(self) -&gt; tuple:
+        &quot;&quot;&quot;The identity of the configuration in the results, in the order of the fields. The run
+        is not part of it.&quot;&quot;&quot;
+        return (
+            self.model_size,
+            self.dtype_mode,
+            self.side,
+            self.batch_size,
+            self.compile,
+            self.bits,
+            self.repeat,
+        )
+
+    @property
+    def label(self) -&gt; str:
+        &quot;&quot;&quot;A short name for logs, for example &quot;ViT-S/16 fp32 224px b8&quot;.&quot;&quot;&quot;
+        extra = (&quot; compile&quot; if self.compile else &quot;&quot;) + (f&quot; {self.bits}-bit&quot; if self.bits else &quot;&quot;)
+        extra += f&quot; r{self.repeat}&quot; if self.repeat else &quot;&quot;
+        return f&quot;{self.model_size} {self.dtype_mode} {self.side}px b{self.batch_size}{extra}&quot;
+
+
+def line_key(line: dict) -&gt; tuple:
+    &quot;&quot;&quot;Return the BenchConfig.key of one JSON line. A line without the field bits (Steps 3 to 5)
+    has unquantized weights.&quot;&quot;&quot;
+    return (
+        line[&quot;model_size&quot;],
+        line[&quot;dtype_mode&quot;],
+        line[&quot;side&quot;],
+        line[&quot;batch_size&quot;],
+        line[&quot;compile&quot;],
+        line.get(&quot;bits&quot;),
+        line[&quot;repeat&quot;],
+    )</code></pre>
+  <ul>
+    <li><b>Line 121.</b> A quantized row keeps the name of its dtype mode and adds <code>bits</code> (D22). So the 8-bit and the 4-bit row of one configuration have two keys, and neither replaces the unquantized row.</li>
+    <li><b>Lines 128 to 136.</b> The field order equals the key order, and <code>repeat</code> stays the last key element: <code>add_rounds</code> uses <code>key[:-1]</code>.</li>
+    <li><b>Line 155.</b> <code>line.get("bits")</code> reads the 273 + 30 + 12 committed lines of Steps 3 to 5 as unquantized. The key still has no backend. So a reader of paired lines keys each line by run, group, round, backend and key, never by <code>latest_lines</code> alone (Section 3.15 of the plan).</li>
+    <li><b><code>QUANTIZED_MODEL_SIZES</code> and <code>QUANTIZED_MODES</code>.</b> The driver adds 4 quantized workers (8 and 4 bits × fp16-autocast and bf16-autocast) to each group of ViT-H+/16 and ViT-7B/16. <code>speedup.py</code> uses <code>QUANTIZED_MODES</code> to find the quantized rows of a cell. <a href="06-3-quantized-weights.html">06-3</a> explains why only these two dtype modes load quantized weights.</li>
+  </ul>
+  <pre><code># src/dinov3_apple/bench.py, lines 168 to 217
+def _modes(model_size: str, backend: str = &quot;torch-mps&quot;) -&gt; list[str]:
+    &quot;&quot;&quot;Return the dtype modes of one model size on one backend.
+
+    ViT-7B/16 never loads fp32 weights (CLAUDE.md run rules, ADR 0008). On torch-mps its autocast
+    modes keep fp32 weights, so it runs the two cast modes. On mlx its autocast modes keep fp16 or
+    bf16 weights (ADR 0007), so it runs the four fp16 and bf16 dtype modes (D23).
+    &quot;&quot;&quot;
+    if model_size != GIANT_MODEL_SIZE:
+        return DTYPE_MODE_NAMES
+    if backend == &quot;mlx&quot;:
+        return [mode for mode in DTYPE_MODE_NAMES if mode != &quot;fp32&quot;]
+    return CAST_MODES
+
+
+def bench_configurations(
+    model_sizes: list[str] | None = None,
+    priority: bool = False,
+    repeats: int = 0,
+    compile: bool = False,
+) -&gt; list[BenchConfig]:
+    &quot;&quot;&quot;Return the configurations of one run of Table 2 of the plan.
+
+    Args:
+        model_sizes: The model sizes of B1 or B4. None means the five sizes of B1.
+        priority: True for the priority configurations P1 and P2 in all five dtype modes.
+        repeats: With priority, the number of repeats (B2). Repeat numbers start at 1.
+        compile: The compile rows: B3 with priority, else compile rows of B1 or B4 (D9 of
+            specs/06-speed/plan.html).
+
+    Returns:
+        The configurations from the smallest to the largest model size.
+    &quot;&quot;&quot;
+    if priority:
+        run = &quot;B3&quot; if compile else (&quot;B2&quot; if repeats else &quot;B1&quot;)
+        return [
+            BenchConfig(run, model_size, mode, side, batch_size, compile, repeat=repeat)
+            for model_size, side, batch_size, _ in PRIORITY.values()
+            for repeat in (range(1, repeats + 1) if repeats else [0])
+            for mode in DTYPE_MODE_NAMES
+        ]
+    configs = []
+    for model_size in model_sizes or MAIN_MODEL_SIZES:
+        run = &quot;B4&quot; if model_size == GIANT_MODEL_SIZE else &quot;B1&quot;
+        configs += [
+            BenchConfig(run, model_size, mode, side, batch_size, compile)
+            for mode in _modes(model_size)
+            for side in SIDES
+            for batch_size in BATCH_SIZES
+        ]
+    return configs</code></pre>
+  <ul>
+    <li><b><code>_modes</code>.</b> ViT-7B/16 never loads fp32 weights (ADR 0008). On <code>torch-mps</code> its autocast modes keep fp32 weights, so it runs only the two cast modes. On <code>mlx</code> the autocast modes keep fp16 or bf16 weights (ADR 0007), so it runs four dtype modes. A paired group of ViT-7B/16 thus has 2 <code>torch-mps</code> workers, 4 <code>mlx</code> workers and 4 quantized workers: 10 (Table 11 of the plan).</li>
+    <li><b><code>bench_configurations(..., compile=True)</code>.</b> Before Step 6, compile rows existed only at P1 and P2 (B3). Now every configuration gets compile rows (D9, ADR 0009). <code>benchmark.py</code> accepts <code>--compile</code> without <code>--priority</code>.</li>
+  </ul>
+
+  <h3>8.2 The memory need of each backend</h3>
+  <pre><code># src/dinov3_apple/bench.py, lines 277 to 297
+def quantized_weight_bytes(model_size: str, bits: int, parameters: int | None = None) -&gt; int:
+    &quot;&quot;&quot;Return the bytes of the weights of one model size with quantized block weights (Table 9 of
+    specs/06-speed/plan.html).
+
+    Each block weight takes bits / 8 bytes plus one fp16 or bf16 scale and one offset for each
+    group of 64 weights. The other parameters take 2 bytes. The loader keeps the layer norms,
+    LayerScale and the prefix tokens in fp32, so the value leaves out at most 2.0 MB (ViT-7B/16).
+
+    Args:
+        model_size: A key of MODEL_SHAPES.
+        bits: 8 or 4.
+        parameters: The parameter count. None reads it from the safetensors headers.
+
+    Returns:
+        block weights x (bits / 8 + 4 / 64) + the other parameters x 2.
+    &quot;&quot;&quot;
+    shape = MODEL_SHAPES[model_size]
+    count = _parameter_count(model_size) if parameters is None else parameters
+    ff_matrices = 3 if shape.gated else 2
+    block = shape.blocks * (4 * shape.dim**2 + ff_matrices * shape.dim * shape.ff)
+    return block * (8 * bits + 4) // 64 + (count - block) * 2</code></pre>
+  <ul>
+    <li><b>The formula.</b> Each block weight takes bits / 8 bytes plus one 2-byte scale and one 2-byte offset for each group of 64 weights: (8 · bits + 4) / 64 bytes. All other parameters take 2 bytes. The block weights are L · (4 D² + 3 D F) for SwiGLU and L · (4 D² + 2 D F) for the MLP. The loader keeps the layer norms, LayerScale and the prefix tokens in fp32, so the value leaves out at most 2.0 MB.</li>
+    <li><b>Values.</b> ViT-H+/16: 894,753,280 B at 8 bits and 475,322,880 B at 4 bits. ViT-7B/16: 7,140,614,144 B and 3,785,170,944 B (Table 9 of the plan; T17 pins them).</li>
+  </ul>
+  <pre><code># src/dinov3_apple/bench.py, lines 300 to 302 and 323 to 336 (shortened: the docstring is left out)
+def required_bench_bytes(
+    config: BenchConfig, activation_factor: float = ACTIVATION_FACTOR, backend: str = &quot;torch-mps&quot;
+) -&gt; int:
+    ...
+    if config.bits is not None and backend != &quot;mlx&quot;:
+        raise ValueError(f&quot;quantized weights run on mlx only, not on {backend}&quot;)
+    shape = MODEL_SHAPES[config.model_size]
+    if config.bits is not None:
+        weights = quantized_weight_bytes(config.model_size, config.bits)
+    else:
+        count = _parameter_count(config.model_size)
+        weights = count * bytes_per_weight(backend, config.dtype_mode)
+    a = 2 if config.dtype_mode in CAST_MODES else 4
+    b, t = config.batch_size, tokens(config.side)
+    activations = b * t * (8 * shape.dim + 3 * shape.ff) * a
+    if backend != &quot;mlx&quot;:
+        activations += 2 * b * shape.heads * t * t * a
+    return load_bytes(weights) + round(activation_factor * activations)</code></pre>
+  <ul>
+    <li><b>Line 330.</b> <code>bytes_per_weight("mlx", mode)</code> gives 2 bytes in the four fp16 and bf16 dtype modes: <code>mlx</code> casts the weights at the load. <code>torch-mps</code> keeps 4 bytes in the autocast modes.</li>
+    <li><b>Lines 334 and 335.</b> Only <code>torch-mps</code> gets the score term 2 · B · heads · T² · a (Section 2). For ViT-H+/16 at P2 in bf16-cast this term is 2 × 8 × 20 × 1,029² × 2 B = 677,658,240 B. The two needs of the result lines differ by exactly this value: <code>torch-mps</code> 7,116,558,976 B, <code>mlx</code> 6,438,900,736 B (<code>results/speed-matrix.jsonl</code>; Section 3.3.4 of the plan).</li>
+    <li><b>Line 323.</b> A quantized row on <code>torch-mps</code> raises <code>ValueError</code>: quantized weights run on <code>mlx</code> only.</li>
+    <li><b>Who uses the need.</b> The driver compares it with the free memory before each worker. The <code>mlx</code> worker loads with the load need as the MLX limit, then raises the limit to this need before the warm-up (D8). For P2 in bf16-cast the line records <code>mlx_load_limit_bytes</code> 6,017,422,336 and <code>mlx_memory_limit_bytes</code> 6,438,900,736. The probe memory-limit measured +1 % throughput with the raised limit.</li>
+  </ul>
+
+  <h3>8.3 The mlx worker</h3>
+  <pre><code># src/dinov3_apple/mlx_bench.py, lines 49 to 67
+def output_transfer(frame: np.ndarray, patches: np.ndarray) -&gt; str:
+    &quot;&quot;&quot;Return how an output moved to the host.
+
+    Returns:
+        &quot;view-uint16&quot; for bf16 bits (the lines of Step 5), &quot;fp16-patches&quot; for fp32 frame
+        embeddings with fp16 patch embeddings (D13 of specs/06-speed/plan.html), else &quot;native&quot;.
+    &quot;&quot;&quot;
+    if frame.dtype == np.uint16:
+        return &quot;view-uint16&quot;
+    if frame.dtype == np.float32 and patches.dtype == np.float16:
+        return &quot;fp16-patches&quot;
+    return &quot;native&quot;
+
+
+def host_to_fp32(host: np.ndarray) -&gt; np.ndarray:
+    &quot;&quot;&quot;Return the fp32 values of a host output. bf16 bits (uint16) become fp32; others stay.&quot;&quot;&quot;
+    if host.dtype != np.uint16:
+        return host
+    return (host.astype(np.uint32) &lt;&lt; 16).view(np.float32)</code></pre>
+  <pre><code># src/dinov3_apple/mlx_bench.py, lines 70 to 101
+def time_batch_mlx(
+    forward: Forward, batch: np.ndarray, dtype_mode: str, patch_fp32: bool = False
+) -&gt; tuple[tuple[float, float, float], np.ndarray, np.ndarray]:
+    &quot;&quot;&quot;Run one batch host to host on mlx and time it (Table 4 of the Step 3 plan).
+
+    The frame embeddings move to the host in fp32. The patch embeddings move in the dtype of
+    patch_dtype: fp16 in the four fp16 and bf16 dtype modes (D13), fp32 in fp32. The casts run on
+    the GPU, after the device time.
+
+    Args:
+        forward: The compiled forward pass of compile_backbone, or the backbone (eager).
+        batch: fp32 pixels with shape (B, 3, H, W) in NumPy. The model casts them.
+        dtype_mode: The dtype mode of the backbone.
+        patch_fp32: True for fp32 patch embeddings in every dtype mode.
+
+    Returns:
+        The device time, the frame time and the patch time in seconds, then the frame embeddings
+        (B, D) and the patch embeddings (B, N, D) in NumPy.
+    &quot;&quot;&quot;
+    import mlx.core as mx
+
+    from dinov3_apple.mlx_model import patch_dtype
+
+    t0 = time.perf_counter()
+    tokens = forward(mx.array(batch))
+    mx.eval(tokens)  # mlx synchronizes with mx.eval
+    t1 = time.perf_counter()
+    frame = np.array(tokens[:, 0].astype(mx.float32))
+    t2 = time.perf_counter()
+    patches = np.array(tokens[:, NUM_PREFIX_TOKENS:].astype(patch_dtype(dtype_mode, patch_fp32)))
+    t3 = time.perf_counter()
+    return (t1 - t0, t2 - t0, (t1 - t0) + (t3 - t2)), frame, patches</code></pre>
+  <ul>
+    <li><b>Lines 93 to 96: the device time.</b> MLX is lazy. <code>forward(...)</code> only builds or replays the graph; <code>mx.eval</code> runs it and waits. So the device time ends after <code>mx.eval</code>.</li>
+    <li><b>Lines 97 to 100: the outputs.</b> The frame embeddings move to the host in fp32. The patch embeddings move in fp16 in the four fp16 and bf16 dtype modes (D13, <code>patch_dtype</code>). NumPy has no bf16, so the bf16 modes also move fp16. The patch time leaves out the copy of the frame embeddings: (t1 − t0) + (t3 − t2).</li>
+    <li><b><code>output_transfer</code> and <code>host_to_fp32</code>.</b> Step 5 moved bf16 values as uint16 bits ("view-uint16"). Step 6 moves fp16 patch embeddings ("fp16-patches"). <code>host_to_fp32</code> still reads the old bits: it shifts each 16-bit value into the high half of a 32-bit word. All Step 6 lines of <code>mlx</code> benchmark workers (kind "bench", status "done") in the four fp16 and bf16 dtype modes record "fp16-patches". The change, profile and token-range lines have no value.</li>
+  </ul>
+  <pre><code># src/dinov3_apple/mlx_bench.py, lines 117 to 122
+def load_report_fields(load_report: object | None) -&gt; dict[str, int | None]:
+    &quot;&quot;&quot;Return the fields of the load report of an mlx worker, or null fields without a report.&quot;&quot;&quot;
+    return {
+        f&quot;load_report_{name}&quot;: getattr(load_report, name, None)
+        for name in (&quot;need_bytes&quot;, &quot;peak_bytes&quot;, &quot;cache_bytes&quot;, &quot;footprint_bytes&quot;)
+    }</code></pre>
+  <pre><code># src/dinov3_apple/mlx_bench.py, lines 168 to 216
+    import mlx.core as mx
+
+    from dinov3_apple import mlx_weights
+    from dinov3_apple.mlx_model import compile_backbone, patch_dtype
+
+    start_time = datetime.now(UTC).isoformat(timespec=&quot;seconds&quot;)
+    base = read_footprint()
+    start = time.perf_counter()
+    kwargs: dict[str, Any] = {&quot;bits&quot;: config.bits} if config.bits else {}
+    model = mlx_weights.load_mlx_backbone(
+        config.model_size, config.dtype_mode, tf32=False, **kwargs
+    )
+    load_time_s = time.perf_counter() - start
+    load_footprint_peak = read_footprint().lifetime_max_bytes
+    forward: Forward = compile_backbone(model) if config.compile else model
+
+    if batch is None:
+        batch = make_batch(read_inputs(), config.side, config.batch_size)
+    start = time.perf_counter()
+    tokens = forward(mx.array(batch))  # the trace: the compiled call before mx.eval (R38)
+    compile_trace_s = time.perf_counter() - start
+    mx.eval(tokens)
+    frame = np.array(tokens[:, 0].astype(mx.float32))
+    patches = np.array(tokens[:, NUM_PREFIX_TOKENS:].astype(patch_dtype(config.dtype_mode)))
+    first_call_s = time.perf_counter() - start
+    del tokens
+    transfer = output_transfer(frame, patches)
+    output_dtype = f&quot;{frame.dtype}/{patches.dtype}&quot;
+    reference = reference_tokens(config.model_size, config.side) if config.side in SIDES else None
+    validity = check_validity(frame[0], patches[0], reference, config.dtype_mode)
+    del frame, patches
+
+    need = required_bench_bytes(config, backend=&quot;mlx&quot;)
+    load_limit = mx.set_memory_limit(need)  # returns the previous limit: the load need (D8)
+    warm = phase(lambda: time_batch_mlx(forward, batch, config.dtype_mode)[0], warm_up)
+    mlx_peak = mx.get_peak_memory()  # the Step 5 meaning: no reset after the load
+    mx.reset_peak_memory()
+    timed_times = phase(lambda: time_batch_mlx(forward, batch, config.dtype_mode)[0], timed)
+    timed_peak = mx.get_peak_memory()
+    end = read_footprint()
+
+    device, frame_t, patch_t = (list(column) for column in zip(*timed_times, strict=True))
+    bench_dir.mkdir(parents=True, exist_ok=True)
+    name = batch_file_name(config, run_id)
+    (bench_dir / name).write_text(
+        json.dumps({&quot;config&quot;: config.key, &quot;device&quot;: device, &quot;frame&quot;: frame_t, &quot;patch&quot;: patch_t})
+    )
+    above_load = end.lifetime_max_bytes &gt; load_footprint_peak
+    load_report = getattr(model, &quot;load_report&quot;, None)</code></pre>
+  <ul>
+    <li><b>Line 182.</b> With <code>config.compile</code> the worker holds the compiled forward pass. The function stays a local variable, never an attribute of the model (R36, <a href="06-1-compiled-forward-pass.html">06-1</a>).</li>
+    <li><b>Lines 186 to 192: the first call.</b> <code>compile_trace_s</code> is the time of the compiled call before <code>mx.eval</code>: the trace (R38). <code>first_call_s</code> keeps its Step 3 meaning: the first batch, host to host. In the Learn data the trace takes 2.1 to 10.4 ms.</li>
+    <li><b>Lines 200 and 201: the MLX limit.</b> <code>mx.set_memory_limit</code> returns the previous limit, the load need. The worker records both values.</li>
+    <li><b>Lines 203 to 206: two MLX peaks.</b> <code>mlx_peak_bytes</code> keeps its Step 5 meaning: no reset after the load. Then <code>mx.reset_peak_memory()</code> starts the MLX peak of the timed batches (<code>mlx_timed_peak_bytes</code>). Section 3 uses the second value.</li>
+    <li><b>Lines 209 to 214.</b> The per-batch times go to their own file. Its name holds the model, the dtype mode, the input resolution, the batch size, the compile flag, <code>bits</code>, the repeat and the run id (<code>batch_file_name</code>), so a paired run never writes over a file of another run.</li>
+    <li><b><code>load_report_fields</code>.</b> A quantized or unquantized load gives a <code>LoadReport</code>; the four fields become <code>load_report_need_bytes</code>, <code>load_report_peak_bytes</code>, <code>load_report_cache_bytes</code> and <code>load_report_footprint_bytes</code>. Without a report the fields are null.</li>
+    <li><b><code>phase</code>, <code>run_change_worker</code>, <code>run_token_range_worker</code>.</b> <code>phase</code> runs batches until <code>keep_going</code> of the time budget says stop. <code>run_change_worker</code> holds two forms of one configuration in one process and asserts bit equality on the first batch before it times them (R56, change ratios C1, C2, C4; for C4 only the frame embeddings; <a href="06-1-compiled-forward-pass.html">06-1</a>). <code>run_token_range_worker</code> gives the token range of Section 3.</li>
+  </ul>
+
+  <h3>8.4 The fields of a result line</h3>
+  <pre><code># src/dinov3_apple/bench.py, lines 478 to 504
+# The pairing fields of a Step 6 line (Table 8 of specs/06-speed/plan.html), from the driver.
+PAIR_FIELDS = [
+    &quot;run_id&quot;,
+    &quot;group&quot;,
+    &quot;round&quot;,
+    &quot;position&quot;,
+    &quot;backend&quot;,
+    &quot;priority&quot;,
+    &quot;other_heavy_jobs_seen&quot;,
+]
+# The fields of an mlx worker of Step 6 (Table 8), on top of LINE_FIELDS.
+MLX_FIELDS = [
+    &quot;compile_trace_s&quot;,
+    &quot;mlx_architecture&quot;,
+    &quot;mlx_disable_compile&quot;,
+    &quot;mlx_load_limit_bytes&quot;,
+    &quot;mlx_memory_limit_bytes&quot;,
+    &quot;mlx_timed_peak_bytes&quot;,
+    &quot;mlx_cache_bytes&quot;,
+    &quot;mlx_peak_bytes&quot;,
+    &quot;output_transfer&quot;,
+    &quot;tf32&quot;,
+    &quot;load_report_need_bytes&quot;,
+    &quot;load_report_peak_bytes&quot;,
+    &quot;load_report_cache_bytes&quot;,
+    &quot;load_report_footprint_bytes&quot;,
+]</code></pre>
+  <pre><code># src/dinov3_apple/bench.py, lines 550 to 580
+def result_line(
+    config: BenchConfig,
+    worker: dict,
+    need_bytes: int,
+    available_bytes: int,
+    machine: MachineState,
+    backend: str = &quot;torch-mps&quot;,
+) -&gt; dict:
+    &quot;&quot;&quot;Return one JSON line of a results file of the benchmarks.
+
+    Args:
+        config: The configuration.
+        worker: The result of the worker, or {&quot;status&quot;: ..., &quot;reason&quot;: ...} for a line without a
+            worker. Missing fields become None.
+        need_bytes: The memory need from required_bench_bytes.
+        available_bytes: The available memory before the worker.
+        machine: The machine state before the worker.
+        backend: &quot;torch-mps&quot; or &quot;mlx&quot;.
+
+    Returns:
+        A dict with every field of LINE_FIELDS.
+    &quot;&quot;&quot;
+    line = dict.fromkeys(LINE_FIELDS)
+    line |= asdict(config) | {&quot;backend&quot;: backend}
+    line |= worker
+    line |= {&quot;need_bytes&quot;: need_bytes, &quot;available_bytes&quot;: available_bytes}
+    line[&quot;machine&quot;] = asdict(machine)
+    line[&quot;versions&quot;] = line[&quot;versions&quot;] or machine.versions
+    # A line without a worker (skipped, deferred) gets the time of the driver.
+    line[&quot;time&quot;] = line[&quot;time&quot;] or datetime.now(UTC).isoformat(timespec=&quot;seconds&quot;)
+    return line</code></pre>
+  <ul>
+    <li><b><code>LINE_FIELDS</code>.</b> Step 6 adds <code>bits</code>, <code>compile_trace_s</code> and <code>load_footprint_peak_bytes</code> (lines 445, 455 and 467). <code>result_line</code> starts from <code>dict.fromkeys(LINE_FIELDS)</code>, so each line has each field, with None where a worker gives no value.</li>
+    <li><b><code>MLX_FIELDS</code>.</b> T30 asserts that an <code>mlx</code> worker returns each of these fields. <code>compile_trace_s</code> is in both lists.</li>
+    <li><b><code>PAIR_FIELDS</code>.</b> No code and no test reads this list. The driver keeps its own list <code>PAIR_KEYS</code> in <code>scripts/bench_speed.py</code> (run_id, group, round, position, priority, phase, change, form, forms). <code>result_line</code> sets <code>backend</code>, and <code>run_specs</code> sets <code>other_heavy_jobs_seen</code>. So <code>PAIR_FIELDS</code> is a record of the names only.</li>
+    <li><b><code>result_line(..., backend)</code>, line 573.</b> Before Step 6 the line was <code>{"backend": "torch-mps"}</code> for every line. The driver <code>bench_mlx_port.py</code> set the backend of its <code>mlx</code> lines afterwards. Now the caller gives it.</li>
+    <li><b>F17: the load footprint peak.</b> The old field <code>load_peak_bytes</code> held the lifetime maximum of the process footprint, not the load peak of the glossary. Step 6 renames it to <code>load_footprint_peak_bytes</code> in <code>LINE_FIELDS</code>, in <code>torch_bench.run_worker</code> and in the <code>mlx</code> worker. <code>baseline_table.py</code> reads both names, so the old lines keep their values (T13).</li>
+  </ul>
+  <pre><code># src/dinov3_apple/torch_bench.py, lines 131 to 133
+    if config.compile:
+        model = torch.compile(model)
+    load_peak = read_footprint().lifetime_max_bytes  # the load footprint peak (F17)</code></pre>
+
+  <h3>8.5 The parts of one block</h3>
+  <pre><code># src/dinov3_apple/mlx_bench.py, lines 259 to 294
+def mlx_block_parts(block: &quot;Block&quot;) -&gt; dict[str, Callable[..., tuple[&quot;mx.array&quot;, ...]]]:
+    &quot;&quot;&quot;Return the 11 parts of one MLX block, with the names, inputs and outputs of block_parts.
+
+    The P1 profile (Table 12 of specs/06-speed/plan.html) and the part tests use it. The rope part
+    takes the tables of the block: (T, head_dim) or the layout of the concat-free rotation.
+    &quot;&quot;&quot;
+    import mlx.core as mx
+
+    from dinov3_apple import mlx_model
+
+    attention, mlp = block.attention, block.mlp
+
+    def ff_in(h: mx.array) -&gt; tuple[mx.array, ...]:
+        &quot;&quot;&quot;(gate, up) for SwiGLU, (up,) for the MLP, as ff_in of block_parts.&quot;&quot;&quot;
+        if isinstance(mlp, mlx_model.SwiGLU):
+            return mlp.gate_proj(h), mlp.up_proj(h)
+        return (mlp.up_proj(h),)
+
+    def rope(q: mx.array, k: mx.array, cos: mx.array, sin: mx.array) -&gt; tuple[mx.array, ...]:
+        return mlx_model.apply_rope(q, cos, sin), mlx_model.apply_rope(k, cos, sin)
+
+    return {
+        &quot;norm1&quot;: lambda x: (block.norm1(x),),
+        &quot;qkv_proj&quot;: lambda h: attention.qkv(h),
+        &quot;rope&quot;: rope,
+        &quot;sdpa&quot;: lambda q, k, v: (
+            mx.fast.scaled_dot_product_attention(q, k, v, scale=attention.scale, mask=None),
+        ),
+        &quot;o_proj&quot;: lambda a: (attention.output(a),),
+        &quot;layer_scale1&quot;: lambda o, x: (block.layer_scale1(o) + x,),
+        &quot;norm2&quot;: lambda x: (block.norm2(x),),
+        &quot;ff_in&quot;: ff_in,
+        &quot;activation&quot;: lambda *values: (mlp.activation(*values),),
+        &quot;ff_out&quot;: lambda g: (mlp.down_proj(g),),
+        &quot;layer_scale2&quot;: lambda y, x: (block.layer_scale2(y) + x,),
+    }</code></pre>
+  <ul>
+    <li><b>The names are the names of <code>PART_NAMES</code></b> of <code>flops.py</code>, in the order of the forward pass. So the part times of <code>mlx</code> sit next to the part times and the FLOPs of Step 3.</li>
+    <li><b>The function moved.</b> In Step 5 it was <code>_mlx_parts</code> of <code>tests/test_mlx_parts.py</code>. The P1 profile needs it outside the tests, so it moved to <code>src/</code>. The part tests call it through their old helper.</li>
+    <li><b>Line 277: <code>rope</code>.</b> The part takes the tables of the block. In the profile they are the tables of the concat-free rotation (<a href="06-1-compiled-forward-pass.html">06-1</a>).</li>
+    <li><b>Line 284: <code>sdpa</code>.</b> The part calls the MLX SDPA kernel with <code>mask=None</code>, as the backbone does.</li>
+  </ul>
+</section>
+
+<section id="speedup">
+  <h2>9 The speedup table and the pass rule</h2>
+  <p>The speedup of one configuration is the throughput of <code>mlx</code> divided by the throughput of the baseline row. ADR 0004 picks, on each side, the fastest valid row of each dtype and output. ADR 0009 widens it: the <code>torch-mps</code> side runs <code>torch.compile</code> in every valid dtype mode, in a paired group with the <code>mlx</code> workers. So each speedup divides by a row of the same session and power state, a few minutes apart.</p>
+
+  <h3>9.1 The pass rule at P1 and P2</h3>
+  <pre><code># src/dinov3_apple/speedup.py, lines 22 to 56
+NOISE = 0.03  # the spread inside one arm of the probe paired-noise
+MODEL_SIZES = list(MODEL_IDS)
+DTYPES = [&quot;fp32&quot;, &quot;fp16&quot;, &quot;bf16&quot;]
+QUANTIZED_BITS = (8, 4)
+NO_FP32_REASON = &quot;ADR 0008: ViT-7B/16 never loads its fp32 weights&quot;
+# The phases of the matrix lines that join the choice of ADR 0004 (the gate J13 stays out).
+MATRIX_PHASES = (&quot;matrix&quot;, &quot;compile-check&quot;)
+
+
+def _lower_median(values: list[float]) -&gt; float:
+    &quot;&quot;&quot;Return the median; for an even count, the lower of the two middle values (ADR 0004).&quot;&quot;&quot;
+    ordered = sorted(values)
+    return ordered[(len(ordered) - 1) // 2]
+
+
+def pass_verdict(run_medians: list[float], pooled_median: float) -&gt; str:
+    &quot;&quot;&quot;Return the verdict of a speedup at P1 or P2 (D21, option b).
+
+    &quot;above 1&quot; only if the pooled median of all paired ratios and the median of each run are above
+    1. Two runs that disagree in sign give &quot;not above 1&quot;.
+    &quot;&quot;&quot;
+    above = pooled_median &gt; 1 and all(median &gt; 1 for median in run_medians)
+    return &quot;above 1&quot; if above else &quot;not above 1&quot;
+
+
+def single_verdict(ratio: float) -&gt; str:
+    &quot;&quot;&quot;Return the verdict of one paired ratio outside P1 and P2 (D20, D21). A ratio within
+    1 ± NOISE gets the mark &quot;inside the noise&quot;.&quot;&quot;&quot;
+    verdict = &quot;above 1&quot; if ratio &gt; 1 else &quot;not above 1&quot;
+    return f&quot;{verdict}, inside the noise&quot; if abs(ratio - 1) &lt;= NOISE else verdict
+
+
+def spread_between_runs(run_medians: list[float]) -&gt; float:
+    &quot;&quot;&quot;Return (largest run median − smallest run median) / smallest run median.&quot;&quot;&quot;
+    return (max(run_medians) - min(run_medians)) / min(run_medians)</code></pre>
+  <ul>
+    <li><b><code>_lower_median</code>.</b> For an even count it takes the lower of the two middle values (ADR 0004). 10 paired ratios give the 5th smallest value.</li>
+    <li><b><code>pass_verdict</code> (D21 option b).</b> "above 1" needs the pooled median of all paired ratios above 1 and the median of each run above 1. Two runs that disagree give "not above 1".</li>
+    <li><b><code>single_verdict</code>.</b> Outside P1 and P2 one paired group gives one ratio. The verdict is its sign against 1. A ratio within 1 ± <code>NOISE</code> (inclusive) gets the mark "inside the noise". The probe paired-noise measured a spread of 1.6 % (<code>torch-mps</code>) and 3.0 % (<code>mlx</code>) inside one arm (Section 2 of <code>explore.html</code>).</li>
+    <li><b><code>spread_between_runs</code>.</b> (largest run median − smallest run median) / smallest run median.</li>
+  </ul>
+  <pre><code># src/dinov3_apple/speedup.py, lines 341 to 354
+                pick = {}
+                for line in mlx + torch:
+                    mode = mlx_mode if line[&quot;backend&quot;] == &quot;mlx&quot; else torch_mode
+                    if line[&quot;dtype_mode&quot;] == mode and _usable(line):
+                        pick[(str(line[&quot;run_id&quot;]), line[&quot;round&quot;], line[&quot;backend&quot;])] = line
+                by_run: dict[str, list[float]] = {}
+                for (run_id, round_, backend), line in sorted(pick.items()):
+                    other = pick.get((run_id, round_, &quot;torch-mps&quot;))
+                    if backend == &quot;mlx&quot; and other is not None:
+                        ratio = _ips(line, output) / _ips(other, output)
+                        by_run.setdefault(run_id, []).append(ratio)
+                run_ids = sorted(by_run)
+                medians = [_lower_median(by_run[run_id]) for run_id in run_ids]
+                pooled = _lower_median([r for run_id in run_ids for r in by_run[run_id]])</code></pre>
+  <p><code>pair_rows</code> first picks the mode of each side by the lower median over all rounds of both runs (<code>_mode_by_median</code>). Then it pairs the <code>mlx</code> line and the <code>torch-mps</code> line of each run and round. Each run of build step 9 had 5 rounds × 5 dtype modes × 2 backends = 50 workers for each priority configuration. The order of the two backends alternated from round to round, and the order of the dtype modes rotated by one.</p>
+  <figure>
+    <div class="fig"><svg viewBox="0 0 960 400" role="img" aria-labelledby="fig5-title" font-family="-apple-system, Helvetica Neue, Arial, sans-serif">
+<title id="fig5-title">The ten paired ratios of each verdict row at P1 and P2, run 1 and run 2</title>
+<rect width="960" height="400" fill="#ffffff"/>
+<rect x="538.1" y="38" width="78.3" height="272" fill="#f5f8f7" stroke="#d6dedd"/>
+<text x="577.2" y="32" text-anchor="middle" font-size="11" fill="#4a5655">1 ± NOISE (0.03)</text>
+<line x1="316.1" y1="38" x2="316.1" y2="310" stroke="#d6dedd" stroke-width="1"/>
+<text x="316.1" y="328" text-anchor="middle" font-size="11" fill="#111414">0.80</text>
+<line x1="381.4" y1="38" x2="381.4" y2="310" stroke="#d6dedd" stroke-width="1"/>
+<text x="381.4" y="328" text-anchor="middle" font-size="11" fill="#111414">0.85</text>
+<line x1="446.7" y1="38" x2="446.7" y2="310" stroke="#d6dedd" stroke-width="1"/>
+<text x="446.7" y="328" text-anchor="middle" font-size="11" fill="#111414">0.90</text>
+<line x1="511.9" y1="38" x2="511.9" y2="310" stroke="#d6dedd" stroke-width="1"/>
+<text x="511.9" y="328" text-anchor="middle" font-size="11" fill="#111414">0.95</text>
+<line x1="577.2" y1="38" x2="577.2" y2="310" stroke="#111414" stroke-width="1.4"/>
+<text x="577.2" y="328" text-anchor="middle" font-size="11" fill="#111414">1.00</text>
+<line x1="642.5" y1="38" x2="642.5" y2="310" stroke="#d6dedd" stroke-width="1"/>
+<text x="642.5" y="328" text-anchor="middle" font-size="11" fill="#111414">1.05</text>
+<line x1="707.8" y1="38" x2="707.8" y2="310" stroke="#d6dedd" stroke-width="1"/>
+<text x="707.8" y="328" text-anchor="middle" font-size="11" fill="#111414">1.10</text>
+<text x="525.0" y="348" text-anchor="middle" font-size="12" fill="#111414">Paired ratio = mlx throughput / torch-mps throughput in one round</text>
+<text x="780" y="32" font-size="11" font-weight="600" fill="#111414">Pooled median, verdict (D21)</text>
+<text x="20" y="59" font-size="12" font-weight="600" fill="#111414">P1 fp32, frame</text>
+<text x="20" y="73" font-size="10.5" fill="#4a5655">fp32 / fp32 (compile)</text>
+<circle cx="603.8" cy="54" r="4" fill="#057379" stroke="#057379" stroke-width="1.8"><title>P1 fp32, frame, run 1, round 1: 1.020</title></circle>
+<circle cx="672.4" cy="54" r="4" fill="#057379" stroke="#057379" stroke-width="1.8"><title>P1 fp32, frame, run 1, round 2: 1.073</title></circle>
+<circle cx="684.0" cy="54" r="4" fill="#057379" stroke="#057379" stroke-width="1.8"><title>P1 fp32, frame, run 1, round 3: 1.082</title></circle>
+<circle cx="664.2" cy="54" r="4" fill="#057379" stroke="#057379" stroke-width="1.8"><title>P1 fp32, frame, run 1, round 4: 1.067</title></circle>
+<circle cx="657.8" cy="54" r="4" fill="#057379" stroke="#057379" stroke-width="1.8"><title>P1 fp32, frame, run 1, round 5: 1.062</title></circle>
+<circle cx="547.3" cy="66" r="4" fill="#ffffff" stroke="#b26b00" stroke-width="1.8"><title>P1 fp32, frame, run 2, round 1: 0.977</title></circle>
+<circle cx="664.0" cy="66" r="4" fill="#ffffff" stroke="#b26b00" stroke-width="1.8"><title>P1 fp32, frame, run 2, round 2: 1.066</title></circle>
+<circle cx="670.1" cy="66" r="4" fill="#ffffff" stroke="#b26b00" stroke-width="1.8"><title>P1 fp32, frame, run 2, round 3: 1.071</title></circle>
+<circle cx="665.6" cy="66" r="4" fill="#ffffff" stroke="#b26b00" stroke-width="1.8"><title>P1 fp32, frame, run 2, round 4: 1.068</title></circle>
+<circle cx="676.3" cy="66" r="4" fill="#ffffff" stroke="#b26b00" stroke-width="1.8"><title>P1 fp32, frame, run 2, round 5: 1.076</title></circle>
+<line x1="664.2" y1="46" x2="664.2" y2="74" stroke="#111414" stroke-width="2.4"/>
+<text x="780" y="64" font-size="12" fill="#111414">1.067, above 1</text>
+<text x="20" y="103" font-size="12" font-weight="600" fill="#111414">P1 fp16, frame</text>
+<text x="20" y="117" font-size="10.5" fill="#4a5655">fp16-cast / fp16-cast (compile)</text>
+<circle cx="377.1" cy="98" r="4" fill="#057379" stroke="#057379" stroke-width="1.8"><title>P1 fp16, frame, run 1, round 1: 0.847</title></circle>
+<circle cx="421.5" cy="98" r="4" fill="#057379" stroke="#057379" stroke-width="1.8"><title>P1 fp16, frame, run 1, round 2: 0.881</title></circle>
+<circle cx="418.8" cy="98" r="4" fill="#057379" stroke="#057379" stroke-width="1.8"><title>P1 fp16, frame, run 1, round 3: 0.879</title></circle>
+<circle cx="404.2" cy="98" r="4" fill="#057379" stroke="#057379" stroke-width="1.8"><title>P1 fp16, frame, run 1, round 4: 0.867</title></circle>
+<circle cx="401.8" cy="98" r="4" fill="#057379" stroke="#057379" stroke-width="1.8"><title>P1 fp16, frame, run 1, round 5: 0.866</title></circle>
+<circle cx="327.7" cy="110" r="4" fill="#ffffff" stroke="#b26b00" stroke-width="1.8"><title>P1 fp16, frame, run 2, round 1: 0.809</title></circle>
+<circle cx="373.1" cy="110" r="4" fill="#ffffff" stroke="#b26b00" stroke-width="1.8"><title>P1 fp16, frame, run 2, round 2: 0.844</title></circle>
+<circle cx="412.0" cy="110" r="4" fill="#ffffff" stroke="#b26b00" stroke-width="1.8"><title>P1 fp16, frame, run 2, round 3: 0.873</title></circle>
+<circle cx="422.3" cy="110" r="4" fill="#ffffff" stroke="#b26b00" stroke-width="1.8"><title>P1 fp16, frame, run 2, round 4: 0.881</title></circle>
+<circle cx="410.4" cy="110" r="4" fill="#ffffff" stroke="#b26b00" stroke-width="1.8"><title>P1 fp16, frame, run 2, round 5: 0.872</title></circle>
+<line x1="404.2" y1="90" x2="404.2" y2="118" stroke="#111414" stroke-width="2.4"/>
+<text x="780" y="108" font-size="12" fill="#111414">0.867, not above 1</text>
+<text x="20" y="147" font-size="12" font-weight="600" fill="#111414">P1 bf16, frame</text>
+<text x="20" y="161" font-size="10.5" fill="#4a5655">bf16-cast / bf16-cast (compile)</text>
+<circle cx="436.4" cy="142" r="4" fill="#057379" stroke="#057379" stroke-width="1.8"><title>P1 bf16, frame, run 1, round 1: 0.892</title></circle>
+<circle cx="442.5" cy="142" r="4" fill="#057379" stroke="#057379" stroke-width="1.8"><title>P1 bf16, frame, run 1, round 2: 0.897</title></circle>
+<circle cx="447.1" cy="142" r="4" fill="#057379" stroke="#057379" stroke-width="1.8"><title>P1 bf16, frame, run 1, round 3: 0.900</title></circle>
+<circle cx="416.5" cy="142" r="4" fill="#057379" stroke="#057379" stroke-width="1.8"><title>P1 bf16, frame, run 1, round 4: 0.877</title></circle>
+<circle cx="417.4" cy="142" r="4" fill="#057379" stroke="#057379" stroke-width="1.8"><title>P1 bf16, frame, run 1, round 5: 0.878</title></circle>
+<circle cx="338.9" cy="154" r="4" fill="#ffffff" stroke="#b26b00" stroke-width="1.8"><title>P1 bf16, frame, run 2, round 1: 0.817</title></circle>
+<circle cx="400.4" cy="154" r="4" fill="#ffffff" stroke="#b26b00" stroke-width="1.8"><title>P1 bf16, frame, run 2, round 2: 0.865</title></circle>
+<circle cx="454.8" cy="154" r="4" fill="#ffffff" stroke="#b26b00" stroke-width="1.8"><title>P1 bf16, frame, run 2, round 3: 0.906</title></circle>
+<circle cx="419.0" cy="154" r="4" fill="#ffffff" stroke="#b26b00" stroke-width="1.8"><title>P1 bf16, frame, run 2, round 4: 0.879</title></circle>
+<circle cx="405.3" cy="154" r="4" fill="#ffffff" stroke="#b26b00" stroke-width="1.8"><title>P1 bf16, frame, run 2, round 5: 0.868</title></circle>
+<line x1="417.4" y1="134" x2="417.4" y2="162" stroke="#111414" stroke-width="2.4"/>
+<text x="780" y="152" font-size="12" fill="#111414">0.878, not above 1</text>
+<text x="20" y="191" font-size="12" font-weight="600" fill="#111414">P2 fp32, patch</text>
+<text x="20" y="205" font-size="10.5" fill="#4a5655">fp32 / fp32 (compile)</text>
+<circle cx="727.8" cy="186" r="4" fill="#057379" stroke="#057379" stroke-width="1.8"><title>P2 fp32, patch, run 1, round 1: 1.115</title></circle>
+<circle cx="693.8" cy="186" r="4" fill="#057379" stroke="#057379" stroke-width="1.8"><title>P2 fp32, patch, run 1, round 2: 1.089</title></circle>
+<circle cx="689.9" cy="186" r="4" fill="#057379" stroke="#057379" stroke-width="1.8"><title>P2 fp32, patch, run 1, round 3: 1.086</title></circle>
+<circle cx="687.8" cy="186" r="4" fill="#057379" stroke="#057379" stroke-width="1.8"><title>P2 fp32, patch, run 1, round 4: 1.085</title></circle>
+<circle cx="711.4" cy="186" r="4" fill="#057379" stroke="#057379" stroke-width="1.8"><title>P2 fp32, patch, run 1, round 5: 1.103</title></circle>
+<circle cx="693.8" cy="198" r="4" fill="#ffffff" stroke="#b26b00" stroke-width="1.8"><title>P2 fp32, patch, run 2, round 1: 1.089</title></circle>
+<circle cx="713.6" cy="198" r="4" fill="#ffffff" stroke="#b26b00" stroke-width="1.8"><title>P2 fp32, patch, run 2, round 2: 1.104</title></circle>
+<circle cx="704.5" cy="198" r="4" fill="#ffffff" stroke="#b26b00" stroke-width="1.8"><title>P2 fp32, patch, run 2, round 3: 1.097</title></circle>
+<circle cx="709.5" cy="198" r="4" fill="#ffffff" stroke="#b26b00" stroke-width="1.8"><title>P2 fp32, patch, run 2, round 4: 1.101</title></circle>
+<circle cx="697.1" cy="198" r="4" fill="#ffffff" stroke="#b26b00" stroke-width="1.8"><title>P2 fp32, patch, run 2, round 5: 1.092</title></circle>
+<line x1="697.1" y1="178" x2="697.1" y2="206" stroke="#111414" stroke-width="2.4"/>
+<text x="780" y="196" font-size="12" fill="#111414">1.092, above 1</text>
+<text x="20" y="235" font-size="12" font-weight="600" fill="#111414">P2 fp16, patch</text>
+<text x="20" y="249" font-size="10.5" fill="#4a5655">fp16-cast / fp16-cast (compile)</text>
+<circle cx="599.2" cy="230" r="4" fill="#057379" stroke="#057379" stroke-width="1.8"><title>P2 fp16, patch, run 1, round 1: 1.017</title></circle>
+<circle cx="562.9" cy="230" r="4" fill="#057379" stroke="#057379" stroke-width="1.8"><title>P2 fp16, patch, run 1, round 2: 0.989</title></circle>
+<circle cx="606.0" cy="230" r="4" fill="#057379" stroke="#057379" stroke-width="1.8"><title>P2 fp16, patch, run 1, round 3: 1.022</title></circle>
+<circle cx="626.0" cy="230" r="4" fill="#057379" stroke="#057379" stroke-width="1.8"><title>P2 fp16, patch, run 1, round 4: 1.037</title></circle>
+<circle cx="620.5" cy="230" r="4" fill="#057379" stroke="#057379" stroke-width="1.8"><title>P2 fp16, patch, run 1, round 5: 1.033</title></circle>
+<circle cx="607.2" cy="242" r="4" fill="#ffffff" stroke="#b26b00" stroke-width="1.8"><title>P2 fp16, patch, run 2, round 1: 1.023</title></circle>
+<circle cx="681.8" cy="242" r="4" fill="#ffffff" stroke="#b26b00" stroke-width="1.8"><title>P2 fp16, patch, run 2, round 2: 1.080</title></circle>
+<circle cx="660.1" cy="242" r="4" fill="#ffffff" stroke="#b26b00" stroke-width="1.8"><title>P2 fp16, patch, run 2, round 3: 1.063</title></circle>
+<circle cx="669.5" cy="242" r="4" fill="#ffffff" stroke="#b26b00" stroke-width="1.8"><title>P2 fp16, patch, run 2, round 4: 1.071</title></circle>
+<circle cx="659.6" cy="242" r="4" fill="#ffffff" stroke="#b26b00" stroke-width="1.8"><title>P2 fp16, patch, run 2, round 5: 1.063</title></circle>
+<line x1="620.5" y1="222" x2="620.5" y2="250" stroke="#111414" stroke-width="2.4"/>
+<text x="780" y="240" font-size="12" fill="#111414">1.033, above 1</text>
+<text x="20" y="279" font-size="12" font-weight="600" fill="#111414">P2 bf16, patch</text>
+<text x="20" y="293" font-size="10.5" fill="#4a5655">bf16-autocast / bf16-cast (compile)</text>
+<circle cx="581.8" cy="274" r="4" fill="#057379" stroke="#057379" stroke-width="1.8"><title>P2 bf16, patch, run 1, round 1: 1.004</title></circle>
+<circle cx="594.5" cy="274" r="4" fill="#057379" stroke="#057379" stroke-width="1.8"><title>P2 bf16, patch, run 1, round 2: 1.013</title></circle>
+<circle cx="562.4" cy="274" r="4" fill="#057379" stroke="#057379" stroke-width="1.8"><title>P2 bf16, patch, run 1, round 3: 0.989</title></circle>
+<circle cx="718.8" cy="274" r="4" fill="#057379" stroke="#057379" stroke-width="1.8"><title>P2 bf16, patch, run 1, round 4: 1.108</title></circle>
+<circle cx="600.3" cy="274" r="4" fill="#057379" stroke="#057379" stroke-width="1.8"><title>P2 bf16, patch, run 1, round 5: 1.018</title></circle>
+<circle cx="577.2" cy="286" r="4" fill="#ffffff" stroke="#b26b00" stroke-width="1.8"><title>P2 bf16, patch, run 2, round 1: 1.000</title></circle>
+<circle cx="445.6" cy="286" r="4" fill="#ffffff" stroke="#b26b00" stroke-width="1.8"><title>P2 bf16, patch, run 2, round 2: 0.899</title></circle>
+<circle cx="625.4" cy="286" r="4" fill="#ffffff" stroke="#b26b00" stroke-width="1.8"><title>P2 bf16, patch, run 2, round 3: 1.037</title></circle>
+<circle cx="600.0" cy="286" r="4" fill="#ffffff" stroke="#b26b00" stroke-width="1.8"><title>P2 bf16, patch, run 2, round 4: 1.017</title></circle>
+<circle cx="634.4" cy="286" r="4" fill="#ffffff" stroke="#b26b00" stroke-width="1.8"><title>P2 bf16, patch, run 2, round 5: 1.044</title></circle>
+<line x1="594.5" y1="266" x2="594.5" y2="294" stroke="#111414" stroke-width="2.4"/>
+<text x="780" y="284" font-size="12" fill="#111414">1.013, above 1</text>
+<g font-size="11.5" fill="#111414"><circle cx="26" cy="370" r="4" fill="#057379" stroke="#057379" stroke-width="1.8"/><text x="36" y="374">run 1, 13:29 to 14:07 UTC</text><circle cx="236" cy="370" r="4" fill="#ffffff" stroke="#b26b00" stroke-width="1.8"/><text x="246" y="374">run 2, 19:36 to 20:17 UTC</text><line x1="452" y1="362" x2="452" y2="378" stroke="#111414" stroke-width="2.4"/><text x="462" y="374">pooled median of the 10 paired ratios</text></g>
+</svg></div>
+    <figcaption><b>Figure 5.</b> The 10 paired ratios of each verdict row (our computation from <code>results/speed-pairs.jsonl</code> with the modes of Table 9). Grey band: 1 ± <code>NOISE</code>. Black tick: the pooled median. At P1 the fp16 and bf16 ratios of both runs lie between 0.809 and 0.906: all below 1. At P2 the fp16 and bf16 ratios scatter around their pooled medians 1.033 and 1.013; single rounds lie below 1 (0.989, 0.899), but the run medians stay above 1.</figcaption>
+  </figure>
+  <div class="table-wrap"><table class="first-nowrap">
+<thead><tr><th>Priority</th><th>Dtype</th><th>Output</th><th>mlx mode</th><th>torch-mps mode</th><th class="num">Run 1 median</th><th class="num">Run 2 median</th><th class="num">Pooled median</th><th class="num">Spread between runs</th><th>Verdict (D21)</th></tr></thead><tbody>
+<tr><td>P1</td><td>fp32</td><td>frame</td><td>fp32</td><td>fp32 (compile)</td><td class="num">1.067</td><td class="num">1.068</td><td class="num">1.067</td><td class="num">0.001</td><td>above 1</td></tr>
+<tr><td>P1</td><td>fp32</td><td>patch</td><td>fp32</td><td>fp32 (compile)</td><td class="num">1.068</td><td class="num">1.068</td><td class="num">1.068</td><td class="num">0.000</td><td>above 1</td></tr>
+<tr><td>P1</td><td>fp16</td><td>frame</td><td>fp16-cast</td><td>fp16-cast (compile)</td><td class="num">0.867</td><td class="num">0.872</td><td class="num">0.867</td><td class="num">0.006</td><td>not above 1</td></tr>
+<tr><td>P1</td><td>fp16</td><td>patch</td><td>fp16-cast</td><td>fp16-cast (compile)</td><td class="num">0.900</td><td class="num">0.906</td><td class="num">0.900</td><td class="num">0.006</td><td>not above 1</td></tr>
+<tr><td>P1</td><td>bf16</td><td>frame</td><td>bf16-cast</td><td>bf16-cast (compile)</td><td class="num">0.892</td><td class="num">0.868</td><td class="num">0.878</td><td class="num">0.027</td><td>not above 1</td></tr>
+<tr><td>P1</td><td>bf16</td><td>patch</td><td>bf16-cast</td><td>bf16-cast (compile)</td><td class="num">0.897</td><td class="num">0.873</td><td class="num">0.881</td><td class="num">0.027</td><td>not above 1</td></tr>
+<tr><td>P2</td><td>fp32</td><td>frame</td><td>fp32</td><td>fp32 (compile)</td><td class="num">1.089</td><td class="num">1.097</td><td class="num">1.092</td><td class="num">0.007</td><td>above 1</td></tr>
+<tr><td>P2</td><td>fp32</td><td>patch</td><td>fp32</td><td>fp32 (compile)</td><td class="num">1.089</td><td class="num">1.097</td><td class="num">1.092</td><td class="num">0.008</td><td>above 1</td></tr>
+<tr><td>P2</td><td>fp16</td><td>frame</td><td>fp16-cast</td><td>fp16-cast (compile)</td><td class="num">1.021</td><td class="num">1.063</td><td class="num">1.032</td><td class="num">0.041</td><td>above 1</td></tr>
+<tr><td>P2</td><td>fp16</td><td>patch</td><td>fp16-cast</td><td>fp16-cast (compile)</td><td class="num">1.022</td><td class="num">1.063</td><td class="num">1.033</td><td class="num">0.041</td><td>above 1</td></tr>
+<tr><td>P2</td><td>bf16</td><td>frame</td><td>bf16-autocast</td><td>bf16-cast (compile)</td><td class="num">1.013</td><td class="num">1.018</td><td class="num">1.013</td><td class="num">0.004</td><td>above 1</td></tr>
+<tr><td>P2</td><td>bf16</td><td>patch</td><td>bf16-autocast</td><td>bf16-cast (compile)</td><td class="num">1.013</td><td class="num">1.017</td><td class="num">1.013</td><td class="num">0.004</td><td>above 1</td></tr>
+</tbody></table></div>
+  <p class="caption"><b>Table 9.</b> The paired speedup runs at P1 and P2 (section 1 of <code>results/speedup-table.md</code>). Each row has 10 paired ratios: 5 rounds in run 1 (13:29 to 14:07 UTC) and 5 rounds in run 2 (19:36 to 20:17 UTC). "(compile)": the <code>torch-mps</code> row ran <code>torch.compile</code>. At P2 the bf16 side of <code>mlx</code> is bf16-autocast: it was faster than bf16-cast by the lower median over the 10 rounds.</p>
+  <div class="table-wrap"><table class="first-nowrap">
+<thead><tr><th>Priority, dtype, output</th><th class="num">mlx run medians (img/s)</th><th class="num">mlx spread</th><th class="num">torch-mps run medians (img/s)</th><th class="num">torch-mps spread</th><th class="num">Paired ratio: spread between runs</th><th class="num">Paired ratios of one run: min to max</th></tr></thead><tbody>
+<tr><td>P1 fp32, frame</td><td class="num">677.18 / 690.93</td><td class="num">2.0 %</td><td class="num">634.87 / 642.20</td><td class="num">1.2 %</td><td class="num">0.1 %</td><td class="num">0.977 to 1.082</td></tr>
+<tr><td>P1 fp16, frame</td><td class="num">1,434.61 / 1,458.20</td><td class="num">1.6 %</td><td class="num">1,657.32 / 1,677.33</td><td class="num">1.2 %</td><td class="num">0.6 %</td><td class="num">0.809 to 0.881</td></tr>
+<tr><td>P1 bf16, frame</td><td class="num">1,446.41 / 1,472.05</td><td class="num">1.8 %</td><td class="num">1,648.11 / 1,695.25</td><td class="num">2.9 %</td><td class="num">2.7 %</td><td class="num">0.817 to 0.906</td></tr>
+<tr><td>P2 fp32, patch</td><td class="num">4.75 / 3.99</td><td class="num">19.2 %</td><td class="num">4.38 / 3.63</td><td class="num">20.9 %</td><td class="num">0.8 %</td><td class="num">1.085 to 1.115</td></tr>
+<tr><td>P2 fp16, patch</td><td class="num">13.83 / 12.76</td><td class="num">8.3 %</td><td class="num">13.96 / 11.97</td><td class="num">16.6 %</td><td class="num">4.1 %</td><td class="num">0.989 to 1.080</td></tr>
+<tr><td>P2 bf16, patch</td><td class="num">14.81 / 12.34</td><td class="num">20.1 %</td><td class="num">13.36 / 11.97</td><td class="num">11.7 %</td><td class="num">0.4 %</td><td class="num">0.899 to 1.108</td></tr>
+</tbody></table></div>
+  <p class="caption"><b>Table 10.</b> The spread between runs of the raw throughput against the spread between runs of the paired ratio (our computation from <code>results/speed-pairs.jsonl</code>, the modes of Table 9, the lower median of the 5 rounds of each run). The two runs ran on the same day, about 5.5 h apart.</p>
+  <p>Table 10 shows why the pairing matters. At P2 the raw throughput of each backend fell from run 1 to run 2, with a spread between runs of 8.3 to 20.9 %. The spread between runs of the paired ratio is only 0.4 to 4.1 %. Step 5 measured a spread between runs on different days of about 20 % (F2 of <code>specs/05-all-sizes/verify.html</code>) against a noise of 1.6 to 3.0 % inside one session (probe paired-noise). Here the raw throughput shows the large term, and the pairing removes most of it. One round can still leave the noise band: the P1 fp32 ratio of round 1 of run 2 is 0.977, against 1.020 to 1.082 in the other 9 rounds.</p>
+
+  <h3>9.2 The matrix</h3>
+  <pre><code># src/dinov3_apple/speedup.py, lines 131 to 163
+def _fastest(lines: list[dict], output: str) -&gt; dict | None:
+    usable = [line for line in lines if _usable(line)]
+    return max(usable, key=lambda line: _ips(line, output)) if usable else None
+
+
+def _row(
+    cell: tuple[str, int, int], output: str, dtype: str, mlx: list[dict], torch: list[dict]
+) -&gt; SpeedupRow:
+    &quot;&quot;&quot;The main row of one cell, output and dtype from the candidate lines of both sides.&quot;&quot;&quot;
+    model_size, side, batch_size = cell
+    if dtype == &quot;fp32&quot; and model_size in NO_FP32_WEIGHTS:
+        return SpeedupRow(model_size, side, batch_size, output, dtype, reason=NO_FP32_REASON)
+    best_mlx, best_torch = _fastest(mlx, output), _fastest(torch, output)
+    if best_mlx is None or best_torch is None:
+        reasons = [_reasons(side_lines) for side_lines in (mlx, torch)]
+        reason = &quot;; &quot;.join(r for r in reasons if r) or &quot;not measured&quot;
+        return SpeedupRow(model_size, side, batch_size, output, dtype, reason=reason)
+    ratio = _ips(best_mlx, output) / _ips(best_torch, output)
+    return SpeedupRow(
+        model_size,
+        side,
+        batch_size,
+        output,
+        dtype,
+        mlx_mode=best_mlx[&quot;dtype_mode&quot;],
+        mlx_ips=_ips(best_mlx, output),
+        torch_mode=best_torch[&quot;dtype_mode&quot;],
+        torch_ips=_ips(best_torch, output),
+        torch_compile=bool(best_torch[&quot;compile&quot;]),
+        ratio=ratio,
+        verdict=single_verdict(ratio),
+        mark=best_torch.get(&quot;mark&quot;, &quot;&quot;),
+    )</code></pre>
+  <pre><code># src/dinov3_apple/speedup.py, lines 253 to 267
+def speedup_rows(lines: list[dict]) -&gt; list[SpeedupRow]:
+    &quot;&quot;&quot;Return the main rows and the quantized rows of each cell that has a line.
+
+    ADR 0004 on both sides: the mlx side takes the fastest valid unquantized mode of the dtype;
+    the torch-mps side the fastest valid row of the dtype, from the matrix or from a follow-up
+    group of the compile check. Quantized rows never join the choice (D22).
+
+    Args:
+        lines: The lines of results/speed-matrix.jsonl. The last line of each (phase, backend,
+            key) counts, so a rerun of a skipped worker replaces its skip line.
+    &quot;&quot;&quot;
+    rows = []
+    for cell, group in _by_cell(lines).items():
+        rows += _cell_rows(cell, group, quantized=True)
+    return rows</code></pre>
+  <ul>
+    <li><b>ADR 0004 on both sides.</b> <code>_fastest</code> takes the fastest valid line of each side for one output and one dtype. The <code>mlx</code> side takes only unquantized lines (D22). The <code>torch-mps</code> side can take a compiled or an eager line.</li>
+    <li><b>Empty cells.</b> The 18 ViT-7B/16 fp32 cells get the reason "ADR 0008: ViT-7B/16 never loads its fp32 weights" before any search. A cell without a valid line on one side gives the reasons of that side.</li>
+    <li><b><code>SpeedupRow</code></b> holds the cell, the output, the dtype, <code>bits</code>, the mode and the throughput of each side, <code>torch_compile</code>, the ratio, the ratio to the unquantized row (quantized rows only), the verdict, the mark, the reason and the parity of image 0.</li>
+    <li><b>The phases.</b> <code>_latest</code> keeps the last line of each (phase, backend, key) of the phases "matrix" and "compile-check". So the gate J13 stays out, and the lines of a follow-up group stand next to the matrix lines of the same cell. <code>_fastest</code> then takes the faster line of the two. In the four follow-up groups of Section 9.3 both sides came from the follow-up group. But a cell can, in principle, mix two sessions.</li>
+  </ul>
+  <div class="table-wrap"><table class="first-nowrap">
+<thead><tr><th>Model size</th><th>Dtype</th><th class="num">Cells</th><th class="num">Above 1</th><th class="num">of them inside the noise</th><th class="num">Not above 1</th><th class="num">of them inside the noise</th><th class="num">Empty</th><th class="num">Paired ratio: min to max</th></tr></thead><tbody>
+<tr><td>ViT-S/16</td><td>fp32</td><td class="num">18</td><td class="num">12</td><td class="num">4</td><td class="num">6</td><td class="num">0</td><td class="num">0</td><td class="num">0.950 to 1.262</td></tr>
+<tr><td>ViT-S/16</td><td>fp16</td><td class="num">18</td><td class="num">2</td><td class="num">0</td><td class="num">16</td><td class="num">0</td><td class="num">0</td><td class="num">0.801 to 1.465</td></tr>
+<tr><td>ViT-S/16</td><td>bf16</td><td class="num">18</td><td class="num">2</td><td class="num">0</td><td class="num">16</td><td class="num">0</td><td class="num">0</td><td class="num">0.842 to 1.400</td></tr>
+<tr><td>ViT-S+/16</td><td>fp32</td><td class="num">18</td><td class="num">12</td><td class="num">4</td><td class="num">6</td><td class="num">6</td><td class="num">0</td><td class="num">0.989 to 1.245</td></tr>
+<tr><td>ViT-S+/16</td><td>fp16</td><td class="num">18</td><td class="num">2</td><td class="num">0</td><td class="num">16</td><td class="num">0</td><td class="num">0</td><td class="num">0.853 to 1.475</td></tr>
+<tr><td>ViT-S+/16</td><td>bf16</td><td class="num">18</td><td class="num">2</td><td class="num">0</td><td class="num">16</td><td class="num">0</td><td class="num">0</td><td class="num">0.862 to 1.365</td></tr>
+<tr><td>ViT-B/16</td><td>fp32</td><td class="num">18</td><td class="num">14</td><td class="num">6</td><td class="num">4</td><td class="num">4</td><td class="num">0</td><td class="num">0.982 to 1.226</td></tr>
+<tr><td>ViT-B/16</td><td>fp16</td><td class="num">18</td><td class="num">6</td><td class="num">2</td><td class="num">12</td><td class="num">3</td><td class="num">0</td><td class="num">0.934 to 1.056</td></tr>
+<tr><td>ViT-B/16</td><td>bf16</td><td class="num">18</td><td class="num">8</td><td class="num">2</td><td class="num">10</td><td class="num">3</td><td class="num">0</td><td class="num">0.906 to 1.055</td></tr>
+<tr><td>ViT-L/16</td><td>fp32</td><td class="num">18</td><td class="num">10</td><td class="num">4</td><td class="num">8</td><td class="num">0</td><td class="num">0</td><td class="num">0.844 to 1.205</td></tr>
+<tr><td>ViT-L/16</td><td>fp16</td><td class="num">18</td><td class="num">8</td><td class="num">4</td><td class="num">10</td><td class="num">2</td><td class="num">0</td><td class="num">0.937 to 1.205</td></tr>
+<tr><td>ViT-L/16</td><td>bf16</td><td class="num">18</td><td class="num">4</td><td class="num">0</td><td class="num">14</td><td class="num">0</td><td class="num">0</td><td class="num">0.864 to 1.147</td></tr>
+<tr><td>ViT-H+/16</td><td>fp32</td><td class="num">18</td><td class="num">14</td><td class="num">2</td><td class="num">4</td><td class="num">0</td><td class="num">0</td><td class="num">0.909 to 1.282</td></tr>
+<tr><td>ViT-H+/16</td><td>fp16</td><td class="num">18</td><td class="num">14</td><td class="num">4</td><td class="num">4</td><td class="num">2</td><td class="num">0</td><td class="num">0.867 to 1.402</td></tr>
+<tr><td>ViT-H+/16</td><td>bf16</td><td class="num">18</td><td class="num">10</td><td class="num">4</td><td class="num">8</td><td class="num">2</td><td class="num">0</td><td class="num">0.796 to 1.130</td></tr>
+<tr><td>ViT-7B/16</td><td>fp32</td><td class="num">18</td><td class="num">0</td><td class="num">0</td><td class="num">0</td><td class="num">0</td><td class="num">18</td><td class="num">–</td></tr>
+<tr><td>ViT-7B/16</td><td>fp16</td><td class="num">18</td><td class="num">10</td><td class="num">0</td><td class="num">8</td><td class="num">0</td><td class="num">0</td><td class="num">0.876 to 1.166</td></tr>
+<tr><td>ViT-7B/16</td><td>bf16</td><td class="num">18</td><td class="num">10</td><td class="num">0</td><td class="num">8</td><td class="num">0</td><td class="num">0</td><td class="num">0.849 to 1.161</td></tr>
+<tr class="group"><td>All</td><td></td><td class="num">324</td><td class="num">140</td><td class="num">36</td><td class="num">166</td><td class="num">22</td><td class="num">18</td><td class="num"></td></tr>
+</tbody></table></div>
+  <p class="caption"><b>Table 11.</b> The verdicts of the 324 cells of the matrix section (section 2 of <code>results/speedup-table.md</code>; our count). Each model size has 9 cells (3 input resolutions × 3 batch sizes) × 2 outputs for each dtype. "Inside the noise": the paired ratio lies within 1 ± 0.03. The count of the quantized section (section 3) is the subject of <a href="06-3-quantized-weights.html">06-3</a>.</p>
+  <p>The pattern of Table 11 follows from Sections 4 and 6. In fp16 and bf16, ViT-S/16 and ViT-S+/16 are above 1 only at 224 px and batch size 1 (1.355 to 1.475), where the fixed cost of each <code>torch-mps</code> forward pass counts most. At larger batches <code>torch.compile</code> wins (down to 0.801). For the large model sizes both backends reach the same GPU limit, and the verdicts split. In fp32, <code>mlx</code> is above 1 in 62 of 90 cells. In fp16 and bf16 it is above 1 in 78 of 216 cells. 36 of the 140 cells above 1 and 22 of the 166 cells not above 1 lie inside the noise.</p>
+  <h3>9.3 The compile check</h3>
+  <pre><code># src/dinov3_apple/speedup.py, lines 401 to 434
+def compile_check(
+    matrix_lines: list[dict], step3_lines: list[dict]
+) -&gt; list[tuple[str, int, int, str]]:
+    &quot;&quot;&quot;Return each (model size, input resolution, batch size, dtype mode) whose compiled torch-mps
+    row of the matrix is below the Step 3 eager median of the same mode, for the frame or the
+    patch output (Section 3.8 of the plan). Job J16 runs a follow-up group for each.
+
+    Args:
+        matrix_lines: The lines of results/speed-matrix.jsonl.
+        step3_lines: The lines of results/baseline-torch-mps.jsonl.
+    &quot;&quot;&quot;
+    eager: dict[tuple, list[dict]] = {}
+    for line in step3_lines:
+        if (
+            line.get(&quot;backend&quot;, &quot;torch-mps&quot;) == &quot;torch-mps&quot;
+            and not line[&quot;compile&quot;]
+            and _usable(line)
+        ):
+            eager.setdefault((*_cell(line), line[&quot;dtype_mode&quot;]), []).append(line)
+    listed = set()
+    for line in _latest(matrix_lines):
+        if line[&quot;backend&quot;] != &quot;torch-mps&quot; or not line[&quot;compile&quot;] or not _usable(line):
+            continue
+        if line.get(&quot;phase&quot;, &quot;matrix&quot;) != &quot;matrix&quot;:
+            continue
+        key = (*_cell(line), line[&quot;dtype_mode&quot;])
+        if key not in eager:
+            continue
+        for output in OUTPUTS:
+            median = _lower_median([_ips(other, output) for other in eager[key]])
+            if _ips(line, output) &lt; median:
+                listed.add(key)
+    order = {size: index for index, size in enumerate(MODEL_SIZES)}
+    return sorted(listed, key=lambda key: (order[key[0]], *key[1:]))</code></pre>
+  <p>The compile check compares each compiled <code>torch-mps</code> row of the matrix with the eager median of Step 3 (<code>results/baseline-torch-mps.jsonl</code>). ADR 0004 takes the fastest valid row, and a compiled row can be slower than eager in a configuration that nobody measured. So each listed group gets one follow-up group in job J16: <code>torch-mps</code> eager, <code>torch-mps</code> compiled and <code>mlx</code>.</p>
+  <div class="table-wrap">
+    <table class="first-nowrap">
+      <thead><tr><th>Group (ViT-S/16, fp32)</th><th class="num">Step 3 eager (img/s)</th><th class="num">Matrix, compiled (img/s)</th><th class="num">Follow-up, eager (img/s)</th><th class="num">Follow-up, compiled (img/s)</th><th class="num">Follow-up, compiled / eager</th></tr></thead>
+      <tbody>
+        <tr><td>224 px, batch size 32</td><td class="num">765.5</td><td class="num">689.4</td><td class="num">767.3</td><td class="num">998.6</td><td class="num">1.30</td></tr>
+        <tr><td>448 px, batch size 32</td><td class="num">159.7</td><td class="num">154.7</td><td class="num">163.5</td><td class="num">209.9</td><td class="num">1.28</td></tr>
+        <tr><td>512 px, batch size 8</td><td class="num">112.9</td><td class="num">98.9</td><td class="num">118.8</td><td class="num">143.1</td><td class="num">1.20</td></tr>
+        <tr><td>512 px, batch size 32</td><td class="num">96.2</td><td class="num">82.8</td><td class="num">99.4</td><td class="num">112.5</td><td class="num">1.13</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 12.</b> The four groups of the compile check (section 7 of <code>results/speedup-table.md</code>), frame output. Step 3 eager: <code>results/baseline-torch-mps.jsonl</code>. Matrix: the matrix run, 14:16 to 14:30 UTC. Follow-up: phase "compile-check" of <code>results/speed-matrix.jsonl</code>, 19:33 to 19:36 UTC. No eager fallback and no other mark occurred.</p>
+  <p>All four groups are ViT-S/16 in fp32. In the follow-up groups the compiled row is 13 to 30 % faster than the eager row of the same session. So the four entries of the compile check came from the difference between sessions, not from <code>torch.compile</code>. The follow-up rows are 36 to 45 % faster than the matrix rows of the same configuration: the speed of the Mac differed between 14:16 and 19:33 UTC.</p>
+  <p>The plan expected a gain of 36 to 71 % from <code>torch.compile</code> outside P1 and P2 (probe torch-compile-offp, <code>explore.html</code>). The committed lines give these values:</p>
+  <ul>
+    <li><b>Across days</b> (Step 6 matrix, compiled, against Step 3, eager, bf16-cast, frame output): ViT-S/16 at 224 px gives 2.23 at batch size 1 (342.1 against 153.3 img/s) and 1.68 at batch size 32 (2,094.6 against 1,243.2). ViT-B/16 at 448 px and batch size 8 gives 1.41 (149.8 against 106.5). ViT-H+/16 at 224 px and batch size 32 gives 1.48 (79.5 against 53.9).</li>
+    <li><b>In one session</b> (the follow-up groups, ViT-S/16, fp32): 1.13 to 1.30.</li>
+    <li><b>ViT-7B/16</b> (gate J13, bf16-cast): 1.16 at 224 px and batch size 1 (14.43 against 12.48 img/s), and 1.00 at 512 px and batch size 8 (2.128 against 2.131 img/s). The first compiled call took 10.6 s and 14.3 s.</li>
+  </ul>
+</section>
+
+<section id="lock">
+  <h2>10 The GPU lock</h2>
+  <p>In Step 5, light jobs of other agents ran during timing runs (F14). The wait loop of Step 5 (Section 13 of <code>specs/05-all-sizes/verify.html</code>) protected only the agent that ran it. Step 6 makes the run rule code: every entry point takes the GPU lock. The entry points are <code>tests/conftest.py</code> (from <code>pytest_sessionstart</code> to <code>pytest_sessionfinish</code>) and <code>main</code> of <code>bench_speed.py</code>, <code>bench_mlx_port.py</code>, <code>benchmark.py</code>, <code>cross_check.py</code>, <code>make_reference.py</code> and <code>profile_block.py</code>. A light GPU job runs through the command line <code>uv run python -m dinov3_apple.gpu_lock -- &lt;command&gt;</code> (<code>CLAUDE.md</code>, run rules).</p>
+  <figure>
+    <div class="fig"><svg viewBox="0 0 960 480" role="img" aria-labelledby="fig6-title" font-family="-apple-system, Helvetica Neue, Arial, sans-serif">
+      <title id="fig6-title">The actions of heavy_job: registry entry, flock, wait for jobs outside the lock, hold, end</title>
+      <defs><marker id="arrow6" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#4a5655"/></marker></defs>
+      <rect width="960" height="480" fill="#ffffff"/>
+      <g font-size="12" fill="#111414" text-anchor="middle">
+        <rect x="20" y="40" width="130" height="74" rx="5" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="85" y="66" font-weight="600">heavy_job(label)</text>
+        <text x="85" y="84" font-size="10.5">timeout_s = None:</text>
+        <text x="85" y="99" font-size="10.5">wait for ever</text>
+        <path d="M265,35 L360,77 L265,119 L170,77 Z" fill="#fbf1df" stroke="#b26b00" stroke-width="1.5"/>
+        <text x="265" y="72" font-size="11">LOCK_ENV names this</text>
+        <text x="265" y="87" font-size="11">process or an ancestor?</text>
+        <rect x="380" y="40" width="160" height="74" rx="5" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="460" y="62" font-weight="600">1 registry entry</text>
+        <text x="460" y="80" font-size="10.5">LOCK_REGISTRY / pid = label</text>
+        <text x="460" y="95" font-size="10.5">log: wait</text>
+        <rect x="560" y="40" width="170" height="74" rx="5" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="645" y="62" font-weight="600">2 flock on LOCK_PATH</text>
+        <text x="645" y="80" font-size="10.5">LOCK_EX | LOCK_NB</text>
+        <text x="645" y="95" font-size="10.5">sets the order of the waiters</text>
+        <rect x="750" y="40" width="190" height="74" rx="5" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="845" y="62" font-weight="600">3 other_heavy_jobs()</text>
+        <text x="845" y="80" font-size="10.5">heavy jobs outside</text>
+        <text x="845" y="95" font-size="10.5">the GPU lock?</text>
+        <rect x="560" y="160" width="380" height="60" rx="5" fill="#f5f8f7" stroke="#4a5655" stroke-width="1.5"/>
+        <text x="750" y="182" font-weight="600">wait poll_s (20 s), then try again</text>
+        <text x="750" y="200" font-size="10.5">log: "wait for" and the command line, once for each job</text>
+        <text x="750" y="214" font-size="10.5">after timeout_s: log "timeout", raise GpuLockTimeoutError</text>
+        <rect x="170" y="160" width="190" height="60" rx="5" fill="#f5f8f7" stroke="#4a5655" stroke-width="1.5"/>
+        <text x="265" y="184" font-weight="600">yes: run at once</text>
+        <text x="265" y="202" font-size="10.5">a child of the holder: no lock action</text>
+        <rect x="750" y="262" width="190" height="74" rx="5" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="845" y="284" font-weight="600">hold</text>
+        <text x="845" y="302" font-size="10.5">log: hold</text>
+        <text x="845" y="317" font-size="10.5">LOCK_ENV = own pid</text>
+        <rect x="440" y="262" width="280" height="74" rx="5" fill="#ffffff" stroke="#4a5655" stroke-width="1.5"/>
+        <text x="580" y="284" font-weight="600">the job runs (yield)</text>
+        <text x="580" y="302" font-size="10.5">its child processes inherit LOCK_ENV</text>
+        <text x="580" y="317" font-size="10.5">and enter at once</text>
+        <rect x="110" y="262" width="300" height="74" rx="5" fill="#e6f2f2" stroke="#057379" stroke-width="1.5"/>
+        <text x="260" y="284" font-weight="600">end (finally)</text>
+        <text x="260" y="302" font-size="10.5">pop LOCK_ENV, log: end, unlock the flock,</text>
+        <text x="260" y="317" font-size="10.5">remove the registry entry</text>
+        <text x="370" y="70" font-size="11" fill="#4a5655">no</text>
+        <text x="280" y="140" font-size="11" fill="#4a5655">yes</text>
+        <text x="600" y="140" font-size="11" fill="#4a5655">busy</text>
+        <text x="694" y="140" font-size="11" fill="#4a5655">again</text>
+        <text x="786" y="140" font-size="11" fill="#4a5655">found</text>
+        <text x="902" y="140" font-size="11" fill="#4a5655">again</text>
+        <text x="946" y="250" font-size="11" fill="#4a5655" text-anchor="end">none</text>
+      </g>
+      <g stroke="#4a5655" stroke-width="1.5" fill="none">
+        <path d="M150,77 H166" marker-end="url(#arrow6)"/>
+        <path d="M360,77 H376" marker-end="url(#arrow6)"/>
+        <path d="M540,77 H556" marker-end="url(#arrow6)"/>
+        <path d="M730,77 H746" marker-end="url(#arrow6)"/>
+        <path d="M265,119 V156" marker-end="url(#arrow6)"/>
+        <path d="M620,114 V156" marker-end="url(#arrow6)"/>
+        <path d="M680,160 V118" marker-end="url(#arrow6)"/>
+        <path d="M810,114 V156" marker-end="url(#arrow6)"/>
+        <path d="M890,160 V118" marker-end="url(#arrow6)"/>
+        <path d="M940,77 H952 V299 H944" marker-end="url(#arrow6)"/>
+        <path d="M750,299 H724" marker-end="url(#arrow6)"/>
+        <path d="M440,299 H414" marker-end="url(#arrow6)"/>
+      </g>
+      <rect x="20" y="360" width="920" height="104" rx="6" fill="#f5f8f7" stroke="#d6dedd"/>
+      <g font-size="11.5" fill="#111414">
+        <text x="34" y="382"><tspan font-weight="600">other_heavy_jobs leaves out:</tspan> the own process and its ancestors (for example uv run); the processes of the own process group</text>
+        <text x="34" y="400">(a shell pipeline); each registered process that still runs, its ancestors and its child processes at all depths. A dead registry entry counts as absent.</text>
+        <text x="34" y="422"><tspan font-weight="600">HEAVY_JOB_PATTERN:</tspan> [b]in/pytest | [s]cripts/bench | [c]ross_check\.py | [m]ake_reference\.py | [p]rofile_block\.py | [d]inov3_apple\.gpu_lock</text>
+        <text x="34" y="444">macOS releases a flock when its process ends, so a crash leaves no stale lock. The lock file, the registry and the lock log lie outside the repo.</text>
+      </g>
+    </svg></div>
+    <figcaption><b>Figure 6.</b> The actions of <code>heavy_job</code>. The flock comes first and sets the order of the lock-aware jobs. Only the holder of the flock waits for jobs outside the lock. A waiter in the registry never counts as a job outside the lock, so two waiters never wait for each other (T5). The holder writes its process id into <code>LOCK_ENV</code>, so its workers and its pytest children run at once (T4).</figcaption>
+  </figure>
+  <pre><code># src/dinov3_apple/gpu_lock.py, lines 37 to 51
+# The pattern of the wait loop of Step 5 plus the command line of this module. The brackets keep a
+# pgrep of the pattern from a match with its own command line.
+HEAVY_JOB_PATTERN = (
+    r&quot;[b]in/pytest|[s]cripts/bench|[c]ross_check\.py|[m]ake_reference\.py|[p]rofile_block\.py&quot;
+    r&quot;|[d]inov3_apple\.gpu_lock&quot;
+)
+LOCK_PATH = Path.home() / &quot;.cache&quot; / &quot;dinov3-apple&quot; / &quot;gpu.lock&quot;
+LOCK_REGISTRY = LOCK_PATH.parent / &quot;gpu-lock.d&quot;  # one file for each lock-aware process
+LOG_PATH = LOCK_PATH.parent / &quot;gpu-lock.log&quot;
+LOCK_ENV = &quot;DINOV3_GPU_LOCK&quot;  # the process id of the holder; its child processes inherit it
+POLL_S = 20.0
+
+
+class GpuLockTimeoutError(TimeoutError):
+    &quot;&quot;&quot;A wait for the GPU lock took longer than its time limit.&quot;&quot;&quot;</code></pre>
+  <ul>
+    <li><b>The brackets in <code>HEAVY_JOB_PATTERN</code>.</b> <code>[b]in/pytest</code> matches "bin/pytest" but not its own text "[b]in/pytest". So a <code>pgrep</code> of the pattern does not find its own command line. The pattern is the pattern of the Step 5 wait loop plus <code>[d]inov3_apple\.gpu_lock</code>, the command line of light jobs.</li>
+    <li><b><code>LOCK_PATH</code></b> lies in the cache folder of the user, outside the repo. So all worktrees share one lock.</li>
+  </ul>
+  <pre><code># src/dinov3_apple/gpu_lock.py, lines 117 to 144
+def other_heavy_jobs(pattern: str = HEAVY_JOB_PATTERN, registry: Path = LOCK_REGISTRY) -&gt; list[str]:
+    &quot;&quot;&quot;Return the command lines of the heavy jobs outside the GPU lock.
+
+    A process outside the lock matches pattern and is none of these: the own process or one of its
+    ancestors, a process of the own process group (for example the other commands of the shell
+    pipeline that started this job), a registered process, an ancestor or a child of a registered
+    process.
+
+    Args:
+        pattern: The regular expression of the command lines of heavy jobs.
+        registry: The folder of the registry entries.
+
+    Returns:
+        The command lines, sorted by process id.
+    &quot;&quot;&quot;
+    groups = _process_groups()
+    table = {pid: (ppid, command) for pid, (ppid, _, command) in groups.items()}
+    own_group = os.getpgid(0)
+    registered = registered_processes(registry, table)
+    known = _ancestors(os.getpid(), table) | _descendants(registered, table)
+    for pid in registered:
+        known |= _ancestors(pid, table)
+    regex = re.compile(pattern)
+    return [
+        command
+        for pid, (_, command) in sorted(table.items())
+        if pid not in known and groups[pid][1] != own_group and regex.search(command)
+    ]</code></pre>
+  <ul>
+    <li><b>Why leave out the ancestors.</b> A process that waits inside <code>heavy_job</code> matches the pattern, and so does its <code>uv run</code> parent. Without line 136 each job would wait for itself.</li>
+    <li><b>Why leave out the registered processes.</b> Two lock-aware waiters both match the pattern. If each waited for all matching processes before the flock, they would wait for each other for ever. The registry marks them as lock-aware; the flock sets their order.</li>
+    <li><b>Why leave out the own process group (line 143).</b> A shell pipeline such as <code>uv run pytest | tee log</code> starts its commands in one process group. They are not ancestors of each other.</li>
+  </ul>
+  <pre><code># src/dinov3_apple/gpu_lock.py, lines 201 to 245
+    if _holds_lock_of_ancestor():
+        yield
+        return
+    registry.mkdir(parents=True, exist_ok=True)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    entry = registry / str(os.getpid())
+    entry.write_text(label)
+    start = time.monotonic()
+    _log_lock(log_path, label, &quot;wait&quot;)
+    try:
+        with lock_path.open(&quot;a&quot;) as file:
+            waited_for: set[str] = set()
+
+            def wait(others: list[str]) -&gt; None:
+                for other in set(others) - waited_for:
+                    _log_lock(log_path, label, &quot;wait for&quot;, other)
+                    waited_for.add(other)
+                sleep_s = poll_s
+                if timeout_s is not None:
+                    left = timeout_s - (time.monotonic() - start)
+                    if left &lt;= 0:
+                        _log_lock(log_path, label, &quot;timeout&quot;, f&quot;after {timeout_s} s&quot;)
+                        raise GpuLockTimeoutError(
+                            f&quot;{label}: no GPU lock after {timeout_s} s, &quot;
+                            f&quot;waits for {&#x27;; &#x27;.join(others)}&quot;
+                        )
+                    sleep_s = min(poll_s, left + 0.01)
+                time.sleep(sleep_s)
+
+            while not _try_flock(file):
+                wait([&quot;the holder of the GPU lock&quot;])
+            try:
+                while others := other_heavy_jobs(pattern, registry):
+                    wait(others)
+                _log_lock(log_path, label, &quot;hold&quot;)
+                os.environ[LOCK_ENV] = str(os.getpid())
+                try:
+                    yield
+                finally:
+                    os.environ.pop(LOCK_ENV, None)
+                    _log_lock(log_path, label, &quot;end&quot;)
+            finally:
+                fcntl.flock(file, fcntl.LOCK_UN)
+    finally:
+        entry.unlink(missing_ok=True)</code></pre>
+  <ul>
+    <li><b>Lines 201 to 203.</b> A child of the holder runs at once. <code>_holds_lock_of_ancestor</code> checks that <code>LOCK_ENV</code> names this process or one of its ancestors, so a stale value from another shell does not open the lock.</li>
+    <li><b>Lines 214 to 228: the wait.</b> Each wait sleeps <code>poll_s</code> or less. It logs each new job outside the lock once. With <code>timeout_s</code> a wait past the limit logs "timeout" and raises <code>GpuLockTimeoutError</code> (R54, T7).</li>
+    <li><b>Lines 230 to 234.</b> First the flock, then the wait for jobs outside the lock. The order is the reason why two waiters never block each other.</li>
+    <li><b>Lines 237 to 245.</b> The <code>finally</code> blocks release the lock in reverse order, also after an error of the job.</li>
+  </ul>
+  <pre><code># src/dinov3_apple/gpu_lock.py, lines 267 to 287
+    args = parser.parse_args(argv)
+    command = args.command[1:] if args.command[:1] == [&quot;--&quot;] else args.command
+    if not command:
+        parser.error(&quot;give the command after --&quot;)
+    try:
+        folder = args.lock_dir
+        paths = (
+            {}
+            if folder is None
+            else {
+                &quot;lock_path&quot;: folder / LOCK_PATH.name,
+                &quot;registry&quot;: folder / LOCK_REGISTRY.name,
+                &quot;log_path&quot;: folder / LOG_PATH.name,
+            }
+        )
+        label = args.label or &quot; &quot;.join(command)
+        with heavy_job(label, poll_s=args.poll, timeout_s=args.timeout, **paths):
+            return subprocess.run(command, check=False).returncode
+    except GpuLockTimeoutError as error:
+        print(f&quot;gpu_lock: {error}&quot;, file=sys.stderr)
+        return 1</code></pre>
+  <ul>
+    <li><b><code>main</code></b> runs one command under the lock and returns its exit code, or 1 after a timeout. The hidden option <code>--lock-dir</code> lets the tests use a temporary lock file, registry and log.</li>
+    <li><b>What the lock cannot do.</b> It cannot stop a job outside the lock that starts during a hold. So the driver records such jobs before and after each worker in the field <code>other_heavy_jobs_seen</code> (T9). In all 941 committed Step 6 lines (99 change lines, 22 Learn lines, 594 matrix lines, 200 pair lines, 4 profile lines and 22 sweep lines) the list is empty.</li>
+  </ul>
+</section>
+
+<section id="surprises">
+  <h2>11 Surprises</h2>
+  <ol>
+    <li class="note"><b>The quadratic term makes ViT-S/16 more efficient, not less.</b> From 224 to 1024 px its FLOPs grow 51.78 times, but its batch time grows only 30.91 times (Table 3). The SDPA kernel at large T runs at a higher rate than the small matmuls of D = 384 (probe sdpa, measured in fp16; the measured bf16 rows agree, Figure 2). The SDPA share of 63.7 % at 1024 px (Table 4 of the plan) is a share of FLOPs, not of time.</li>
+    <li class="note"><b>No T² buffer in the MLX SDPA kernel.</b> The probe sdpa found at most 0.012 MB of extra memory in 139 cells. The Learn data agrees: each MLX peak at 1024 px is below the size of one score matrix of one block (1.97 GB against 3.23 GB, 3.55 GB against 5.38 GB). So <code>required_bench_bytes</code> drops the score term on <code>mlx</code>, and at P2 the two needs differ by exactly that term.</li>
+    <li class="note"><b>bf16 SDPA is slower at large T.</b> The probe sdpa measured 35 TFLOP/s in bf16 against 57 TFLOP/s in fp16 at T = 9,221 (R45). In one session, ViT-H+/16 in bf16-cast needs 5.48 times the time for 5.07 times the FLOPs from 512 to 1024 px, and its reached TFLOP/s falls from 31.2 to 28.9. The Learn data has no fp16 row above 512 px, so it shows the effect only against the FLOPs, not against fp16.</li>
+    <li class="note"><b>ViT-S/16 at 224 px is best at batch size 32 or more; ViT-H+/16 at 512 px is flat.</b> The probe batch-knee found the best ViT-S/16 batch size at 32 (eager). The compiled sweep gives 64 in round 1, with 32 to 256 within 2.4 %, and again 64 among the later workers of round 2. ViT-H+/16 stays within 8 % from batch size 1 to 16. At 768 and 1024 px batch size 1 already fills the GPU.</li>
+    <li class="note"><b>The Mac lost up to 30 % of its throughput within five minutes.</b> Round 2 of the sweep ran 4.6 to 30.1 % slower than round 1, with AC power, no thermal warning and no job outside the GPU lock. The two workers of ViT-S/16 at batch size 128 started 4.5 min apart (19:20:09 and 19:24:36 UTC). The mean of the two rounds in Table 6 of <code>results/speedup-table.md</code> therefore has its highest value at batch size 256 for ViT-S/16. A single sweep round in a rotated order cannot separate the batch size from such a drift; the paired rounds of the speedup runs can.</li>
+    <li class="note"><b><code>torch.compile</code> gains 36 to 71 % outside P1 and P2.</b> The probe torch-compile-offp measured it. The committed lines give 1.41 to 2.23 across days and 1.13 to 1.30 in one session (Section 9.3). For ViT-7B/16 at 512 px and batch size 8 the gain is 1.00. A compiled <code>mlx</code> row against an eager <code>torch-mps</code> row would overstate the speedup by about this factor, so every <code>torch-mps</code> worker of the matrix runs <code>torch.compile</code> (ADR 0009).</li>
+    <li class="note"><b>The compile check found only the drift between sessions.</b> Its four groups (all ViT-S/16, fp32) had a compiled matrix row below the Step 3 eager median. In the follow-up groups the compiled row was 13 to 30 % faster than the eager row of the same session.</li>
+    <li class="note"><b>The spread between runs is large for the throughput and small for the paired ratio.</b> Step 5 measured about 20 % between runs on different days, against 1.6 to 3.0 % of noise inside one session. In Step 6 the raw throughput at P2 moved by 8.3 to 20.9 % between two runs 5.5 h apart, but the paired ratios moved by only 0.4 to 4.1 % (Table 10). The pairing turns the large term into the small one.</li>
+    <li class="note"><b>The Neural Accelerators give 1.87 to 2.82 times the throughput.</b> The build measured more than the probe nax-ab (1.81 and 2.69). Without them <code>mlx</code> reaches 11.1 TFLOP/s at P2, far below the 27.8 TFLOP/s of <code>torch-mps</code>. So <code>torch-mps</code> very probably also uses the matrix units, and the matmul limit of Section 4 is then the same hardware for both backends. The result files do not record the kernels of <code>torch-mps</code>, so this is a conclusion from the rates only.</li>
+    <li class="note"><b>At P1 Python is not the problem.</b> The host share is 3.3 to 3.5 %. One compiled forward pass of ViT-S/16 has 637 operation nodes (841 eager), about 6 µs of GPU time each. The profile cannot name the part where <code>torch.compile</code> wins, because it has no <code>torch.compile</code> part times.</li>
+    <li class="note"><b><code>PAIR_FIELDS</code> is not used.</b> The driver writes the pairing fields from its own list <code>PAIR_KEYS</code>. A change of one list does not change the other.</li>
+  </ol>
+</section>
+
+<section id="sources">
+  <h2>12 Sources</h2>
+  <ul>
+    <li>Repo code at commit <code>2567808</code>: <code>src/dinov3_apple/bench.py</code>, <code>src/dinov3_apple/mlx_bench.py</code>, <code>src/dinov3_apple/speedup.py</code>, <code>src/dinov3_apple/gpu_lock.py</code>, <code>src/dinov3_apple/machine.py</code> (line 17), <code>src/dinov3_apple/torch_bench.py</code> (lines 131 to 133, 180), <code>src/dinov3_apple/flops.py</code> (<code>part_flops</code>, <code>image_flops</code>, <code>MODEL_SHAPES</code>), <code>src/dinov3_apple/mlx_model.py</code> (<code>patch_dtype</code>), <code>scripts/bench_speed.py</code> (<code>PAIR_KEYS</code>, <code>run_specs</code>, <code>main</code>, <code>_rotate</code>, <code>pairs_plan</code>), <code>scripts/speedup_table.py</code> (the sweep median), <code>scripts/baseline_table.py</code> (<code>load_footprint_peak</code>). Commit <code>11a45b1</code> for the code before the build.</li>
+    <li>Tests: <code>tests/test_bench.py</code> (T12, T15 to T20), <code>tests/test_bench_speed.py</code> (T9, T21 to T24), <code>tests/test_speedup.py</code> (T25 to T28), <code>tests/test_gpu_lock.py</code> (T1 to T8), <code>tests/test_machine.py</code> (T31), <code>tests/test_mlx_environment.py</code> (T29, T30, T56, <code>test_change_worker_forms</code>, <code>test_profile_worker_parts</code>), <code>tests/test_mlx_parts.py</code> (<code>test_mlx_block_part</code>, T57 <code>test_mlx_sdpa_nax_fingerprint</code>), <code>tests/test_torch_bench.py</code>, <code>tests/test_baseline_table.py</code> (T13).</li>
+    <li>Spec files: <code>specs/06-speed/plan.html</code> (Tables 1, 4, 5, 6, 8, 9, 11, 12, 13 and 15; Sections 2, 3.3 to 3.15 and 3.19), <code>specs/06-speed/explore.html</code> (Sections 2 and 2.4 with Tables 7 and 8; Section 2.5 with Figure 3 and Table 9; the probes sdpa, highres, batch-knee, torch-compile-offp, paired-noise, nax-record and nax-ab), <code>specs/05-all-sizes/verify.html</code> (F2, F14, F17).</li>
+    <li>Result files: <code>results/speed-matrix.jsonl</code> (594 lines: the matrix, the gate J13, the follow-up groups), <code>results/speed-learn.jsonl</code> (22 lines: 768 and 1024 px, the token range, the Neural Accelerators on and off), <code>results/speed-sweep.jsonl</code> (22 lines), <code>results/speed-pairs.jsonl</code> (200 lines: two paired runs), <code>results/speed-profile-p1.jsonl</code> (4 lines), <code>results/speed-changes.jsonl</code> (99 lines: no C7), <code>results/speedup-table.md</code> (sections 1, 2, 4, 5, 7 and 8), <code>results/baseline-torch-mps.jsonl</code> (the Step 3 eager rows of Section 9.3), <code>results/block-profile-torch-mps.jsonl</code> (through Table 8 of the speedup table).</li>
+    <li>Other explainers: <a href="03-where-the-compute-goes.html">03</a> (Table 4: GFLOP per image; Section 7: reached TFLOP/s), <a href="04-5-mlp.html">04-5</a> (the fixed cost of a <code>torch-mps</code> forward pass), <a href="05-3-numeric-range.html">05-3</a> (fp16 overflow).</li>
+    <li>Computation of the agent for this page (CPU only, Python with <code>json</code>): the FLOPs of one image with the formula of <code>flops.image_flops</code>; the reached TFLOP/s of Tables 2 and 4 and of Figure 2; the time ratios of Table 3; the paired ratios of each round in Figure 5 and Table 10; the counts of Table 11; the sums of Table 8; the score-matrix sizes of Section 3; the compile gains of Section 9.3.</li>
+    <li>Glossary: <code>GLOSSARY.md</code> (throughput, reached TFLOP/s, best batch size, paired group, paired ratio, speedup, speedup table, inside the noise, spread between runs, MLX peak, load footprint peak, heavy job, GPU lock, NAX kernel, Neural Accelerators on / off).</li>
+  </ul>
+</section>
+
+<footer class="steps">Previous: <a href="06-1-compiled-forward-pass.html">06-1 Compiled forward pass</a> · Next: <a href="06-3-quantized-weights.html">06-3 Quantized weights</a>.</footer>
+</main>
+</body>
+</html>

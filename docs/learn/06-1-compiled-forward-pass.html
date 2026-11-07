@@ -1,0 +1,865 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Compiled Forward Pass</title>
+<style>
+/* Explainer page. White page, black text, no dark mode. */
+:root { --bg: #ffffff; --fg: #111414; --muted: #4a5655; --rule: #d6dedd; --panel: #f5f8f7; --accent: #057379; --cls: #057379; --patch: #9fd3d1; --reg: #e0a336; color-scheme: light; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif; }
+main { max-width: 62rem; margin: 0 auto; padding: 40px 20px 64px; display: grid; gap: 1.75rem; }
+main > *, section > * { min-width: 0; }
+h1 { font-size: 1.9rem; line-height: 1.15; margin: 0; }
+h2 { font-size: 1.3rem; margin: 0; }
+h3 { font-size: 1.05rem; margin: 0; }
+section { display: grid; gap: 0.8rem; }
+p, ul, ol { margin: 0; max-width: 46rem; }
+li + li { margin-top: 0.25rem; }
+code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.86em; }
+p code, li code, td code { overflow-wrap: anywhere; }
+pre { margin: 0; background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 0.8rem 1rem; overflow-x: auto; }
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 0.92rem; }
+th, td { text-align: left; vertical-align: top; padding: 0.45rem 0.7rem 0.45rem 0; border-bottom: 1px solid var(--rule); }
+th { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); border-bottom: 1.5px solid var(--fg); }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+tr.group td { background: var(--panel); font-weight: 600; }
+table.first-nowrap td:first-child { white-space: nowrap; }
+.caption, figcaption { font-size: 0.88rem; color: var(--muted); }
+figure { margin: 0; display: grid; gap: 0.4rem; }
+.fig { border: 1px solid var(--rule); border-radius: 6px; padding: 0.5rem; overflow-x: auto; }
+.fig svg { display: block; width: 100%; height: auto; min-width: 640px; }
+.note { border-left: 3px solid var(--accent); padding: 0.3rem 0 0.3rem 0.9rem; }
+nav ol { columns: 2; }
+.steps { font-size: 0.92rem; color: var(--muted); }
+a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+<header>
+  <h1>The Compiled Forward Pass</h1>
+  <p>Explainer for roadmap Step 6. Date: 2026-11-07.</p>
+  <p class="steps">Step 6 explainers: 1 Compiled forward pass (this page) · <a href="06-2-attention-and-batch-size.html">2 Attention and batch size</a> · <a href="06-3-quantized-weights.html">3 Quantized weights</a> · <a href="06-4-preprocessing.html">4 Preprocessing</a>. Step 4: <a href="04-2-rope.html">2 RoPE tables and rotation</a>. Step 5: <a href="05-1-swiglu.html">1 SwiGLU and one rounding</a>.</p>
+  <p class="steps">Previous: <a href="05-3-numeric-range.html">05-3 Numeric range of the tokens</a> · Next: <a href="06-2-attention-and-batch-size.html">06-2 Attention and batch size</a></p>
+</header>
+
+<nav>
+  <h2>Contents</h2>
+  <ol>
+    <li><a href="#why">Why this explainer</a></li>
+    <li><a href="#picture">The compiled forward pass in one picture</a></li>
+    <li><a href="#one-path">One code path for eager and compiled</a></li>
+    <li><a href="#compile">compile_backbone and the trace</a></li>
+    <li><a href="#fusion">Fused kernels and fusion barriers</a></li>
+    <li><a href="#concat-free">The concat-free rotation</a></li>
+    <li><a href="#cache">The RoPE cache outside the module tree</a></li>
+    <li><a href="#outputs">run_mlx and mlx_embeddings</a></li>
+    <li><a href="#r30">R30: the casts of the autocast modes</a></li>
+    <li><a href="#ratios">The measured change ratios C1 and C2</a></li>
+    <li><a href="#surprises">Surprises</a></li>
+    <li><a href="#sources">Sources</a></li>
+  </ol>
+</nav>
+
+<section id="why">
+  <h2>1 Why this explainer</h2>
+  <p>Up to Step 5, the MLX backbone ran as an eager forward pass. Each call builds the graph again, and most operations become their own GPU kernel. <code>nn.gelu</code> and <code>nn.silu</code> are compiled functions in MLX already, so each of them is one kernel also in the eager forward pass (D1, <code>specs/06-speed/explore.html</code>). Each kernel reads its inputs from memory and writes its output to memory. Step 6 wraps the whole forward pass in one <code>mx.compile</code> function. <code>mx.compile</code> records a trace at the first call and joins each chain of element-wise operations into one fused kernel. Step 6 also changes the RoPE rotation, so that the rotation of q and the rotation of k each become one fused kernel.</p>
+  <p>This page covers the functions of row <code>06-1-compiled-forward-pass.html</code> in Table 5 of <code>specs/06-speed/plan.html</code>, and the surprises of that row. Table 1 lists the functions. The line numbers are those of commit <code>2567808</code>, the last commit of the Step 6 build. "(new)", "(changed)" and "(removed)" compare with commit <code>11a45b1</code>, the last commit before the build. Each code quote is an exact copy of the file, except where the quote says "shortened". The first line of each quote, a comment with the file name, belongs to this page. The notes under each quote explain the code.</p>
+  <p>The agent that wrote this page ran no test, no model and no GPU job. It read the numbers from the committed result files with a small CPU-only Python script. Section 12 names each file. A number marked "probe" comes from the Explore stage (<code>specs/06-speed/explore.html</code>), before the build. Every other number comes from a result file of the build.</p>
+  <p>P1 and P2 are the two priority configurations: P1 is ViT-S/16 at 224 px, batch size 8, frame embedding. P2 is ViT-H+/16 at 512 px, batch size 8, patch embeddings.</p>
+  <p>The result in three numbers:</p>
+  <ul>
+    <li>The compiled forward pass (change ratio C1) gives 1.250 to 1.305 times the throughput of the eager forward pass in the four fp16 and bf16 dtype modes, and 1.037 to 1.051 times in fp32 (median of 5 rounds at P1 and P2, <code>results/speed-changes.jsonl</code>).</li>
+    <li>The concat-free rotation (change ratio C2) adds 1.040 to 1.089 in the four fp16 and bf16 dtype modes and 1.010 to 1.012 in fp32. The product of the two medians is 1.303 to 1.408 in the fp16 and bf16 dtype modes (Section 10).</li>
+    <li>The compiled forward pass gives the same bits as the eager forward pass: 348 of 348 configurations of the six model sizes have a largest difference of 0 (Table 6 of <code>results/parity-mlx.md</code>). The first batch of each of the 20 C1 and C2 processes was also bit for bit equal.</li>
+  </ul>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Name</th><th class="num">Lines</th><th>Job</th><th>Tests</th><th>Section</th></tr></thead>
+      <tbody>
+        <tr class="group"><td colspan="5"><code>src/dinov3_apple/mlx_model.py</code></td></tr>
+        <tr><td><code>compile_backbone(model)</code> (new)</td><td class="num">500–522</td><td>Returns <code>forward(pixels)</code>. The function reads the RoPE tables of the patch grid in Python and calls one <code>mx.compile</code> function. The weights enter the trace as implicit inputs (<code>inputs=model.state</code>), the RoPE tables as arguments.</td><td>T34, T35, T36, T37, T40, W1</td><td>4</td></tr>
+        <tr><td><code>MlxBackbone.forward_with_rope(pixels, cos, sin)</code> (new)</td><td class="num">480–489</td><td>The forward pass with the RoPE tables as arguments. The eager and the compiled forward pass both call it.</td><td>T34, T37</td><td>3</td></tr>
+        <tr><td><code>MlxBackbone.__call__(pixels)</code> (changed)</td><td class="num">491–497</td><td>The eager forward pass. It reads the RoPE tables from the RoPE cache and calls <code>forward_with_rope</code>.</td><td>T34, the eager tests of Steps 4 and 5</td><td>3</td></tr>
+        <tr><td><code>MlxBackbone.rope(grid_h, grid_w)</code> (changed)</td><td class="num">475–478</td><td>Returns <code>(cos2, sin2)</code> of one patch grid from the RoPE cache.</td><td>T39</td><td>7</td></tr>
+        <tr><td><code>MlxBackbone.rope_cache</code> (new; replaces <code>_rope_cache</code>)</td><td class="num">471</td><td>The <code>RopeCache</code> of the backbone.</td><td>T37, T39</td><td>7</td></tr>
+        <tr><td><code>RopeCache</code> (new)</td><td class="num">222–245</td><td>A plain object that holds the RoPE tables of each patch grid in the layout of the concat-free rotation. <code>tables(grid_h, grid_w)</code> makes them at the first call; <code>__len__</code> counts the patch grids.</td><td>T37, T39</td><td>7</td></tr>
+        <tr><td><code>rope_layout(cos, sin)</code> (new)</td><td class="num">181–196</td><td>Turns the tables of <code>rope_tables</code> into <code>cos2</code> and the signed <code>sin2</code>, each (T, 2, head_dim / 2), fp32.</td><td>T38, T39</td><td>6</td></tr>
+        <tr><td><code>apply_rope(x, cos2, sin2)</code> (changed)</td><td class="num">199–219</td><td>The concat-free rotation: x · cos2 + reversed(x) · sin2 on a (…, 2, head_dim / 2) view, in fp32.</td><td>T38, C2</td><td>6</td></tr>
+        <tr><td><code>rotate_half(x)</code> (removed)</td><td class="num">–</td><td>Moved to <code>tests/rope_oracle.py</code> (lines 7–10), next to <code>apply_rope_step5</code> (lines 13–16). There it is the oracle of T38.</td><td>T38</td><td>6</td></tr>
+        <tr><td><code>run_mlx(model, pixels, dtype_mode, forward=None)</code> (changed)</td><td class="num">551–580</td><td>Runs the given compiled forward pass. Without <code>forward</code>, it runs the eager forward pass.</td><td>T40, W1, the parity tests of Step 5</td><td>8.1</td></tr>
+        <tr><td><code>mlx_embeddings(tokens, dtype_mode, patch_fp32=False)</code> (new)</td><td class="num">590–611</td><td>Returns the frame embeddings in fp32 and the patch embeddings in fp16 (four fp16 and bf16 dtype modes) or fp32 on the host. Its helper <code>patch_dtype</code> (lines 583–587, new) picks the dtype.</td><td>T55, W4</td><td>8.2</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 1.</b> The Step 6 code that this page explains: the column "Step 6 code" of row 06-1 in Table 5 of <code>specs/06-speed/plan.html</code>. The test numbers are those of Section 6 of the plan. C2 is a change ratio (Section 10), not a test. Two other changes in <code>mlx_model.py</code> touch only docstrings: <code>Attention.__call__</code> (lines 337–348) now names the table shapes (5 + N, 2, head_dim / 2), and the class docstring of <code>MlxBackbone</code> (lines 455–461) names the <code>RopeCache</code>. The changed <code>linear_parameter_names</code> and the new <code>quantized_weight_names</code> (lines 525–548) belong to <a href="06-3-quantized-weights.html">06-3</a>. The callers of <code>compile_backbone</code> are the benchmark worker (<code>src/dinov3_apple/mlx_bench.py</code>, line 182), <code>change_forms</code> (line 352) and <code>run_profile_worker</code> (line 516) of the same file, <code>scripts/cross_check.py</code> (line 183) and the backbone slot of the tests (<code>tests/conftest.py</code>, line 164).</p>
+</section>
+
+<section id="picture">
+  <h2>2 The compiled forward pass in one picture</h2>
+  <figure>
+    <div class="fig"><svg viewBox="0 0 960 600" role="img" aria-labelledby="f1t" font-family="-apple-system, Helvetica Neue, Arial, sans-serif">
+      <title id="f1t">Data flow of the compiled forward pass of the MLX backbone, and the kernels of one block</title>
+      <defs>
+        <marker id="f1a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#4a5655"/></marker>
+      </defs>
+      <rect width="960" height="600" fill="#ffffff"/>
+      <g font-size="13" fill="#111414">
+        <rect x="20" y="78" width="120" height="64" rx="6" fill="#f5f8f7" stroke="#4a5655"/>
+        <text x="80" y="102" text-anchor="middle" font-weight="600">pixels</text>
+        <text x="80" y="120" text-anchor="middle" font-size="12">(B, 3, H, W)</text>
+        <text x="80" y="136" text-anchor="middle" font-size="12">fp32</text>
+        <rect x="160" y="20" width="780" height="190" rx="8" fill="none" stroke="#057379" stroke-width="2"/>
+        <text x="176" y="42" font-weight="600">forward(pixels): the function of compile_backbone. The caller holds it (R36).</text>
+        <rect x="176" y="56" width="320" height="138" rx="6" fill="#f5f8f7" stroke="#d6dedd"/>
+        <text x="190" y="78" font-weight="600">Python, at each call, outside the trace</text>
+        <text x="190" y="102" font-size="12">grid = (H / 16, W / 16) from pixels.shape</text>
+        <text x="190" y="122" font-size="12">model.rope(*grid) → RopeCache.tables(*grid)</text>
+        <text x="190" y="142" font-size="12">new grid: rope_tables, then rope_layout (NumPy)</text>
+        <text x="190" y="162" font-size="12">→ cos2, sin2: (T, 2, head_dim / 2), fp32</text>
+        <text x="190" y="182" font-size="12" fill="#4a5655">sin2 holds the sign of rotate_half</text>
+        <rect x="536" y="56" width="388" height="138" rx="6" fill="#ffffff" stroke="#057379" stroke-width="1.5"/>
+        <text x="550" y="78" font-weight="600">traced(pixels, cos2, sin2)</text>
+        <text x="550" y="102" font-size="12">mx.compile(lambda p, c, s: model.forward_with_rope(p, c, s),</text>
+        <text x="550" y="120" font-size="12">inputs=model.state)</text>
+        <text x="550" y="144" font-size="12">first call for one (B, H, W) and dtype: make the trace</text>
+        <text x="550" y="164" font-size="12">later calls: replay the trace (0.12 to 0.14 ms at P1)</text>
+        <text x="550" y="184" font-size="12" fill="#4a5655">no shapeless=True: "Slice cannot infer output shapes"</text>
+        <line x1="140" y1="110" x2="174" y2="110" stroke="#4a5655" stroke-width="1.5" marker-end="url(#f1a)"/>
+        <line x1="496" y1="125" x2="534" y2="125" stroke="#4a5655" stroke-width="1.5" marker-end="url(#f1a)"/>
+        <rect x="176" y="236" width="320" height="48" rx="6" fill="#ffffff" stroke="#4a5655" stroke-dasharray="5 3"/>
+        <text x="190" y="256" font-size="12" font-weight="600">RopeCache: one (cos2, sin2) for each patch grid</text>
+        <text x="190" y="274" font-size="12">a plain object, outside the module tree (R43)</text>
+        <line x1="336" y1="236" x2="336" y2="197" stroke="#4a5655" stroke-width="1.5" marker-end="url(#f1a)"/>
+        <rect x="536" y="236" width="388" height="48" rx="6" fill="#ffffff" stroke="#057379"/>
+        <text x="550" y="256" font-size="12" font-weight="600">model.state: each weight of the backbone</text>
+        <text x="550" y="274" font-size="12">implicit inputs, read at each call (R35)</text>
+        <line x1="730" y1="236" x2="730" y2="197" stroke="#057379" stroke-width="1.5" marker-end="url(#f1a)"/>
+        <text x="20" y="326" font-weight="600">Inside the trace: the patch embedding, L blocks, the final layer norm. One SwiGLU block in a cast mode: 15 kernels.</text>
+        <rect x="20" y="340" width="58" height="46" rx="4" fill="#d6dedd"/>
+        <rect x="88" y="340" width="70" height="46" rx="4" fill="#057379"/>
+        <rect x="168" y="340" width="62" height="46" rx="4" fill="#e0a336"/>
+        <rect x="240" y="340" width="62" height="46" rx="4" fill="#e0a336"/>
+        <rect x="312" y="340" width="56" height="46" rx="4" fill="#057379"/>
+        <rect x="378" y="340" width="60" height="46" rx="4" fill="#057379"/>
+        <rect x="448" y="340" width="78" height="46" rx="4" fill="#e0a336"/>
+        <rect x="536" y="340" width="58" height="46" rx="4" fill="#d6dedd"/>
+        <rect x="604" y="340" width="72" height="46" rx="4" fill="#057379"/>
+        <rect x="686" y="340" width="100" height="46" rx="4" fill="#e0a336"/>
+        <rect x="796" y="340" width="56" height="46" rx="4" fill="#057379"/>
+        <rect x="862" y="340" width="78" height="46" rx="4" fill="#e0a336"/>
+        <g font-size="12" text-anchor="middle">
+          <text x="49" y="367">norm1</text>
+          <text x="123" y="367" fill="#ffffff">q, k, v</text>
+          <text x="199" y="367">RoPE q</text>
+          <text x="271" y="367">RoPE k</text>
+          <text x="340" y="367" fill="#ffffff">SDPA</text>
+          <text x="408" y="367" fill="#ffffff">o_proj</text>
+          <text x="487" y="367">λ1 · a + x</text>
+          <text x="565" y="367">norm2</text>
+          <text x="640" y="367" fill="#ffffff">gate, up</text>
+          <text x="736" y="367">silu(gate) · up</text>
+          <text x="824" y="367" fill="#ffffff">down</text>
+          <text x="901" y="367">λ2 · f + x</text>
+          <g fill="#4a5655">
+            <text x="49" y="404">1</text><text x="123" y="404">3</text><text x="199" y="404">1</text><text x="271" y="404">1</text><text x="340" y="404">1</text><text x="408" y="404">1</text><text x="487" y="404">1</text><text x="565" y="404">1</text><text x="640" y="404">2</text><text x="736" y="404">1</text><text x="824" y="404">1</text><text x="901" y="404">1</text>
+          </g>
+        </g>
+        <rect x="20" y="414" width="58" height="26" rx="4" fill="#ffffff" stroke="#b07a12" stroke-dasharray="4 3"/>
+        <rect x="536" y="414" width="58" height="26" rx="4" fill="#ffffff" stroke="#b07a12" stroke-dasharray="4 3"/>
+        <g font-size="12" text-anchor="middle"><text x="49" y="432">+ cast</text><text x="565" y="432">+ cast</text></g>
+        <text x="20" y="466" font-size="12">Numbers under the boxes: kernels (sum 15). Autocast modes: + 2 casts after the layer norms = 17 kernels. Eager: 33 (cast) and 37 (autocast). All counts: probe.</text>
+        <rect x="20" y="480" width="14" height="14" fill="#057379"/><text x="40" y="492" font-size="12">matmul or SDPA: own kernel</text>
+        <rect x="226" y="480" width="14" height="14" fill="#e0a336"/><text x="246" y="492" font-size="12">fused kernel</text>
+        <rect x="356" y="480" width="14" height="14" fill="#d6dedd"/><text x="376" y="492" font-size="12">layer norm: fusion barrier</text>
+        <rect x="560" y="480" width="14" height="14" fill="#ffffff" stroke="#b07a12" stroke-dasharray="4 3"/><text x="580" y="492" font-size="12">cast after a layer norm: autocast modes only (R30)</text>
+        <text x="20" y="530" font-weight="600">After the trace</text>
+        <rect x="20" y="542" width="230" height="46" rx="6" fill="#f5f8f7" stroke="#4a5655"/>
+        <text x="135" y="570" text-anchor="middle" font-size="12">tokens (B, 5 + N, D), on the GPU</text>
+        <line x1="250" y1="565" x2="288" y2="565" stroke="#4a5655" stroke-width="1.5" marker-end="url(#f1a)"/>
+        <rect x="290" y="542" width="270" height="46" rx="6" fill="#ffffff" stroke="#057379" stroke-width="1.5"/>
+        <text x="425" y="562" text-anchor="middle" font-size="12">mlx_embeddings (tests, Step 7 API)</text>
+        <text x="425" y="579" text-anchor="middle" font-size="12">time_batch_mlx (benchmark worker)</text>
+        <line x1="560" y1="565" x2="598" y2="565" stroke="#4a5655" stroke-width="1.5" marker-end="url(#f1a)"/>
+        <rect x="600" y="542" width="340" height="46" rx="6" fill="#f5f8f7" stroke="#4a5655"/>
+        <text x="770" y="562" text-anchor="middle" font-size="12">frame embeddings (B, D): fp32</text>
+        <text x="770" y="579" text-anchor="middle" font-size="12">patch embeddings (B, N, D): fp16; fp32 in fp32</text>
+      </g>
+    </svg></div>
+    <figcaption><b>Figure 1.</b> The compiled forward pass. Top: <code>forward</code> reads the patch grid from the shape of the pixels and gets the RoPE tables from the RoPE cache, in Python. Then it calls the <code>mx.compile</code> function with the pixels and the two tables. The weights are not arguments: <code>inputs=model.state</code> makes them implicit inputs. Middle: the kernels of one SwiGLU block inside the trace. The element-wise chains (amber) become fused kernels. The matmuls, the SDPA and the layer norms stay their own kernels. The MLP model sizes have <code>up_proj</code> and GELU in place of <code>gate</code>, <code>up</code> and SiLU. Kernel counts: probe graph export, Section 2.2 and 2.3 of <code>specs/06-speed/explore.html</code>. The block layout follows Figure 1 of <code>specs/06-speed/plan.html</code>. Replay time: the compiled call before <code>mx.eval</code>, field <code>host.call_median_s</code> of <code>results/speed-profile-p1.jsonl</code>. Bottom: the outputs on the host (Section 8.2).</figcaption>
+  </figure>
+</section>
+
+<section id="one-path">
+  <h2>3 One code path for eager and compiled</h2>
+  <pre><code># src/dinov3_apple/mlx_model.py, lines 471 to 497 (shortened: lines 472 and 473 of MlxBackbone.__init__ are left out)
+        self.rope_cache = RopeCache(config.head_dim, config.rope_theta)
+
+    def rope(self, grid_h: int, grid_w: int) -&gt; tuple[mx.array, mx.array]:
+        """Return the RoPE tables (cos2, sin2) of one patch grid from the RoPE cache, in the
+        layout of the concat-free rotation."""
+        return self.rope_cache.tables(grid_h, grid_w)
+
+    def forward_with_rope(self, pixels: mx.array, cos: mx.array, sin: mx.array) -&gt; mx.array:
+        """Return all tokens after the final layer norm, (B, 5 + N, D), with the given RoPE tables.
+
+        The eager and the compiled forward pass share this code path (D1 of
+        specs/06-speed/plan.html).
+        """
+        x = self.embeddings(pixels)
+        for block in self.layer:
+            x = block(x, cos, sin)
+        return self.norm(x)
+
+    def __call__(self, pixels: mx.array) -&gt; mx.array:
+        """The eager forward pass: all tokens after the final layer norm, (B, 5 + N, D), of NCHW
+        pixels, with the RoPE tables of the patch grid from the cache."""
+        p = self.config.patch_size
+        return self.forward_with_rope(
+            pixels, *self.rope(pixels.shape[2] // p, pixels.shape[3] // p)
+        )</code></pre>
+  <ul>
+    <li><b><code>forward_with_rope</code> (lines 480–489).</b> In Step 5, <code>__call__</code> held this loop and read the cache itself. Step 6 moves the loop into its own method, with the RoPE tables as arguments. The method has no Python branch on array values. It uses only the shapes. So <code>mx.compile</code> can record it as a trace.</li>
+    <li><b><code>__call__</code> (lines 491–497).</b> This is the eager forward pass. It computes the patch grid (H / 16, W / 16) from the shape, reads the tables and calls <code>forward_with_rope</code>. The eager and the compiled forward pass thus run the same block code. They cannot drift apart.</li>
+    <li><b><code>rope</code> (lines 475–478).</b> The method now only asks the <code>RopeCache</code>. The tables have the layout of the concat-free rotation (Section 6). In Step 5 the method filled a dict <code>_rope_cache</code> on the module (<a href="04-2-rope.html#cache">04-2, Section 9</a>). Section 7 explains why the dict had to go.</li>
+    <li><b>Who still runs eager.</b> The part tests, <code>run_mlx_hidden_states</code>, <code>run_mlx_token_range</code> and the stored-state tests of Step 5 run the eager forward pass (Section 3.4 of the plan). <code>run_mlx</code> without <code>forward</code> also runs it (Section 8.1).</li>
+  </ul>
+</section>
+
+<section id="compile">
+  <h2>4 compile_backbone and the trace</h2>
+
+  <h3>4.1 The code</h3>
+  <pre><code># src/dinov3_apple/mlx_model.py, lines 500 to 522
+def compile_backbone(model: MlxBackbone) -&gt; Callable[[mx.array], mx.array]:
+    """Return the compiled forward pass of one backbone (D1 of specs/06-speed/plan.html).
+
+    One trace for each input shape (B, H, W). The weights enter as implicit inputs
+    (inputs=model.state), so the output follows a later weight change (R35). The RoPE tables enter
+    as arguments; Python reads them from the cache, outside the trace. Call it after the last
+    weight change (the load, nn.quantize). The caller holds the function: a function stored on the
+    model keeps the weights until gc.collect() (R36).
+
+    Args:
+        model: A loaded backbone.
+
+    Returns:
+        forward(pixels) -&gt; tokens, with the contract of model(pixels).
+    """
+    traced = mx.compile(lambda p, c, s: model.forward_with_rope(p, c, s), inputs=model.state)
+    patch = model.config.patch_size
+
+    def forward(pixels: mx.array) -&gt; mx.array:
+        cos, sin = model.rope(pixels.shape[2] // patch, pixels.shape[3] // patch)
+        return traced(pixels, cos, sin)
+
+    return forward</code></pre>
+  <ul>
+    <li><b>Line 515: the trace.</b> The lambda takes three arrays: the pixels and the two RoPE tables. <code>inputs=model.state</code> tells <code>mx.compile</code> that each array in the module tree is an input of the trace too. MLX reads these arrays again at each call. So a later weight change reaches the output (R35). T35 adds 0.01 to <code>layer.0.attention.q_proj.weight</code> after one compiled call. The next compiled call equals the eager output of the changed model bit for bit.</li>
+    <li><b>The first call for a shape.</b> At the first call with a new input shape (B, 3, H, W) or a new dtype, <code>mx.compile</code> runs the lambda once with placeholder arrays and records the operations: the trace. Then it fuses each element-wise chain. Later calls with the same shapes replay the trace. T37 calls <code>forward</code> at (1, 224, 224), (2, 224, 224), (1, 448, 448), (1, 224, 224) and (2, 224, 224). It counts 3 traces and 2 cache entries.</li>
+    <li><b>Lines 518–520: Python at each call.</b> <code>forward</code> is a plain function. It runs at each call, outside the trace. It reads the tables of the patch grid from the RoPE cache. The tables are arguments of the trace, not constants inside it. So one trace serves all calls of one shape, and a new patch grid needs a new trace only because the shape changes.</li>
+    <li><b>No <code>shapeless=True</code>.</b> One shapeless trace for all shapes fails at the first call: "Slice cannot infer output shapes" (option C of D1, <code>explore.html</code>). The retrace that it would save costs only milliseconds (Section 4.4).</li>
+    <li><b>Compile after the last weight change.</b> <code>load_mlx_backbone</code> returns a model with all weights set, also after <code>nn.quantize</code> (<a href="06-3-quantized-weights.html">06-3</a>). The caller compiles after the load: for example <code>forward: Forward = compile_backbone(model) if config.compile else model</code> in <code>mlx_bench.py</code>, line 182.</li>
+  </ul>
+
+  <h3>4.2 How the trace sees the weights</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Form</th><th>The weights in the trace</th><th>After a weight change (in place, or <code>nn.quantize</code> after the compile)</th><th>Source</th></tr></thead>
+      <tbody>
+        <tr><td><code>mx.compile(lambda p: model(p))</code></td><td>The lambda reaches the weights through a closure. The trace keeps the arrays of the first call as constants.</td><td>The old output, without an error</td><td>Probe, Section 2.2 of <code>explore.html</code>; R35</td></tr>
+        <tr><td><code>mx.compile(model)</code></td><td>The same: the module is the function, and the trace keeps its arrays of the first call.</td><td>The old output, without an error</td><td>Probe; R35</td></tr>
+        <tr><td><code>mx.compile(lambda p: model(p), inputs=model.state)</code></td><td>Implicit inputs, read at each call.</td><td>The new output</td><td>Probe; form A of the Explore stage</td></tr>
+        <tr><td><code>compile_backbone(model)</code></td><td>Implicit inputs (<code>inputs=model.state</code>); the RoPE tables as arguments.</td><td>The new output, bit for bit equal to eager</td><td>T35</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 2.</b> Four ways to compile the backbone and what they do after a weight change. The first two forms fail silently. The probe found the hazard before the build (R35, Table 38 of <code>explore.html</code>). <code>inputs=model.state</code> costs 0.010 ms (12 blocks) to 0.026 ms (40 blocks) per call (probe, Section 2.2 of <code>explore.html</code>).</p>
+
+  <h3>4.3 Who holds the compiled function</h3>
+  <figure>
+    <div class="fig"><svg viewBox="0 0 960 320" role="img" aria-labelledby="f2t" font-family="-apple-system, Helvetica Neue, Arial, sans-serif">
+      <title id="f2t">References between the caller, the compiled function and the model, without and with a reference cycle</title>
+      <defs>
+        <marker id="f2g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#4a5655"/></marker>
+        <marker id="f2b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#b07a12"/></marker>
+      </defs>
+      <rect width="960" height="320" fill="#ffffff"/>
+      <g font-size="13" fill="#111414">
+        <text x="20" y="28" font-weight="600">A. compile_backbone: the caller holds forward</text>
+        <rect x="30" y="60" width="110" height="36" rx="5" fill="#f5f8f7" stroke="#4a5655"/><text x="85" y="83" text-anchor="middle">caller</text>
+        <rect x="190" y="60" width="110" height="36" rx="5" fill="#ffffff" stroke="#057379" stroke-width="1.5"/><text x="245" y="83" text-anchor="middle">forward</text>
+        <rect x="350" y="60" width="110" height="36" rx="5" fill="#ffffff" stroke="#057379" stroke-width="1.5"/><text x="405" y="83" text-anchor="middle">traced</text>
+        <rect x="190" y="150" width="110" height="36" rx="5" fill="#f5f8f7" stroke="#4a5655"/><text x="245" y="173" text-anchor="middle">model</text>
+        <rect x="190" y="240" width="110" height="36" rx="5" fill="#9fd3d1"/><text x="245" y="263" text-anchor="middle">weights</text>
+        <line x1="140" y1="78" x2="188" y2="78" stroke="#4a5655" stroke-width="1.5" marker-end="url(#f2g)"/>
+        <line x1="300" y1="78" x2="348" y2="78" stroke="#4a5655" stroke-width="1.5" marker-end="url(#f2g)"/>
+        <line x1="245" y1="96" x2="245" y2="148" stroke="#4a5655" stroke-width="1.5" marker-end="url(#f2g)"/>
+        <line x1="405" y1="96" x2="302" y2="158" stroke="#4a5655" stroke-width="1.5" marker-end="url(#f2g)"/>
+        <line x1="245" y1="186" x2="245" y2="238" stroke="#4a5655" stroke-width="1.5" marker-end="url(#f2g)"/>
+        <g font-size="12">
+          <text x="358" y="142">lambda and</text>
+          <text x="358" y="158">inputs=model.state</text>
+          <text x="320" y="214">model holds no reference</text>
+          <text x="320" y="230">to forward. del forward and</text>
+          <text x="320" y="246">del model free the weights</text>
+          <text x="320" y="262">at once (T36: no gc.collect()).</text>
+        </g>
+        <line x1="480" y1="16" x2="480" y2="304" stroke="#d6dedd" stroke-width="1"/>
+        <text x="500" y="28" font-weight="600">B. Not used: forward stored on the model</text>
+        <rect x="510" y="60" width="110" height="36" rx="5" fill="#f5f8f7" stroke="#4a5655"/><text x="565" y="83" text-anchor="middle">caller</text>
+        <rect x="670" y="60" width="110" height="36" rx="5" fill="#f5f8f7" stroke="#4a5655"/><text x="725" y="83" text-anchor="middle">model</text>
+        <rect x="830" y="60" width="110" height="36" rx="5" fill="#ffffff" stroke="#b07a12" stroke-width="1.5"/><text x="885" y="83" text-anchor="middle">model.forward</text>
+        <rect x="830" y="150" width="110" height="36" rx="5" fill="#ffffff" stroke="#b07a12" stroke-width="1.5"/><text x="885" y="173" text-anchor="middle">traced</text>
+        <rect x="670" y="150" width="110" height="36" rx="5" fill="#9fd3d1"/><text x="725" y="173" text-anchor="middle">weights</text>
+        <line x1="620" y1="78" x2="668" y2="78" stroke="#4a5655" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#f2g)"/>
+        <line x1="780" y1="78" x2="828" y2="78" stroke="#b07a12" stroke-width="2" marker-end="url(#f2b)"/>
+        <line x1="885" y1="96" x2="885" y2="148" stroke="#b07a12" stroke-width="2" marker-end="url(#f2b)"/>
+        <line x1="830" y1="160" x2="772" y2="98" stroke="#b07a12" stroke-width="2" marker-end="url(#f2b)"/>
+        <line x1="725" y1="96" x2="725" y2="148" stroke="#4a5655" stroke-width="1.5" marker-end="url(#f2g)"/>
+        <g font-size="12">
+          <text x="512" y="118" fill="#4a5655">dashed: del model</text>
+          <text x="510" y="214">The cycle model → model.forward → traced → model</text>
+          <text x="510" y="230">stays after del model. The weights stay until</text>
+          <text x="510" y="246">gc.collect(). Probe: 12.52 MiB of weights stayed.</text>
+          <text x="510" y="262">A script that loads two model sizes in a row can then</text>
+          <text x="510" y="278">hold both, against the run rule (R36).</text>
+        </g>
+      </g>
+    </svg></div>
+    <figcaption><b>Figure 2.</b> References between the caller, the compiled function and the model. An arrow points from the holder to the object it holds. A: the pattern of Step 6. Only the caller holds <code>forward</code>. B: a function stored on the model forms a reference cycle (amber). Python reference counting cannot free a cycle; only the cycle collector <code>gc.collect()</code> can. Source of the 12.52 MiB: Section 2.2 of <code>explore.html</code> (probe). T36 checks pattern A on the small model <code>vits16plus</code> in fp32: after <code>del forward, mlx</code> with the cycle collector off, the active memory is within 1 MB of the value before the model.</figcaption>
+  </figure>
+  <p>The backbone slot of the tests follows pattern A. It holds the pair (model, forward). Its method <code>free()</code> drops the function first, then the model, then calls <code>gc.collect()</code> and <code>mx.clear_cache()</code> (<code>tests/conftest.py</code>, lines 123–129). The fixture <code>mlx_forward</code> gives the function of the slot. For a model outside the slot it raises <code>ValueError</code> (T41).</p>
+
+  <h3>4.4 The cost of a trace</h3>
+  <div class="table-wrap">
+    <table class="first-nowrap">
+      <thead><tr><th>Model size</th><th class="num">Blocks</th><th class="num">Batch size 1, ms</th><th class="num">Batch size 8, ms</th><th class="num">Batch size 32, ms</th></tr></thead>
+      <tbody>
+        <tr><td>ViT-S/16</td><td class="num">12</td><td class="num">2.1 [1.8–2.2]</td><td class="num">3.2 [2.0–4.5]</td><td class="num">6.8 [2.7–8.5]</td></tr>
+        <tr><td>ViT-S+/16</td><td class="num">12</td><td class="num">2.0 [1.8–2.3]</td><td class="num">2.9 [1.9–3.8]</td><td class="num">6.2 [2.9–8.7]</td></tr>
+        <tr><td>ViT-B/16</td><td class="num">12</td><td class="num">2.2 [1.9–3.2]</td><td class="num">3.1 [2.0–5.5]</td><td class="num">7.0 [2.9–8.5]</td></tr>
+        <tr><td>ViT-L/16</td><td class="num">24</td><td class="num">3.6 [3.3–3.7]</td><td class="num">4.6 [3.5–5.1]</td><td class="num">7.7 [4.4–9.8]</td></tr>
+        <tr><td>ViT-H+/16</td><td class="num">32</td><td class="num">4.5 [4.1–4.9]</td><td class="num">5.4 [4.3–6.9]</td><td class="num">8.6 [5.2–11.3]</td></tr>
+        <tr><td>ViT-7B/16</td><td class="num">40</td><td class="num">5.9 [5.5–9.6]</td><td class="num">7.0 [5.9–13.4]</td><td class="num">10.8 [6.6–12.9]</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 3.</b> The first compiled call of each benchmark worker, before <code>mx.eval</code>: median [min–max] of the field <code>compile_trace_s</code> over the compiled <code>mlx</code> rows without quantized weights in <code>results/speed-matrix.jsonl</code> (267 rows; 12 to 18 rows per cell, over the input resolutions 224, 448 and 512 px and the dtype modes). For an even count the median is the mean of the two middle values. Each worker runs in its own subprocess, so its first call always makes a new trace. The timed span starts before <code>mx.array(batch)</code> (<code>mlx_bench.py</code>, lines 186–188), so it also holds the copy of the NumPy pixels. It also holds the first call of <code>RopeCache.tables</code> for the patch grid of the worker (<code>rope_tables</code> and <code>rope_layout</code> in NumPy). The blocks: <code>MODEL_SHAPES</code> of <code>src/dinov3_apple/flops.py</code>.</p>
+  <ul>
+    <li>The first compiled call costs 1.8 to 13.4 ms over all 267 rows. It grows with the number of blocks: at batch size 1 from 2.0 to 2.2 ms (12 blocks) to 5.9 ms (40 blocks). It also grows with the batch size. The trace itself does not depend on the batch size, so the growth probably comes from the copy of the pixels. No result file separates the parts.</li>
+    <li>A replay costs much less. At P1 the compiled call before <code>mx.eval</code> took 0.124 to 0.138 ms, and the call to the end of <code>mx.eval</code> took 3.75 to 3.83 ms: a host share of 3.3 to 3.6 % (<code>results/speed-profile-p1.jsonl</code>, field <code>host</code>, four rows). The gap between two calls was 0.001 to 0.002 ms. In this loop the GPU waits only during the compiled call, because <code>mx.eval</code> starts the GPU work after the call. So Python costs 3.3 to 3.6 % of the time at P1.</li>
+    <li>The eager forward pass builds its graph again at each call: 0.26 ms for 12 blocks and 0.77 ms for 32 blocks. The compiled forward pass needs 0.11 and 0.32 ms (probe, Section 2.2 of <code>explore.html</code>).</li>
+    <li>The first call of a C3 worker (trace, first evaluation and copy to the host, field <code>first_call_s</code> of <code>results/speed-changes.jsonl</code>) took 12 to 15 ms at P1 and 0.313 to 0.352 s at P2.</li>
+  </ul>
+</section>
+
+<section id="fusion">
+  <h2>5 Fused kernels and fusion barriers</h2>
+  <p>A fused kernel is one GPU kernel for a chain of element-wise operations. Without fusion, each operation reads its full input tensor from memory and writes its full output tensor. With fusion, the chain reads its inputs once and writes its output once. The values between the operations stay in GPU registers. At P2 the feed-forward hidden values of one block are 8 × 1,029 × 5,120 = 42,147,840 values (T = 1,029 tokens at 512 px, Table 4 of the plan; ff = 5,120 for ViT-H+/16 in <code>MODEL_SHAPES</code> of <code>src/dinov3_apple/flops.py</code>). In fp32 that is 168.6 MB. A cast of 256 M fp32 values to fp16 takes 3.14 ms (514 GB/s, probe, Table 7 of <code>explore.html</code>). So each avoided memory pass saves time at P2.</p>
+  <p>Some operations stop a fusion. They are fusion barriers: <code>mx.fast.layer_norm</code>, a matmul, the SDPA, slice and concatenate. A barrier stays its own kernel, and an element-wise chain before a barrier cannot fuse with an element-wise chain after it.</p>
+  <div class="table-wrap">
+    <table class="first-nowrap">
+      <thead><tr><th>Model</th><th>Dtype mode</th><th class="num">E: eager</th><th class="num">A: compiled, Step 5 RoPE</th><th class="num">R: compiled, concat-free</th><th class="num">R / E</th></tr></thead>
+      <tbody>
+        <tr class="group"><td colspan="6">12 MLP blocks</td></tr>
+        <tr><td>12 blocks, MLP</td><td>fp32</td><td class="num">292</td><td class="num">220</td><td class="num">172</td><td class="num">0.59</td></tr>
+        <tr><td>12 blocks, MLP</td><td>bf16-cast</td><td class="num">365</td><td class="num">245</td><td class="num">173</td><td class="num">0.47</td></tr>
+        <tr><td>12 blocks, MLP</td><td>bf16-autocast</td><td class="num">414</td><td class="num">270</td><td class="num">198</td><td class="num">0.48</td></tr>
+        <tr class="group"><td colspan="6">32 SwiGLU blocks</td></tr>
+        <tr><td>32 blocks, SwiGLU</td><td>fp32</td><td class="num">836</td><td class="num">612</td><td class="num">484</td><td class="num">0.58</td></tr>
+        <tr><td>32 blocks, SwiGLU</td><td>bf16-cast</td><td class="num">1,061</td><td class="num">677</td><td class="num">485</td><td class="num">0.46</td></tr>
+        <tr><td>32 blocks, SwiGLU</td><td>bf16-autocast</td><td class="num">1,190</td><td class="num">742</td><td class="num">550</td><td class="num">0.46</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 4.</b> Kernel nodes of one forward pass from a graph export without evaluation (probe, Section 2.2 of <code>explore.html</code>). R / E: computed for this page. Per SwiGLU block the probe counted 33 kernels (cast) and 37 kernels (autocast) eager, and 15 and 17 compiled with the concat-free rotation (Section 2.3 of <code>explore.html</code>). Figure 1 shows the 15 kernels.</p>
+  <p>Compile and the concat-free rotation together remove more than half of the kernels in the fp16 and bf16 dtype modes: 1,190 → 550 for 32 SwiGLU blocks in bf16-autocast. Compile alone gives 1,190 → 742. In fp32 the two changes remove less: 836 → 484. In fp32 the casts of the activation and of the RoPE rotation keep the dtype, so they add no kernel, and the eager chains are shorter.</p>
+  <div class="table-wrap">
+    <table class="first-nowrap">
+      <thead><tr><th>Part of block 1</th><th class="num">bf16-cast, eager</th><th class="num">bf16-cast, compiled</th><th class="num">bf16-autocast, eager</th><th class="num">bf16-autocast, compiled</th></tr></thead>
+      <tbody>
+        <tr><td>RoPE (q and k), Step 5 form</td><td class="num">2.28</td><td class="num">1.33</td><td class="num">2.28</td><td class="num">1.31</td></tr>
+        <tr><td>RoPE, concat-free rotation</td><td class="num">–</td><td class="num">0.74</td><td class="num">–</td><td class="num">0.75</td></tr>
+        <tr><td>SwiGLU activation (silu · up)</td><td class="num">3.16</td><td class="num">0.66</td><td class="num">3.17</td><td class="num">0.67</td></tr>
+        <tr><td>LayerScale and residual add</td><td class="num">0.32</td><td class="num">0.29</td><td class="num">0.58</td><td class="num">0.39</td></tr>
+        <tr><td>norm1 and cast</td><td class="num">0.24</td><td class="num">0.23</td><td class="num">0.46</td><td class="num">0.46</td></tr>
+        <tr><td>Matmuls and SDPA, all</td><td class="num" colspan="2">8.83</td><td class="num" colspan="2">8.81</td></tr>
+        <tr class="group"><td>Whole block, eager</td><td class="num">13.84</td><td class="num">–</td><td class="num">14.72</td><td class="num">–</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 5.</b> Time of parts of block 1 of ViT-H+/16 at P2 in ms, each part alone: 3 warm-up calls and 20 calls, <code>mx.eval</code> after each, median (probe, Table 7 of <code>explore.html</code>). Each value holds 0.16 to 0.17 ms of evaluation overhead. "Matmuls and SDPA, all": the sum of the five rows q, k, v (1.51 / 1.50), SDPA (1.05 / 1.08), o_proj (0.65 / 0.61), gate and up (3.61 / 3.63) and down_proj (2.01 / 1.99) of that table, computed for this page. Compile does not change them.</p>
+  <ul>
+    <li><b>The SwiGLU activation gains most: 3.16 → 0.66 ms.</b> <code>SwiGLU.activation</code> casts gate and up to fp32, computes silu(gate) · up and rounds once (<a href="05-1-swiglu.html#rounding">05-1, Section 6</a>). In eager mode each of these steps writes a full tensor of 42 M values, most of them in fp32. Compiled, one kernel reads gate and up in bf16 and writes one bf16 tensor. The one rounding of Step 5 thus costs no time after compile, and the bits stay the same.</li>
+    <li><b>The layer norm is a fusion barrier.</b> "norm1 and cast" does not change with compile: 0.23 and 0.46 ms. In the autocast modes the cast after the layer norm stays its own kernel (Section 9).</li>
+    <li><b>The RoPE rotation of Step 5 fuses only partly: 2.28 → 1.33 ms.</b> Slice and concatenate are fusion barriers. The concat-free rotation gives 0.74 ms (Section 6).</li>
+    <li><b>The matmuls and the SDPA do not change.</b> They take 8.8 ms of the 13.8 ms block. In eager mode the element-wise chains take about 6.6 ms of the block. From the part times, compile removes about 4 ms per block, about 128 ms for 32 blocks. This is an upper estimate: the measured difference E − R at P2 was 80 to 110 ms per batch (probe, Table 7 and Section 2.3 of <code>explore.html</code>).</li>
+    <li><b>Fewer intermediate tensors, less memory.</b> The MLX peak at P1, batch size 8, was 0.61 to 0.78 GB eager, 0.41 to 0.55 GB compiled and 0.33 to 0.52 GB compiled with the concat-free rotation (probe, Table 5 of <code>explore.html</code>).</li>
+  </ul>
+  <p>The P1 profile of the build counted the nodes of one forward pass of ViT-S/16 in fp16-cast and bf16-cast: 841 eager and 637 compiled (field <code>kernels</code> of <code>results/speed-profile-p1.jsonl</code>). Its counter <code>_count_kernels</code> (<code>mlx_bench.py</code>, lines 486–497) counts every operation node of the DOT export (<code>shape=rectangle</code>). The probe of Table 4 used another count. Also, both forms of the profile use the concat-free rotation, but the eager form E of Table 4 uses the Step 5 rotation. So compare a count only with a count of the same method and the same form.</p>
+</section>
+
+<section id="concat-free">
+  <h2>6 The concat-free rotation</h2>
+  <p>RoPE rotates each pair (x[d], x[d + head_dim / 2]) of a query or a key by one angle (the half-split layout, <a href="04-2-rope.html#layout">04-2, Section 5</a>). Step 4 and Step 5 computed the rotation with <code>rotate_half</code>. Step 6 keeps the tables of <code>rope_tables</code> (ADR 0006). It changes the form of the rotation, and <code>rope_layout</code> gives the tables a new layout.</p>
+  <pre><code># tests/rope_oracle.py, lines 7 to 16 (the Step 5 form, now the oracle of T38)
+def rotate_half(x: mx.array) -&gt; mx.array:
+    """Return (-x2, x1) for the halves x1 and x2 of the last axis (the half-split layout)."""
+    half = x.shape[-1] // 2
+    return mx.concatenate([-x[..., half:], x[..., :half]], axis=-1)
+
+
+def apply_rope_step5(x: mx.array, cos: mx.array, sin: mx.array) -&gt; mx.array:
+    """Rotate queries or keys with the tables of rope_tables, (T, head_dim), in fp32 (Step 5)."""
+    xf = x.astype(mx.float32)
+    return (xf * cos + rotate_half(xf) * sin).astype(x.dtype)</code></pre>
+  <p><code>rotate_half</code> needs two slices, a negation and <code>mx.concatenate</code>. Slice and concatenate are fusion barriers. So the compiled Step 5 form still needs 4 kernels for q and 4 for k; the eager form needs 7 each in the fp16 and bf16 dtype modes (option R1 of D2, <code>explore.html</code>). Figure 3 shows the new form.</p>
+  <figure>
+    <div class="fig"><svg viewBox="0 0 960 460" role="img" aria-labelledby="f3t" font-family="-apple-system, Helvetica Neue, Arial, sans-serif">
+      <title id="f3t">The concat-free rotation of one head with head dimension 64 as a view of shape 2 by 32</title>
+      <rect width="960" height="460" fill="#ffffff"/>
+      <g font-size="13" fill="#111414">
+        <text x="20" y="26" font-weight="600">One head of q or k with head_dim 64, as the view (2, 32) of apply_rope (line 217)</text>
+        <text x="20" y="80">x and reversed(x)</text>
+        <text x="230" y="50" font-size="12" fill="#4a5655">xr: a reshape, no copy</text>
+        <rect x="230" y="58" width="320" height="28" fill="#057379"/>
+        <rect x="230" y="88" width="320" height="28" fill="#9fd3d1"/>
+        <text x="390" y="77" text-anchor="middle" fill="#ffffff">row 0: x1 = values 0 … 31</text>
+        <text x="390" y="107" text-anchor="middle">row 1: x2 = values 32 … 63</text>
+        <text x="600" y="50" font-size="12" fill="#4a5655">xr[..., ::-1, :]: the same memory, negative stride (R48)</text>
+        <rect x="600" y="58" width="320" height="28" fill="#9fd3d1"/>
+        <rect x="600" y="88" width="320" height="28" fill="#057379"/>
+        <text x="760" y="77" text-anchor="middle">row 0: x2</text>
+        <text x="760" y="107" text-anchor="middle" fill="#ffffff">row 1: x1</text>
+        <text x="20" y="172">RoPE tables</text>
+        <text x="230" y="142" font-size="12" fill="#4a5655">cos2 = cos.reshape(T, 2, 32)</text>
+        <rect x="230" y="150" width="320" height="28" fill="#f5f8f7" stroke="#d6dedd"/>
+        <rect x="230" y="180" width="320" height="28" fill="#f5f8f7" stroke="#d6dedd"/>
+        <text x="390" y="169" text-anchor="middle">cos θ0 … cos θ31</text>
+        <text x="390" y="199" text-anchor="middle">cos θ0 … cos θ31</text>
+        <text x="600" y="142" font-size="12" fill="#4a5655">sin2: −sin in row 0 (rope_layout)</text>
+        <rect x="600" y="150" width="320" height="28" fill="#f6e3bd" stroke="#e0a336"/>
+        <rect x="600" y="180" width="320" height="28" fill="#f5f8f7" stroke="#d6dedd"/>
+        <text x="760" y="169" text-anchor="middle">−sin θ0 … −sin θ31</text>
+        <text x="760" y="199" text-anchor="middle">sin θ0 … sin θ31</text>
+        <text x="20" y="244" font-weight="600">out = xr · cos2 + xr[..., ::-1, :] · sin2, element by element, in fp32 (line 218)</text>
+        <text x="40" y="268">row 0: x1 · cos θ + x2 · (−sin θ) = x1 · cos θ − x2 · sin θ</text>
+        <text x="40" y="290">row 1: x2 · cos θ + x1 · sin θ</text>
+        <text x="40" y="312" fill="#4a5655">Each column d rotates the pair (x[d], x[d + 32]) by θd: the same rotation as Step 5 (04-2, Figure 3).</text>
+        <rect x="20" y="330" width="450" height="116" rx="6" fill="#f5f8f7" stroke="#d6dedd"/>
+        <text x="36" y="354" font-weight="600">Step 5: x · cos + rotate_half(x) · sin</text>
+        <text x="36" y="378" font-size="12">rotate_half: two slices, a negation, mx.concatenate</text>
+        <text x="36" y="398" font-size="12">slice and concatenate are fusion barriers</text>
+        <text x="36" y="418" font-size="12">compiled: 4 kernels for q and 4 for k (probe)</text>
+        <text x="36" y="438" font-size="12">P2, block 1, compiled, bf16-cast: 1.33 ms (probe)</text>
+        <rect x="490" y="330" width="450" height="116" rx="6" fill="#ffffff" stroke="#057379" stroke-width="1.5"/>
+        <text x="506" y="354" font-weight="600">Step 6: x · cos2 + reversed(x) · sin2</text>
+        <text x="506" y="378" font-size="12">a reshape and a reversed view: no join, no copy</text>
+        <text x="506" y="398" font-size="12">the sign moves into sin2: (−x2) · s = x2 · (−s) exactly</text>
+        <text x="506" y="418" font-size="12">compiled: 1 fused kernel for q and 1 for k</text>
+        <text x="506" y="438" font-size="12">P2, block 1, compiled, bf16-cast: 0.74 ms (probe)</text>
+      </g>
+    </svg></div>
+    <figcaption><b>Figure 3.</b> The concat-free rotation for one token in one head of ViT-S/16 (head_dim 64). Dark teal: the first half x1, light teal: the second half x2. Here the colors mark the halves, not the y and x angles of Figure 3 of 04-2. <code>rope_tables</code> tiles the angles (<code>np.tile(angles, 2)</code>), so both rows of <code>cos2</code> hold the same values. Only row 0 of <code>sin2</code> carries the minus sign of <code>rotate_half</code>. Times: Table 5. Kernel counts: option R1 of D2 and the kernel counts of Section 2.2 of <code>explore.html</code>.</figcaption>
+  </figure>
+  <pre><code># src/dinov3_apple/mlx_model.py, lines 181 to 219
+def rope_layout(cos: np.ndarray, sin: np.ndarray) -&gt; tuple[np.ndarray, np.ndarray]:
+    """Return the RoPE tables in the layout of the concat-free rotation (D2 of
+    specs/06-speed/plan.html).
+
+    Args:
+        cos: The cos table of rope_tables, (T, head_dim), fp32.
+        sin: The sin table of rope_tables, (T, head_dim), fp32.
+
+    Returns:
+        cos2 and sin2, each (T, 2, head_dim / 2), fp32. sin2 holds -sin in its first half: the
+        sign of rotate_half moves into the table, so the rotation needs no join.
+    """
+    t, head_dim = cos.shape
+    half = head_dim // 2
+    signed = np.concatenate([-sin[:, :half], sin[:, half:]], axis=-1)
+    return cos.reshape(t, 2, half), signed.reshape(t, 2, half)
+
+
+def apply_rope(x: mx.array, cos2: mx.array, sin2: mx.array) -&gt; mx.array:
+    """Rotate queries or keys with the RoPE tables, without a join (D2, option R2).
+
+    out = x · cos + (x2, x1) · (−sin1, sin2). The pair (x2, x1) is a reversed view of an axis of
+    size 2, so mx.compile fuses the rotation into one kernel. The rotation runs in fp32 and the
+    result has the dtype of x. In IEEE arithmetic (−x2) · s equals x2 · (−s), so the result
+    equals the Step 5 form with rotate_half bit for bit. The identity rows of the prefix tokens
+    give x · 1 + r · 0 = x.
+
+    Args:
+        x: Queries or keys with shape (B, heads, 5 + N, head_dim).
+        cos2: The cos table, (5 + N, 2, head_dim / 2), fp32.
+        sin2: The signed sin table, (5 + N, 2, head_dim / 2), fp32.
+
+    Returns:
+        The rotated values with the shape and the dtype of x.
+    """
+    b, h, t, d = x.shape
+    xr = x.reshape(b, h, t, 2, d // 2).astype(mx.float32)
+    out = xr * cos2 + xr[..., ::-1, :] * sin2
+    return out.astype(x.dtype).reshape(b, h, t, d)</code></pre>
+  <ul>
+    <li><b>Lines 193–196: <code>rope_layout</code>.</b> The function runs in NumPy, once for each patch grid, inside <code>RopeCache.tables</code>. It negates the first half of the sin table and reshapes both tables to (T, 2, head_dim / 2). The concatenate here runs on the CPU, outside the trace, so it costs no kernel.</li>
+    <li><b>Line 217: the view.</b> <code>x.reshape(b, h, t, 2, d // 2)</code> splits the last axis into the two halves. Row 0 holds x1, row 1 holds x2. Then the values go to fp32, as in Step 5 (<a href="04-2-rope.html#fp32">04-2, Section 8</a>).</li>
+    <li><b>Line 218: the rotation.</b> <code>xr[..., ::-1, :]</code> reverses the axis of size 2. It is a view with a negative stride: it swaps the halves without a copy and without a join (R48). The broadcast of <code>cos2</code> and <code>sin2</code> over B and heads works because the tables have the shape (T, 2, head_dim / 2) and x has (B, heads, T, 2, head_dim / 2). Two products and one sum: one fused kernel.</li>
+    <li><b>A slice, but one fused kernel.</b> Section 5 names slice as a fusion barrier, and the Step 5 form stays at 4 kernels for q. Here the probe counted one kernel for q and one for k (option R2 of D2, <code>explore.html</code>): the fused kernel reads the reversed view directly. A new MLX version can add a copy kernel here (R48). T38 then still guards the bits, but not the speed; C2 measures the speed.</li>
+    <li><b>Line 219.</b> The result rounds once to the dtype of x and goes back to (B, heads, T, head_dim).</li>
+    <li><b>Why the bits are the same.</b> Step 5 computes x1 · c + (−x2) · s. Step 6 computes x1 · c + x2 · (−s). A negation in IEEE arithmetic is exact, and the product of two numbers has the same magnitude with either sign placement. So both products round to the same value, and the two sums see the same operands. T38 checks this bit for bit: 3 dtypes × 2 head dimensions (64, 128) × 3 patch grids (14 × 14, 32 × 32, 14 × 25), on the GPU and on the CPU stream (<code>tests/test_mlx_rope.py</code>). The C2 worker also compares both forms on its first batch before it times them (R56). All 10 C2 processes recorded <code>frame_equal</code> and <code>patches_equal</code> true (<code>results/speed-changes.jsonl</code>).</li>
+    <li><b>The prefix tokens.</b> Rows 0 to 4 of the tables are identity rows (cos 1, sin 0, <a href="04-2-rope.html#prefix">04-2, Section 6</a>). The minus sign of <code>rope_layout</code> gives −0 there. x · 1 + r · (−0) = x for each finite x, so the prefix tokens do not change.</li>
+  </ul>
+  <p class="note">Page 04-2 shows the Step 4 form with <code>rotate_half</code> in its Sections 5 and 8. The code of <code>src/</code> now uses the concat-free rotation of this section. <code>rotate_half</code> lives on only in <code>tests/rope_oracle.py</code>, as the oracle of T38.</p>
+</section>
+
+<section id="cache">
+  <h2>7 The RoPE cache outside the module tree</h2>
+  <pre><code># src/dinov3_apple/mlx_model.py, lines 222 to 245
+class RopeCache:
+    """The RoPE tables of each patch grid, in the layout of apply_rope (A3 of
+    specs/06-speed/plan.html).
+
+    A plain object, not a dict: mlx.nn.Module keeps a dict attribute in its module tree, so
+    model.state and the inputs of the compiled forward pass would change with each new grid (R43).
+    """
+
+    def __init__(self, head_dim: int, theta: float) -&gt; None:
+        self.head_dim = head_dim
+        self.theta = theta
+        self._tables: dict[tuple[int, int], tuple[mx.array, mx.array]] = {}
+
+    def tables(self, grid_h: int, grid_w: int) -&gt; tuple[mx.array, mx.array]:
+        """Return (cos2, sin2) of one patch grid. The first call computes them in NumPy."""
+        key = (grid_h, grid_w)
+        if key not in self._tables:
+            cos, sin = rope_tables(grid_h, grid_w, self.head_dim, self.theta)
+            cos2, sin2 = rope_layout(cos, sin)
+            self._tables[key] = (mx.array(cos2), mx.array(sin2))
+        return self._tables[key]
+
+    def __len__(self) -&gt; int:
+        return len(self._tables)</code></pre>
+  <p>Why a plain object and not a dict on the module? <code>mlx.nn.Module</code> is itself a dict. Its <code>__setattr__</code> stores each value of type <code>mx.array</code>, dict, list or tuple as an item of that dict. It stores other values as ordinary Python attributes. <code>Module.state</code> returns the module itself, so it holds every dict item. <code>Module.parameters()</code> leaves out the keys that start with "_" (<code>mlx/nn/layers/base.py</code> of MLX 0.32.4).</p>
+  <ul>
+    <li><b>Step 5.</b> The dict <code>_rope_cache</code> was not a parameter, so <code>load_weights(strict=True)</code>, <code>set_dtype</code> and <code>nn.quantize</code> did not see it (<a href="04-2-rope.html#cache">04-2, Section 9</a>, T19). But it was an item of <code>model.state</code>. The probes found it there (Section 3.4 of the plan).</li>
+    <li><b>The problem with <code>inputs=model.state</code>.</b> The cached tables were then implicit inputs of the trace. A new patch grid adds an entry, so the set of implicit inputs changes. The first call at a new grid can then trace twice (R43, Table 38 of <code>explore.html</code>).</li>
+    <li><b>Step 6.</b> A <code>RopeCache</code> is not an array, a dict, a list or a tuple. So <code>Module.__setattr__</code> stores it as an ordinary attribute, outside the module tree. T39 flattens <code>model.state</code> and finds no name that contains "rope". It also finds as many leaves in <code>model.state</code> as in <code>model.parameters()</code>. T37 counts 3 traces for 5 calls at 3 shapes: the new grid does not retrace the old shapes.</li>
+    <li><b>Lines 235–245: <code>tables</code> and <code>__len__</code>.</b> The first call for a patch grid runs <code>rope_tables</code> and <code>rope_layout</code> in NumPy and makes two <code>mx.array</code> objects. Later calls return the same two arrays. <code>__len__</code> gives the number of patch grids in the cache. T37 and T39 read it with <code>len(model.rope_cache)</code>.</li>
+    <li><b>The key is the patch grid.</b> A batch of 1 and a batch of 8 at 224 px share one entry. T39 asserts that a second call returns the same two arrays (<code>is</code>). One pair of tables is about 0.53 MB at 512 px with head dimension 64 (Section 3.2 of <code>explore.html</code>).</li>
+  </ul>
+</section>
+
+<section id="outputs">
+  <h2>8 run_mlx and mlx_embeddings</h2>
+
+  <h3>8.1 run_mlx: the parity tests run the compiled forward pass</h3>
+  <pre><code># src/dinov3_apple/mlx_model.py, lines 551 to 580 (shortened: the docstring, lines 557 to 574, is left out)
+def run_mlx(
+    model: MlxBackbone,
+    pixels: np.ndarray,
+    dtype_mode: str,
+    forward: Callable[[mx.array], mx.array] | None = None,
+) -&gt; np.ndarray:
+    if dtype_mode != model.dtype_mode:
+        raise ValueError(f"the model runs in {model.dtype_mode}, not in {dtype_mode}")
+    tokens = (forward or model)(mx.array(pixels))
+    tokens = tokens.astype(mx.float32)  # a bf16 mx.array does not convert to NumPy
+    mx.eval(tokens)
+    return np.array(tokens)</code></pre>
+  <ul>
+    <li><b>Line 577: <code>(forward or model)</code>.</b> With <code>forward</code>, the function runs the compiled forward pass. Without it, it runs the eager forward pass, as in Step 5. The docstring says: "None runs the eager forward pass (part tests, diagnostics)". T40 wraps a compiled function in a counter and checks one call, and the same tokens as the eager call.</li>
+    <li><b>D4.</b> The parity tests of Step 5 (<code>test_parity</code>, <code>test_batch_consistency</code>) pass the compiled forward pass of the backbone slot. So the tests check the forward pass that the benchmark and the Step 7 API run.</li>
+    <li><b>W1.</b> The test runs the 12 configurations of each model size and dtype mode twice: compiled and eager. Table 6 of <code>results/parity-mlx.md</code> gives 29 rows with 12 configurations each: 348 of 348 bit for bit equal, largest difference 0. The ViT-7B/16 fp32 row has 0 configurations: its fp32 weights alone need about 27 GB (run rule).</li>
+    <li><b>The CPU stream.</b> On the GPU the compiled and the eager forward pass give the same bits. On the CPU stream they differ: up to 2.0e-6 in fp32 (probe, R37). So T34 uses a tolerance of 1e-5 in fp32 on the CPU stream. In the four fp16 and bf16 dtype modes the worst measured CPU values are 0.0059 (fp16-cast), 0.047 (bf16-cast), 0.0024 (fp16-autocast) and 0.017 (bf16-autocast). The comment in <code>tests/test_mlx_parts.py</code> (lines 743–747) gives the reason: the compiled CPU kernel rounds once for each fused chain; the eager CPU path rounds after each operation. A decision of 2026-11-07 (a deviation from AC1) applies on the CPU stream: T34 only reports the difference of these four modes and asserts a fault bound of at least 5 times the worst value (<code>CPU_FAULT_BOUND</code>, lines 748–753). On the GPU, T34 asserts bit equality in all five dtype modes.</li>
+  </ul>
+
+  <h3>8.2 mlx_embeddings: fp16 patch embeddings on the host</h3>
+  <pre><code># src/dinov3_apple/mlx_model.py, lines 583 to 611
+def patch_dtype(dtype_mode: str, patch_fp32: bool = False) -&gt; mx.Dtype:
+    """Return the host dtype of the patch embeddings of one dtype mode (D13 of
+    specs/06-speed/plan.html): fp16 in the four fp16 and bf16 dtype modes, else fp32."""
+    half = MLX_DTYPE_MODES[dtype_mode].matmul != mx.float32
+    return mx.float16 if half and not patch_fp32 else mx.float32
+
+
+def mlx_embeddings(
+    tokens: mx.array, dtype_mode: str, patch_fp32: bool = False
+) -&gt; tuple[np.ndarray, np.ndarray]:
+    """Return the frame embeddings and the patch embeddings of one batch on the host (D13 of
+    specs/06-speed/plan.html).
+
+    The frame embeddings are fp32. In the four fp16 and bf16 dtype modes the patch embeddings are
+    fp16: half the host bytes for at most 3e-8 of parity (probe fp16-output). NumPy has no bf16,
+    so the bf16 modes cast to fp16 on the GPU; after the final layer norm no value is above 18.
+
+    Args:
+        tokens: All tokens after the final layer norm, (B, 5 + N, D).
+        dtype_mode: The dtype mode of the backbone.
+        patch_fp32: True for fp32 patch embeddings in every dtype mode.
+
+    Returns:
+        The frame embeddings (B, D) and the patch embeddings (B, N, D).
+    """
+    frame = tokens[:, 0].astype(mx.float32)
+    patches = tokens[:, NUM_PREFIX_TOKENS:].astype(patch_dtype(dtype_mode, patch_fp32))
+    mx.eval(frame, patches)
+    return np.array(frame), np.array(patches)</code></pre>
+  <ul>
+    <li><b>Line 608: the frame embedding.</b> Token 0 is the CLS token after the final layer norm. It goes to the host in fp32 in every dtype mode.</li>
+    <li><b>Line 609: the patch embeddings.</b> They skip the 5 prefix tokens. In the four fp16 and bf16 dtype modes they go to the host in fp16: half the bytes. For one P2 batch that is 21.0 MB in place of 42.0 MB (Figure 1 of the plan). NumPy has no bf16, so a bf16 mode casts to fp16 on the GPU. bf16 to fp16 is exact for normal values up to 65,504, and after the final layer norm no value is above 18 (Table 10 of the plan). Only very small values below the normal range of fp16 can lose bits. This is the small extra loss of bf16-cast in Table 8 of <code>results/parity-mlx.md</code> (below).</li>
+    <li><b>Line 610: one <code>mx.eval</code> for both.</b> The casts run on the GPU after the forward pass. The function is not part of the trace.</li>
+    <li><b>The parity cost.</b> Table 8 of <code>results/parity-mlx.md</code> gives the extra loss of the fp16 patch embeddings: the parity of the fp32 output minus the parity of the fp16 output, for the patch mean and the patch 1st percentile. The largest extra loss of a row is 0 in fp16-cast, at most 3.7e-15 in bf16-cast, and 5.3e-8 to 1.3e-6 in the two autocast modes. In fp16-cast the tokens are fp16 already, so the cast changes nothing. In an autocast mode the tokens are fp32, so the cast rounds. The largest value, 1.3e-6, is ViT-H+/16 in bf16-autocast. W4 bounds the extra loss at 1e-7 for the patch mean and 5e-6 for the patch 1st percentile (<code>FP16_EXTRA_LOSS</code>, <code>tests/test_mlx_parity.py</code>, line 352). The docstring of <code>mlx_embeddings</code> still names the probe value "at most 3e-8"; the build measured more (Table 8). The frame embeddings do not change in any row.</li>
+    <li><b>The benchmark worker.</b> <code>time_batch_mlx</code> (<code>mlx_bench.py</code>, lines 70–101) does the same two casts with <code>patch_dtype</code>, but it times the frame and the patch transfer on their own. The change ratio C4 compares fp32 and fp16 patch embeddings. At P2 (patch output) it gives 1.004 to 1.042 (Table 4 of <code>results/speedup-table.md</code>). At P1 that table gives the frame output, and the frame time does not hold the patch transfer. The patch ratio of the same P1 rows is 0.964 to 1.031 (field <code>ratio</code> of the C4 rows of <code>results/speed-changes.jsonl</code>). So the smaller transfer gives little or no speed gain at P1 and P2.</li>
+  </ul>
+</section>
+
+<section id="r30">
+  <h2>9 R30: the casts of the autocast modes</h2>
+  <p>In an autocast mode the matmuls run in fp16 or bf16, and the residual stream, the layer norms and LayerScale stay in fp32. So each block has extra work at the dtype borders:</p>
+  <ul>
+    <li><b>After each layer norm, a cast to the matmul dtype.</b> <code>Block.attention_branch</code> (line 439) and <code>Block.ff_hidden</code> (line 443) call <code>.astype(self.dtypes.matmul)</code> on the fp32 output of <code>norm1</code> and <code>norm2</code>. In a cast mode the norm output has the matmul dtype already, and the cast does nothing.</li>
+    <li><b>After each branch, a promotion.</b> The branch output in fp16 or bf16 times the fp32 LayerScale factor gives fp32, then the residual add follows.</li>
+  </ul>
+  <p>Eager, this gives 37 kernels per SwiGLU block against 33 in the cast modes (probe). Step 5 measured the autocast modes on <code>mlx</code> at P2, eager, at 0.953 to 0.973 times the throughput of the cast modes (R30; Table 7 of <code>specs/05-all-sizes/verify.html</code>). Compile fuses the promotion with the LayerScale multiply and the residual add. The cast after the layer norm stays, because <code>mx.fast.layer_norm</code> is a fusion barrier: 17 kernels against 15 (probe). Step 6 accepts the 2 remaining casts (D3, option a). The other options change the numerics of the autocast mode (round the residual stream before the norm) or need a custom kernel (a non-goal of <code>mission.md</code>).</p>
+  <div class="table-wrap">
+    <table class="first-nowrap">
+      <thead><tr><th>Priority</th><th>Dtype</th><th class="num">C3, frame</th><th class="num">C3, patch</th><th class="num">Paired runs, frame</th><th class="num">Paired runs, patch</th><th class="num">MLX peak, cast / autocast</th></tr></thead>
+      <tbody>
+        <tr><td>P1</td><td>bf16</td><td class="num">1.034 [0.981–1.051]</td><td class="num">0.991 [0.943–1.003]</td><td class="num">0.951</td><td class="num">0.919</td><td class="num">323.6 / 446.0 MB</td></tr>
+        <tr><td>P1</td><td>fp16</td><td class="num">0.999 [0.980–1.124]</td><td class="num">0.921 [0.906–1.038]</td><td class="num">0.960</td><td class="num">0.901</td><td class="num">323.6 / 446.0 MB</td></tr>
+        <tr><td>P2</td><td>bf16</td><td class="num">0.940 [0.922–0.959]</td><td class="num">0.939 [0.921–0.958]</td><td class="num">0.968</td><td class="num">0.968</td><td class="num">2.61 / 2.76 GB</td></tr>
+        <tr><td>P2</td><td>fp16</td><td class="num">0.954 [0.654–0.961]</td><td class="num">0.954 [0.653–0.960]</td><td class="num">0.969</td><td class="num">0.968</td><td class="num">2.61 / 2.76 GB</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 6.</b> Autocast / cast throughput of the compiled forward pass with the concat-free rotation. C3: one subprocess for each dtype mode, in alternation, 5 rounds; the ratio of the two workers of each round, median [min–max]; computed for this page from the rows with <code>"change": "C3"</code> of <code>results/speed-changes.jsonl</code>. The columns of the speedup table agree: P1 frame and P2 patch in Table 4 of <code>results/speedup-table.md</code>. Paired runs: median over the rounds of the two paired runs (Table 7 of <code>results/speedup-table.md</code>, from <code>results/speed-pairs.jsonl</code>). MLX peak: field <code>mlx_timed_peak_bytes</code> of the C3 rows (the same in all 5 rounds), in MB and GB of 10<sup>6</sup> and 10<sup>9</sup> bytes.</p>
+  <ul>
+    <li><b>At P2 the autocast modes stay 3 to 6 % behind the cast modes after compile.</b> C3 gives 0.939 and 0.954, the paired runs 0.968 and 0.969. The probe r30 gave 0.976 [0.959–1.038] for bf16 at P2, with both models in one process (Section 2.3 of <code>explore.html</code>). C3 of the build runs one subprocess for each dtype mode and gives a lower value.</li>
+    <li><b>The build does not show a gain against Step 5.</b> Before compile, Step 5 gave 0.953 to 0.973 at P2. After compile, C3 gives 0.939 and 0.954 and the paired runs give 0.968 and 0.969. The probe r30 gave 0.917 eager and 0.976 compiled, with both models in one process. The methods and the days differ, so this page does not give a size for the gain of compile on R30.</li>
+    <li><b>At P1 the frame ratio of C3 is inside the noise of its 5 rounds.</b> bf16 gives 1.034 [0.981–1.051], fp16 0.999 [0.980–1.124]. The paired runs, with more rounds, give 0.951 and 0.960.</li>
+    <li><b>The patch output of an autocast mode costs more at P1</b>: C3 0.921 to 0.991, paired runs 0.901 and 0.919. A probable reason: in an autocast mode the tokens are fp32, so the fp16 cast of the patch embeddings reads 4 bytes for each value; in a cast mode it reads 2. C4 points the same way: in the two autocast modes at P1, the fp16 patch output gives 0.964 and 0.965 times the patch throughput of the fp32 patch output (field <code>ratio</code> of the C4 rows of <code>results/speed-changes.jsonl</code>). No result file isolates the cost of the cast alone.</li>
+    <li><b>The autocast modes need more memory.</b> The residual stream stays fp32: the MLX peak is 1.38 times the cast value at P1 and 1.06 times at P2 (computed from Table 6).</li>
+    <li><b>One outlier round.</b> In round 1 of C3 at P2 in fp16, the fp16-cast worker gave 24.9 img/s; the other four rounds gave 16.8 to 17.2 img/s. The autocast worker of round 1 gave 16.3 img/s, as in its other rounds. So the round ratio is 0.653. It was the first P2 worker of the C3 run. Its recorded machine state (AC power, no thermal warning, no other heavy job) equals that of the other rounds. The median of the 5 rounds does not use this value.</li>
+  </ul>
+</section>
+
+<section id="ratios">
+  <h2>10 The measured change ratios C1 and C2</h2>
+  <p>A change ratio is the throughput after a change divided by the throughput before it. Both forms run in one process, in alternation and in a rotated order, for 5 rounds. Each form gets 3 warm-up batches and 20 timed batches per round at P1, and 3 warm-up batches and 4 timed batches at P2. The worker <code>run_change_worker</code> (<code>mlx_bench.py</code>, lines 363–457) builds the forms with <code>change_forms</code> (lines 327–360):</p>
+  <ul>
+    <li><b>E</b>: the eager forward pass with the Step 5 rotation (<code>_apply_rope_step5</code>, swapped in by the context <code>_Step5Rope</code>).</li>
+    <li><b>A</b>: <code>mx.compile(..., inputs=model.state)</code> with the Step 5 rotation and its tables (T, head_dim) as arguments.</li>
+    <li><b>R</b>: <code>compile_backbone(model)</code>, with the concat-free rotation.</li>
+  </ul>
+  <p>C1 is A / E (build step 2a), C2 is R / A (build step 2b). Before the timed batches, the worker asserts that both forms give the same tokens bit for bit (R56). All 20 C1 and C2 rows recorded <code>frame_equal</code> and <code>patches_equal</code> true.</p>
+  <figure>
+    <div class="fig"><svg viewBox="0 0 960 520" role="img" aria-labelledby="f4t" font-family="-apple-system, Helvetica Neue, Arial, sans-serif">
+      <title id="f4t">Change ratios C1 and C2 at P1 and P2 for the five dtype modes, median and range over 5 rounds</title>
+      <rect width="960" height="520" fill="#ffffff"/>
+      <g font-size="13" fill="#111414">
+        <circle cx="276" cy="24" r="6" fill="#057379" stroke="#ffffff" stroke-width="2"/><text x="290" y="29">C1: compiled / eager (A / E)</text>
+        <path d="M560,17 L567,24 L560,31 L553,24 Z" fill="#e0a336" stroke="#7a5200" stroke-width="1"/><text x="576" y="29">C2: concat-free / Step 5 form (R / A)</text>
+      </g>
+      <g font-size="13" fill="#111414">
+        <text x="20" y="60" font-weight="600">P1: ViT-S/16, 224 px, batch size 8, frame embedding</text>
+        <line x1="270.0" y1="70" x2="270.0" y2="242" stroke="#d6dedd" stroke-width="1"/>
+        <line x1="340.0" y1="70" x2="340.0" y2="242" stroke="#4a5655" stroke-width="1.5" stroke-dasharray="4 3"/>
+        <line x1="410.0" y1="70" x2="410.0" y2="242" stroke="#d6dedd" stroke-width="1"/>
+        <line x1="480.0" y1="70" x2="480.0" y2="242" stroke="#d6dedd" stroke-width="1"/>
+        <line x1="550.0" y1="70" x2="550.0" y2="242" stroke="#d6dedd" stroke-width="1"/>
+        <line x1="620.0" y1="70" x2="620.0" y2="242" stroke="#d6dedd" stroke-width="1"/>
+        <line x1="690.0" y1="70" x2="690.0" y2="242" stroke="#d6dedd" stroke-width="1"/>
+        <line x1="760.0" y1="70" x2="760.0" y2="242" stroke="#d6dedd" stroke-width="1"/>
+        <line x1="830.0" y1="70" x2="830.0" y2="242" stroke="#d6dedd" stroke-width="1"/>
+        <line x1="900.0" y1="70" x2="900.0" y2="242" stroke="#d6dedd" stroke-width="1"/>
+        <text x="40" y="93">fp32</text>
+        <g><title>C1, P1, fp32: 1.051 [1.048–1.056]</title>
+          <line x1="406.8" y1="82" x2="417.7" y2="82" stroke="#057379" stroke-width="2" stroke-linecap="round"/>
+          <circle cx="411.9" cy="82" r="5.5" fill="#057379" stroke="#ffffff" stroke-width="2"/>
+        </g>
+        <g><title>C2, P1, fp32: 1.012 [0.967–1.038]</title>
+          <line x1="294.3" y1="94" x2="393.8" y2="94" stroke="#b07a12" stroke-width="2" stroke-linecap="round"/>
+          <path d="M356.1,88 L362.1,94 L356.1,100 L350.1,94 Z" fill="#e0a336" stroke="#7a5200" stroke-width="1"/>
+        </g>
+        <text x="40" y="127">fp16-cast</text>
+        <g><title>C1, P1, fp16-cast: 1.305 [1.302–1.343]</title>
+          <line x1="763.0" y1="116" x2="820.0" y2="116" stroke="#057379" stroke-width="2" stroke-linecap="round"/>
+          <circle cx="767.1" cy="116" r="5.5" fill="#057379" stroke="#ffffff" stroke-width="2"/>
+        </g>
+        <g><title>C2, P1, fp16-cast: 1.060 [1.008–1.067]</title>
+          <line x1="351.9" y1="128" x2="433.2" y2="128" stroke="#b07a12" stroke-width="2" stroke-linecap="round"/>
+          <path d="M423.6,122 L429.6,128 L423.6,134 L417.6,128 Z" fill="#e0a336" stroke="#7a5200" stroke-width="1"/>
+        </g>
+        <text x="40" y="161">bf16-cast</text>
+        <g><title>C1, P1, bf16-cast: 1.300 [1.289–1.310]</title>
+          <line x1="745.3" y1="150" x2="773.6" y2="150" stroke="#057379" stroke-width="2" stroke-linecap="round"/>
+          <circle cx="760.0" cy="150" r="5.5" fill="#057379" stroke="#ffffff" stroke-width="2"/>
+        </g>
+        <g><title>C2, P1, bf16-cast: 1.068 [1.015–1.082]</title>
+          <line x1="361.2" y1="162" x2="455.1" y2="162" stroke="#b07a12" stroke-width="2" stroke-linecap="round"/>
+          <path d="M435.6,156 L441.6,162 L435.6,168 L429.6,162 Z" fill="#e0a336" stroke="#7a5200" stroke-width="1"/>
+        </g>
+        <text x="40" y="195">fp16-autocast</text>
+        <g><title>C1, P1, fp16-autocast: 1.293 [1.278–1.317]</title>
+          <line x1="729.6" y1="184" x2="783.2" y2="184" stroke="#057379" stroke-width="2" stroke-linecap="round"/>
+          <circle cx="750.7" cy="184" r="5.5" fill="#057379" stroke="#ffffff" stroke-width="2"/>
+        </g>
+        <g><title>C2, P1, fp16-autocast: 1.089 [1.059–1.106]</title>
+          <line x1="422.0" y1="196" x2="489.0" y2="196" stroke="#b07a12" stroke-width="2" stroke-linecap="round"/>
+          <path d="M464.0,190 L470.0,196 L464.0,202 L458.0,196 Z" fill="#e0a336" stroke="#7a5200" stroke-width="1"/>
+        </g>
+        <text x="40" y="229">bf16-autocast</text>
+        <g><title>C1, P1, bf16-autocast: 1.293 [1.292–1.311]</title>
+          <line x1="748.6" y1="218" x2="774.9" y2="218" stroke="#057379" stroke-width="2" stroke-linecap="round"/>
+          <circle cx="750.4" cy="218" r="5.5" fill="#057379" stroke="#ffffff" stroke-width="2"/>
+        </g>
+        <g><title>C2, P1, bf16-autocast: 1.079 [1.032–1.099]</title>
+          <line x1="385.5" y1="230" x2="478.9" y2="230" stroke="#b07a12" stroke-width="2" stroke-linecap="round"/>
+          <path d="M450.2,224 L456.2,230 L450.2,236 L444.2,230 Z" fill="#e0a336" stroke="#7a5200" stroke-width="1"/>
+        </g>
+        <text x="20" y="272" font-weight="600">P2: ViT-H+/16, 512 px, batch size 8, patch embeddings</text>
+        <line x1="270.0" y1="282" x2="270.0" y2="454" stroke="#d6dedd" stroke-width="1"/>
+        <line x1="340.0" y1="282" x2="340.0" y2="454" stroke="#4a5655" stroke-width="1.5" stroke-dasharray="4 3"/>
+        <line x1="410.0" y1="282" x2="410.0" y2="454" stroke="#d6dedd" stroke-width="1"/>
+        <line x1="480.0" y1="282" x2="480.0" y2="454" stroke="#d6dedd" stroke-width="1"/>
+        <line x1="550.0" y1="282" x2="550.0" y2="454" stroke="#d6dedd" stroke-width="1"/>
+        <line x1="620.0" y1="282" x2="620.0" y2="454" stroke="#d6dedd" stroke-width="1"/>
+        <line x1="690.0" y1="282" x2="690.0" y2="454" stroke="#d6dedd" stroke-width="1"/>
+        <line x1="760.0" y1="282" x2="760.0" y2="454" stroke="#d6dedd" stroke-width="1"/>
+        <line x1="830.0" y1="282" x2="830.0" y2="454" stroke="#d6dedd" stroke-width="1"/>
+        <line x1="900.0" y1="282" x2="900.0" y2="454" stroke="#d6dedd" stroke-width="1"/>
+        <text x="40" y="305">fp32</text>
+        <g><title>C1, P2, fp32: 1.037 [1.001–1.040]</title>
+          <line x1="341.7" y1="294" x2="396.4" y2="294" stroke="#057379" stroke-width="2" stroke-linecap="round"/>
+          <circle cx="392.3" cy="294" r="5.5" fill="#057379" stroke="#ffffff" stroke-width="2"/>
+        </g>
+        <g><title>C2, P2, fp32: 1.010 [0.985–1.021]</title>
+          <line x1="318.8" y1="306" x2="368.8" y2="306" stroke="#b07a12" stroke-width="2" stroke-linecap="round"/>
+          <path d="M354.6,300 L360.6,306 L354.6,312 L348.6,306 Z" fill="#e0a336" stroke="#7a5200" stroke-width="1"/>
+        </g>
+        <text x="40" y="339">fp16-cast</text>
+        <g><title>C1, P2, fp16-cast: 1.272 [1.236–1.276]</title>
+          <line x1="670.9" y1="328" x2="726.1" y2="328" stroke="#057379" stroke-width="2" stroke-linecap="round"/>
+          <circle cx="720.5" cy="328" r="5.5" fill="#057379" stroke="#ffffff" stroke-width="2"/>
+        </g>
+        <g><title>C2, P2, fp16-cast: 1.040 [1.013–1.059]</title>
+          <line x1="358.6" y1="340" x2="422.9" y2="340" stroke="#b07a12" stroke-width="2" stroke-linecap="round"/>
+          <path d="M396.1,334 L402.1,340 L396.1,346 L390.1,340 Z" fill="#e0a336" stroke="#7a5200" stroke-width="1"/>
+        </g>
+        <text x="40" y="373">bf16-cast</text>
+        <g><title>C1, P2, bf16-cast: 1.258 [1.256–1.275]</title>
+          <line x1="698.8" y1="362" x2="724.8" y2="362" stroke="#057379" stroke-width="2" stroke-linecap="round"/>
+          <circle cx="700.5" cy="362" r="5.5" fill="#057379" stroke="#ffffff" stroke-width="2"/>
+        </g>
+        <g><title>C2, P2, bf16-cast: 1.047 [1.005–1.080]</title>
+          <line x1="347.2" y1="374" x2="452.3" y2="374" stroke="#b07a12" stroke-width="2" stroke-linecap="round"/>
+          <path d="M405.7,368 L411.7,374 L405.7,380 L399.7,374 Z" fill="#e0a336" stroke="#7a5200" stroke-width="1"/>
+        </g>
+        <text x="40" y="407">fp16-autocast</text>
+        <g><title>C1, P2, fp16-autocast: 1.282 [1.210–1.302]</title>
+          <line x1="633.5" y1="396" x2="762.7" y2="396" stroke="#057379" stroke-width="2" stroke-linecap="round"/>
+          <circle cx="734.8" cy="396" r="5.5" fill="#057379" stroke="#ffffff" stroke-width="2"/>
+        </g>
+        <g><title>C2, P2, fp16-autocast: 1.056 [1.041–1.067]</title>
+          <line x1="397.9" y1="408" x2="434.1" y2="408" stroke="#b07a12" stroke-width="2" stroke-linecap="round"/>
+          <path d="M418.4,402 L424.4,408 L418.4,414 L412.4,408 Z" fill="#e0a336" stroke="#7a5200" stroke-width="1"/>
+        </g>
+        <text x="40" y="441">bf16-autocast</text>
+        <g><title>C1, P2, bf16-autocast: 1.250 [1.237–1.287]</title>
+          <line x1="672.0" y1="430" x2="741.4" y2="430" stroke="#057379" stroke-width="2" stroke-linecap="round"/>
+          <circle cx="689.8" cy="430" r="5.5" fill="#057379" stroke="#ffffff" stroke-width="2"/>
+        </g>
+        <g><title>C2, P2, bf16-autocast: 1.042 [1.018–1.059]</title>
+          <line x1="365.1" y1="442" x2="422.3" y2="442" stroke="#b07a12" stroke-width="2" stroke-linecap="round"/>
+          <path d="M399.3,436 L405.3,442 L399.3,448 L393.3,442 Z" fill="#e0a336" stroke="#7a5200" stroke-width="1"/>
+        </g>
+      </g>
+      <g font-size="12" fill="#4a5655" text-anchor="middle">
+        <text x="270.0" y="470">0.95</text>
+        <text x="340.0" y="470">1.00</text>
+        <text x="410.0" y="470">1.05</text>
+        <text x="480.0" y="470">1.10</text>
+        <text x="550.0" y="470">1.15</text>
+        <text x="620.0" y="470">1.20</text>
+        <text x="690.0" y="470">1.25</text>
+        <text x="760.0" y="470">1.30</text>
+        <text x="830.0" y="470">1.35</text>
+        <text x="900.0" y="470">1.40</text>
+        <text x="585.0" y="492" fill="#111414">throughput after the change / throughput before it: median of 5 rounds, bar from min to max</text>
+      </g>
+    </svg></div>
+    <figcaption><b>Figure 4.</b> The change ratios C1 (teal circle) and C2 (amber diamond) at P1 (frame embedding) and P2 (patch embeddings), from <code>results/speed-changes.jsonl</code>. The marker is the median of the 5 rounds; the bar runs from the smallest to the largest round. The dashed line marks 1.00: no change. Hover a marker for its values. Table 7 gives the same values.</figcaption>
+  </figure>
+  <div class="table-wrap">
+    <table class="first-nowrap">
+      <thead><tr><th>Priority</th><th>Dtype mode</th><th class="num">E, img/s</th><th class="num">A, img/s</th><th class="num">C1 = A / E</th><th class="num">C2 = R / A</th><th class="num">C1 · C2</th></tr></thead>
+      <tbody>
+        <tr class="group"><td colspan="7">P1: ViT-S/16, 224 px, batch size 8, frame embedding</td></tr>
+        <tr><td>P1</td><td>fp32</td><td class="num">929.0</td><td class="num">976.9</td><td class="num">1.051 [1.048–1.056]</td><td class="num">1.012 [0.967–1.038]</td><td class="num">1.064</td></tr>
+        <tr><td>P1</td><td>fp16-cast</td><td class="num">1,447.2</td><td class="num">1,886.6</td><td class="num">1.305 [1.302–1.343]</td><td class="num">1.060 [1.008–1.067]</td><td class="num">1.383</td></tr>
+        <tr><td>P1</td><td>bf16-cast</td><td class="num">1,455.0</td><td class="num">1,893.2</td><td class="num">1.300 [1.289–1.310]</td><td class="num">1.068 [1.015–1.082]</td><td class="num">1.389</td></tr>
+        <tr><td>P1</td><td>fp16-autocast</td><td class="num">1,406.6</td><td class="num">1,831.9</td><td class="num">1.293 [1.278–1.317]</td><td class="num">1.089 [1.059–1.106]</td><td class="num">1.408</td></tr>
+        <tr><td>P1</td><td>bf16-autocast</td><td class="num">1,419.3</td><td class="num">1,840.6</td><td class="num">1.293 [1.292–1.311]</td><td class="num">1.079 [1.032–1.099]</td><td class="num">1.395</td></tr>
+        <tr class="group"><td colspan="7">P2: ViT-H+/16, 512 px, batch size 8, patch embeddings</td></tr>
+        <tr><td>P2</td><td>fp32</td><td class="num">5.7</td><td class="num">5.8</td><td class="num">1.037 [1.001–1.040]</td><td class="num">1.010 [0.985–1.021]</td><td class="num">1.048</td></tr>
+        <tr><td>P2</td><td>fp16-cast</td><td class="num">15.5</td><td class="num">19.7</td><td class="num">1.272 [1.236–1.276]</td><td class="num">1.040 [1.013–1.059]</td><td class="num">1.323</td></tr>
+        <tr><td>P2</td><td>bf16-cast</td><td class="num">15.7</td><td class="num">19.8</td><td class="num">1.258 [1.256–1.275]</td><td class="num">1.047 [1.005–1.080]</td><td class="num">1.317</td></tr>
+        <tr><td>P2</td><td>fp16-autocast</td><td class="num">14.4</td><td class="num">18.6</td><td class="num">1.282 [1.210–1.302]</td><td class="num">1.056 [1.041–1.067]</td><td class="num">1.354</td></tr>
+        <tr><td>P2</td><td>bf16-autocast</td><td class="num">14.3</td><td class="num">18.0</td><td class="num">1.250 [1.237–1.287]</td><td class="num">1.042 [1.018–1.059]</td><td class="num">1.303</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 7.</b> The change ratios C1 and C2, median [min–max] over 5 rounds, from the field <code>ratio</code> of the C1 and C2 rows of <code>results/speed-changes.jsonl</code> (output: frame at P1, patch at P2). Table 4 of <code>results/speedup-table.md</code> gives the same values. E and A: the median throughput of the 5 rounds of the C1 process. The C2 process ran later and measured other absolute values (for example A at P1 in fp32: 828.6 img/s), so compare the ratios only. C1 · C2: the product of the two medians, computed for this page. It estimates R / E.</p>
+  <ul>
+    <li><b>Compile gains 25 to 31 % in the four fp16 and bf16 dtype modes and 4 to 5 % in fp32.</b> In fp32 the eager forward pass has fewer kernels to remove (Table 4: 836 → 612 for 32 SwiGLU blocks, against 1,061 → 677 in bf16-cast). The fp32 matmuls also take a larger share of the time: at P2, E gives 5.7 img/s in fp32 and 15.5 img/s in fp16-cast. TF32 stays off in fp32 (ADR 0005).</li>
+    <li><b>The concat-free rotation adds 4 to 9 % in the four fp16 and bf16 dtype modes.</b> It removes 3 kernels for q and 3 for k in each block: (677 − 485) / 32 = 6 per block in bf16-cast (Table 4). In fp32 it removes 4 per block, and C2 stays inside the noise: 1.012 [0.967–1.038] at P1, 1.010 [0.985–1.021] at P2.</li>
+    <li><b>At P1 the autocast modes gain a little more from C2 than the cast modes</b> (1.079 and 1.089 against 1.060 and 1.068). At P2 the order is mixed: fp16-autocast 1.056 against fp16-cast 1.040, but bf16-autocast 1.042 against bf16-cast 1.047. The ranges overlap, so this page draws no conclusion from it.</li>
+    <li><b>The build mostly confirms the probe.</b> The probe gave A / E 1.05 to 1.09 (fp32) and 1.18 to 1.35 (fp16 and bf16 dtype modes), and R / A about 1.01 to 1.11 (Table 23 of the plan). 19 of the 20 build medians are inside these ranges. C1 at P2 in fp32 gives 1.037, below the probe range of 1.05 to 1.09.</li>
+    <li><b>Target of AC6.</b> The plan asks for C1 · C2 above 1 in 10 of 10 cells. The products of the medians are 1.048 to 1.408. The Verify stage decides on the criterion.</li>
+  </ul>
+  <p>The change ratios compare <code>mlx</code> with <code>mlx</code>. They do not compare <code>mlx</code> with <code>torch-mps</code>. At P1 the compiled forward pass in fp16-cast and bf16-cast still reaches only 0.867 to 0.900 times the throughput of <code>torch.compile</code> on <code>torch-mps</code> (pooled medians of the frame and the patch output, Table 1 of <code>results/speedup-table.md</code>). <a href="06-2-attention-and-batch-size.html">06-2</a> explains the speedup, the batch size and the P1 profile.</p>
+</section>
+
+<section id="surprises">
+  <h2>11 Surprises</h2>
+  <ol>
+    <li class="note"><b>A closure or <code>mx.compile(model)</code> keeps the weights of the first trace.</b> After a weight change, both give the old output without an error (probe, R35). Only <code>inputs=model.state</code> makes the weights implicit inputs that MLX reads at each call. T35 guards this.</li>
+    <li class="note"><b>A function stored on the model keeps the weights until <code>gc.collect()</code>.</b> The model, the function and the trace form a reference cycle. In the probe 12.52 MiB of weights stayed after <code>del model</code> (R36). So only the caller holds the compiled forward pass. T36 checks that the memory goes free without <code>gc.collect()</code>.</li>
+    <li class="note"><b>A dict on a module joins the compiled inputs (R43).</b> The "_" in <code>_rope_cache</code> kept the RoPE tables out of <code>parameters()</code>, but not out of <code>model.state</code>. With <code>inputs=model.state</code>, each new patch grid changed the implicit inputs. A plain object (<code>RopeCache</code>) stays out of the module tree.</li>
+    <li class="note"><b><code>shapeless=True</code> fails.</b> The first call stops with "Slice cannot infer output shapes". The first compiled call of a new shape, with its trace, costs only 1.8 to 13.4 ms before <code>mx.eval</code> (Table 3), so Step 6 uses one trace for each shape.</li>
+    <li class="note"><b>Kernel counts 1,190 → 550 for 32 SwiGLU blocks in bf16-autocast.</b> Compile removes 448 kernels (14 per block); the concat-free rotation removes another 192 (6 per block). The matmuls and the SDPA do not change: 8.8 ms of a 13.8 ms block at P2.</li>
+    <li class="note"><b>The layer norm is a fusion barrier: 2 casts stay.</b> Compile fuses the promotion of the autocast modes into LayerScale and the residual add, but not the cast after <code>mx.fast.layer_norm</code>. At P2 the autocast modes stay at 0.939 to 0.969 times the cast modes (Table 6).</li>
+    <li class="note"><b>The concat-free rotation is bit for bit equal to the Step 5 form</b>, although it moves the minus sign from the value into the table. The reason: (−x2) · s and x2 · (−s) give the same IEEE result. T38 covers 18 cases on each device.</li>
+    <li class="note"><b>The SwiGLU activation gains most from compile: 3.16 → 0.66 ms per block at P2.</b> In eager mode each cast of the one rounding of Step 5 writes a full tensor. Compile removes this cost and keeps the bits.</li>
+    <li class="note"><b>On the CPU stream, compiled and eager differ; on the GPU they do not.</b> The compiled CPU kernel rounds once for each fused chain. The difference reaches 0.047 in bf16-cast. On the GPU all 348 configurations of W1 are bit for bit equal.</li>
+    <li class="note"><b>Two kernel counts disagree.</b> The probe counted 365 → 173 kernels for 12 MLP blocks in bf16-cast. The P1 profile counted 841 → 637 nodes for ViT-S/16 (12 MLP blocks) in bf16-cast. The two counters count different graph nodes, and the eager form of the profile already uses the concat-free rotation.</li>
+    <li class="note"><b>At P1 the autocast frame ratio of C3 is not below 1.</b> bf16 gives 1.034 in the median of 5 rounds. The paired runs, with more rounds, give 0.951. Five rounds of separate subprocesses at P1 do not resolve a cost of a few percent.</li>
+    <li class="note"><b>Page 04-2 still shows <code>rotate_half</code>.</b> Its Sections 5 and 8 describe the Step 4 form, and it has no link to this page yet. Section 6 of this page (anchor <code>#concat-free</code>) holds the current form.</li>
+    <li class="note"><b>Compile does not show a gain on R30 against Step 5.</b> The probe in one process gave autocast / cast 0.917 eager and 0.976 compiled. The build gives 0.939 to 0.969 at P2, and Step 5 gave 0.953 to 0.973 eager at P2 (Section 9).</li>
+  </ol>
+</section>
+
+<section id="sources">
+  <h2>12 Sources</h2>
+  <ul>
+    <li>Repo code at commit <code>2567808</code>: <code>src/dinov3_apple/mlx_model.py</code> (<code>rope_tables</code>, <code>rope_layout</code>, <code>apply_rope</code>, <code>RopeCache</code>, <code>Attention</code>, <code>Block</code>, <code>MlxBackbone</code>, <code>compile_backbone</code>, <code>run_mlx</code>, <code>patch_dtype</code>, <code>mlx_embeddings</code>), <code>src/dinov3_apple/mlx_bench.py</code> (<code>time_batch_mlx</code>, <code>run_mlx_worker</code> lines 182–188, <code>_apply_rope_step5</code>, <code>_Step5Rope</code>, <code>change_forms</code> line 352, <code>run_change_worker</code>, <code>_count_kernels</code>, <code>run_profile_worker</code> line 516), <code>src/dinov3_apple/flops.py</code> (<code>MODEL_SHAPES</code>). The Step 5 code: commit <code>11a45b1</code>.</li>
+    <li>Tests: <code>tests/rope_oracle.py</code> (<code>rotate_half</code>, <code>apply_rope_step5</code>), <code>tests/test_mlx_rope.py</code> (T37, T38, T39), <code>tests/test_mlx_parts.py</code> (T34 with <code>CPU_COMPILE_TOLERANCE</code> and <code>CPU_FAULT_BOUND</code>, T35, T36, T40, T55), <code>tests/test_mlx_weights.py</code> (T41), <code>tests/test_mlx_parity.py</code> (W1, W4), <code>tests/conftest.py</code> (the backbone slot, <code>mlx_forward</code>).</li>
+    <li>Result files: <code>results/speed-changes.jsonl</code> (C1, C2, C3 and C4 rows: <code>ratio</code>, <code>throughput</code>, <code>frame_equal</code>, <code>patches_equal</code>, <code>compile_trace_s</code>, <code>first_call_s</code>, <code>mlx_timed_peak_bytes</code>, <code>machine</code>), <code>results/speed-matrix.jsonl</code> (<code>compile_trace_s</code> of the compiled <code>mlx</code> rows), <code>results/speed-profile-p1.jsonl</code> (<code>host</code>, <code>kernels</code>), <code>results/speed-pairs.jsonl</code> through Table 7 of <code>results/speedup-table.md</code>, <code>results/speedup-table.md</code> (Tables 1, 4 and 7), <code>results/parity-mlx.md</code> (Tables 6 and 8).</li>
+    <li>Spec files: <code>specs/06-speed/plan.html</code> (Tables 4, 5, 6 and 10, Sections 2, 3.4, 3.17 (R56) and 3.19, Figure 1, Table 23, AC6), <code>specs/06-speed/explore.html</code> (Sections 2.2 and 2.3 with Tables 5 to 7; D1, D2, D3, D4; risks R35, R36, R37, R43, R48 in Table 38), <code>specs/05-all-sizes/verify.html</code> (Table 7, R30 before compile).</li>
+    <li>Words: <code>GLOSSARY.md</code> (eager forward pass, compiled forward pass, trace, fused kernel, fusion barrier, concat-free rotation, RoPE cache, change ratio, priority configuration, MLX peak).</li>
+    <li>MLX 0.32.4: <code>mlx/nn/layers/base.py</code> (<code>Module.__setattr__</code>, <code>Module.state</code>, <code>valid_parameter_filter</code>) and the docstring of <code>mx.compile</code> (arguments <code>inputs</code> and <code>shapeless</code>), MIT. Public: <a href="https://github.com/ml-explore/mlx">github.com/ml-explore/mlx</a>.</li>
+    <li>Earlier explainers: <a href="04-2-rope.html">04-2 RoPE tables and rotation</a> (half-split layout, the Step 4 cache), <a href="05-1-swiglu.html">05-1 SwiGLU and one rounding</a> (the activation in fp32).</li>
+    <li>Computation of the agent for this page (CPU only, Python with <code>json</code>): the C3 round ratios and their median of Table 6, the medians of Table 3, the products C1 · C2 of Table 7, R / E of Table 4, the sum of the matmul rows of Table 5, the per-block kernel differences, and the range of the C4 patch ratios at P1 (read from the field <code>ratio</code>).</li>
+  </ul>
+</section>
+
+<footer class="steps">Previous: <a href="05-3-numeric-range.html">05-3 Numeric range of the tokens</a> · Next: <a href="06-2-attention-and-batch-size.html">06-2 Attention and batch size</a>.</footer>
+</main>
+</body>
+</html>
