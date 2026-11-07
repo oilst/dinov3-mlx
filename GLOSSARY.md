@@ -57,6 +57,9 @@ _Avoid_: layer (alone)
 The rotary position embedding of DINOv3. It rotates the queries and keys of the patch tokens by angles that come from the 2D patch coordinates in a [-1, 1] box.
 _Avoid_: positional encoding, position embedding (alone)
 
+**RoPE tables**:
+The cos and sin arrays of one patch grid, with one row for each token and one column for each value of a head. The prefix tokens get identity rows (cos 1, sin 0).
+
 **LayerScale**:
 A learned factor for each channel on the output of each branch of a block.
 
@@ -89,6 +92,9 @@ _Avoid_: original weights, raw weights
 
 **Converted weights**:
 A Hugging Face model folder that `scripts/convert_meta_checkpoint.py` made from a Meta checkpoint, in `~/.cache/dinov3-apple/converted/`. We use them only while a gated repo is not available.
+
+**MLX weights**:
+The weights of one model size as MLX arrays, with the names and layouts of the MLX backbone. The key map makes them at load time from the Hugging Face safetensors.
 
 ## Outputs
 
@@ -151,6 +157,9 @@ A training augmentation that scales the RoPE coordinate box from [-1, 1] to [-s,
 The software that runs the backbone: `torch-cpu`, `torch-mps` or `mlx`.
 _Avoid_: engine, runtime, framework (in this sense)
 
+**TF32**:
+A matmul mode that rounds the fp32 inputs to a 10-bit mantissa. MLX turns it on by default; the fp32 dtype mode of `mlx` turns it off (`MLX_ENABLE_TF32=0`).
+
 **Reference output**:
 The output of the Hugging Face backbone on `torch-cpu` in fp32. All parity tests compare with it.
 _Avoid_: ground truth, golden output
@@ -200,7 +209,7 @@ Images per second in steady state, after warm-up.
 _Avoid_: speed (as a number), FPS
 
 **Peak memory**:
-The largest memory use during one benchmark run, as the backend reports it.
+The largest memory use during one benchmark run: the lifetime maximum of the process footprint of the benchmark worker. The same measure serves torch-mps and mlx.
 
 **Process footprint**:
 The memory that macOS charges to one process, from `proc_pid_rusage`. On unified memory it includes the GPU memory of torch-mps and mlx. Its lifetime maximum is the peak memory of a benchmark worker.
@@ -214,6 +223,9 @@ One of the two configurations that the benchmarks repeat and compile: P1 (ViT-S/
 
 **Compile row**:
 A benchmark result of a priority configuration with the backbone wrapped by `torch.compile`.
+
+**Round**:
+One run of each configuration of a benchmark command, in order. A second round runs the whole list again. The baseline row takes the median of the runs of each configuration.
 
 **Block profile**:
 The time of each part of block 1, with each part run alone in a loop, next to its FLOP count.

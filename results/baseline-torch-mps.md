@@ -1,17 +1,17 @@
 # Baseline: Hugging Face backbone on torch-mps
 
-Written by `scripts/baseline_table.py` on 2026-11-06 from `results/baseline-torch-mps.jsonl` (276 lines, 2026-11-06T17:10:21+00:00 to 2026-11-06T21:12:53+00:00). Spec: `specs/03-baseline/plan.html`. The latest line of each configuration counts.
+Written by `scripts/baseline_table.py` on 2026-11-07 from `results/baseline-torch-mps.jsonl` (273 lines, 2026-11-06T21:43:26+00:00 to 2026-11-06T23:26:49+00:00). Spec: `specs/03-baseline/plan.html`. The latest line of each configuration counts.
 
 Throughput is images per second, host to host (D3). Peak memory is the lifetime maximum of the macOS process footprint of the worker (D5). Latency is the median and the p90 of the batch times.
 
-Repeatability: over 3 to 3 runs, the throughput of P1 and P2 spreads by 7.9 to 86.4 % (Section 4, limit 5 %). The fastest and the slowest run of one configuration differ by up to 1.9x. So one run can be far off on this Mac (finding F1 of `specs/03-baseline/verify.html`). A baseline row with 1 run is one sample.
+Repeatability: over 3 to 3 runs, the throughput of P1 and P2 spreads by 0.4 to 23.2 % (Section 4, limit 5 %). The fastest and the slowest run of one configuration differ by up to 1.3x. So one run can be far off on this Mac (finding F1 of `specs/03-baseline/verify.html`). A baseline row with 1 run is one sample.
 
 ## Checks
 
 - AC1: 243 of 243 configurations of B1 and B4 have a line: {'done': 225, 'deferred': 18}.
 - AC3: 12 done lines of B1 and B4 are not valid. Not expected: none. Expected but valid or not run: none.
 - AC4: 0 done lines miss the time budget of Table 5.
-- AC7: 0 done lines have a peak memory above the need. Largest peak / need: 0.62.
+- AC7: 0 done lines have a peak memory above the need. Largest peak / need: 0.61.
 
 ## 1. Baseline rows: frame embedding
 
@@ -19,141 +19,141 @@ The fastest valid dtype mode of each dtype (D2, Section 3.7 of the plan). Each d
 
 | Model size | Input resolution | Batch size | Dtype | Dtype mode | Runs | Throughput (img/s) | Median (ms) | p90 (ms) | Peak memory (GB) | Note |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| ViT-S/16 | 224 | 1 | fp32 | fp32 | 1 | 121.4 | 9.19 | 9.91 | 0.56 | parity passes |
-| ViT-S/16 | 224 | 1 | fp16 | fp16-autocast | 1 | 112.4 | 9.47 | 10.23 | 0.57 | parity passes |
-| ViT-S/16 | 224 | 1 | bf16 | bf16-cast | 1 | 129.6 | 7.86 | 9.83 | 0.56 | parity passes |
-| ViT-S/16 | 224 | 8 | fp32 | fp32 + compile | 1 | 471.1 | 17.33 | 19.37 | 0.81 | parity passes |
-| ViT-S/16 | 224 | 8 | fp16 | fp16-cast + compile | 1 | 1333.1 | 6.06 | 6.99 | 0.77 | parity passes |
-| ViT-S/16 | 224 | 8 | bf16 | bf16-cast + compile | 1 | 1377.2 | 6.08 | 6.76 | 0.77 | parity passes |
-| ViT-S/16 | 224 | 32 | fp32 | fp32 | 1 | 755.1 | 41.99 | 45.18 | 1.69 | parity passes |
-| ViT-S/16 | 224 | 32 | fp16 | fp16-autocast | 1 | 654.4 | 48.77 | 52.07 | 1.69 | parity passes |
-| ViT-S/16 | 224 | 32 | bf16 | bf16-cast | 1 | 764.1 | 41.71 | 44.97 | 1.74 | parity passes |
-| ViT-S/16 | 448 | 1 | fp32 | fp32 | 1 | 100.3 | 9.84 | 10.42 | 0.60 | parity passes |
-| ViT-S/16 | 448 | 1 | fp16 | fp16-autocast | 1 | 104.8 | 9.85 | 10.39 | 0.60 | parity passes |
-| ViT-S/16 | 448 | 1 | bf16 | bf16-cast | 1 | 108.9 | 9.71 | 10.16 | 0.60 | parity passes |
-| ViT-S/16 | 448 | 8 | fp32 | fp32 | 1 | 122.5 | 65.19 | 68.55 | 1.69 | parity passes |
-| ViT-S/16 | 448 | 8 | fp16 | fp16-autocast | 1 | 160.3 | 51.70 | 58.00 | 1.69 | parity passes |
-| ViT-S/16 | 448 | 8 | bf16 | bf16-cast | 1 | 198.1 | 41.11 | 43.99 | 1.74 | parity passes |
-| ViT-S/16 | 448 | 32 | fp32 | fp32 | 1 | 104.5 | 306.45 | 336.00 | 1.83 | parity passes |
-| ViT-S/16 | 448 | 32 | fp16 | fp16-autocast | 1 | 128.7 | 246.26 | 271.86 | 1.83 | parity passes |
-| ViT-S/16 | 448 | 32 | bf16 | bf16-cast | 1 | 187.4 | 169.15 | 183.85 | 1.80 | parity passes |
-| ViT-S/16 | 512 | 1 | fp32 | fp32 | 1 | 54.7 | 18.64 | 20.86 | 0.60 | parity passes |
-| ViT-S/16 | 512 | 1 | fp16 | fp16-autocast | 1 | 91.6 | 10.77 | 12.03 | 0.61 | parity passes |
-| ViT-S/16 | 512 | 1 | bf16 | bf16-cast | 1 | 105.9 | 9.81 | 10.18 | 0.61 | parity passes |
-| ViT-S/16 | 512 | 8 | fp32 | fp32 | 1 | 49.9 | 155.41 | 204.88 | 1.70 | parity passes |
-| ViT-S/16 | 512 | 8 | fp16 | fp16-autocast | 1 | 102.3 | 77.25 | 85.97 | 1.70 | parity passes |
-| ViT-S/16 | 512 | 8 | bf16 | bf16-cast | 1 | 165.3 | 49.46 | 54.47 | 1.69 | parity passes |
-| ViT-S/16 | 512 | 32 | fp32 | fp32 | 1 | 41.2 | 749.55 | 932.63 | 3.05 | parity passes |
-| ViT-S/16 | 512 | 32 | fp16 | fp16-autocast | 1 | 104.8 | 297.99 | 343.15 | 1.89 | parity passes |
-| ViT-S/16 | 512 | 32 | bf16 | bf16-cast | 1 | 148.0 | 213.40 | 231.81 | 1.85 | parity passes |
-| ViT-S+/16 | 224 | 1 | fp32 | fp32 | 1 | 113.8 | 9.00 | 10.23 | 0.60 | parity passes |
-| ViT-S+/16 | 224 | 1 | fp16 | fp16-cast | 1 | 126.2 | 7.83 | 9.91 | 0.61 | parity passes |
-| ViT-S+/16 | 224 | 1 | bf16 | bf16-cast | 1 | 117.7 | 9.30 | 10.37 | 0.61 | parity passes |
-| ViT-S+/16 | 224 | 8 | fp32 | fp32 | 1 | 327.2 | 25.45 | 27.43 | 0.67 | parity passes |
-| ViT-S+/16 | 224 | 8 | fp16 | fp16-cast | 1 | 785.9 | 10.18 | 10.54 | 0.64 | parity passes |
-| ViT-S+/16 | 224 | 8 | bf16 | bf16-cast | 1 | 782.8 | 10.24 | 10.64 | 0.64 | parity passes |
-| ViT-S+/16 | 224 | 32 | fp32 | fp32 | 1 | 274.4 | 113.04 | 134.48 | 1.72 | parity passes |
-| ViT-S+/16 | 224 | 32 | fp16 | fp16-cast | 1 | 738.8 | 44.01 | 46.94 | 1.78 | parity passes |
-| ViT-S+/16 | 224 | 32 | bf16 | bf16-cast | 1 | 789.5 | 42.39 | 46.08 | 1.78 | parity passes |
-| ViT-S+/16 | 448 | 1 | fp32 | fp32 | 1 | 63.6 | 15.68 | 16.58 | 0.64 | parity passes |
-| ViT-S+/16 | 448 | 1 | fp16 | fp16-cast | 1 | 101.1 | 10.04 | 10.47 | 0.61 | parity passes |
-| ViT-S+/16 | 448 | 1 | bf16 | bf16-cast | 1 | 102.0 | 10.01 | 10.39 | 0.61 | parity passes |
-| ViT-S+/16 | 448 | 8 | fp32 | fp32 | 1 | 71.7 | 110.23 | 120.22 | 1.72 | parity passes |
-| ViT-S+/16 | 448 | 8 | fp16 | fp16-cast | 1 | 194.8 | 43.23 | 46.95 | 1.78 | parity passes |
-| ViT-S+/16 | 448 | 8 | bf16 | bf16-cast | 1 | 193.1 | 44.23 | 46.74 | 1.78 | parity passes |
-| ViT-S+/16 | 448 | 32 | fp32 | fp32 | 1 | 65.4 | 471.33 | 549.58 | 1.87 | parity passes |
-| ViT-S+/16 | 448 | 32 | fp16 | fp16-cast | 1 | 158.8 | 203.76 | 214.10 | 1.85 | parity passes |
-| ViT-S+/16 | 448 | 32 | bf16 | bf16-cast | 1 | 156.3 | 203.14 | 220.32 | 1.85 | parity passes |
-| ViT-S+/16 | 512 | 1 | fp32 | fp32 | 1 | 49.0 | 20.24 | 21.86 | 0.64 | parity passes |
-| ViT-S+/16 | 512 | 1 | fp16 | fp16-cast | 1 | 102.0 | 10.15 | 10.57 | 0.62 | parity passes |
-| ViT-S+/16 | 512 | 1 | bf16 | bf16-cast | 1 | 100.1 | 10.18 | 10.59 | 0.62 | parity passes |
-| ViT-S+/16 | 512 | 8 | fp32 | fp32 | 1 | 51.4 | 152.49 | 166.21 | 1.74 | parity passes |
-| ViT-S+/16 | 512 | 8 | fp16 | fp16-cast | 1 | 128.6 | 62.02 | 65.73 | 1.80 | parity passes |
-| ViT-S+/16 | 512 | 8 | bf16 | bf16-cast | 1 | 119.5 | 66.89 | 71.43 | 1.80 | parity passes |
-| ViT-S+/16 | 512 | 32 | fp32 | fp32 | 1 | 44.9 | 704.15 | 748.32 | 3.08 | parity passes |
-| ViT-S+/16 | 512 | 32 | fp16 | fp16-cast | 1 | 114.8 | 277.54 | 294.93 | 1.90 | parity passes |
-| ViT-S+/16 | 512 | 32 | bf16 | bf16-cast | 1 | 110.5 | 291.08 | 309.62 | 1.90 | parity passes |
-| ViT-B/16 | 224 | 1 | fp32 | fp32 | 1 | 82.2 | 12.19 | 13.28 | 0.85 | parity passes |
-| ViT-B/16 | 224 | 1 | fp16 | fp16-cast | 1 | 121.9 | 8.39 | 9.76 | 0.82 | parity passes |
-| ViT-B/16 | 224 | 1 | bf16 | bf16-cast | 1 | 104.9 | 9.76 | 10.09 | 0.82 | parity passes |
-| ViT-B/16 | 224 | 8 | fp32 | fp32 | 1 | 133.3 | 59.80 | 63.60 | 2.00 | parity passes |
-| ViT-B/16 | 224 | 8 | fp16 | fp16-cast | 1 | 327.1 | 25.80 | 28.16 | 0.86 | parity passes |
-| ViT-B/16 | 224 | 8 | bf16 | bf16-cast | 1 | 375.8 | 23.10 | 24.92 | 0.86 | parity passes |
-| ViT-B/16 | 224 | 32 | fp32 | fp32 | 1 | 123.8 | 256.74 | 277.63 | 1.99 | parity passes |
-| ViT-B/16 | 224 | 32 | fp16 | fp16-cast | 1 | 292.4 | 109.36 | 115.71 | 2.08 | parity passes |
-| ViT-B/16 | 224 | 32 | bf16 | bf16-cast | 1 | 341.2 | 94.23 | 99.74 | 2.08 | parity passes |
-| ViT-B/16 | 448 | 1 | fp32 | fp32 | 1 | 28.9 | 34.43 | 36.36 | 0.89 | parity passes |
-| ViT-B/16 | 448 | 1 | fp16 | fp16-cast | 1 | 69.2 | 14.23 | 15.93 | 0.84 | parity passes |
-| ViT-B/16 | 448 | 1 | bf16 | bf16-cast | 1 | 76.3 | 12.94 | 14.15 | 0.84 | parity passes |
-| ViT-B/16 | 448 | 8 | fp32 | fp32 | 1 | 28.6 | 279.22 | 296.79 | 2.00 | parity passes |
-| ViT-B/16 | 448 | 8 | fp16 | fp16-cast | 1 | 73.3 | 106.86 | 120.32 | 2.06 | parity passes |
-| ViT-B/16 | 448 | 8 | bf16 | bf16-cast | 1 | 82.2 | 97.00 | 103.17 | 2.06 | parity passes |
-| ViT-B/16 | 448 | 32 | fp32 | fp32 | 1 | 27.2 | 1180.54 | 1228.29 | 3.32 | parity passes |
-| ViT-B/16 | 448 | 32 | fp16 | fp16-cast | 1 | 67.5 | 466.64 | 495.41 | 2.10 | parity passes |
-| ViT-B/16 | 448 | 32 | bf16 | bf16-cast | 1 | 74.2 | 425.93 | 454.03 | 2.10 | parity passes |
-| ViT-B/16 | 512 | 1 | fp32 | fp32 | 1 | 21.4 | 46.21 | 49.72 | 1.97 | parity passes |
-| ViT-B/16 | 512 | 1 | fp16 | fp16-cast | 1 | 53.6 | 18.47 | 20.17 | 0.88 | parity passes |
-| ViT-B/16 | 512 | 1 | bf16 | bf16-cast | 1 | 59.4 | 16.65 | 17.81 | 0.88 | parity passes |
-| ViT-B/16 | 512 | 8 | fp32 | fp32 | 1 | 20.0 | 379.92 | 438.23 | 2.03 | parity passes |
-| ViT-B/16 | 512 | 8 | fp16 | fp16-cast | 1 | 53.9 | 146.69 | 157.62 | 1.98 | parity passes |
-| ViT-B/16 | 512 | 8 | bf16 | bf16-cast | 1 | 60.7 | 129.96 | 141.11 | 1.97 | parity passes |
-| ViT-B/16 | 512 | 32 | fp32 | fp32 | 1 | 18.8 | 1691.32 | 1755.18 | 4.64 | parity passes |
-| ViT-B/16 | 512 | 32 | fp16 | fp16-cast | 1 | 50.1 | 625.07 | 713.26 | 3.23 | parity passes |
-| ViT-B/16 | 512 | 32 | bf16 | bf16-cast | 1 | 54.5 | 586.84 | 647.61 | 3.23 | parity passes |
-| ViT-L/16 | 224 | 1 | fp32 | fp32 | 1 | 27.6 | 35.44 | 40.52 | 2.67 | parity passes |
-| ViT-L/16 | 224 | 1 | fp16 | fp16-autocast | 1 | 48.8 | 20.11 | 22.79 | 2.67 | parity passes |
-| ViT-L/16 | 224 | 1 | bf16 | bf16-cast | 1 | 77.6 | 12.84 | 14.02 | 1.72 | parity passes |
-| ViT-L/16 | 224 | 8 | fp32 | fp32 | 1 | 41.1 | 195.80 | 202.69 | 2.68 | parity passes |
-| ViT-L/16 | 224 | 8 | fp16 | fp16-autocast | 1 | 90.4 | 85.76 | 97.91 | 2.68 | parity passes |
-| ViT-L/16 | 224 | 8 | bf16 | bf16-cast | 1 | 149.6 | 53.49 | 55.37 | 2.83 | parity passes |
-| ViT-L/16 | 224 | 32 | fp32 | fp32 | 1 | 38.7 | 822.67 | 853.73 | 2.75 | parity passes |
-| ViT-L/16 | 224 | 32 | fp16 | fp16-autocast | 1 | 84.6 | 372.18 | 421.76 | 2.76 | parity passes |
-| ViT-L/16 | 224 | 32 | bf16 | bf16-cast | 1 | 147.1 | 215.00 | 228.38 | 2.86 | parity passes |
-| ViT-L/16 | 448 | 1 | fp32 | fp32 | 1 | 9.5 | 105.39 | 108.93 | 2.69 | parity passes |
-| ViT-L/16 | 448 | 1 | fp16 | fp16-autocast | 1 | 20.2 | 48.78 | 53.92 | 2.69 | parity passes |
-| ViT-L/16 | 448 | 1 | bf16 | bf16-cast | 1 | 31.6 | 31.22 | 35.41 | 1.76 | parity passes |
-| ViT-L/16 | 448 | 8 | fp32 | fp32 | 1 | 9.0 | 883.46 | 925.22 | 2.77 | parity passes |
-| ViT-L/16 | 448 | 8 | fp16 | fp16-autocast | 1 | 20.5 | 388.61 | 412.02 | 2.78 | parity passes |
-| ViT-L/16 | 448 | 8 | bf16 | bf16-cast | 1 | 35.7 | 223.43 | 233.19 | 2.87 | parity passes |
-| ViT-L/16 | 448 | 32 | fp32 | fp32 | 1 | 8.0 | 3959.21 | 4103.39 | 5.22 | parity passes |
-| ViT-L/16 | 448 | 32 | fp16 | fp16-autocast | 1 | 17.9 | 1791.30 | 1811.02 | 4.14 | parity passes |
-| ViT-L/16 | 448 | 32 | bf16 | bf16-cast | 1 | 30.3 | 1008.75 | 1224.03 | 4.15 | parity passes |
-| ViT-L/16 | 512 | 1 | fp32 | fp32 | 1 | 6.2 | 161.24 | 175.10 | 2.69 | parity passes |
-| ViT-L/16 | 512 | 1 | fp16 | fp16-autocast | 1 | 15.7 | 62.26 | 70.71 | 2.70 | parity passes |
-| ViT-L/16 | 512 | 1 | bf16 | bf16-cast | 1 | 25.7 | 39.25 | 40.51 | 1.78 | parity passes |
-| ViT-L/16 | 512 | 8 | fp32 | fp32 | 1 | 6.2 | 1273.02 | 1435.58 | 2.83 | parity passes |
-| ViT-L/16 | 512 | 8 | fp16 | fp16-autocast | 1 | 14.8 | 538.70 | 579.60 | 2.82 | parity passes |
-| ViT-L/16 | 512 | 8 | bf16 | bf16-cast | 1 | 21.3 | 377.98 | 413.61 | 2.89 | parity passes |
-| ViT-L/16 | 512 | 32 | fp32 | fp32 | 1 | 6.0 | 5358.27 | 5408.86 | 5.61 | parity passes |
-| ViT-L/16 | 512 | 32 | fp16 | fp16-autocast | 1 | 13.3 | 2395.98 | 2448.17 | 5.35 | parity passes |
-| ViT-L/16 | 512 | 32 | bf16 | bf16-cast | 1 | 17.3 | 1839.79 | 1908.45 | 4.24 | parity passes |
-| ViT-H+/16 | 224 | 1 | fp32 | fp32 | 1 | 12.9 | 77.09 | 87.87 | 4.82 | parity passes |
-| ViT-H+/16 | 224 | 1 | fp16 | fp16-autocast | 1 | 19.8 | 49.27 | 60.96 | 4.82 | parity passes |
-| ViT-H+/16 | 224 | 1 | bf16 | bf16-cast | 1 | 31.3 | 30.68 | 36.46 | 3.69 | parity passes |
-| ViT-H+/16 | 224 | 8 | fp32 | fp32 | 1 | 14.3 | 548.87 | 615.94 | 4.83 | parity passes |
-| ViT-H+/16 | 224 | 8 | fp16 | fp16-autocast | 1 | 34.9 | 225.61 | 260.50 | 4.84 | parity passes |
-| ViT-H+/16 | 224 | 8 | bf16 | bf16-cast | 1 | 47.1 | 168.26 | 182.66 | 3.69 | parity passes |
-| ViT-H+/16 | 224 | 32 | fp32 | fp32 | 1 | 14.9 | 2128.12 | 2254.17 | 4.92 | parity passes |
-| ViT-H+/16 | 224 | 32 | fp16 | fp16-autocast | 1 | 34.2 | 932.46 | 980.78 | 4.93 | parity passes |
-| ViT-H+/16 | 224 | 32 | bf16 | bf16-cast | 1 | 45.0 | 701.85 | 743.42 | 3.69 | parity passes |
-| ViT-H+/16 | 448 | 1 | fp32 | fp32 | 1 | 3.7 | 265.07 | 303.66 | 4.84 | parity passes |
-| ViT-H+/16 | 448 | 1 | fp16 | fp16-cast | 1 | 10.3 | 95.43 | 108.96 | 3.69 | parity passes |
-| ViT-H+/16 | 448 | 1 | bf16 | bf16-cast | 1 | 11.2 | 88.38 | 96.73 | 3.69 | parity passes |
-| ViT-H+/16 | 448 | 8 | fp32 | fp32 | 1 | 3.6 | 2215.48 | 2253.68 | 4.95 | parity passes |
-| ViT-H+/16 | 448 | 8 | fp16 | fp16-cast | 1 | 10.4 | 757.62 | 837.28 | 3.69 | parity passes |
-| ViT-H+/16 | 448 | 8 | bf16 | bf16-cast | 1 | 11.1 | 712.36 | 734.89 | 3.69 | parity passes |
-| ViT-H+/16 | 448 | 32 | fp32 | fp32 | 1 | 3.3 | 9576.36 | 9632.07 | 7.46 | parity passes |
-| ViT-H+/16 | 448 | 32 | fp16 | fp16-cast | 1 | 9.4 | 3409.55 | 3458.78 | 4.50 | parity passes |
-| ViT-H+/16 | 448 | 32 | bf16 | bf16-cast | 1 | 10.1 | 3168.81 | 3197.16 | 4.50 | parity passes |
-| ViT-H+/16 | 512 | 1 | fp32 | fp32 | 1 | 2.6 | 379.73 | 425.09 | 4.86 | parity passes |
-| ViT-H+/16 | 512 | 1 | fp16 | fp16-cast | 1 | 7.8 | 125.35 | 144.52 | 3.69 | parity passes |
-| ViT-H+/16 | 512 | 1 | bf16 | bf16-cast | 1 | 8.8 | 114.32 | 120.23 | 3.69 | parity passes |
-| ViT-H+/16 | 512 | 8 | fp32 | fp32 + compile | 1 | 2.9 | 2849.32 | 2913.59 | 6.35 | parity passes |
-| ViT-H+/16 | 512 | 8 | fp16 | fp16-cast + compile | 1 | 10.5 | 726.15 | 892.38 | 3.69 | parity passes |
-| ViT-H+/16 | 512 | 8 | bf16 | bf16-autocast + compile | 1 | 10.1 | 771.26 | 832.01 | 5.33 | parity passes |
-| ViT-H+/16 | 512 | 32 | fp32 | fp32 | 1 | 2.1 | 14990.00 | 15312.99 | 9.30 | parity passes |
-| ViT-H+/16 | 512 | 32 | fp16 | fp16-cast | 1 | 7.4 | 4339.55 | 4350.27 | 5.68 | parity passes |
-| ViT-H+/16 | 512 | 32 | bf16 | bf16-cast | 1 | 6.7 | 4721.68 | 5215.99 | 5.73 | parity passes |
+| ViT-S/16 | 224 | 1 | fp32 | fp32 | 1 | 130.7 | 7.99 | 9.59 | 0.57 | parity passes |
+| ViT-S/16 | 224 | 1 | fp16 | fp16-cast | 1 | 129.8 | 8.01 | 9.35 | 0.56 | parity passes |
+| ViT-S/16 | 224 | 1 | bf16 | bf16-cast | 1 | 153.3 | 5.42 | 9.22 | 0.56 | parity passes |
+| ViT-S/16 | 224 | 8 | fp32 | fp32 + compile | 1 | 642.3 | 13.02 | 13.73 | 0.77 | parity passes |
+| ViT-S/16 | 224 | 8 | fp16 | fp16-cast + compile | 1 | 1860.0 | 4.49 | 4.74 | 0.72 | parity passes |
+| ViT-S/16 | 224 | 8 | bf16 | bf16-cast + compile | 1 | 1848.4 | 4.56 | 4.78 | 0.73 | parity passes |
+| ViT-S/16 | 224 | 32 | fp32 | fp32 | 1 | 765.5 | 41.30 | 43.38 | 1.69 | parity passes |
+| ViT-S/16 | 224 | 32 | fp16 | fp16-cast | 1 | 1275.3 | 24.97 | 25.96 | 1.74 | parity passes |
+| ViT-S/16 | 224 | 32 | bf16 | bf16-cast | 1 | 1243.2 | 25.67 | 26.62 | 1.74 | parity passes |
+| ViT-S/16 | 448 | 1 | fp32 | fp32 | 1 | 104.0 | 9.71 | 10.07 | 0.60 | parity passes |
+| ViT-S/16 | 448 | 1 | fp16 | fp16-cast | 1 | 107.4 | 9.47 | 10.17 | 0.60 | parity passes |
+| ViT-S/16 | 448 | 1 | bf16 | bf16-cast | 1 | 110.0 | 9.37 | 10.10 | 0.60 | parity passes |
+| ViT-S/16 | 448 | 8 | fp32 | fp32 | 1 | 158.5 | 49.98 | 52.78 | 1.69 | parity passes |
+| ViT-S/16 | 448 | 8 | fp16 | fp16-cast | 1 | 303.9 | 26.15 | 27.44 | 1.74 | parity passes |
+| ViT-S/16 | 448 | 8 | bf16 | bf16-cast | 1 | 301.9 | 26.48 | 27.61 | 1.74 | parity passes |
+| ViT-S/16 | 448 | 32 | fp32 | fp32 | 1 | 159.7 | 199.00 | 215.52 | 1.83 | parity passes |
+| ViT-S/16 | 448 | 32 | fp16 | fp16-cast | 1 | 298.2 | 109.79 | 112.40 | 1.80 | parity passes |
+| ViT-S/16 | 448 | 32 | bf16 | bf16-cast | 1 | 300.2 | 108.86 | 112.26 | 1.80 | parity passes |
+| ViT-S/16 | 512 | 1 | fp32 | fp32 | 1 | 82.2 | 12.12 | 12.66 | 0.61 | parity passes |
+| ViT-S/16 | 512 | 1 | fp16 | fp16-autocast | 1 | 115.3 | 8.68 | 9.00 | 0.61 | parity passes |
+| ViT-S/16 | 512 | 1 | bf16 | bf16-cast | 1 | 109.2 | 9.47 | 10.27 | 0.61 | parity passes |
+| ViT-S/16 | 512 | 8 | fp32 | fp32 | 1 | 112.9 | 68.84 | 77.73 | 1.70 | parity passes |
+| ViT-S/16 | 512 | 8 | fp16 | fp16-cast | 1 | 221.4 | 35.92 | 37.72 | 1.68 | parity passes |
+| ViT-S/16 | 512 | 8 | bf16 | bf16-cast | 1 | 228.8 | 34.91 | 36.51 | 1.68 | parity passes |
+| ViT-S/16 | 512 | 32 | fp32 | fp32 | 1 | 96.2 | 319.92 | 372.13 | 3.04 | parity passes |
+| ViT-S/16 | 512 | 32 | fp16 | fp16-cast | 1 | 212.6 | 151.52 | 158.77 | 1.86 | parity passes |
+| ViT-S/16 | 512 | 32 | bf16 | bf16-cast | 1 | 223.3 | 144.82 | 154.24 | 1.85 | parity passes |
+| ViT-S+/16 | 224 | 1 | fp32 | fp32 | 1 | 113.3 | 9.08 | 10.20 | 0.60 | parity passes |
+| ViT-S+/16 | 224 | 1 | fp16 | fp16-cast | 1 | 121.6 | 8.51 | 10.14 | 0.61 | parity passes |
+| ViT-S+/16 | 224 | 1 | bf16 | bf16-cast | 1 | 122.3 | 8.54 | 10.23 | 0.61 | parity passes |
+| ViT-S+/16 | 224 | 8 | fp32 | fp32 | 1 | 414.5 | 19.21 | 20.25 | 0.67 | parity passes |
+| ViT-S+/16 | 224 | 8 | fp16 | fp16-cast | 1 | 760.2 | 10.50 | 11.10 | 0.64 | parity passes |
+| ViT-S+/16 | 224 | 8 | bf16 | bf16-cast | 1 | 757.1 | 10.49 | 11.23 | 0.64 | parity passes |
+| ViT-S+/16 | 224 | 32 | fp32 | fp32 | 1 | 464.3 | 70.00 | 73.18 | 1.72 | parity passes |
+| ViT-S+/16 | 224 | 32 | fp16 | fp16-cast | 1 | 937.2 | 34.54 | 36.12 | 1.78 | parity passes |
+| ViT-S+/16 | 224 | 32 | bf16 | bf16-cast | 1 | 946.3 | 34.20 | 35.68 | 1.78 | parity passes |
+| ViT-S+/16 | 448 | 1 | fp32 | fp32 | 1 | 83.7 | 12.00 | 12.78 | 0.64 | parity passes |
+| ViT-S+/16 | 448 | 1 | fp16 | fp16-cast | 1 | 106.6 | 9.60 | 10.45 | 0.61 | parity passes |
+| ViT-S+/16 | 448 | 1 | bf16 | bf16-cast | 1 | 102.0 | 9.89 | 10.63 | 0.61 | parity passes |
+| ViT-S+/16 | 448 | 8 | fp32 | fp32 | 1 | 104.5 | 78.38 | 80.93 | 1.72 | parity passes |
+| ViT-S+/16 | 448 | 8 | fp16 | fp16-cast | 1 | 281.6 | 29.33 | 32.90 | 1.78 | parity passes |
+| ViT-S+/16 | 448 | 8 | bf16 | bf16-cast | 1 | 233.7 | 34.24 | 35.41 | 1.78 | parity passes |
+| ViT-S+/16 | 448 | 32 | fp32 | fp32 | 1 | 94.6 | 340.54 | 353.75 | 1.86 | parity passes |
+| ViT-S+/16 | 448 | 32 | fp16 | fp16-cast | 1 | 259.2 | 127.14 | 128.51 | 1.85 | parity passes |
+| ViT-S+/16 | 448 | 32 | bf16 | bf16-cast | 1 | 224.0 | 143.68 | 155.63 | 1.85 | parity passes |
+| ViT-S+/16 | 512 | 1 | fp32 | fp32 | 1 | 63.0 | 16.25 | 17.00 | 0.64 | parity passes |
+| ViT-S+/16 | 512 | 1 | fp16 | fp16-cast | 1 | 101.4 | 9.95 | 10.56 | 0.62 | parity passes |
+| ViT-S+/16 | 512 | 1 | bf16 | bf16-cast | 1 | 100.1 | 10.02 | 10.62 | 0.62 | parity passes |
+| ViT-S+/16 | 512 | 8 | fp32 | fp32 | 1 | 70.7 | 114.87 | 121.96 | 1.74 | parity passes |
+| ViT-S+/16 | 512 | 8 | fp16 | fp16-cast | 1 | 196.8 | 41.63 | 48.93 | 1.80 | parity passes |
+| ViT-S+/16 | 512 | 8 | bf16 | bf16-cast | 1 | 178.5 | 44.83 | 46.34 | 1.80 | parity passes |
+| ViT-S+/16 | 512 | 32 | fp32 | fp32 | 1 | 58.4 | 544.47 | 570.45 | 3.08 | parity passes |
+| ViT-S+/16 | 512 | 32 | fp16 | fp16-cast | 1 | 155.9 | 209.61 | 216.67 | 1.90 | parity passes |
+| ViT-S+/16 | 512 | 32 | bf16 | bf16-cast | 1 | 171.8 | 185.84 | 199.69 | 1.90 | parity passes |
+| ViT-B/16 | 224 | 1 | fp32 | fp32 | 1 | 103.6 | 9.62 | 9.97 | 0.85 | parity passes |
+| ViT-B/16 | 224 | 1 | fp16 | fp16-cast | 1 | 107.9 | 9.48 | 10.00 | 0.82 | parity passes |
+| ViT-B/16 | 224 | 1 | bf16 | bf16-cast | 1 | 107.6 | 9.59 | 10.06 | 0.82 | parity passes |
+| ViT-B/16 | 224 | 8 | fp32 | fp32 | 1 | 197.7 | 41.04 | 46.15 | 2.00 | parity passes |
+| ViT-B/16 | 224 | 8 | fp16 | fp16-cast | 1 | 396.3 | 19.98 | 21.39 | 0.86 | parity passes |
+| ViT-B/16 | 224 | 8 | bf16 | bf16-cast | 1 | 415.4 | 18.93 | 20.67 | 0.86 | parity passes |
+| ViT-B/16 | 224 | 32 | fp32 | fp32 | 1 | 178.1 | 182.82 | 190.67 | 1.99 | parity passes |
+| ViT-B/16 | 224 | 32 | fp16 | fp16-cast | 1 | 392.1 | 82.50 | 86.19 | 2.08 | parity passes |
+| ViT-B/16 | 224 | 32 | bf16 | bf16-cast | 1 | 435.7 | 73.14 | 77.45 | 2.08 | parity passes |
+| ViT-B/16 | 448 | 1 | fp32 | fp32 | 1 | 39.5 | 25.47 | 26.29 | 0.89 | parity passes |
+| ViT-B/16 | 448 | 1 | fp16 | fp16-cast | 1 | 92.6 | 10.99 | 11.88 | 0.84 | parity passes |
+| ViT-B/16 | 448 | 1 | bf16 | bf16-cast | 1 | 96.6 | 10.09 | 11.37 | 0.84 | parity passes |
+| ViT-B/16 | 448 | 8 | fp32 | fp32 | 1 | 39.3 | 205.52 | 211.58 | 2.00 | parity passes |
+| ViT-B/16 | 448 | 8 | fp16 | fp16-cast | 1 | 100.5 | 79.53 | 84.78 | 2.06 | parity passes |
+| ViT-B/16 | 448 | 8 | bf16 | bf16-cast | 1 | 106.5 | 75.48 | 79.71 | 2.06 | parity passes |
+| ViT-B/16 | 448 | 32 | fp32 | fp32 | 1 | 35.5 | 897.10 | 938.21 | 3.30 | parity passes |
+| ViT-B/16 | 448 | 32 | fp16 | fp16-cast | 1 | 89.2 | 359.13 | 378.12 | 2.10 | parity passes |
+| ViT-B/16 | 448 | 32 | bf16 | bf16-cast | 1 | 96.6 | 336.25 | 354.54 | 2.10 | parity passes |
+| ViT-B/16 | 512 | 1 | fp32 | fp32 | 1 | 28.1 | 35.97 | 37.21 | 1.97 | parity passes |
+| ViT-B/16 | 512 | 1 | fp16 | fp16-cast | 1 | 70.4 | 14.20 | 15.49 | 0.88 | parity passes |
+| ViT-B/16 | 512 | 1 | bf16 | bf16-cast | 1 | 73.9 | 13.51 | 14.75 | 0.88 | parity passes |
+| ViT-B/16 | 512 | 8 | fp32 | fp32 | 1 | 27.6 | 292.20 | 310.30 | 2.03 | parity passes |
+| ViT-B/16 | 512 | 8 | fp16 | fp16-cast | 1 | 74.2 | 108.99 | 113.57 | 1.97 | parity passes |
+| ViT-B/16 | 512 | 8 | bf16 | bf16-cast | 1 | 80.3 | 99.44 | 106.18 | 1.97 | parity passes |
+| ViT-B/16 | 512 | 32 | fp32 | fp32 | 1 | 23.5 | 1355.87 | 1417.66 | 4.66 | parity passes |
+| ViT-B/16 | 512 | 32 | fp16 | fp16-cast | 1 | 63.5 | 505.32 | 541.24 | 3.23 | parity passes |
+| ViT-B/16 | 512 | 32 | bf16 | bf16-cast | 1 | 66.9 | 475.66 | 505.15 | 3.23 | parity passes |
+| ViT-L/16 | 224 | 1 | fp32 | fp32 | 1 | 38.5 | 26.28 | 28.40 | 2.67 | parity passes |
+| ViT-L/16 | 224 | 1 | fp16 | fp16-autocast | 1 | 54.9 | 18.05 | 20.54 | 2.67 | parity passes |
+| ViT-L/16 | 224 | 1 | bf16 | bf16-cast | 1 | 81.2 | 12.20 | 12.92 | 1.72 | parity passes |
+| ViT-L/16 | 224 | 8 | fp32 | fp32 | 1 | 54.9 | 151.76 | 155.43 | 2.68 | parity passes |
+| ViT-L/16 | 224 | 8 | fp16 | fp16-autocast | 1 | 111.5 | 72.14 | 77.71 | 2.68 | parity passes |
+| ViT-L/16 | 224 | 8 | bf16 | bf16-cast | 1 | 156.7 | 51.95 | 54.96 | 2.83 | parity passes |
+| ViT-L/16 | 224 | 32 | fp32 | fp32 | 1 | 50.8 | 634.36 | 647.10 | 2.75 | parity passes |
+| ViT-L/16 | 224 | 32 | fp16 | fp16-autocast | 1 | 122.8 | 262.18 | 266.99 | 2.75 | parity passes |
+| ViT-L/16 | 224 | 32 | bf16 | bf16-cast | 1 | 148.2 | 215.81 | 230.88 | 2.86 | parity passes |
+| ViT-L/16 | 448 | 1 | fp32 | fp32 | 1 | 11.8 | 86.44 | 88.52 | 2.68 | parity passes |
+| ViT-L/16 | 448 | 1 | fp16 | fp16-autocast | 1 | 26.5 | 38.01 | 40.77 | 2.69 | parity passes |
+| ViT-L/16 | 448 | 1 | bf16 | bf16-cast | 1 | 34.8 | 28.70 | 31.35 | 1.76 | parity passes |
+| ViT-L/16 | 448 | 8 | fp32 | fp32 | 1 | 11.6 | 694.16 | 706.14 | 2.77 | parity passes |
+| ViT-L/16 | 448 | 8 | fp16 | fp16-autocast | 1 | 29.6 | 273.30 | 291.08 | 2.78 | parity passes |
+| ViT-L/16 | 448 | 8 | bf16 | bf16-cast | 1 | 35.0 | 232.65 | 241.99 | 2.87 | parity passes |
+| ViT-L/16 | 448 | 32 | fp32 | fp32 | 1 | 10.4 | 3093.15 | 3135.33 | 5.23 | parity passes |
+| ViT-L/16 | 448 | 32 | fp16 | fp16-autocast | 1 | 27.1 | 1157.49 | 1208.83 | 4.15 | parity passes |
+| ViT-L/16 | 448 | 32 | bf16 | bf16-cast | 1 | 29.5 | 1079.48 | 1126.51 | 4.15 | parity passes |
+| ViT-L/16 | 512 | 1 | fp32 | fp32 | 1 | 8.5 | 119.59 | 123.03 | 2.69 | parity passes |
+| ViT-L/16 | 512 | 1 | fp16 | fp16-autocast | 1 | 20.3 | 49.98 | 55.71 | 2.70 | parity passes |
+| ViT-L/16 | 512 | 1 | bf16 | bf16-cast | 1 | 26.0 | 38.54 | 41.60 | 1.78 | parity passes |
+| ViT-L/16 | 512 | 8 | fp32 | fp32 | 1 | 7.9 | 1009.76 | 1045.33 | 2.81 | parity passes |
+| ViT-L/16 | 512 | 8 | fp16 | fp16-autocast | 1 | 19.1 | 420.91 | 452.29 | 2.82 | parity passes |
+| ViT-L/16 | 512 | 8 | bf16 | bf16-cast | 1 | 25.1 | 322.42 | 335.25 | 2.89 | parity passes |
+| ViT-L/16 | 512 | 32 | fp32 | fp32 | 1 | 7.3 | 4417.04 | 4460.80 | 5.62 | parity passes |
+| ViT-L/16 | 512 | 32 | fp16 | fp16-autocast | 1 | 17.1 | 1881.89 | 1938.18 | 5.35 | parity passes |
+| ViT-L/16 | 512 | 32 | bf16 | bf16-cast | 1 | 21.0 | 1517.50 | 1579.47 | 4.25 | parity passes |
+| ViT-H+/16 | 224 | 1 | fp32 | fp32 | 1 | 16.3 | 62.44 | 65.35 | 4.82 | parity passes |
+| ViT-H+/16 | 224 | 1 | fp16 | fp16-autocast | 1 | 26.8 | 37.57 | 41.35 | 4.82 | parity passes |
+| ViT-H+/16 | 224 | 1 | bf16 | bf16-cast | 1 | 39.5 | 25.60 | 27.86 | 3.69 | parity passes |
+| ViT-H+/16 | 224 | 8 | fp32 | fp32 | 1 | 23.3 | 347.50 | 350.15 | 4.83 | parity passes |
+| ViT-H+/16 | 224 | 8 | fp16 | fp16-autocast | 1 | 48.3 | 163.79 | 180.50 | 4.84 | parity passes |
+| ViT-H+/16 | 224 | 8 | bf16 | bf16-cast | 1 | 59.5 | 133.67 | 143.87 | 3.69 | parity passes |
+| ViT-H+/16 | 224 | 32 | fp32 | fp32 | 1 | 21.4 | 1456.29 | 1624.25 | 4.94 | parity passes |
+| ViT-H+/16 | 224 | 32 | fp16 | fp16-autocast | 1 | 46.4 | 685.44 | 712.38 | 4.92 | parity passes |
+| ViT-H+/16 | 224 | 32 | bf16 | bf16-cast | 1 | 53.9 | 595.78 | 622.36 | 3.69 | parity passes |
+| ViT-H+/16 | 448 | 1 | fp32 | fp32 | 1 | 5.1 | 199.66 | 207.91 | 4.84 | parity passes |
+| ViT-H+/16 | 448 | 1 | fp16 | fp16-cast | 1 | 14.3 | 69.84 | 75.08 | 3.69 | parity passes |
+| ViT-H+/16 | 448 | 1 | bf16 | bf16-cast | 1 | 14.1 | 70.74 | 75.58 | 3.69 | parity passes |
+| ViT-H+/16 | 448 | 8 | fp32 | fp32 | 1 | 4.7 | 1703.34 | 1769.10 | 4.97 | parity passes |
+| ViT-H+/16 | 448 | 8 | fp16 | fp16-cast | 1 | 13.5 | 588.51 | 610.10 | 3.69 | parity passes |
+| ViT-H+/16 | 448 | 8 | bf16 | bf16-cast | 1 | 13.8 | 578.57 | 613.58 | 3.69 | parity passes |
+| ViT-H+/16 | 448 | 32 | fp32 | fp32 | 1 | 4.1 | 7814.99 | 7932.98 | 7.48 | parity passes |
+| ViT-H+/16 | 448 | 32 | fp16 | fp16-cast | 1 | 11.8 | 2699.35 | 2738.54 | 4.50 | parity passes |
+| ViT-H+/16 | 448 | 32 | bf16 | bf16-cast | 1 | 13.0 | 2527.14 | 2709.95 | 4.51 | parity passes |
+| ViT-H+/16 | 512 | 1 | fp32 | fp32 | 1 | 3.4 | 292.03 | 304.02 | 4.86 | parity passes |
+| ViT-H+/16 | 512 | 1 | fp16 | fp16-cast | 1 | 10.9 | 91.36 | 97.73 | 3.69 | parity passes |
+| ViT-H+/16 | 512 | 1 | bf16 | bf16-cast | 1 | 11.0 | 90.83 | 96.08 | 3.69 | parity passes |
+| ViT-H+/16 | 512 | 8 | fp32 | fp32 + compile | 1 | 3.8 | 2105.29 | 2164.06 | 6.24 | parity passes |
+| ViT-H+/16 | 512 | 8 | fp16 | fp16-cast + compile | 1 | 12.2 | 657.15 | 688.46 | 3.69 | parity passes |
+| ViT-H+/16 | 512 | 8 | bf16 | bf16-cast + compile | 1 | 12.0 | 658.82 | 693.79 | 3.69 | parity passes |
+| ViT-H+/16 | 512 | 32 | fp32 | fp32 | 1 | 3.1 | 10312.28 | 10388.94 | 9.27 | parity passes |
+| ViT-H+/16 | 512 | 32 | fp16 | fp16-cast | 1 | 8.7 | 3684.47 | 3775.57 | 5.69 | parity passes |
+| ViT-H+/16 | 512 | 32 | bf16 | bf16-cast | 1 | 9.7 | 3507.97 | 3594.97 | 5.68 | parity passes |
 | ViT-7B/16 | 224 | 1 | fp16 | – | – | – | – | – | – | empty: fp16-cast: deferred, ViT-7B/16 runs in its own session (D8) |
 | ViT-7B/16 | 224 | 1 | bf16 | – | – | – | – | – | – | empty: bf16-cast: deferred, ViT-7B/16 runs in its own session (D8) |
 | ViT-7B/16 | 224 | 8 | fp16 | – | – | – | – | – | – | empty: fp16-cast: deferred, ViT-7B/16 runs in its own session (D8) |
@@ -179,141 +179,141 @@ The fastest valid dtype mode of each dtype (D2, Section 3.7 of the plan). Each d
 
 | Model size | Input resolution | Batch size | Dtype | Dtype mode | Runs | Throughput (img/s) | Median (ms) | p90 (ms) | Peak memory (GB) | Note |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| ViT-S/16 | 224 | 1 | fp32 | fp32 | 1 | 122.0 | 9.15 | 9.87 | 0.56 | parity passes |
-| ViT-S/16 | 224 | 1 | fp16 | fp16-autocast | 1 | 113.0 | 9.43 | 10.16 | 0.57 | parity passes |
-| ViT-S/16 | 224 | 1 | bf16 | bf16-cast | 1 | 130.5 | 7.80 | 9.75 | 0.56 | parity passes |
-| ViT-S/16 | 224 | 8 | fp32 | fp32 + compile | 1 | 471.3 | 17.32 | 19.35 | 0.81 | parity passes |
-| ViT-S/16 | 224 | 8 | fp16 | fp16-cast + compile | 1 | 1333.5 | 6.06 | 6.98 | 0.77 | parity passes |
-| ViT-S/16 | 224 | 8 | bf16 | bf16-cast + compile | 1 | 1376.5 | 6.08 | 6.76 | 0.77 | parity passes |
-| ViT-S/16 | 224 | 32 | fp32 | fp32 | 1 | 752.4 | 42.16 | 45.30 | 1.69 | parity passes |
-| ViT-S/16 | 224 | 32 | fp16 | fp16-autocast | 1 | 652.4 | 48.87 | 52.24 | 1.69 | parity passes |
-| ViT-S/16 | 224 | 32 | bf16 | bf16-cast | 1 | 763.5 | 41.75 | 45.03 | 1.74 | parity passes |
-| ViT-S/16 | 448 | 1 | fp32 | fp32 | 1 | 100.7 | 9.83 | 10.38 | 0.60 | parity passes |
-| ViT-S/16 | 448 | 1 | fp16 | fp16-autocast | 1 | 105.2 | 9.81 | 10.32 | 0.60 | parity passes |
-| ViT-S/16 | 448 | 1 | bf16 | bf16-cast | 1 | 109.4 | 9.67 | 10.12 | 0.60 | parity passes |
-| ViT-S/16 | 448 | 8 | fp32 | fp32 | 1 | 122.0 | 65.32 | 68.78 | 1.69 | parity passes |
-| ViT-S/16 | 448 | 8 | fp16 | fp16-autocast | 1 | 159.7 | 51.81 | 58.18 | 1.69 | parity passes |
-| ViT-S/16 | 448 | 8 | bf16 | bf16-cast | 1 | 197.9 | 41.15 | 44.01 | 1.74 | parity passes |
-| ViT-S/16 | 448 | 32 | fp32 | fp32 | 1 | 103.5 | 307.74 | 337.37 | 1.83 | parity passes |
-| ViT-S/16 | 448 | 32 | fp16 | fp16-autocast | 1 | 128.0 | 247.78 | 273.26 | 1.83 | parity passes |
-| ViT-S/16 | 448 | 32 | bf16 | bf16-cast | 1 | 186.9 | 169.61 | 184.33 | 1.80 | parity passes |
-| ViT-S/16 | 512 | 1 | fp32 | fp32 | 1 | 54.8 | 18.59 | 20.83 | 0.60 | parity passes |
-| ViT-S/16 | 512 | 1 | fp16 | fp16-autocast | 1 | 91.9 | 10.74 | 12.00 | 0.61 | parity passes |
-| ViT-S/16 | 512 | 1 | bf16 | bf16-cast | 1 | 106.3 | 9.78 | 10.15 | 0.61 | parity passes |
-| ViT-S/16 | 512 | 8 | fp32 | fp32 | 1 | 49.7 | 155.56 | 206.05 | 1.70 | parity passes |
-| ViT-S/16 | 512 | 8 | fp16 | fp16-autocast | 1 | 102.0 | 77.66 | 86.18 | 1.70 | parity passes |
-| ViT-S/16 | 512 | 8 | bf16 | bf16-cast | 1 | 165.0 | 49.52 | 54.55 | 1.69 | parity passes |
-| ViT-S/16 | 512 | 32 | fp32 | fp32 | 1 | 41.0 | 752.82 | 937.28 | 3.05 | parity passes |
-| ViT-S/16 | 512 | 32 | fp16 | fp16-autocast | 1 | 104.3 | 299.11 | 346.02 | 1.89 | parity passes |
-| ViT-S/16 | 512 | 32 | bf16 | bf16-cast | 1 | 147.5 | 214.14 | 232.34 | 1.85 | parity passes |
-| ViT-S+/16 | 224 | 1 | fp32 | fp32 | 1 | 114.4 | 8.95 | 10.17 | 0.60 | parity passes |
-| ViT-S+/16 | 224 | 1 | fp16 | fp16-cast | 1 | 126.9 | 7.79 | 9.86 | 0.61 | parity passes |
-| ViT-S+/16 | 224 | 1 | bf16 | bf16-cast | 1 | 118.4 | 9.24 | 10.31 | 0.61 | parity passes |
-| ViT-S+/16 | 224 | 8 | fp32 | fp32 | 1 | 327.5 | 25.47 | 27.42 | 0.67 | parity passes |
-| ViT-S+/16 | 224 | 8 | fp16 | fp16-cast | 1 | 786.7 | 10.17 | 10.52 | 0.64 | parity passes |
-| ViT-S+/16 | 224 | 8 | bf16 | bf16-cast | 1 | 783.1 | 10.22 | 10.64 | 0.64 | parity passes |
-| ViT-S+/16 | 224 | 32 | fp32 | fp32 | 1 | 273.9 | 113.23 | 134.62 | 1.72 | parity passes |
-| ViT-S+/16 | 224 | 32 | fp16 | fp16-cast | 1 | 738.2 | 44.02 | 47.00 | 1.78 | parity passes |
-| ViT-S+/16 | 224 | 32 | bf16 | bf16-cast | 1 | 788.6 | 42.42 | 46.10 | 1.78 | parity passes |
-| ViT-S+/16 | 448 | 1 | fp32 | fp32 | 1 | 63.8 | 15.63 | 16.53 | 0.64 | parity passes |
-| ViT-S+/16 | 448 | 1 | fp16 | fp16-cast | 1 | 101.6 | 9.98 | 10.43 | 0.61 | parity passes |
-| ViT-S+/16 | 448 | 1 | bf16 | bf16-cast | 1 | 102.5 | 9.97 | 10.36 | 0.61 | parity passes |
-| ViT-S+/16 | 448 | 8 | fp32 | fp32 | 1 | 71.5 | 110.42 | 120.45 | 1.72 | parity passes |
-| ViT-S+/16 | 448 | 8 | fp16 | fp16-cast | 1 | 194.6 | 43.30 | 46.99 | 1.78 | parity passes |
-| ViT-S+/16 | 448 | 8 | bf16 | bf16-cast | 1 | 193.1 | 44.25 | 46.73 | 1.78 | parity passes |
-| ViT-S+/16 | 448 | 32 | fp32 | fp32 | 1 | 65.2 | 472.26 | 550.65 | 1.87 | parity passes |
-| ViT-S+/16 | 448 | 32 | fp16 | fp16-cast | 1 | 158.4 | 204.27 | 214.53 | 1.85 | parity passes |
-| ViT-S+/16 | 448 | 32 | bf16 | bf16-cast | 1 | 156.0 | 203.46 | 220.83 | 1.85 | parity passes |
-| ViT-S+/16 | 512 | 1 | fp32 | fp32 | 1 | 49.1 | 20.18 | 21.81 | 0.64 | parity passes |
-| ViT-S+/16 | 512 | 1 | fp16 | fp16-cast | 1 | 102.4 | 10.10 | 10.54 | 0.62 | parity passes |
-| ViT-S+/16 | 512 | 1 | bf16 | bf16-cast | 1 | 100.6 | 10.13 | 10.55 | 0.62 | parity passes |
-| ViT-S+/16 | 512 | 8 | fp32 | fp32 | 1 | 51.3 | 152.74 | 166.62 | 1.74 | parity passes |
-| ViT-S+/16 | 512 | 8 | fp16 | fp16-cast | 1 | 128.5 | 62.00 | 65.97 | 1.80 | parity passes |
-| ViT-S+/16 | 512 | 8 | bf16 | bf16-cast | 1 | 119.4 | 67.03 | 71.62 | 1.80 | parity passes |
-| ViT-S+/16 | 512 | 32 | fp32 | fp32 | 1 | 44.8 | 705.47 | 750.14 | 3.08 | parity passes |
-| ViT-S+/16 | 512 | 32 | fp16 | fp16-cast | 1 | 114.5 | 278.19 | 295.49 | 1.90 | parity passes |
-| ViT-S+/16 | 512 | 32 | bf16 | bf16-cast | 1 | 110.3 | 291.54 | 310.14 | 1.90 | parity passes |
-| ViT-B/16 | 224 | 1 | fp32 | fp32 | 1 | 82.5 | 12.14 | 13.24 | 0.85 | parity passes |
-| ViT-B/16 | 224 | 1 | fp16 | fp16-cast | 1 | 122.5 | 8.33 | 9.71 | 0.82 | parity passes |
-| ViT-B/16 | 224 | 1 | bf16 | bf16-cast | 1 | 105.4 | 9.71 | 10.05 | 0.82 | parity passes |
-| ViT-B/16 | 224 | 8 | fp32 | fp32 | 1 | 133.2 | 59.87 | 63.61 | 2.00 | parity passes |
-| ViT-B/16 | 224 | 8 | fp16 | fp16-cast | 1 | 327.1 | 25.75 | 28.15 | 0.86 | parity passes |
-| ViT-B/16 | 224 | 8 | bf16 | bf16-cast | 1 | 375.8 | 23.12 | 24.92 | 0.86 | parity passes |
-| ViT-B/16 | 224 | 32 | fp32 | fp32 | 1 | 123.6 | 257.26 | 278.12 | 1.99 | parity passes |
-| ViT-B/16 | 224 | 32 | fp16 | fp16-cast | 1 | 292.2 | 109.45 | 115.80 | 2.08 | parity passes |
-| ViT-B/16 | 224 | 32 | bf16 | bf16-cast | 1 | 341.0 | 94.26 | 99.83 | 2.08 | parity passes |
-| ViT-B/16 | 448 | 1 | fp32 | fp32 | 1 | 29.0 | 34.38 | 36.39 | 0.89 | parity passes |
-| ViT-B/16 | 448 | 1 | fp16 | fp16-cast | 1 | 69.4 | 14.19 | 15.89 | 0.84 | parity passes |
-| ViT-B/16 | 448 | 1 | bf16 | bf16-cast | 1 | 76.6 | 12.90 | 14.11 | 0.84 | parity passes |
-| ViT-B/16 | 448 | 8 | fp32 | fp32 | 1 | 28.6 | 279.57 | 297.04 | 2.00 | parity passes |
-| ViT-B/16 | 448 | 8 | fp16 | fp16-cast | 1 | 73.2 | 107.05 | 120.58 | 2.06 | parity passes |
-| ViT-B/16 | 448 | 8 | bf16 | bf16-cast | 1 | 82.2 | 97.08 | 103.28 | 2.06 | parity passes |
-| ViT-B/16 | 448 | 32 | fp32 | fp32 | 1 | 27.1 | 1182.59 | 1230.37 | 3.32 | parity passes |
-| ViT-B/16 | 448 | 32 | fp16 | fp16-cast | 1 | 67.3 | 467.51 | 496.11 | 2.10 | parity passes |
-| ViT-B/16 | 448 | 32 | bf16 | bf16-cast | 1 | 74.0 | 426.89 | 454.83 | 2.10 | parity passes |
-| ViT-B/16 | 512 | 1 | fp32 | fp32 | 1 | 21.4 | 46.17 | 49.70 | 1.97 | parity passes |
-| ViT-B/16 | 512 | 1 | fp16 | fp16-cast | 1 | 53.7 | 18.42 | 20.13 | 0.88 | parity passes |
-| ViT-B/16 | 512 | 1 | bf16 | bf16-cast | 1 | 59.5 | 16.60 | 17.78 | 0.88 | parity passes |
-| ViT-B/16 | 512 | 8 | fp32 | fp32 | 1 | 20.0 | 380.40 | 438.62 | 2.03 | parity passes |
-| ViT-B/16 | 512 | 8 | fp16 | fp16-cast | 1 | 53.8 | 146.88 | 157.72 | 1.98 | parity passes |
-| ViT-B/16 | 512 | 8 | bf16 | bf16-cast | 1 | 60.6 | 130.24 | 141.34 | 1.97 | parity passes |
-| ViT-B/16 | 512 | 32 | fp32 | fp32 | 1 | 18.8 | 1693.08 | 1756.28 | 4.64 | parity passes |
-| ViT-B/16 | 512 | 32 | fp16 | fp16-cast | 1 | 50.0 | 626.41 | 714.47 | 3.23 | parity passes |
-| ViT-B/16 | 512 | 32 | bf16 | bf16-cast | 1 | 54.4 | 588.30 | 649.22 | 3.23 | parity passes |
-| ViT-L/16 | 224 | 1 | fp32 | fp32 | 1 | 27.6 | 35.38 | 40.52 | 2.67 | parity passes |
-| ViT-L/16 | 224 | 1 | fp16 | fp16-autocast | 1 | 49.0 | 20.07 | 22.75 | 2.67 | parity passes |
-| ViT-L/16 | 224 | 1 | bf16 | bf16-cast | 1 | 77.7 | 12.84 | 13.99 | 1.72 | parity passes |
-| ViT-L/16 | 224 | 8 | fp32 | fp32 | 1 | 41.1 | 195.80 | 202.65 | 2.68 | parity passes |
-| ViT-L/16 | 224 | 8 | fp16 | fp16-autocast | 1 | 90.4 | 85.92 | 98.01 | 2.68 | parity passes |
-| ViT-L/16 | 224 | 8 | bf16 | bf16-cast | 1 | 149.5 | 53.48 | 55.41 | 2.83 | parity passes |
-| ViT-L/16 | 224 | 32 | fp32 | fp32 | 1 | 38.7 | 823.20 | 854.28 | 2.75 | parity passes |
-| ViT-L/16 | 224 | 32 | fp16 | fp16-autocast | 1 | 84.4 | 372.82 | 422.32 | 2.76 | parity passes |
-| ViT-L/16 | 224 | 32 | bf16 | bf16-cast | 1 | 146.9 | 215.23 | 228.62 | 2.86 | parity passes |
-| ViT-L/16 | 448 | 1 | fp32 | fp32 | 1 | 9.5 | 105.35 | 108.88 | 2.69 | parity passes |
-| ViT-L/16 | 448 | 1 | fp16 | fp16-autocast | 1 | 20.2 | 48.76 | 53.80 | 2.69 | parity passes |
-| ViT-L/16 | 448 | 1 | bf16 | bf16-cast | 1 | 31.6 | 31.23 | 35.34 | 1.76 | parity passes |
-| ViT-L/16 | 448 | 8 | fp32 | fp32 | 1 | 9.0 | 883.99 | 925.73 | 2.77 | parity passes |
-| ViT-L/16 | 448 | 8 | fp16 | fp16-autocast | 1 | 20.4 | 389.21 | 412.66 | 2.78 | parity passes |
-| ViT-L/16 | 448 | 8 | bf16 | bf16-cast | 1 | 35.6 | 223.75 | 233.42 | 2.87 | parity passes |
-| ViT-L/16 | 448 | 32 | fp32 | fp32 | 1 | 8.0 | 3960.13 | 4104.19 | 5.22 | parity passes |
-| ViT-L/16 | 448 | 32 | fp16 | fp16-autocast | 1 | 17.9 | 1792.29 | 1812.41 | 4.14 | parity passes |
-| ViT-L/16 | 448 | 32 | bf16 | bf16-cast | 1 | 30.3 | 1009.83 | 1225.05 | 4.15 | parity passes |
-| ViT-L/16 | 512 | 1 | fp32 | fp32 | 1 | 6.2 | 161.20 | 175.11 | 2.69 | parity passes |
-| ViT-L/16 | 512 | 1 | fp16 | fp16-autocast | 1 | 15.8 | 62.30 | 70.44 | 2.70 | parity passes |
-| ViT-L/16 | 512 | 1 | bf16 | bf16-cast | 1 | 25.7 | 39.24 | 40.54 | 1.78 | parity passes |
-| ViT-L/16 | 512 | 8 | fp32 | fp32 | 1 | 6.2 | 1273.61 | 1435.28 | 2.83 | parity passes |
-| ViT-L/16 | 512 | 8 | fp16 | fp16-autocast | 1 | 14.8 | 539.51 | 580.38 | 2.82 | parity passes |
-| ViT-L/16 | 512 | 8 | bf16 | bf16-cast | 1 | 21.3 | 378.44 | 414.11 | 2.89 | parity passes |
-| ViT-L/16 | 512 | 32 | fp32 | fp32 | 1 | 6.0 | 5360.23 | 5409.59 | 5.61 | parity passes |
-| ViT-L/16 | 512 | 32 | fp16 | fp16-autocast | 1 | 13.3 | 2399.15 | 2451.90 | 5.35 | parity passes |
-| ViT-L/16 | 512 | 32 | bf16 | bf16-cast | 1 | 17.3 | 1840.61 | 1909.77 | 4.24 | parity passes |
-| ViT-H+/16 | 224 | 1 | fp32 | fp32 | 1 | 12.9 | 77.12 | 84.77 | 4.82 | parity passes |
-| ViT-H+/16 | 224 | 1 | fp16 | fp16-autocast | 1 | 19.8 | 49.24 | 60.89 | 4.82 | parity passes |
-| ViT-H+/16 | 224 | 1 | bf16 | bf16-cast | 1 | 31.4 | 30.61 | 36.40 | 3.69 | parity passes |
-| ViT-H+/16 | 224 | 8 | fp32 | fp32 | 1 | 14.3 | 549.17 | 616.29 | 4.83 | parity passes |
-| ViT-H+/16 | 224 | 8 | fp16 | fp16-autocast | 1 | 34.8 | 226.06 | 260.93 | 4.84 | parity passes |
-| ViT-H+/16 | 224 | 8 | bf16 | bf16-cast | 1 | 47.0 | 168.46 | 182.70 | 3.69 | parity passes |
-| ViT-H+/16 | 224 | 32 | fp32 | fp32 | 1 | 14.9 | 2126.98 | 2254.27 | 4.92 | parity passes |
-| ViT-H+/16 | 224 | 32 | fp16 | fp16-autocast | 1 | 34.1 | 933.33 | 981.54 | 4.93 | parity passes |
-| ViT-H+/16 | 224 | 32 | bf16 | bf16-cast | 1 | 44.9 | 703.30 | 744.11 | 3.69 | parity passes |
-| ViT-H+/16 | 448 | 1 | fp32 | fp32 | 1 | 3.7 | 265.10 | 303.74 | 4.84 | parity passes |
-| ViT-H+/16 | 448 | 1 | fp16 | fp16-cast | 1 | 10.3 | 95.38 | 108.89 | 3.69 | parity passes |
-| ViT-H+/16 | 448 | 1 | bf16 | bf16-cast | 1 | 11.3 | 88.35 | 96.23 | 3.69 | parity passes |
-| ViT-H+/16 | 448 | 8 | fp32 | fp32 | 1 | 3.6 | 2214.21 | 2253.28 | 4.95 | parity passes |
-| ViT-H+/16 | 448 | 8 | fp16 | fp16-cast | 1 | 10.4 | 758.02 | 838.09 | 3.69 | parity passes |
-| ViT-H+/16 | 448 | 8 | bf16 | bf16-cast | 1 | 11.1 | 712.74 | 735.30 | 3.69 | parity passes |
-| ViT-H+/16 | 448 | 32 | fp32 | fp32 | 1 | 3.3 | 9577.50 | 9634.37 | 7.46 | parity passes |
-| ViT-H+/16 | 448 | 32 | fp16 | fp16-cast | 1 | 9.4 | 3409.56 | 3458.83 | 4.50 | parity passes |
-| ViT-H+/16 | 448 | 32 | bf16 | bf16-cast | 1 | 10.1 | 3168.23 | 3197.59 | 4.50 | parity passes |
-| ViT-H+/16 | 512 | 1 | fp32 | fp32 | 1 | 2.6 | 379.78 | 425.13 | 4.86 | parity passes |
-| ViT-H+/16 | 512 | 1 | fp16 | fp16-cast | 1 | 7.8 | 125.32 | 144.46 | 3.69 | parity passes |
-| ViT-H+/16 | 512 | 1 | bf16 | bf16-cast | 1 | 8.8 | 114.35 | 120.23 | 3.69 | parity passes |
-| ViT-H+/16 | 512 | 8 | fp32 | fp32 + compile | 1 | 2.9 | 2850.29 | 2914.61 | 6.35 | parity passes |
-| ViT-H+/16 | 512 | 8 | fp16 | fp16-cast + compile | 1 | 10.5 | 726.69 | 892.90 | 3.69 | parity passes |
-| ViT-H+/16 | 512 | 8 | bf16 | bf16-autocast + compile | 1 | 10.1 | 772.26 | 833.05 | 5.33 | parity passes |
-| ViT-H+/16 | 512 | 32 | fp32 | fp32 | 1 | 2.1 | 14993.44 | 15316.10 | 9.30 | parity passes |
-| ViT-H+/16 | 512 | 32 | fp16 | fp16-cast | 1 | 7.4 | 4339.17 | 4350.32 | 5.68 | parity passes |
-| ViT-H+/16 | 512 | 32 | bf16 | bf16-cast | 1 | 6.7 | 4722.95 | 5217.09 | 5.73 | parity passes |
+| ViT-S/16 | 224 | 1 | fp32 | fp32 | 1 | 131.4 | 7.95 | 9.55 | 0.57 | parity passes |
+| ViT-S/16 | 224 | 1 | fp16 | fp16-cast | 1 | 130.6 | 7.96 | 9.30 | 0.56 | parity passes |
+| ViT-S/16 | 224 | 1 | bf16 | bf16-cast | 1 | 153.9 | 5.41 | 9.18 | 0.56 | parity passes |
+| ViT-S/16 | 224 | 8 | fp32 | fp32 + compile | 1 | 642.6 | 13.04 | 13.73 | 0.77 | parity passes |
+| ViT-S/16 | 224 | 8 | fp16 | fp16-cast + compile | 1 | 1854.9 | 4.50 | 4.75 | 0.72 | parity passes |
+| ViT-S/16 | 224 | 8 | bf16 | bf16-cast + compile | 1 | 1841.8 | 4.57 | 4.79 | 0.73 | parity passes |
+| ViT-S/16 | 224 | 32 | fp32 | fp32 | 1 | 763.7 | 41.42 | 43.57 | 1.69 | parity passes |
+| ViT-S/16 | 224 | 32 | fp16 | fp16-cast | 1 | 1273.0 | 24.99 | 25.99 | 1.74 | parity passes |
+| ViT-S/16 | 224 | 32 | bf16 | bf16-cast | 1 | 1239.8 | 25.72 | 26.77 | 1.74 | parity passes |
+| ViT-S/16 | 448 | 1 | fp32 | fp32 | 1 | 104.3 | 9.68 | 10.04 | 0.60 | parity passes |
+| ViT-S/16 | 448 | 1 | fp16 | fp16-cast | 1 | 107.9 | 9.42 | 10.12 | 0.60 | parity passes |
+| ViT-S/16 | 448 | 1 | bf16 | bf16-cast | 1 | 110.6 | 9.32 | 10.04 | 0.60 | parity passes |
+| ViT-S/16 | 448 | 8 | fp32 | fp32 | 1 | 158.1 | 50.11 | 52.92 | 1.69 | parity passes |
+| ViT-S/16 | 448 | 8 | fp16 | fp16-cast | 1 | 302.9 | 26.18 | 27.58 | 1.74 | parity passes |
+| ViT-S/16 | 448 | 8 | bf16 | bf16-cast | 1 | 301.2 | 26.52 | 27.73 | 1.74 | parity passes |
+| ViT-S/16 | 448 | 32 | fp32 | fp32 | 1 | 159.0 | 199.77 | 216.66 | 1.83 | parity passes |
+| ViT-S/16 | 448 | 32 | fp16 | fp16-cast | 1 | 297.2 | 110.13 | 112.75 | 1.80 | parity passes |
+| ViT-S/16 | 448 | 32 | bf16 | bf16-cast | 1 | 299.1 | 109.20 | 112.64 | 1.80 | parity passes |
+| ViT-S/16 | 512 | 1 | fp32 | fp32 | 1 | 82.5 | 12.08 | 12.63 | 0.61 | parity passes |
+| ViT-S/16 | 512 | 1 | fp16 | fp16-autocast | 1 | 115.5 | 8.68 | 8.98 | 0.61 | parity passes |
+| ViT-S/16 | 512 | 1 | bf16 | bf16-cast | 1 | 109.7 | 9.42 | 10.23 | 0.61 | parity passes |
+| ViT-S/16 | 512 | 8 | fp32 | fp32 | 1 | 112.7 | 69.01 | 77.97 | 1.70 | parity passes |
+| ViT-S/16 | 512 | 8 | fp16 | fp16-cast | 1 | 221.0 | 35.98 | 37.85 | 1.68 | parity passes |
+| ViT-S/16 | 512 | 8 | bf16 | bf16-cast | 1 | 228.6 | 34.90 | 36.67 | 1.68 | parity passes |
+| ViT-S/16 | 512 | 32 | fp32 | fp32 | 1 | 95.9 | 321.00 | 373.22 | 3.04 | parity passes |
+| ViT-S/16 | 512 | 32 | fp16 | fp16-cast | 1 | 211.8 | 151.99 | 159.19 | 1.86 | parity passes |
+| ViT-S/16 | 512 | 32 | bf16 | bf16-cast | 1 | 222.6 | 145.23 | 154.59 | 1.85 | parity passes |
+| ViT-S+/16 | 224 | 1 | fp32 | fp32 | 1 | 113.9 | 9.03 | 10.15 | 0.60 | parity passes |
+| ViT-S+/16 | 224 | 1 | fp16 | fp16-cast | 1 | 122.2 | 8.46 | 10.07 | 0.61 | parity passes |
+| ViT-S+/16 | 224 | 1 | bf16 | bf16-cast | 1 | 123.0 | 8.49 | 10.18 | 0.61 | parity passes |
+| ViT-S+/16 | 224 | 8 | fp32 | fp32 | 1 | 414.6 | 19.19 | 20.27 | 0.67 | parity passes |
+| ViT-S+/16 | 224 | 8 | fp16 | fp16-cast | 1 | 760.7 | 10.50 | 11.11 | 0.64 | parity passes |
+| ViT-S+/16 | 224 | 8 | bf16 | bf16-cast | 1 | 757.5 | 10.48 | 11.26 | 0.64 | parity passes |
+| ViT-S+/16 | 224 | 32 | fp32 | fp32 | 1 | 463.3 | 70.20 | 73.39 | 1.72 | parity passes |
+| ViT-S+/16 | 224 | 32 | fp16 | fp16-cast | 1 | 936.4 | 34.59 | 36.16 | 1.78 | parity passes |
+| ViT-S+/16 | 224 | 32 | bf16 | bf16-cast | 1 | 945.5 | 34.21 | 35.68 | 1.78 | parity passes |
+| ViT-S+/16 | 448 | 1 | fp32 | fp32 | 1 | 84.0 | 11.95 | 12.75 | 0.64 | parity passes |
+| ViT-S+/16 | 448 | 1 | fp16 | fp16-cast | 1 | 107.2 | 9.54 | 10.41 | 0.61 | parity passes |
+| ViT-S+/16 | 448 | 1 | bf16 | bf16-cast | 1 | 102.5 | 9.84 | 10.58 | 0.61 | parity passes |
+| ViT-S+/16 | 448 | 8 | fp32 | fp32 | 1 | 104.4 | 78.46 | 81.20 | 1.72 | parity passes |
+| ViT-S+/16 | 448 | 8 | fp16 | fp16-cast | 1 | 281.1 | 29.38 | 32.91 | 1.78 | parity passes |
+| ViT-S+/16 | 448 | 8 | bf16 | bf16-cast | 1 | 233.3 | 34.30 | 35.46 | 1.78 | parity passes |
+| ViT-S+/16 | 448 | 32 | fp32 | fp32 | 1 | 94.4 | 341.34 | 354.70 | 1.86 | parity passes |
+| ViT-S+/16 | 448 | 32 | fp16 | fp16-cast | 1 | 258.5 | 127.42 | 128.76 | 1.85 | parity passes |
+| ViT-S+/16 | 448 | 32 | bf16 | bf16-cast | 1 | 223.4 | 143.99 | 156.00 | 1.85 | parity passes |
+| ViT-S+/16 | 512 | 1 | fp32 | fp32 | 1 | 63.2 | 16.20 | 16.95 | 0.64 | parity passes |
+| ViT-S+/16 | 512 | 1 | fp16 | fp16-cast | 1 | 101.8 | 9.89 | 10.52 | 0.62 | parity passes |
+| ViT-S+/16 | 512 | 1 | bf16 | bf16-cast | 1 | 100.5 | 9.97 | 10.57 | 0.62 | parity passes |
+| ViT-S+/16 | 512 | 8 | fp32 | fp32 | 1 | 70.5 | 115.00 | 122.18 | 1.74 | parity passes |
+| ViT-S+/16 | 512 | 8 | fp16 | fp16-cast | 1 | 196.8 | 41.64 | 48.94 | 1.80 | parity passes |
+| ViT-S+/16 | 512 | 8 | bf16 | bf16-cast | 1 | 178.4 | 44.84 | 46.35 | 1.80 | parity passes |
+| ViT-S+/16 | 512 | 32 | fp32 | fp32 | 1 | 58.3 | 545.58 | 571.69 | 3.08 | parity passes |
+| ViT-S+/16 | 512 | 32 | fp16 | fp16-cast | 1 | 155.5 | 209.85 | 217.14 | 1.90 | parity passes |
+| ViT-S+/16 | 512 | 32 | bf16 | bf16-cast | 1 | 171.3 | 186.31 | 200.28 | 1.90 | parity passes |
+| ViT-B/16 | 224 | 1 | fp32 | fp32 | 1 | 104.1 | 9.58 | 9.96 | 0.85 | parity passes |
+| ViT-B/16 | 224 | 1 | fp16 | fp16-cast | 1 | 108.4 | 9.46 | 9.95 | 0.82 | parity passes |
+| ViT-B/16 | 224 | 1 | bf16 | bf16-cast | 1 | 108.1 | 9.54 | 10.02 | 0.82 | parity passes |
+| ViT-B/16 | 224 | 8 | fp32 | fp32 | 1 | 197.6 | 41.00 | 46.17 | 2.00 | parity passes |
+| ViT-B/16 | 224 | 8 | fp16 | fp16-cast | 1 | 396.2 | 19.99 | 21.38 | 0.86 | parity passes |
+| ViT-B/16 | 224 | 8 | bf16 | bf16-cast | 1 | 415.3 | 18.93 | 20.70 | 0.86 | parity passes |
+| ViT-B/16 | 224 | 32 | fp32 | fp32 | 1 | 177.8 | 183.13 | 190.98 | 1.99 | parity passes |
+| ViT-B/16 | 224 | 32 | fp16 | fp16-cast | 1 | 391.0 | 82.67 | 86.88 | 2.08 | parity passes |
+| ViT-B/16 | 224 | 32 | bf16 | bf16-cast | 1 | 434.8 | 73.24 | 77.72 | 2.08 | parity passes |
+| ViT-B/16 | 448 | 1 | fp32 | fp32 | 1 | 39.5 | 25.43 | 26.28 | 0.89 | parity passes |
+| ViT-B/16 | 448 | 1 | fp16 | fp16-cast | 1 | 92.9 | 10.94 | 11.86 | 0.84 | parity passes |
+| ViT-B/16 | 448 | 1 | bf16 | bf16-cast | 1 | 96.9 | 10.05 | 11.35 | 0.84 | parity passes |
+| ViT-B/16 | 448 | 8 | fp32 | fp32 | 1 | 39.2 | 205.89 | 212.11 | 2.00 | parity passes |
+| ViT-B/16 | 448 | 8 | fp16 | fp16-cast | 1 | 100.4 | 79.58 | 84.80 | 2.06 | parity passes |
+| ViT-B/16 | 448 | 8 | bf16 | bf16-cast | 1 | 106.3 | 75.54 | 80.05 | 2.06 | parity passes |
+| ViT-B/16 | 448 | 32 | fp32 | fp32 | 1 | 35.4 | 899.11 | 940.21 | 3.30 | parity passes |
+| ViT-B/16 | 448 | 32 | fp16 | fp16-cast | 1 | 88.9 | 359.98 | 378.86 | 2.10 | parity passes |
+| ViT-B/16 | 448 | 32 | bf16 | bf16-cast | 1 | 96.3 | 337.14 | 355.53 | 2.10 | parity passes |
+| ViT-B/16 | 512 | 1 | fp32 | fp32 | 1 | 28.2 | 35.94 | 37.20 | 1.97 | parity passes |
+| ViT-B/16 | 512 | 1 | fp16 | fp16-cast | 1 | 70.6 | 14.15 | 15.47 | 0.88 | parity passes |
+| ViT-B/16 | 512 | 1 | bf16 | bf16-cast | 1 | 74.1 | 13.47 | 14.76 | 0.88 | parity passes |
+| ViT-B/16 | 512 | 8 | fp32 | fp32 | 1 | 27.5 | 292.66 | 310.71 | 2.03 | parity passes |
+| ViT-B/16 | 512 | 8 | fp16 | fp16-cast | 1 | 74.1 | 109.27 | 113.75 | 1.97 | parity passes |
+| ViT-B/16 | 512 | 8 | bf16 | bf16-cast | 1 | 80.2 | 99.53 | 106.36 | 1.97 | parity passes |
+| ViT-B/16 | 512 | 32 | fp32 | fp32 | 1 | 23.4 | 1358.29 | 1420.61 | 4.66 | parity passes |
+| ViT-B/16 | 512 | 32 | fp16 | fp16-cast | 1 | 63.3 | 506.55 | 542.27 | 3.23 | parity passes |
+| ViT-B/16 | 512 | 32 | bf16 | bf16-cast | 1 | 66.7 | 477.35 | 506.03 | 3.23 | parity passes |
+| ViT-L/16 | 224 | 1 | fp32 | fp32 | 1 | 38.5 | 26.25 | 28.35 | 2.67 | parity passes |
+| ViT-L/16 | 224 | 1 | fp16 | fp16-autocast | 1 | 55.0 | 18.04 | 20.54 | 2.67 | parity passes |
+| ViT-L/16 | 224 | 1 | bf16 | bf16-cast | 1 | 81.4 | 12.16 | 12.91 | 1.72 | parity passes |
+| ViT-L/16 | 224 | 8 | fp32 | fp32 | 1 | 54.8 | 151.80 | 155.46 | 2.68 | parity passes |
+| ViT-L/16 | 224 | 8 | fp16 | fp16-autocast | 1 | 111.3 | 72.20 | 77.78 | 2.68 | parity passes |
+| ViT-L/16 | 224 | 8 | bf16 | bf16-cast | 1 | 156.7 | 51.96 | 55.00 | 2.83 | parity passes |
+| ViT-L/16 | 224 | 32 | fp32 | fp32 | 1 | 50.7 | 634.91 | 647.66 | 2.75 | parity passes |
+| ViT-L/16 | 224 | 32 | fp16 | fp16-autocast | 1 | 122.5 | 262.75 | 267.49 | 2.75 | parity passes |
+| ViT-L/16 | 224 | 32 | bf16 | bf16-cast | 1 | 148.0 | 216.13 | 231.26 | 2.86 | parity passes |
+| ViT-L/16 | 448 | 1 | fp32 | fp32 | 1 | 11.8 | 86.39 | 88.58 | 2.68 | parity passes |
+| ViT-L/16 | 448 | 1 | fp16 | fp16-autocast | 1 | 26.5 | 38.05 | 40.78 | 2.69 | parity passes |
+| ViT-L/16 | 448 | 1 | bf16 | bf16-cast | 1 | 34.8 | 28.65 | 31.36 | 1.76 | parity passes |
+| ViT-L/16 | 448 | 8 | fp32 | fp32 | 1 | 11.5 | 694.72 | 706.68 | 2.77 | parity passes |
+| ViT-L/16 | 448 | 8 | fp16 | fp16-autocast | 1 | 29.5 | 273.86 | 291.71 | 2.78 | parity passes |
+| ViT-L/16 | 448 | 8 | bf16 | bf16-cast | 1 | 35.0 | 233.21 | 242.27 | 2.87 | parity passes |
+| ViT-L/16 | 448 | 32 | fp32 | fp32 | 1 | 10.4 | 3093.79 | 3136.13 | 5.23 | parity passes |
+| ViT-L/16 | 448 | 32 | fp16 | fp16-autocast | 1 | 27.1 | 1160.39 | 1210.52 | 4.15 | parity passes |
+| ViT-L/16 | 448 | 32 | bf16 | bf16-cast | 1 | 29.5 | 1080.21 | 1127.57 | 4.15 | parity passes |
+| ViT-L/16 | 512 | 1 | fp32 | fp32 | 1 | 8.5 | 119.57 | 122.90 | 2.69 | parity passes |
+| ViT-L/16 | 512 | 1 | fp16 | fp16-autocast | 1 | 20.3 | 49.95 | 55.75 | 2.70 | parity passes |
+| ViT-L/16 | 512 | 1 | bf16 | bf16-cast | 1 | 26.0 | 38.52 | 41.59 | 1.78 | parity passes |
+| ViT-L/16 | 512 | 8 | fp32 | fp32 | 1 | 7.9 | 1010.40 | 1045.99 | 2.81 | parity passes |
+| ViT-L/16 | 512 | 8 | fp16 | fp16-autocast | 1 | 19.1 | 421.64 | 452.95 | 2.82 | parity passes |
+| ViT-L/16 | 512 | 8 | bf16 | bf16-cast | 1 | 25.1 | 322.75 | 335.85 | 2.89 | parity passes |
+| ViT-L/16 | 512 | 32 | fp32 | fp32 | 1 | 7.3 | 4418.54 | 4462.10 | 5.62 | parity passes |
+| ViT-L/16 | 512 | 32 | fp16 | fp16-autocast | 1 | 17.1 | 1885.14 | 1941.40 | 5.35 | parity passes |
+| ViT-L/16 | 512 | 32 | bf16 | bf16-cast | 1 | 21.0 | 1517.90 | 1581.07 | 4.25 | parity passes |
+| ViT-H+/16 | 224 | 1 | fp32 | fp32 | 1 | 16.3 | 62.40 | 65.33 | 4.82 | parity passes |
+| ViT-H+/16 | 224 | 1 | fp16 | fp16-autocast | 1 | 26.8 | 37.52 | 41.34 | 4.82 | parity passes |
+| ViT-H+/16 | 224 | 1 | bf16 | bf16-cast | 1 | 39.6 | 25.55 | 27.79 | 3.69 | parity passes |
+| ViT-H+/16 | 224 | 8 | fp32 | fp32 | 1 | 23.3 | 347.72 | 350.27 | 4.83 | parity passes |
+| ViT-H+/16 | 224 | 8 | fp16 | fp16-autocast | 1 | 48.2 | 164.00 | 180.51 | 4.84 | parity passes |
+| ViT-H+/16 | 224 | 8 | bf16 | bf16-cast | 1 | 59.5 | 133.77 | 143.89 | 3.69 | parity passes |
+| ViT-H+/16 | 224 | 32 | fp32 | fp32 | 1 | 21.4 | 1457.17 | 1623.88 | 4.94 | parity passes |
+| ViT-H+/16 | 224 | 32 | fp16 | fp16-autocast | 1 | 46.4 | 686.79 | 713.00 | 4.92 | parity passes |
+| ViT-H+/16 | 224 | 32 | bf16 | bf16-cast | 1 | 53.8 | 596.02 | 622.56 | 3.69 | parity passes |
+| ViT-H+/16 | 448 | 1 | fp32 | fp32 | 1 | 5.1 | 199.63 | 207.89 | 4.84 | parity passes |
+| ViT-H+/16 | 448 | 1 | fp16 | fp16-cast | 1 | 14.3 | 69.81 | 75.02 | 3.69 | parity passes |
+| ViT-H+/16 | 448 | 1 | bf16 | bf16-cast | 1 | 14.1 | 70.68 | 75.50 | 3.69 | parity passes |
+| ViT-H+/16 | 448 | 8 | fp32 | fp32 | 1 | 4.7 | 1702.99 | 1768.58 | 4.97 | parity passes |
+| ViT-H+/16 | 448 | 8 | fp16 | fp16-cast | 1 | 13.5 | 589.05 | 611.98 | 3.69 | parity passes |
+| ViT-H+/16 | 448 | 8 | bf16 | bf16-cast | 1 | 13.8 | 578.90 | 613.92 | 3.69 | parity passes |
+| ViT-H+/16 | 448 | 32 | fp32 | fp32 | 1 | 4.1 | 7816.57 | 7936.58 | 7.48 | parity passes |
+| ViT-H+/16 | 448 | 32 | fp16 | fp16-cast | 1 | 11.8 | 2699.19 | 2738.72 | 4.50 | parity passes |
+| ViT-H+/16 | 448 | 32 | bf16 | bf16-cast | 1 | 13.0 | 2528.22 | 2710.15 | 4.51 | parity passes |
+| ViT-H+/16 | 512 | 1 | fp32 | fp32 | 1 | 3.4 | 292.04 | 304.04 | 4.86 | parity passes |
+| ViT-H+/16 | 512 | 1 | fp16 | fp16-cast | 1 | 10.9 | 91.31 | 97.72 | 3.69 | parity passes |
+| ViT-H+/16 | 512 | 1 | bf16 | bf16-cast | 1 | 11.0 | 90.81 | 96.04 | 3.69 | parity passes |
+| ViT-H+/16 | 512 | 8 | fp32 | fp32 + compile | 1 | 3.8 | 2106.48 | 2164.90 | 6.24 | parity passes |
+| ViT-H+/16 | 512 | 8 | fp16 | fp16-cast + compile | 1 | 12.2 | 658.31 | 688.91 | 3.69 | parity passes |
+| ViT-H+/16 | 512 | 8 | bf16 | bf16-cast + compile | 1 | 12.0 | 659.22 | 694.31 | 3.69 | parity passes |
+| ViT-H+/16 | 512 | 32 | fp32 | fp32 | 1 | 3.1 | 10323.46 | 10396.21 | 9.27 | parity passes |
+| ViT-H+/16 | 512 | 32 | fp16 | fp16-cast | 1 | 8.7 | 3684.49 | 3776.13 | 5.69 | parity passes |
+| ViT-H+/16 | 512 | 32 | bf16 | bf16-cast | 1 | 9.7 | 3508.44 | 3595.48 | 5.68 | parity passes |
 | ViT-7B/16 | 224 | 1 | fp16 | – | – | – | – | – | – | empty: fp16-cast: deferred, ViT-7B/16 runs in its own session (D8) |
 | ViT-7B/16 | 224 | 1 | bf16 | – | – | – | – | – | – | empty: bf16-cast: deferred, ViT-7B/16 runs in its own session (D8) |
 | ViT-7B/16 | 224 | 8 | fp16 | – | – | – | – | – | – | empty: fp16-cast: deferred, ViT-7B/16 runs in its own session (D8) |
@@ -337,231 +337,231 @@ The fastest valid dtype mode of each dtype (D2, Section 3.7 of the plan). Each d
 
 | Model size | Input resolution | Batch size | Dtype mode | Valid | Frame (img/s) | Patch (img/s) | Device (img/s) | Frame median (ms) | Frame p90 (ms) | Peak (GB) | Load peak (GB) | MPS driver (GB) | Need (GB) | Timed batches |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| ViT-S/16 | 224 | 1 | fp32 | yes | 121.4 | 122.0 | 125.2 | 9.19 | 9.91 | 0.56 | 0.52 | 0.10 | 4.11 | 1221 |
-| ViT-S/16 | 224 | 8 | fp32 | yes | 608.4 | 607.5 | 619.7 | 13.07 | 13.48 | 0.64 | 0.52 | 0.17 | 4.17 | 760 |
-| ViT-S/16 | 224 | 32 | fp32 | yes | 755.1 | 752.4 | 761.7 | 41.99 | 45.18 | 1.69 | 0.52 | 1.18 | 4.36 | 236 |
-| ViT-S/16 | 448 | 1 | fp32 | yes | 100.3 | 100.7 | 103.3 | 9.84 | 10.42 | 0.60 | 0.52 | 0.14 | 4.16 | 1007 |
-| ViT-S/16 | 448 | 8 | fp32 | yes | 122.5 | 122.0 | 123.2 | 65.19 | 68.55 | 1.69 | 0.52 | 1.18 | 4.54 | 153 |
-| ViT-S/16 | 448 | 32 | fp32 | yes | 104.5 | 103.5 | 104.7 | 306.45 | 336.00 | 1.83 | 0.52 | 1.18 | 5.84 | 33 |
-| ViT-S/16 | 512 | 1 | fp32 | yes | 54.7 | 54.8 | 55.6 | 18.64 | 20.86 | 0.60 | 0.52 | 0.14 | 4.19 | 548 |
-| ViT-S/16 | 512 | 8 | fp32 | yes | 49.9 | 49.7 | 50.1 | 155.41 | 204.88 | 1.70 | 0.52 | 1.18 | 4.76 | 63 |
-| ViT-S/16 | 512 | 32 | fp32 | yes | 41.2 | 41.0 | 41.2 | 749.55 | 932.63 | 3.05 | 0.52 | 2.33 | 6.74 | 30 |
-| ViT-S/16 | 224 | 1 | fp16-cast | yes | 104.7 | 105.5 | 108.3 | 9.52 | 12.12 | 0.56 | 0.51 | 0.06 | 4.06 | 1055 |
-| ViT-S/16 | 224 | 8 | fp16-cast | yes | 382.9 | 383.5 | 390.3 | 18.99 | 27.65 | 0.59 | 0.51 | 0.09 | 4.08 | 480 |
-| ViT-S/16 | 224 | 32 | fp16-cast | yes | 367.3 | 367.5 | 371.0 | 66.14 | 146.35 | 1.74 | 0.51 | 1.19 | 4.18 | 115 |
-| ViT-S/16 | 448 | 1 | fp16-cast | yes | 72.6 | 73.0 | 74.4 | 12.44 | 18.57 | 0.60 | 0.51 | 0.10 | 4.08 | 730 |
-| ViT-S/16 | 448 | 8 | fp16-cast | yes | 91.5 | 91.5 | 92.1 | 75.38 | 97.72 | 1.74 | 0.51 | 1.19 | 4.27 | 115 |
-| ViT-S/16 | 448 | 32 | fp16-cast | yes | 86.4 | 86.3 | 86.5 | 309.29 | 472.42 | 1.80 | 0.51 | 1.13 | 4.92 | 30 |
-| ViT-S/16 | 512 | 1 | fp16-cast | yes | 61.5 | 61.8 | 63.1 | 15.17 | 20.60 | 0.61 | 0.51 | 0.10 | 4.09 | 618 |
-| ViT-S/16 | 512 | 8 | fp16-cast | yes | 80.6 | 80.5 | 81.0 | 97.23 | 124.00 | 1.68 | 0.51 | 1.13 | 4.38 | 101 |
-| ViT-S/16 | 512 | 32 | fp16-cast | yes | 82.0 | 81.8 | 82.1 | 385.14 | 497.96 | 1.86 | 0.51 | 1.13 | 5.37 | 30 |
-| ViT-S/16 | 224 | 1 | bf16-cast | yes | 129.6 | 130.5 | 134.2 | 7.86 | 9.83 | 0.56 | 0.51 | 0.06 | 4.06 | 1306 |
-| ViT-S/16 | 224 | 8 | bf16-cast | yes | 487.4 | 487.6 | 496.4 | 15.71 | 20.05 | 0.59 | 0.51 | 0.09 | 4.08 | 610 |
-| ViT-S/16 | 224 | 32 | bf16-cast | yes | 764.1 | 763.5 | 769.4 | 41.71 | 44.97 | 1.74 | 0.51 | 1.19 | 4.18 | 239 |
-| ViT-S/16 | 448 | 1 | bf16-cast | yes | 108.9 | 109.4 | 111.9 | 9.71 | 10.16 | 0.60 | 0.51 | 0.10 | 4.08 | 1094 |
-| ViT-S/16 | 448 | 8 | bf16-cast | yes | 198.1 | 197.9 | 199.5 | 41.11 | 43.99 | 1.74 | 0.51 | 1.19 | 4.27 | 248 |
-| ViT-S/16 | 448 | 32 | bf16-cast | yes | 187.4 | 186.9 | 187.9 | 169.15 | 183.85 | 1.80 | 0.51 | 1.13 | 4.92 | 59 |
-| ViT-S/16 | 512 | 1 | bf16-cast | yes | 105.9 | 106.3 | 108.8 | 9.81 | 10.18 | 0.61 | 0.51 | 0.10 | 4.09 | 1064 |
-| ViT-S/16 | 512 | 8 | bf16-cast | yes | 165.3 | 165.0 | 166.3 | 49.46 | 54.47 | 1.69 | 0.51 | 1.13 | 4.38 | 207 |
-| ViT-S/16 | 512 | 32 | bf16-cast | yes | 148.0 | 147.5 | 148.2 | 213.40 | 231.81 | 1.85 | 0.51 | 1.13 | 5.37 | 47 |
-| ViT-S/16 | 224 | 1 | fp16-autocast | yes | 112.4 | 113.0 | 115.8 | 9.47 | 10.23 | 0.57 | 0.52 | 0.11 | 4.11 | 1131 |
-| ViT-S/16 | 224 | 8 | fp16-autocast | yes | 702.5 | 701.8 | 719.4 | 10.79 | 13.68 | 0.60 | 0.52 | 0.14 | 4.17 | 878 |
-| ViT-S/16 | 224 | 32 | fp16-autocast | yes | 654.4 | 652.4 | 659.4 | 48.77 | 52.07 | 1.69 | 0.52 | 1.18 | 4.36 | 204 |
-| ViT-S/16 | 448 | 1 | fp16-autocast | yes | 104.8 | 105.2 | 107.8 | 9.85 | 10.39 | 0.60 | 0.52 | 0.14 | 4.16 | 1053 |
-| ViT-S/16 | 448 | 8 | fp16-autocast | yes | 160.3 | 159.7 | 161.5 | 51.70 | 58.00 | 1.69 | 0.52 | 1.18 | 4.54 | 200 |
-| ViT-S/16 | 448 | 32 | fp16-autocast | yes | 128.7 | 128.0 | 128.9 | 246.26 | 271.86 | 1.83 | 0.52 | 1.18 | 5.84 | 41 |
-| ViT-S/16 | 512 | 1 | fp16-autocast | yes | 91.6 | 91.9 | 94.2 | 10.77 | 12.03 | 0.61 | 0.52 | 0.15 | 4.19 | 920 |
-| ViT-S/16 | 512 | 8 | fp16-autocast | yes | 102.3 | 102.0 | 102.9 | 77.25 | 85.97 | 1.70 | 0.52 | 1.18 | 4.76 | 128 |
-| ViT-S/16 | 512 | 32 | fp16-autocast | yes | 104.8 | 104.3 | 105.0 | 297.99 | 343.15 | 1.89 | 0.52 | 1.18 | 6.74 | 33 |
-| ViT-S/16 | 224 | 1 | bf16-autocast | yes | 109.9 | 110.6 | 113.2 | 9.51 | 10.42 | 0.57 | 0.52 | 0.11 | 4.11 | 1106 |
-| ViT-S/16 | 224 | 8 | bf16-autocast | yes | 608.8 | 608.8 | 622.5 | 12.85 | 16.93 | 0.60 | 0.52 | 0.14 | 4.17 | 762 |
-| ViT-S/16 | 224 | 32 | bf16-autocast | yes | 530.6 | 529.4 | 534.0 | 59.45 | 65.21 | 1.69 | 0.52 | 1.18 | 4.36 | 166 |
-| ViT-S/16 | 448 | 1 | bf16-autocast | yes | 100.8 | 101.1 | 103.7 | 10.06 | 11.07 | 0.61 | 0.53 | 0.14 | 4.16 | 1012 |
-| ViT-S/16 | 448 | 8 | bf16-autocast | yes | 132.2 | 132.0 | 133.0 | 59.64 | 67.09 | 1.69 | 0.52 | 1.18 | 4.54 | 165 |
-| ViT-S/16 | 448 | 32 | bf16-autocast | yes | 129.3 | 128.8 | 129.6 | 240.25 | 281.31 | 1.83 | 0.52 | 1.18 | 5.84 | 41 |
-| ViT-S/16 | 512 | 1 | bf16-autocast | yes | 90.0 | 90.3 | 92.5 | 11.09 | 12.54 | 0.61 | 0.52 | 0.15 | 4.19 | 904 |
-| ViT-S/16 | 512 | 8 | bf16-autocast | yes | 102.3 | 102.1 | 102.9 | 76.82 | 86.14 | 1.70 | 0.52 | 1.18 | 4.76 | 128 |
-| ViT-S/16 | 512 | 32 | bf16-autocast | yes | 99.5 | 99.1 | 99.6 | 319.11 | 354.77 | 1.89 | 0.52 | 1.18 | 6.74 | 31 |
-| ViT-S+/16 | 224 | 1 | fp32 | yes | 113.8 | 114.4 | 117.2 | 9.00 | 10.23 | 0.60 | 0.56 | 0.14 | 4.15 | 1145 |
-| ViT-S+/16 | 224 | 8 | fp32 | yes | 327.2 | 327.5 | 331.4 | 25.45 | 27.43 | 0.67 | 0.56 | 0.20 | 4.20 | 410 |
-| ViT-S+/16 | 224 | 32 | fp32 | yes | 274.4 | 273.9 | 275.3 | 113.04 | 134.48 | 1.72 | 0.56 | 1.21 | 4.40 | 86 |
-| ViT-S+/16 | 448 | 1 | fp32 | yes | 63.6 | 63.8 | 64.8 | 15.68 | 16.58 | 0.64 | 0.56 | 0.17 | 4.19 | 639 |
-| ViT-S+/16 | 448 | 8 | fp32 | yes | 71.7 | 71.5 | 71.9 | 110.23 | 120.22 | 1.72 | 0.56 | 1.21 | 4.57 | 90 |
-| ViT-S+/16 | 448 | 32 | fp32 | yes | 65.4 | 65.2 | 65.4 | 471.33 | 549.58 | 1.87 | 0.56 | 1.21 | 5.87 | 30 |
-| ViT-S+/16 | 512 | 1 | fp32 | yes | 49.0 | 49.1 | 49.7 | 20.24 | 21.86 | 0.64 | 0.56 | 0.17 | 4.22 | 491 |
-| ViT-S+/16 | 512 | 8 | fp32 | yes | 51.4 | 51.3 | 51.5 | 152.49 | 166.21 | 1.74 | 0.56 | 1.21 | 4.80 | 65 |
-| ViT-S+/16 | 512 | 32 | fp32 | yes | 44.9 | 44.8 | 45.0 | 704.15 | 748.32 | 3.08 | 0.56 | 2.36 | 6.78 | 30 |
-| ViT-S+/16 | 224 | 1 | fp16-cast | yes | 126.2 | 126.9 | 130.1 | 7.83 | 9.91 | 0.61 | 0.56 | 0.10 | 4.07 | 1269 |
-| ViT-S+/16 | 224 | 8 | fp16-cast | yes | 785.9 | 786.7 | 805.7 | 10.18 | 10.54 | 0.64 | 0.56 | 0.12 | 4.10 | 984 |
-| ViT-S+/16 | 224 | 32 | fp16-cast | yes | 738.8 | 738.2 | 744.0 | 44.01 | 46.94 | 1.78 | 0.56 | 1.23 | 4.20 | 231 |
-| ViT-S+/16 | 448 | 1 | fp16-cast | yes | 101.1 | 101.6 | 103.9 | 10.04 | 10.47 | 0.61 | 0.56 | 0.10 | 4.10 | 1017 |
-| ViT-S+/16 | 448 | 8 | fp16-cast | yes | 194.8 | 194.6 | 196.3 | 43.23 | 46.95 | 1.78 | 0.56 | 1.23 | 4.29 | 244 |
-| ViT-S+/16 | 448 | 32 | fp16-cast | yes | 158.8 | 158.4 | 159.1 | 203.76 | 214.10 | 1.85 | 0.56 | 1.16 | 4.93 | 50 |
-| ViT-S+/16 | 512 | 1 | fp16-cast | yes | 102.0 | 102.4 | 104.8 | 10.15 | 10.57 | 0.62 | 0.56 | 0.10 | 4.11 | 1025 |
-| ViT-S+/16 | 512 | 8 | fp16-cast | yes | 128.6 | 128.5 | 129.3 | 62.02 | 65.73 | 1.80 | 0.56 | 1.23 | 4.40 | 161 |
-| ViT-S+/16 | 512 | 32 | fp16-cast | yes | 114.8 | 114.5 | 115.0 | 277.54 | 294.93 | 1.90 | 0.56 | 1.16 | 5.39 | 36 |
-| ViT-S+/16 | 224 | 1 | bf16-cast | yes | 117.7 | 118.4 | 121.3 | 9.30 | 10.37 | 0.61 | 0.56 | 0.10 | 4.07 | 1184 |
-| ViT-S+/16 | 224 | 8 | bf16-cast | yes | 782.8 | 783.1 | 802.4 | 10.24 | 10.64 | 0.64 | 0.56 | 0.12 | 4.10 | 979 |
-| ViT-S+/16 | 224 | 32 | bf16-cast | yes | 789.5 | 788.6 | 795.4 | 42.39 | 46.08 | 1.78 | 0.56 | 1.23 | 4.20 | 247 |
-| ViT-S+/16 | 448 | 1 | bf16-cast | yes | 102.0 | 102.5 | 104.7 | 10.01 | 10.39 | 0.61 | 0.56 | 0.10 | 4.10 | 1026 |
-| ViT-S+/16 | 448 | 8 | bf16-cast | yes | 193.1 | 193.1 | 194.6 | 44.23 | 46.74 | 1.78 | 0.56 | 1.23 | 4.29 | 242 |
-| ViT-S+/16 | 448 | 32 | bf16-cast | yes | 156.3 | 156.0 | 156.6 | 203.14 | 220.32 | 1.85 | 0.56 | 1.16 | 4.93 | 49 |
-| ViT-S+/16 | 512 | 1 | bf16-cast | yes | 100.1 | 100.6 | 102.8 | 10.18 | 10.59 | 0.62 | 0.56 | 0.10 | 4.11 | 1006 |
-| ViT-S+/16 | 512 | 8 | bf16-cast | yes | 119.5 | 119.4 | 120.1 | 66.89 | 71.43 | 1.80 | 0.56 | 1.23 | 4.40 | 150 |
-| ViT-S+/16 | 512 | 32 | bf16-cast | yes | 110.5 | 110.3 | 110.6 | 291.08 | 309.62 | 1.90 | 0.56 | 1.16 | 5.39 | 35 |
-| ViT-S+/16 | 224 | 1 | fp16-autocast | yes | 108.3 | 108.9 | 111.4 | 9.87 | 10.77 | 0.61 | 0.56 | 0.15 | 4.15 | 1089 |
-| ViT-S+/16 | 224 | 8 | fp16-autocast | yes | 550.3 | 550.4 | 561.8 | 13.84 | 17.89 | 0.64 | 0.56 | 0.17 | 4.20 | 688 |
-| ViT-S+/16 | 224 | 32 | fp16-autocast | yes | 490.6 | 490.0 | 493.5 | 64.94 | 70.10 | 1.72 | 0.56 | 1.21 | 4.40 | 154 |
-| ViT-S+/16 | 448 | 1 | fp16-autocast | yes | 92.4 | 92.8 | 95.0 | 10.72 | 12.02 | 0.64 | 0.56 | 0.18 | 4.19 | 928 |
-| ViT-S+/16 | 448 | 8 | fp16-autocast | yes | 122.3 | 122.2 | 123.0 | 64.95 | 69.91 | 1.72 | 0.56 | 1.21 | 4.57 | 153 |
-| ViT-S+/16 | 448 | 32 | fp16-autocast | yes | 115.5 | 115.0 | 115.6 | 269.62 | 311.65 | 1.86 | 0.56 | 1.21 | 5.87 | 36 |
-| ViT-S+/16 | 512 | 1 | fp16-autocast | yes | 80.3 | 80.6 | 82.3 | 12.54 | 13.50 | 0.65 | 0.56 | 0.18 | 4.22 | 806 |
-| ViT-S+/16 | 512 | 8 | fp16-autocast | yes | 94.1 | 94.0 | 94.6 | 83.21 | 94.26 | 1.74 | 0.56 | 1.21 | 4.80 | 118 |
-| ViT-S+/16 | 512 | 32 | fp16-autocast | yes | 87.8 | 87.5 | 87.9 | 357.74 | 387.96 | 1.92 | 0.56 | 1.21 | 6.78 | 30 |
-| ViT-S+/16 | 224 | 1 | bf16-autocast | yes | 106.6 | 107.2 | 109.6 | 9.58 | 10.86 | 0.61 | 0.56 | 0.15 | 4.15 | 1072 |
-| ViT-S+/16 | 224 | 8 | bf16-autocast | yes | 553.2 | 552.9 | 563.6 | 14.66 | 16.94 | 0.64 | 0.56 | 0.17 | 4.20 | 692 |
-| ViT-S+/16 | 224 | 32 | bf16-autocast | yes | 509.5 | 509.2 | 512.5 | 61.75 | 69.49 | 1.72 | 0.56 | 1.21 | 4.40 | 160 |
-| ViT-S+/16 | 448 | 1 | bf16-autocast | yes | 98.3 | 98.6 | 100.9 | 10.18 | 10.77 | 0.64 | 0.56 | 0.18 | 4.19 | 987 |
-| ViT-S+/16 | 448 | 8 | bf16-autocast | yes | 130.3 | 130.2 | 131.1 | 60.95 | 64.84 | 1.72 | 0.56 | 1.21 | 4.57 | 163 |
-| ViT-S+/16 | 448 | 32 | bf16-autocast | yes | 114.4 | 114.0 | 114.5 | 277.42 | 293.26 | 1.86 | 0.56 | 1.21 | 5.87 | 36 |
-| ViT-S+/16 | 512 | 1 | bf16-autocast | yes | 82.9 | 83.1 | 84.9 | 12.04 | 13.99 | 0.65 | 0.56 | 0.18 | 4.22 | 832 |
-| ViT-S+/16 | 512 | 8 | bf16-autocast | yes | 98.4 | 98.3 | 99.0 | 80.77 | 87.81 | 1.74 | 0.56 | 1.21 | 4.80 | 123 |
-| ViT-S+/16 | 512 | 32 | bf16-autocast | yes | 94.2 | 93.8 | 94.3 | 329.54 | 393.51 | 1.92 | 0.56 | 1.21 | 6.78 | 30 |
-| ViT-B/16 | 224 | 1 | fp32 | yes | 82.2 | 82.5 | 84.2 | 12.19 | 13.28 | 0.85 | 0.80 | 0.39 | 4.43 | 826 |
-| ViT-B/16 | 224 | 8 | fp32 | yes | 133.3 | 133.2 | 134.0 | 59.80 | 63.60 | 2.00 | 0.80 | 1.52 | 4.54 | 167 |
-| ViT-B/16 | 224 | 32 | fp32 | yes | 123.8 | 123.6 | 124.0 | 256.74 | 277.63 | 1.99 | 0.80 | 1.46 | 4.93 | 39 |
-| ViT-B/16 | 448 | 1 | fp32 | yes | 28.9 | 29.0 | 29.2 | 34.43 | 36.36 | 0.89 | 0.80 | 0.42 | 4.52 | 290 |
-| ViT-B/16 | 448 | 8 | fp32 | yes | 28.6 | 28.6 | 28.6 | 279.22 | 296.79 | 2.00 | 0.80 | 1.46 | 5.28 | 36 |
-| ViT-B/16 | 448 | 32 | fp32 | yes | 27.2 | 27.1 | 27.2 | 1180.54 | 1228.29 | 3.32 | 0.80 | 2.53 | 7.87 | 30 |
-| ViT-B/16 | 512 | 1 | fp32 | yes | 21.4 | 21.4 | 21.6 | 46.21 | 49.72 | 1.97 | 0.80 | 1.49 | 4.58 | 215 |
-| ViT-B/16 | 512 | 8 | fp32 | yes | 20.0 | 20.0 | 20.0 | 379.92 | 438.23 | 2.03 | 0.80 | 1.46 | 5.73 | 30 |
-| ViT-B/16 | 512 | 32 | fp32 | yes | 18.8 | 18.8 | 18.8 | 1691.32 | 1755.18 | 4.64 | 0.80 | 3.75 | 9.69 | 30 |
-| ViT-B/16 | 224 | 1 | fp16-cast | yes | 121.9 | 122.5 | 125.6 | 8.39 | 9.76 | 0.82 | 0.80 | 0.21 | 4.21 | 1226 |
-| ViT-B/16 | 224 | 8 | fp16-cast | yes | 327.1 | 327.1 | 331.0 | 25.80 | 28.16 | 0.86 | 0.80 | 0.25 | 4.27 | 409 |
-| ViT-B/16 | 224 | 32 | fp16-cast | yes | 292.4 | 292.2 | 293.4 | 109.36 | 115.71 | 2.08 | 0.80 | 1.42 | 4.47 | 92 |
-| ViT-B/16 | 448 | 1 | fp16-cast | yes | 69.2 | 69.4 | 70.6 | 14.23 | 15.93 | 0.84 | 0.80 | 0.21 | 4.26 | 695 |
-| ViT-B/16 | 448 | 8 | fp16-cast | yes | 73.3 | 73.2 | 73.6 | 106.86 | 120.32 | 2.06 | 0.80 | 1.39 | 4.64 | 92 |
-| ViT-B/16 | 448 | 32 | fp16-cast | yes | 67.5 | 67.3 | 67.5 | 466.64 | 495.41 | 2.10 | 0.80 | 1.29 | 5.94 | 30 |
-| ViT-B/16 | 512 | 1 | fp16-cast | yes | 53.6 | 53.7 | 54.5 | 18.47 | 20.17 | 0.88 | 0.80 | 0.25 | 4.29 | 538 |
-| ViT-B/16 | 512 | 8 | fp16-cast | yes | 53.9 | 53.8 | 54.0 | 146.69 | 157.62 | 1.98 | 0.80 | 1.29 | 4.87 | 68 |
-| ViT-B/16 | 512 | 32 | fp16-cast | yes | 50.1 | 50.0 | 50.1 | 625.07 | 713.26 | 3.23 | 0.80 | 2.36 | 6.84 | 30 |
-| ViT-B/16 | 224 | 1 | bf16-cast | yes | 104.9 | 105.4 | 107.8 | 9.76 | 10.09 | 0.82 | 0.80 | 0.21 | 4.21 | 1055 |
-| ViT-B/16 | 224 | 8 | bf16-cast | yes | 375.8 | 375.8 | 380.8 | 23.10 | 24.92 | 0.86 | 0.80 | 0.25 | 4.27 | 470 |
-| ViT-B/16 | 224 | 32 | bf16-cast | yes | 341.2 | 341.0 | 342.5 | 94.23 | 99.74 | 2.08 | 0.80 | 1.42 | 4.47 | 107 |
-| ViT-B/16 | 448 | 1 | bf16-cast | yes | 76.3 | 76.6 | 78.1 | 12.94 | 14.15 | 0.84 | 0.80 | 0.21 | 4.26 | 766 |
-| ViT-B/16 | 448 | 8 | bf16-cast | yes | 82.2 | 82.2 | 82.5 | 97.00 | 103.17 | 2.06 | 0.80 | 1.39 | 4.64 | 103 |
-| ViT-B/16 | 448 | 32 | bf16-cast | yes | 74.2 | 74.0 | 74.3 | 425.93 | 454.03 | 2.10 | 0.80 | 1.29 | 5.94 | 30 |
-| ViT-B/16 | 512 | 1 | bf16-cast | yes | 59.4 | 59.5 | 60.5 | 16.65 | 17.81 | 0.88 | 0.80 | 0.25 | 4.29 | 596 |
-| ViT-B/16 | 512 | 8 | bf16-cast | yes | 60.7 | 60.6 | 60.9 | 129.96 | 141.11 | 1.97 | 0.80 | 1.29 | 4.87 | 76 |
-| ViT-B/16 | 512 | 32 | bf16-cast | yes | 54.5 | 54.4 | 54.5 | 586.84 | 647.61 | 3.23 | 0.80 | 2.36 | 6.84 | 30 |
-| ViT-B/16 | 224 | 1 | fp16-autocast | yes | 105.8 | 106.3 | 108.8 | 9.58 | 10.24 | 0.85 | 0.80 | 0.39 | 4.43 | 1063 |
-| ViT-B/16 | 224 | 8 | fp16-autocast | yes | 298.9 | 298.6 | 302.3 | 28.07 | 31.92 | 0.93 | 0.80 | 0.45 | 4.54 | 374 |
-| ViT-B/16 | 224 | 32 | fp16-autocast | yes | 272.4 | 271.9 | 273.3 | 117.31 | 122.60 | 1.99 | 0.80 | 1.45 | 4.93 | 85 |
-| ViT-B/16 | 448 | 1 | fp16-autocast | yes | 60.8 | 60.9 | 62.0 | 16.19 | 17.75 | 0.89 | 0.80 | 0.41 | 4.52 | 610 |
-| ViT-B/16 | 448 | 8 | fp16-autocast | yes | 66.5 | 66.4 | 66.7 | 120.61 | 127.29 | 2.01 | 0.80 | 1.45 | 5.28 | 83 |
-| ViT-B/16 | 448 | 32 | fp16-autocast | yes | 60.8 | 60.6 | 60.8 | 519.37 | 560.32 | 3.30 | 0.80 | 2.53 | 7.87 | 30 |
-| ViT-B/16 | 512 | 1 | fp16-autocast | yes | 46.8 | 46.8 | 47.5 | 20.87 | 23.57 | 0.93 | 0.80 | 0.45 | 4.58 | 469 |
-| ViT-B/16 | 512 | 8 | fp16-autocast | yes | 47.7 | 47.6 | 47.8 | 166.73 | 178.35 | 2.03 | 0.80 | 1.45 | 5.73 | 60 |
-| ViT-B/16 | 512 | 32 | fp16-autocast | yes | 45.4 | 45.2 | 45.4 | 702.96 | 732.96 | 3.40 | 0.80 | 2.53 | 9.69 | 30 |
-| ViT-B/16 | 224 | 1 | bf16-autocast | yes | 104.5 | 105.0 | 107.6 | 9.72 | 10.31 | 0.85 | 0.80 | 0.39 | 4.43 | 1051 |
-| ViT-B/16 | 224 | 8 | bf16-autocast | yes | 287.7 | 286.9 | 290.7 | 28.41 | 35.41 | 0.93 | 0.80 | 0.45 | 4.54 | 359 |
-| ViT-B/16 | 224 | 32 | bf16-autocast | yes | 268.9 | 268.4 | 269.7 | 119.64 | 124.17 | 1.99 | 0.80 | 1.45 | 4.93 | 84 |
-| ViT-B/16 | 448 | 1 | bf16-autocast | yes | 60.6 | 60.6 | 61.7 | 16.34 | 17.82 | 0.89 | 0.80 | 0.41 | 4.52 | 607 |
-| ViT-B/16 | 448 | 8 | bf16-autocast | yes | 64.4 | 64.2 | 64.6 | 120.95 | 136.57 | 2.01 | 0.80 | 1.45 | 5.28 | 81 |
-| ViT-B/16 | 448 | 32 | bf16-autocast | yes | 60.8 | 60.6 | 60.8 | 520.69 | 558.69 | 3.30 | 0.80 | 2.53 | 7.87 | 30 |
-| ViT-B/16 | 512 | 1 | bf16-autocast | yes | 41.6 | 41.7 | 42.2 | 23.57 | 27.93 | 0.93 | 0.80 | 0.45 | 4.58 | 417 |
-| ViT-B/16 | 512 | 8 | bf16-autocast | yes | 43.4 | 43.3 | 43.5 | 176.50 | 207.35 | 2.03 | 0.80 | 1.45 | 5.73 | 55 |
-| ViT-B/16 | 512 | 32 | bf16-autocast | yes | 42.0 | 41.9 | 42.1 | 747.49 | 792.39 | 3.40 | 0.80 | 2.53 | 9.69 | 30 |
-| ViT-L/16 | 224 | 1 | fp32 | yes | 27.6 | 27.6 | 27.8 | 35.44 | 40.52 | 2.67 | 2.61 | 2.20 | 5.48 | 277 |
-| ViT-L/16 | 224 | 8 | fp32 | yes | 41.1 | 41.1 | 41.2 | 195.80 | 202.69 | 2.68 | 2.61 | 2.19 | 5.63 | 52 |
-| ViT-L/16 | 224 | 32 | fp32 | yes | 38.7 | 38.7 | 38.8 | 822.67 | 853.73 | 2.75 | 2.61 | 2.19 | 6.15 | 30 |
-| ViT-L/16 | 448 | 1 | fp32 | yes | 9.5 | 9.5 | 9.6 | 105.39 | 108.93 | 2.69 | 2.62 | 2.19 | 5.60 | 96 |
-| ViT-L/16 | 448 | 8 | fp32 | yes | 9.0 | 9.0 | 9.0 | 883.46 | 925.22 | 2.77 | 2.61 | 2.19 | 6.61 | 30 |
-| ViT-L/16 | 448 | 32 | fp32 | yes | 8.0 | 8.0 | 8.0 | 3959.21 | 4103.39 | 5.22 | 2.61 | 4.34 | 10.07 | 16 |
-| ViT-L/16 | 512 | 1 | fp32 | yes | 6.2 | 6.2 | 6.2 | 161.24 | 175.10 | 2.69 | 2.61 | 2.19 | 5.67 | 63 |
-| ViT-L/16 | 512 | 8 | fp32 | yes | 6.2 | 6.2 | 6.2 | 1273.02 | 1435.58 | 2.83 | 2.61 | 2.19 | 7.21 | 30 |
-| ViT-L/16 | 512 | 32 | fp32 | yes | 6.0 | 6.0 | 6.0 | 5358.27 | 5408.86 | 5.61 | 2.61 | 4.58 | 12.49 | 12 |
-| ViT-L/16 | 224 | 1 | fp16-cast | no: non-finite output | 62.3 | 62.4 | 63.3 | 16.31 | 17.57 | 1.71 | 1.67 | 0.65 | 4.74 | 625 |
-| ViT-L/16 | 224 | 8 | fp16-cast | no: non-finite output | 110.1 | 110.0 | 110.5 | 72.84 | 76.24 | 2.83 | 1.67 | 1.76 | 4.81 | 138 |
-| ViT-L/16 | 224 | 32 | fp16-cast | no: non-finite output | 104.0 | 103.9 | 104.1 | 308.89 | 345.24 | 2.85 | 1.67 | 1.72 | 5.07 | 33 |
-| ViT-L/16 | 448 | 1 | fp16-cast | no: non-finite output | 25.2 | 25.2 | 25.4 | 39.48 | 42.88 | 1.76 | 1.67 | 0.68 | 4.80 | 252 |
-| ViT-L/16 | 448 | 8 | fp16-cast | no: non-finite output | 24.9 | 24.9 | 25.0 | 321.77 | 356.10 | 2.86 | 1.67 | 1.72 | 5.30 | 32 |
-| ViT-L/16 | 448 | 32 | fp16-cast | no: non-finite output | 22.9 | 22.9 | 23.0 | 1398.33 | 1515.35 | 4.13 | 1.67 | 2.80 | 7.04 | 30 |
-| ViT-L/16 | 512 | 1 | fp16-cast | no: non-finite output | 20.6 | 20.6 | 20.7 | 46.95 | 55.36 | 1.76 | 1.67 | 0.68 | 4.84 | 206 |
-| ViT-L/16 | 512 | 8 | fp16-cast | no: non-finite output | 20.2 | 20.2 | 20.2 | 407.33 | 440.34 | 2.88 | 1.67 | 1.72 | 5.61 | 30 |
-| ViT-L/16 | 512 | 32 | fp16-cast | no: non-finite output | 22.3 | 22.3 | 22.4 | 1413.04 | 1560.46 | 4.23 | 1.67 | 2.80 | 8.24 | 30 |
-| ViT-L/16 | 224 | 1 | bf16-cast | yes | 77.6 | 77.7 | 79.1 | 12.84 | 14.02 | 1.72 | 1.67 | 0.65 | 4.74 | 778 |
-| ViT-L/16 | 224 | 8 | bf16-cast | yes | 149.6 | 149.5 | 150.3 | 53.49 | 55.37 | 2.83 | 1.67 | 1.76 | 4.81 | 187 |
-| ViT-L/16 | 224 | 32 | bf16-cast | yes | 147.1 | 146.9 | 147.3 | 215.00 | 228.38 | 2.86 | 1.67 | 1.72 | 5.07 | 46 |
-| ViT-L/16 | 448 | 1 | bf16-cast | yes | 31.6 | 31.6 | 31.9 | 31.22 | 35.41 | 1.76 | 1.67 | 0.68 | 4.80 | 317 |
-| ViT-L/16 | 448 | 8 | bf16-cast | yes | 35.7 | 35.6 | 35.7 | 223.43 | 233.19 | 2.87 | 1.67 | 1.72 | 5.30 | 45 |
-| ViT-L/16 | 448 | 32 | bf16-cast | yes | 30.3 | 30.3 | 30.3 | 1008.75 | 1224.03 | 4.15 | 1.67 | 2.80 | 7.04 | 30 |
-| ViT-L/16 | 512 | 1 | bf16-cast | yes | 25.7 | 25.7 | 25.9 | 39.25 | 40.51 | 1.78 | 1.67 | 0.68 | 4.84 | 257 |
-| ViT-L/16 | 512 | 8 | bf16-cast | yes | 21.3 | 21.3 | 21.3 | 377.98 | 413.61 | 2.89 | 1.67 | 1.72 | 5.61 | 30 |
-| ViT-L/16 | 512 | 32 | bf16-cast | yes | 17.3 | 17.3 | 17.4 | 1839.79 | 1908.45 | 4.24 | 1.67 | 2.80 | 8.24 | 30 |
-| ViT-L/16 | 224 | 1 | fp16-autocast | yes | 48.8 | 49.0 | 49.6 | 20.11 | 22.79 | 2.67 | 2.61 | 2.20 | 5.48 | 490 |
-| ViT-L/16 | 224 | 8 | fp16-autocast | yes | 90.4 | 90.4 | 90.8 | 85.76 | 97.91 | 2.68 | 2.61 | 2.19 | 5.63 | 113 |
-| ViT-L/16 | 224 | 32 | fp16-autocast | yes | 84.6 | 84.4 | 84.6 | 372.18 | 421.76 | 2.76 | 2.61 | 2.19 | 6.15 | 30 |
-| ViT-L/16 | 448 | 1 | fp16-autocast | yes | 20.2 | 20.2 | 20.3 | 48.78 | 53.92 | 2.69 | 2.61 | 2.19 | 5.60 | 203 |
-| ViT-L/16 | 448 | 8 | fp16-autocast | yes | 20.5 | 20.4 | 20.5 | 388.61 | 412.02 | 2.78 | 2.61 | 2.19 | 6.61 | 30 |
-| ViT-L/16 | 448 | 32 | fp16-autocast | yes | 17.9 | 17.9 | 17.9 | 1791.30 | 1811.02 | 4.14 | 2.62 | 3.27 | 10.07 | 30 |
-| ViT-L/16 | 512 | 1 | fp16-autocast | yes | 15.7 | 15.8 | 15.8 | 62.26 | 70.71 | 2.70 | 2.62 | 2.19 | 5.67 | 158 |
-| ViT-L/16 | 512 | 8 | fp16-autocast | yes | 14.8 | 14.8 | 14.8 | 538.70 | 579.60 | 2.82 | 2.61 | 2.19 | 7.21 | 30 |
-| ViT-L/16 | 512 | 32 | fp16-autocast | yes | 13.3 | 13.3 | 13.3 | 2395.98 | 2448.17 | 5.35 | 2.61 | 4.34 | 12.49 | 25 |
-| ViT-L/16 | 224 | 1 | bf16-autocast | yes | 45.3 | 45.5 | 46.1 | 21.48 | 25.25 | 2.67 | 2.61 | 2.20 | 5.48 | 455 |
-| ViT-L/16 | 224 | 8 | bf16-autocast | yes | 87.6 | 87.4 | 87.8 | 89.21 | 102.55 | 2.68 | 2.62 | 2.19 | 5.63 | 110 |
-| ViT-L/16 | 224 | 32 | bf16-autocast | yes | 83.9 | 83.7 | 84.0 | 377.31 | 417.17 | 2.76 | 2.61 | 2.19 | 6.15 | 30 |
-| ViT-L/16 | 448 | 1 | bf16-autocast | yes | 19.9 | 19.9 | 20.1 | 48.55 | 56.37 | 2.69 | 2.61 | 2.19 | 5.60 | 200 |
-| ViT-L/16 | 448 | 8 | bf16-autocast | yes | 20.4 | 20.4 | 20.4 | 379.11 | 427.27 | 2.78 | 2.61 | 2.19 | 6.61 | 30 |
-| ViT-L/16 | 448 | 32 | bf16-autocast | yes | 18.3 | 18.2 | 18.3 | 1758.75 | 1803.83 | 4.14 | 2.61 | 3.27 | 10.07 | 30 |
-| ViT-L/16 | 512 | 1 | bf16-autocast | yes | 16.1 | 16.2 | 16.2 | 60.12 | 68.66 | 2.70 | 2.62 | 2.19 | 5.67 | 162 |
-| ViT-L/16 | 512 | 8 | bf16-autocast | yes | 15.4 | 15.4 | 15.4 | 517.54 | 554.95 | 2.82 | 2.61 | 2.19 | 7.21 | 30 |
-| ViT-L/16 | 512 | 32 | bf16-autocast | yes | 14.0 | 13.9 | 14.0 | 2293.42 | 2352.03 | 5.36 | 2.62 | 4.34 | 12.49 | 27 |
-| ViT-H+/16 | 224 | 1 | fp32 | yes | 12.9 | 12.9 | 12.9 | 77.09 | 87.87 | 4.82 | 4.77 | 4.35 | 8.06 | 129 |
-| ViT-H+/16 | 224 | 8 | fp32 | yes | 14.3 | 14.3 | 14.4 | 548.87 | 615.94 | 4.83 | 4.77 | 4.34 | 8.25 | 30 |
-| ViT-H+/16 | 224 | 32 | fp32 | yes | 14.9 | 14.9 | 14.9 | 2128.12 | 2254.17 | 4.92 | 4.77 | 4.34 | 8.90 | 28 |
-| ViT-H+/16 | 448 | 1 | fp32 | yes | 3.7 | 3.7 | 3.7 | 265.07 | 303.66 | 4.84 | 4.76 | 4.34 | 8.22 | 37 |
-| ViT-H+/16 | 448 | 8 | fp32 | yes | 3.6 | 3.6 | 3.6 | 2215.48 | 2253.68 | 4.95 | 4.76 | 4.34 | 9.48 | 27 |
-| ViT-H+/16 | 448 | 32 | fp32 | yes | 3.3 | 3.3 | 3.3 | 9576.36 | 9632.07 | 7.46 | 4.77 | 6.49 | 13.81 | 10 |
-| ViT-H+/16 | 512 | 1 | fp32 | yes | 2.6 | 2.6 | 2.6 | 379.73 | 425.09 | 4.86 | 4.77 | 4.34 | 8.31 | 30 |
-| ViT-H+/16 | 512 | 8 | fp32 | yes | 2.6 | 2.6 | 2.6 | 3112.72 | 3142.07 | 6.08 | 4.77 | 5.42 | 10.23 | 20 |
-| ViT-H+/16 | 512 | 32 | fp32 | yes | 2.1 | 2.1 | 2.1 | 14990.00 | 15312.99 | 9.30 | 4.76 | 8.12 | 16.83 | 10 |
-| ViT-H+/16 | 224 | 1 | fp16-cast | no: non-finite output | 29.1 | 29.1 | 29.4 | 33.14 | 40.02 | 3.69 | 3.69 | 2.23 | 6.03 | 292 |
-| ViT-H+/16 | 224 | 8 | fp16-cast | no: non-finite output | 43.2 | 43.2 | 43.3 | 182.12 | 202.61 | 3.69 | 3.69 | 2.23 | 6.13 | 54 |
-| ViT-H+/16 | 224 | 32 | fp16-cast | no: non-finite output | 41.9 | 41.9 | 41.9 | 753.79 | 804.96 | 3.69 | 3.69 | 2.23 | 6.45 | 30 |
-| ViT-H+/16 | 448 | 1 | fp16-cast | yes | 10.3 | 10.3 | 10.3 | 95.43 | 108.96 | 3.69 | 3.69 | 2.23 | 6.11 | 103 |
-| ViT-H+/16 | 448 | 8 | fp16-cast | yes | 10.4 | 10.4 | 10.4 | 757.62 | 837.28 | 3.69 | 3.69 | 2.23 | 6.74 | 30 |
-| ViT-H+/16 | 448 | 32 | fp16-cast | yes | 9.4 | 9.4 | 9.4 | 3409.55 | 3458.78 | 4.50 | 3.69 | 3.30 | 8.90 | 18 |
-| ViT-H+/16 | 512 | 1 | fp16-cast | yes | 7.8 | 7.8 | 7.8 | 125.35 | 144.52 | 3.69 | 3.69 | 2.23 | 6.15 | 78 |
-| ViT-H+/16 | 512 | 8 | fp16-cast | yes | 8.2 | 8.2 | 8.2 | 970.99 | 1019.97 | 4.32 | 3.69 | 3.30 | 7.12 | 30 |
-| ViT-H+/16 | 512 | 32 | fp16-cast | yes | 7.4 | 7.4 | 7.4 | 4339.55 | 4350.27 | 5.68 | 3.69 | 4.37 | 10.41 | 14 |
-| ViT-H+/16 | 224 | 1 | bf16-cast | yes | 31.3 | 31.4 | 31.7 | 30.68 | 36.46 | 3.69 | 3.69 | 2.23 | 6.03 | 315 |
-| ViT-H+/16 | 224 | 8 | bf16-cast | yes | 47.1 | 47.0 | 47.2 | 168.26 | 182.66 | 3.69 | 3.69 | 2.23 | 6.13 | 59 |
-| ViT-H+/16 | 224 | 32 | bf16-cast | yes | 45.0 | 44.9 | 45.0 | 701.85 | 743.42 | 3.69 | 3.69 | 2.23 | 6.45 | 30 |
-| ViT-H+/16 | 448 | 1 | bf16-cast | yes | 11.2 | 11.3 | 11.3 | 88.38 | 96.73 | 3.69 | 3.69 | 2.23 | 6.11 | 113 |
-| ViT-H+/16 | 448 | 8 | bf16-cast | yes | 11.1 | 11.1 | 11.1 | 712.36 | 734.89 | 3.69 | 3.69 | 2.23 | 6.74 | 30 |
-| ViT-H+/16 | 448 | 32 | bf16-cast | yes | 10.1 | 10.1 | 10.1 | 3168.81 | 3197.16 | 4.50 | 3.69 | 3.30 | 8.90 | 19 |
-| ViT-H+/16 | 512 | 1 | bf16-cast | yes | 8.8 | 8.8 | 8.9 | 114.32 | 120.23 | 3.69 | 3.69 | 2.23 | 6.15 | 89 |
-| ViT-H+/16 | 512 | 8 | bf16-cast | yes | 8.3 | 8.3 | 8.3 | 958.61 | 1043.99 | 4.31 | 3.69 | 3.30 | 7.12 | 30 |
-| ViT-H+/16 | 512 | 32 | bf16-cast | yes | 6.7 | 6.7 | 6.7 | 4721.68 | 5215.99 | 5.73 | 3.69 | 4.37 | 10.41 | 13 |
-| ViT-H+/16 | 224 | 1 | fp16-autocast | yes | 19.8 | 19.8 | 19.9 | 49.27 | 60.96 | 4.82 | 4.76 | 4.35 | 8.06 | 198 |
-| ViT-H+/16 | 224 | 8 | fp16-autocast | yes | 34.9 | 34.8 | 34.9 | 225.61 | 260.50 | 4.84 | 4.76 | 4.34 | 8.25 | 44 |
-| ViT-H+/16 | 224 | 32 | fp16-autocast | yes | 34.2 | 34.1 | 34.2 | 932.46 | 980.78 | 4.93 | 4.76 | 4.34 | 8.90 | 30 |
-| ViT-H+/16 | 448 | 1 | fp16-autocast | yes | 7.9 | 7.9 | 8.0 | 125.40 | 134.80 | 4.85 | 4.76 | 4.34 | 8.22 | 80 |
-| ViT-H+/16 | 448 | 8 | fp16-autocast | yes | 8.4 | 8.4 | 8.4 | 948.49 | 980.91 | 4.96 | 4.76 | 4.34 | 9.48 | 30 |
-| ViT-H+/16 | 448 | 32 | fp16-autocast | yes | 7.6 | 7.6 | 7.6 | 4207.30 | 4266.19 | 7.46 | 4.76 | 6.49 | 13.81 | 15 |
-| ViT-H+/16 | 512 | 1 | fp16-autocast | yes | 6.0 | 6.0 | 6.1 | 163.17 | 179.73 | 4.86 | 4.76 | 4.34 | 8.31 | 61 |
-| ViT-H+/16 | 512 | 8 | fp16-autocast | yes | 6.2 | 6.2 | 6.2 | 1276.95 | 1341.18 | 5.02 | 4.77 | 4.34 | 10.23 | 30 |
-| ViT-H+/16 | 512 | 32 | fp16-autocast | yes | 5.7 | 5.7 | 5.7 | 5562.42 | 8018.56 | 8.69 | 4.77 | 7.56 | 16.83 | 12 |
-| ViT-H+/16 | 224 | 1 | bf16-autocast | yes | 18.6 | 18.6 | 18.7 | 50.92 | 66.92 | 4.82 | 4.76 | 4.35 | 8.06 | 186 |
-| ViT-H+/16 | 224 | 8 | bf16-autocast | yes | 33.6 | 33.6 | 33.7 | 236.99 | 252.91 | 4.84 | 4.76 | 4.34 | 8.25 | 42 |
-| ViT-H+/16 | 224 | 32 | bf16-autocast | yes | 33.7 | 33.7 | 33.7 | 940.73 | 990.19 | 4.93 | 4.76 | 4.34 | 8.90 | 30 |
-| ViT-H+/16 | 448 | 1 | bf16-autocast | yes | 7.8 | 7.8 | 7.9 | 125.72 | 139.04 | 4.85 | 4.77 | 4.34 | 8.22 | 79 |
-| ViT-H+/16 | 448 | 8 | bf16-autocast | yes | 8.4 | 8.4 | 8.4 | 943.70 | 990.19 | 4.96 | 4.76 | 4.34 | 9.48 | 30 |
-| ViT-H+/16 | 448 | 32 | bf16-autocast | yes | 7.7 | 7.7 | 7.7 | 4129.67 | 4222.51 | 7.47 | 4.76 | 6.49 | 13.81 | 15 |
-| ViT-H+/16 | 512 | 1 | bf16-autocast | yes | 6.1 | 6.1 | 6.2 | 162.01 | 176.45 | 4.86 | 4.77 | 4.34 | 8.31 | 62 |
-| ViT-H+/16 | 512 | 8 | bf16-autocast | yes | 6.3 | 6.3 | 6.3 | 1260.19 | 1324.64 | 5.01 | 4.76 | 4.34 | 10.23 | 30 |
-| ViT-H+/16 | 512 | 32 | bf16-autocast | yes | 5.7 | 5.7 | 5.7 | 5580.86 | 5981.40 | 8.70 | 4.76 | 7.56 | 16.83 | 11 |
+| ViT-S/16 | 224 | 1 | fp32 | yes | 130.7 | 131.4 | 135.0 | 7.99 | 9.59 | 0.57 | 0.52 | 0.10 | 4.11 | 1315 |
+| ViT-S/16 | 224 | 8 | fp32 | yes | 587.8 | 587.5 | 599.7 | 13.61 | 14.12 | 0.64 | 0.52 | 0.17 | 4.17 | 735 |
+| ViT-S/16 | 224 | 32 | fp32 | yes | 765.5 | 763.7 | 772.6 | 41.30 | 43.38 | 1.69 | 0.52 | 1.18 | 4.36 | 239 |
+| ViT-S/16 | 448 | 1 | fp32 | yes | 104.0 | 104.3 | 106.8 | 9.71 | 10.07 | 0.60 | 0.52 | 0.14 | 4.16 | 1044 |
+| ViT-S/16 | 448 | 8 | fp32 | yes | 158.5 | 158.1 | 159.7 | 49.98 | 52.78 | 1.69 | 0.52 | 1.18 | 4.54 | 198 |
+| ViT-S/16 | 448 | 32 | fp32 | yes | 159.7 | 159.0 | 160.0 | 199.00 | 215.52 | 1.83 | 0.52 | 1.18 | 5.84 | 50 |
+| ViT-S/16 | 512 | 1 | fp32 | yes | 82.2 | 82.5 | 84.1 | 12.12 | 12.66 | 0.61 | 0.52 | 0.14 | 4.19 | 825 |
+| ViT-S/16 | 512 | 8 | fp32 | yes | 112.9 | 112.7 | 113.6 | 68.84 | 77.73 | 1.70 | 0.52 | 1.18 | 4.76 | 141 |
+| ViT-S/16 | 512 | 32 | fp32 | yes | 96.2 | 95.9 | 96.3 | 319.92 | 372.13 | 3.04 | 0.52 | 2.33 | 6.74 | 31 |
+| ViT-S/16 | 224 | 1 | fp16-cast | yes | 129.8 | 130.6 | 134.1 | 8.01 | 9.35 | 0.56 | 0.51 | 0.06 | 4.06 | 1306 |
+| ViT-S/16 | 224 | 8 | fp16-cast | yes | 847.4 | 848.0 | 870.7 | 9.62 | 10.27 | 0.60 | 0.51 | 0.09 | 4.08 | 1060 |
+| ViT-S/16 | 224 | 32 | fp16-cast | yes | 1275.3 | 1273.0 | 1290.5 | 24.97 | 25.96 | 1.74 | 0.51 | 1.19 | 4.18 | 398 |
+| ViT-S/16 | 448 | 1 | fp16-cast | yes | 107.4 | 107.9 | 110.5 | 9.47 | 10.17 | 0.60 | 0.51 | 0.10 | 4.08 | 1080 |
+| ViT-S/16 | 448 | 8 | fp16-cast | yes | 303.9 | 302.9 | 307.3 | 26.15 | 27.44 | 1.74 | 0.51 | 1.19 | 4.27 | 379 |
+| ViT-S/16 | 448 | 32 | fp16-cast | yes | 298.2 | 297.2 | 299.3 | 109.79 | 112.40 | 1.80 | 0.51 | 1.13 | 4.92 | 93 |
+| ViT-S/16 | 512 | 1 | fp16-cast | yes | 107.0 | 107.5 | 110.0 | 9.48 | 10.18 | 0.61 | 0.51 | 0.10 | 4.09 | 1075 |
+| ViT-S/16 | 512 | 8 | fp16-cast | yes | 221.4 | 221.0 | 223.7 | 35.92 | 37.72 | 1.68 | 0.51 | 1.13 | 4.38 | 277 |
+| ViT-S/16 | 512 | 32 | fp16-cast | yes | 212.6 | 211.8 | 213.1 | 151.52 | 158.77 | 1.86 | 0.51 | 1.13 | 5.37 | 67 |
+| ViT-S/16 | 224 | 1 | bf16-cast | yes | 153.3 | 153.9 | 158.7 | 5.42 | 9.22 | 0.56 | 0.51 | 0.06 | 4.06 | 1540 |
+| ViT-S/16 | 224 | 8 | bf16-cast | yes | 818.7 | 819.4 | 840.7 | 9.78 | 10.27 | 0.59 | 0.51 | 0.09 | 4.08 | 1025 |
+| ViT-S/16 | 224 | 32 | bf16-cast | yes | 1243.2 | 1239.8 | 1257.5 | 25.67 | 26.62 | 1.74 | 0.51 | 1.19 | 4.18 | 388 |
+| ViT-S/16 | 448 | 1 | bf16-cast | yes | 110.0 | 110.6 | 113.3 | 9.37 | 10.10 | 0.60 | 0.51 | 0.10 | 4.08 | 1107 |
+| ViT-S/16 | 448 | 8 | bf16-cast | yes | 301.9 | 301.2 | 305.3 | 26.48 | 27.61 | 1.74 | 0.51 | 1.19 | 4.27 | 377 |
+| ViT-S/16 | 448 | 32 | bf16-cast | yes | 300.2 | 299.1 | 301.4 | 108.86 | 112.26 | 1.80 | 0.51 | 1.13 | 4.92 | 94 |
+| ViT-S/16 | 512 | 1 | bf16-cast | yes | 109.2 | 109.7 | 112.4 | 9.47 | 10.27 | 0.61 | 0.51 | 0.10 | 4.09 | 1097 |
+| ViT-S/16 | 512 | 8 | bf16-cast | yes | 228.8 | 228.6 | 231.0 | 34.91 | 36.51 | 1.68 | 0.51 | 1.13 | 4.38 | 286 |
+| ViT-S/16 | 512 | 32 | bf16-cast | yes | 223.3 | 222.6 | 223.9 | 144.82 | 154.24 | 1.85 | 0.51 | 1.13 | 5.37 | 70 |
+| ViT-S/16 | 224 | 1 | fp16-autocast | yes | 116.8 | 117.4 | 120.3 | 8.99 | 10.26 | 0.57 | 0.52 | 0.11 | 4.11 | 1175 |
+| ViT-S/16 | 224 | 8 | fp16-autocast | yes | 733.7 | 733.3 | 751.8 | 10.84 | 11.59 | 0.60 | 0.52 | 0.14 | 4.17 | 917 |
+| ViT-S/16 | 224 | 32 | fp16-autocast | yes | 998.8 | 995.0 | 1010.3 | 33.06 | 34.31 | 1.69 | 0.52 | 1.18 | 4.36 | 311 |
+| ViT-S/16 | 448 | 1 | fp16-autocast | yes | 103.0 | 103.5 | 106.0 | 9.82 | 10.43 | 0.60 | 0.52 | 0.14 | 4.16 | 1035 |
+| ViT-S/16 | 448 | 8 | fp16-autocast | yes | 233.9 | 232.9 | 236.4 | 34.16 | 35.08 | 1.69 | 0.52 | 1.18 | 4.54 | 292 |
+| ViT-S/16 | 448 | 32 | fp16-autocast | yes | 232.4 | 231.0 | 233.2 | 140.95 | 146.73 | 1.83 | 0.52 | 1.18 | 5.84 | 73 |
+| ViT-S/16 | 512 | 1 | fp16-autocast | yes | 115.3 | 115.5 | 118.7 | 8.68 | 9.00 | 0.61 | 0.52 | 0.15 | 4.19 | 1156 |
+| ViT-S/16 | 512 | 8 | fp16-autocast | yes | 200.0 | 199.3 | 202.0 | 38.80 | 45.41 | 1.70 | 0.52 | 1.18 | 4.76 | 250 |
+| ViT-S/16 | 512 | 32 | fp16-autocast | yes | 173.5 | 172.6 | 173.9 | 189.22 | 196.30 | 1.89 | 0.52 | 1.18 | 6.74 | 54 |
+| ViT-S/16 | 224 | 1 | bf16-autocast | yes | 115.7 | 116.3 | 119.2 | 9.03 | 10.26 | 0.57 | 0.52 | 0.11 | 4.11 | 1164 |
+| ViT-S/16 | 224 | 8 | bf16-autocast | yes | 718.4 | 718.1 | 735.8 | 11.03 | 11.88 | 0.60 | 0.52 | 0.14 | 4.17 | 898 |
+| ViT-S/16 | 224 | 32 | bf16-autocast | yes | 919.6 | 915.9 | 928.5 | 35.74 | 37.74 | 1.69 | 0.52 | 1.18 | 4.36 | 287 |
+| ViT-S/16 | 448 | 1 | bf16-autocast | yes | 104.6 | 105.0 | 107.5 | 9.73 | 10.39 | 0.60 | 0.52 | 0.14 | 4.16 | 1050 |
+| ViT-S/16 | 448 | 8 | bf16-autocast | yes | 220.4 | 219.7 | 222.7 | 36.16 | 37.61 | 1.69 | 0.52 | 1.18 | 4.54 | 275 |
+| ViT-S/16 | 448 | 32 | bf16-autocast | yes | 211.9 | 210.8 | 212.5 | 152.80 | 161.61 | 1.83 | 0.52 | 1.18 | 5.84 | 66 |
+| ViT-S/16 | 512 | 1 | bf16-autocast | yes | 101.1 | 101.5 | 104.0 | 9.90 | 10.44 | 0.61 | 0.52 | 0.15 | 4.19 | 1016 |
+| ViT-S/16 | 512 | 8 | bf16-autocast | yes | 163.9 | 163.4 | 165.2 | 48.61 | 50.79 | 1.70 | 0.52 | 1.18 | 4.76 | 205 |
+| ViT-S/16 | 512 | 32 | bf16-autocast | yes | 157.4 | 156.5 | 157.7 | 204.94 | 214.26 | 1.89 | 0.52 | 1.18 | 6.74 | 49 |
+| ViT-S+/16 | 224 | 1 | fp32 | yes | 113.3 | 113.9 | 116.7 | 9.08 | 10.20 | 0.60 | 0.56 | 0.14 | 4.15 | 1140 |
+| ViT-S+/16 | 224 | 8 | fp32 | yes | 414.5 | 414.6 | 420.8 | 19.21 | 20.25 | 0.67 | 0.56 | 0.20 | 4.20 | 519 |
+| ViT-S+/16 | 224 | 32 | fp32 | yes | 464.3 | 463.3 | 466.7 | 70.00 | 73.18 | 1.72 | 0.56 | 1.21 | 4.40 | 145 |
+| ViT-S+/16 | 448 | 1 | fp32 | yes | 83.7 | 84.0 | 85.8 | 12.00 | 12.78 | 0.64 | 0.56 | 0.17 | 4.19 | 841 |
+| ViT-S+/16 | 448 | 8 | fp32 | yes | 104.5 | 104.4 | 105.0 | 78.38 | 80.93 | 1.72 | 0.56 | 1.21 | 4.57 | 131 |
+| ViT-S+/16 | 448 | 32 | fp32 | yes | 94.6 | 94.4 | 94.7 | 340.54 | 353.75 | 1.86 | 0.56 | 1.21 | 5.87 | 30 |
+| ViT-S+/16 | 512 | 1 | fp32 | yes | 63.0 | 63.2 | 64.2 | 16.25 | 17.00 | 0.64 | 0.56 | 0.17 | 4.22 | 633 |
+| ViT-S+/16 | 512 | 8 | fp32 | yes | 70.7 | 70.5 | 70.9 | 114.87 | 121.96 | 1.74 | 0.56 | 1.21 | 4.80 | 89 |
+| ViT-S+/16 | 512 | 32 | fp32 | yes | 58.4 | 58.3 | 58.4 | 544.47 | 570.45 | 3.08 | 0.56 | 2.36 | 6.78 | 30 |
+| ViT-S+/16 | 224 | 1 | fp16-cast | yes | 121.6 | 122.2 | 125.2 | 8.51 | 10.14 | 0.61 | 0.56 | 0.10 | 4.07 | 1223 |
+| ViT-S+/16 | 224 | 8 | fp16-cast | yes | 760.2 | 760.7 | 780.5 | 10.50 | 11.10 | 0.64 | 0.56 | 0.12 | 4.10 | 951 |
+| ViT-S+/16 | 224 | 32 | fp16-cast | yes | 937.2 | 936.4 | 945.6 | 34.54 | 36.12 | 1.78 | 0.56 | 1.23 | 4.20 | 293 |
+| ViT-S+/16 | 448 | 1 | fp16-cast | yes | 106.6 | 107.2 | 109.7 | 9.60 | 10.45 | 0.61 | 0.56 | 0.10 | 4.10 | 1073 |
+| ViT-S+/16 | 448 | 8 | fp16-cast | yes | 281.6 | 281.1 | 284.4 | 29.33 | 32.90 | 1.78 | 0.56 | 1.23 | 4.29 | 352 |
+| ViT-S+/16 | 448 | 32 | fp16-cast | yes | 259.2 | 258.5 | 260.0 | 127.14 | 128.51 | 1.85 | 0.56 | 1.16 | 4.93 | 81 |
+| ViT-S+/16 | 512 | 1 | fp16-cast | yes | 101.4 | 101.8 | 104.1 | 9.95 | 10.56 | 0.62 | 0.56 | 0.10 | 4.11 | 1019 |
+| ViT-S+/16 | 512 | 8 | fp16-cast | yes | 196.8 | 196.8 | 198.5 | 41.63 | 48.93 | 1.80 | 0.56 | 1.23 | 4.40 | 247 |
+| ViT-S+/16 | 512 | 32 | fp16-cast | yes | 155.9 | 155.5 | 156.2 | 209.61 | 216.67 | 1.90 | 0.56 | 1.16 | 5.39 | 49 |
+| ViT-S+/16 | 224 | 1 | bf16-cast | yes | 122.3 | 123.0 | 126.0 | 8.54 | 10.23 | 0.61 | 0.56 | 0.10 | 4.07 | 1231 |
+| ViT-S+/16 | 224 | 8 | bf16-cast | yes | 757.1 | 757.5 | 776.8 | 10.49 | 11.23 | 0.64 | 0.56 | 0.12 | 4.10 | 947 |
+| ViT-S+/16 | 224 | 32 | bf16-cast | yes | 946.3 | 945.5 | 954.7 | 34.20 | 35.68 | 1.78 | 0.56 | 1.23 | 4.20 | 296 |
+| ViT-S+/16 | 448 | 1 | bf16-cast | yes | 102.0 | 102.5 | 104.7 | 9.89 | 10.63 | 0.61 | 0.56 | 0.10 | 4.10 | 1025 |
+| ViT-S+/16 | 448 | 8 | bf16-cast | yes | 233.7 | 233.3 | 235.8 | 34.24 | 35.41 | 1.78 | 0.56 | 1.23 | 4.29 | 292 |
+| ViT-S+/16 | 448 | 32 | bf16-cast | yes | 224.0 | 223.4 | 224.6 | 143.68 | 155.63 | 1.85 | 0.56 | 1.16 | 4.93 | 70 |
+| ViT-S+/16 | 512 | 1 | bf16-cast | yes | 100.1 | 100.5 | 102.7 | 10.02 | 10.62 | 0.62 | 0.56 | 0.10 | 4.11 | 1006 |
+| ViT-S+/16 | 512 | 8 | bf16-cast | yes | 178.5 | 178.4 | 179.8 | 44.83 | 46.34 | 1.80 | 0.56 | 1.23 | 4.40 | 223 |
+| ViT-S+/16 | 512 | 32 | bf16-cast | yes | 171.8 | 171.3 | 172.2 | 185.84 | 199.69 | 1.90 | 0.56 | 1.16 | 5.39 | 54 |
+| ViT-S+/16 | 224 | 1 | fp16-autocast | yes | 107.6 | 108.2 | 110.6 | 9.52 | 10.95 | 0.61 | 0.56 | 0.15 | 4.15 | 1083 |
+| ViT-S+/16 | 224 | 8 | fp16-autocast | yes | 630.5 | 630.2 | 644.6 | 12.64 | 13.38 | 0.64 | 0.56 | 0.17 | 4.20 | 788 |
+| ViT-S+/16 | 224 | 32 | fp16-autocast | yes | 820.3 | 817.5 | 828.3 | 39.66 | 42.02 | 1.72 | 0.56 | 1.21 | 4.40 | 256 |
+| ViT-S+/16 | 448 | 1 | fp16-autocast | yes | 98.8 | 99.1 | 101.4 | 10.23 | 10.86 | 0.64 | 0.56 | 0.18 | 4.19 | 992 |
+| ViT-S+/16 | 448 | 8 | fp16-autocast | yes | 200.6 | 200.0 | 202.5 | 39.90 | 41.35 | 1.72 | 0.56 | 1.21 | 4.57 | 251 |
+| ViT-S+/16 | 448 | 32 | fp16-autocast | yes | 189.6 | 188.8 | 190.0 | 169.66 | 188.81 | 1.86 | 0.56 | 1.21 | 5.87 | 59 |
+| ViT-S+/16 | 512 | 1 | fp16-autocast | yes | 96.0 | 96.3 | 98.5 | 10.37 | 10.84 | 0.65 | 0.56 | 0.18 | 4.22 | 963 |
+| ViT-S+/16 | 512 | 8 | fp16-autocast | yes | 167.6 | 167.6 | 169.2 | 47.82 | 56.54 | 1.74 | 0.56 | 1.21 | 4.80 | 210 |
+| ViT-S+/16 | 512 | 32 | fp16-autocast | yes | 140.1 | 139.2 | 140.3 | 233.46 | 243.01 | 1.92 | 0.56 | 1.21 | 6.78 | 44 |
+| ViT-S+/16 | 224 | 1 | bf16-autocast | yes | 107.4 | 107.9 | 110.3 | 9.67 | 10.64 | 0.61 | 0.56 | 0.15 | 4.15 | 1080 |
+| ViT-S+/16 | 224 | 8 | bf16-autocast | yes | 623.9 | 623.4 | 637.4 | 12.77 | 13.49 | 0.64 | 0.56 | 0.17 | 4.20 | 780 |
+| ViT-S+/16 | 224 | 32 | bf16-autocast | yes | 787.6 | 785.4 | 795.2 | 41.36 | 43.51 | 1.72 | 0.56 | 1.21 | 4.40 | 246 |
+| ViT-S+/16 | 448 | 1 | bf16-autocast | yes | 97.6 | 97.9 | 100.2 | 10.27 | 10.79 | 0.64 | 0.56 | 0.18 | 4.19 | 980 |
+| ViT-S+/16 | 448 | 8 | bf16-autocast | yes | 189.0 | 188.5 | 190.7 | 42.18 | 43.90 | 1.72 | 0.56 | 1.21 | 4.57 | 236 |
+| ViT-S+/16 | 448 | 32 | bf16-autocast | yes | 177.6 | 177.0 | 178.0 | 180.52 | 197.89 | 1.86 | 0.56 | 1.21 | 5.87 | 56 |
+| ViT-S+/16 | 512 | 1 | bf16-autocast | yes | 96.9 | 97.1 | 99.4 | 10.31 | 10.81 | 0.65 | 0.56 | 0.18 | 4.22 | 972 |
+| ViT-S+/16 | 512 | 8 | bf16-autocast | yes | 154.3 | 154.2 | 155.5 | 55.96 | 58.83 | 1.74 | 0.56 | 1.21 | 4.80 | 193 |
+| ViT-S+/16 | 512 | 32 | bf16-autocast | yes | 137.8 | 137.1 | 138.0 | 235.32 | 246.66 | 1.93 | 0.56 | 1.21 | 6.78 | 43 |
+| ViT-B/16 | 224 | 1 | fp32 | yes | 103.6 | 104.1 | 106.5 | 9.62 | 9.97 | 0.85 | 0.80 | 0.39 | 4.43 | 1041 |
+| ViT-B/16 | 224 | 8 | fp32 | yes | 197.7 | 197.6 | 199.1 | 41.04 | 46.15 | 2.00 | 0.80 | 1.52 | 4.54 | 247 |
+| ViT-B/16 | 224 | 32 | fp32 | yes | 178.1 | 177.8 | 178.5 | 182.82 | 190.67 | 1.99 | 0.80 | 1.46 | 4.93 | 56 |
+| ViT-B/16 | 448 | 1 | fp32 | yes | 39.5 | 39.5 | 40.0 | 25.47 | 26.29 | 0.89 | 0.80 | 0.42 | 4.52 | 396 |
+| ViT-B/16 | 448 | 8 | fp32 | yes | 39.3 | 39.2 | 39.4 | 205.52 | 211.58 | 2.00 | 0.80 | 1.46 | 5.28 | 50 |
+| ViT-B/16 | 448 | 32 | fp32 | yes | 35.5 | 35.4 | 35.5 | 897.10 | 938.21 | 3.30 | 0.80 | 2.53 | 7.87 | 30 |
+| ViT-B/16 | 512 | 1 | fp32 | yes | 28.1 | 28.2 | 28.4 | 35.97 | 37.21 | 1.97 | 0.80 | 1.49 | 4.58 | 282 |
+| ViT-B/16 | 512 | 8 | fp32 | yes | 27.6 | 27.5 | 27.6 | 292.20 | 310.30 | 2.03 | 0.80 | 1.46 | 5.73 | 35 |
+| ViT-B/16 | 512 | 32 | fp32 | yes | 23.5 | 23.4 | 23.5 | 1355.87 | 1417.66 | 4.66 | 0.80 | 3.75 | 9.69 | 30 |
+| ViT-B/16 | 224 | 1 | fp16-cast | yes | 107.9 | 108.4 | 110.8 | 9.48 | 10.00 | 0.82 | 0.80 | 0.21 | 4.21 | 1085 |
+| ViT-B/16 | 224 | 8 | fp16-cast | yes | 396.3 | 396.2 | 401.8 | 19.98 | 21.39 | 0.86 | 0.80 | 0.25 | 4.27 | 496 |
+| ViT-B/16 | 224 | 32 | fp16-cast | yes | 392.1 | 391.0 | 393.6 | 82.50 | 86.19 | 2.08 | 0.80 | 1.42 | 4.47 | 123 |
+| ViT-B/16 | 448 | 1 | fp16-cast | yes | 92.6 | 92.9 | 94.9 | 10.99 | 11.88 | 0.84 | 0.80 | 0.21 | 4.26 | 929 |
+| ViT-B/16 | 448 | 8 | fp16-cast | yes | 100.5 | 100.4 | 100.9 | 79.53 | 84.78 | 2.06 | 0.80 | 1.39 | 4.64 | 126 |
+| ViT-B/16 | 448 | 32 | fp16-cast | yes | 89.2 | 88.9 | 89.3 | 359.13 | 378.12 | 2.10 | 0.80 | 1.29 | 5.94 | 30 |
+| ViT-B/16 | 512 | 1 | fp16-cast | yes | 70.4 | 70.6 | 71.8 | 14.20 | 15.49 | 0.88 | 0.80 | 0.25 | 4.29 | 706 |
+| ViT-B/16 | 512 | 8 | fp16-cast | yes | 74.2 | 74.1 | 74.4 | 108.99 | 113.57 | 1.97 | 0.80 | 1.29 | 4.87 | 93 |
+| ViT-B/16 | 512 | 32 | fp16-cast | yes | 63.5 | 63.3 | 63.5 | 505.32 | 541.24 | 3.23 | 0.80 | 2.36 | 6.84 | 30 |
+| ViT-B/16 | 224 | 1 | bf16-cast | yes | 107.6 | 108.1 | 110.6 | 9.59 | 10.06 | 0.82 | 0.80 | 0.21 | 4.21 | 1081 |
+| ViT-B/16 | 224 | 8 | bf16-cast | yes | 415.4 | 415.3 | 421.4 | 18.93 | 20.67 | 0.86 | 0.80 | 0.25 | 4.27 | 520 |
+| ViT-B/16 | 224 | 32 | bf16-cast | yes | 435.7 | 434.8 | 437.4 | 73.14 | 77.45 | 2.08 | 0.80 | 1.42 | 4.47 | 136 |
+| ViT-B/16 | 448 | 1 | bf16-cast | yes | 96.6 | 96.9 | 99.1 | 10.09 | 11.37 | 0.84 | 0.80 | 0.21 | 4.26 | 970 |
+| ViT-B/16 | 448 | 8 | bf16-cast | yes | 106.5 | 106.3 | 106.9 | 75.48 | 79.71 | 2.06 | 0.80 | 1.39 | 4.64 | 133 |
+| ViT-B/16 | 448 | 32 | bf16-cast | yes | 96.6 | 96.3 | 96.7 | 336.25 | 354.54 | 2.10 | 0.80 | 1.29 | 5.94 | 31 |
+| ViT-B/16 | 512 | 1 | bf16-cast | yes | 73.9 | 74.1 | 75.4 | 13.51 | 14.75 | 0.88 | 0.80 | 0.25 | 4.29 | 741 |
+| ViT-B/16 | 512 | 8 | bf16-cast | yes | 80.3 | 80.2 | 80.6 | 99.44 | 106.18 | 1.97 | 0.80 | 1.29 | 4.87 | 101 |
+| ViT-B/16 | 512 | 32 | bf16-cast | yes | 66.9 | 66.7 | 66.9 | 475.66 | 505.15 | 3.23 | 0.80 | 2.36 | 6.84 | 30 |
+| ViT-B/16 | 224 | 1 | fp16-autocast | yes | 104.7 | 105.2 | 107.7 | 9.70 | 10.25 | 0.85 | 0.80 | 0.39 | 4.43 | 1052 |
+| ViT-B/16 | 224 | 8 | fp16-autocast | yes | 332.2 | 331.5 | 336.1 | 23.64 | 26.22 | 0.93 | 0.80 | 0.45 | 4.54 | 415 |
+| ViT-B/16 | 224 | 32 | fp16-autocast | yes | 347.8 | 346.3 | 349.3 | 92.63 | 97.30 | 1.99 | 0.80 | 1.45 | 4.93 | 109 |
+| ViT-B/16 | 448 | 1 | fp16-autocast | yes | 74.1 | 74.1 | 75.6 | 13.57 | 15.13 | 0.89 | 0.80 | 0.41 | 4.52 | 742 |
+| ViT-B/16 | 448 | 8 | fp16-autocast | yes | 85.8 | 85.5 | 86.2 | 93.22 | 99.12 | 2.01 | 0.80 | 1.45 | 5.28 | 107 |
+| ViT-B/16 | 448 | 32 | fp16-autocast | yes | 76.9 | 76.6 | 77.0 | 417.91 | 444.30 | 3.30 | 0.80 | 2.53 | 7.87 | 30 |
+| ViT-B/16 | 512 | 1 | fp16-autocast | yes | 57.9 | 57.9 | 58.9 | 17.30 | 19.29 | 0.93 | 0.80 | 0.45 | 4.58 | 580 |
+| ViT-B/16 | 512 | 8 | fp16-autocast | yes | 61.9 | 61.7 | 62.1 | 130.07 | 139.21 | 2.03 | 0.80 | 1.45 | 5.73 | 78 |
+| ViT-B/16 | 512 | 32 | fp16-autocast | yes | 54.3 | 54.1 | 54.4 | 590.03 | 611.76 | 3.40 | 0.80 | 2.53 | 9.69 | 30 |
+| ViT-B/16 | 224 | 1 | bf16-autocast | yes | 106.3 | 106.8 | 109.3 | 9.70 | 10.29 | 0.85 | 0.80 | 0.39 | 4.43 | 1068 |
+| ViT-B/16 | 224 | 8 | bf16-autocast | yes | 323.0 | 322.3 | 326.6 | 24.70 | 26.55 | 0.93 | 0.80 | 0.45 | 4.54 | 403 |
+| ViT-B/16 | 224 | 32 | bf16-autocast | yes | 347.1 | 345.5 | 348.4 | 92.38 | 100.39 | 1.99 | 0.80 | 1.45 | 4.93 | 108 |
+| ViT-B/16 | 448 | 1 | bf16-autocast | yes | 73.2 | 73.3 | 74.7 | 13.71 | 15.12 | 0.89 | 0.80 | 0.41 | 4.52 | 733 |
+| ViT-B/16 | 448 | 8 | bf16-autocast | yes | 84.4 | 84.2 | 84.7 | 95.13 | 100.90 | 2.01 | 0.80 | 1.45 | 5.28 | 106 |
+| ViT-B/16 | 448 | 32 | bf16-autocast | yes | 75.3 | 75.0 | 75.4 | 427.28 | 446.87 | 3.30 | 0.80 | 2.53 | 7.87 | 30 |
+| ViT-B/16 | 512 | 1 | bf16-autocast | yes | 57.2 | 57.2 | 58.1 | 17.49 | 19.36 | 0.93 | 0.80 | 0.45 | 4.58 | 573 |
+| ViT-B/16 | 512 | 8 | bf16-autocast | yes | 60.7 | 60.5 | 60.9 | 132.65 | 142.14 | 2.04 | 0.80 | 1.45 | 5.73 | 76 |
+| ViT-B/16 | 512 | 32 | bf16-autocast | yes | 54.1 | 53.9 | 54.1 | 592.58 | 614.98 | 3.40 | 0.80 | 2.53 | 9.69 | 30 |
+| ViT-L/16 | 224 | 1 | fp32 | yes | 38.5 | 38.5 | 38.9 | 26.28 | 28.40 | 2.67 | 2.61 | 2.20 | 5.48 | 386 |
+| ViT-L/16 | 224 | 8 | fp32 | yes | 54.9 | 54.8 | 55.0 | 151.76 | 155.43 | 2.68 | 2.61 | 2.19 | 5.63 | 69 |
+| ViT-L/16 | 224 | 32 | fp32 | yes | 50.8 | 50.7 | 50.8 | 634.36 | 647.10 | 2.75 | 2.61 | 2.19 | 6.15 | 30 |
+| ViT-L/16 | 448 | 1 | fp32 | yes | 11.8 | 11.8 | 11.9 | 86.44 | 88.52 | 2.68 | 2.61 | 2.19 | 5.60 | 119 |
+| ViT-L/16 | 448 | 8 | fp32 | yes | 11.6 | 11.5 | 11.6 | 694.16 | 706.14 | 2.77 | 2.61 | 2.19 | 6.61 | 30 |
+| ViT-L/16 | 448 | 32 | fp32 | yes | 10.4 | 10.4 | 10.4 | 3093.15 | 3135.33 | 5.23 | 2.61 | 4.34 | 10.07 | 20 |
+| ViT-L/16 | 512 | 1 | fp32 | yes | 8.5 | 8.5 | 8.5 | 119.59 | 123.03 | 2.69 | 2.61 | 2.19 | 5.67 | 85 |
+| ViT-L/16 | 512 | 8 | fp32 | yes | 7.9 | 7.9 | 7.9 | 1009.76 | 1045.33 | 2.81 | 2.61 | 2.19 | 7.21 | 30 |
+| ViT-L/16 | 512 | 32 | fp32 | yes | 7.3 | 7.3 | 7.3 | 4417.04 | 4460.80 | 5.62 | 2.61 | 4.58 | 12.49 | 14 |
+| ViT-L/16 | 224 | 1 | fp16-cast | no: non-finite output | 75.8 | 76.1 | 77.4 | 13.11 | 14.62 | 1.71 | 1.67 | 0.65 | 4.74 | 761 |
+| ViT-L/16 | 224 | 8 | fp16-cast | no: non-finite output | 137.9 | 137.9 | 138.6 | 58.45 | 61.13 | 2.83 | 1.67 | 1.76 | 4.81 | 173 |
+| ViT-L/16 | 224 | 32 | fp16-cast | no: non-finite output | 127.5 | 127.3 | 127.7 | 256.15 | 270.18 | 2.85 | 1.67 | 1.72 | 5.07 | 40 |
+| ViT-L/16 | 448 | 1 | fp16-cast | no: non-finite output | 32.2 | 32.3 | 32.5 | 30.92 | 33.38 | 1.76 | 1.67 | 0.68 | 4.80 | 323 |
+| ViT-L/16 | 448 | 8 | fp16-cast | no: non-finite output | 32.0 | 32.0 | 32.0 | 255.27 | 264.21 | 2.86 | 1.67 | 1.72 | 5.30 | 40 |
+| ViT-L/16 | 448 | 32 | fp16-cast | no: non-finite output | 28.1 | 28.1 | 28.1 | 1130.35 | 1186.27 | 4.15 | 1.67 | 2.80 | 7.04 | 30 |
+| ViT-L/16 | 512 | 1 | fp16-cast | no: non-finite output | 26.4 | 26.4 | 26.6 | 38.01 | 40.25 | 1.76 | 1.67 | 0.68 | 4.84 | 264 |
+| ViT-L/16 | 512 | 8 | fp16-cast | no: non-finite output | 25.3 | 25.2 | 25.3 | 319.51 | 333.39 | 2.88 | 1.67 | 1.72 | 5.61 | 32 |
+| ViT-L/16 | 512 | 32 | fp16-cast | no: non-finite output | 22.3 | 22.3 | 22.3 | 1444.18 | 1495.19 | 4.22 | 1.67 | 2.80 | 8.24 | 30 |
+| ViT-L/16 | 224 | 1 | bf16-cast | yes | 81.2 | 81.4 | 82.8 | 12.20 | 12.92 | 1.72 | 1.67 | 0.65 | 4.74 | 815 |
+| ViT-L/16 | 224 | 8 | bf16-cast | yes | 156.7 | 156.7 | 157.6 | 51.95 | 54.96 | 2.83 | 1.67 | 1.76 | 4.81 | 196 |
+| ViT-L/16 | 224 | 32 | bf16-cast | yes | 148.2 | 148.0 | 148.4 | 215.81 | 230.88 | 2.86 | 1.67 | 1.72 | 5.07 | 47 |
+| ViT-L/16 | 448 | 1 | bf16-cast | yes | 34.8 | 34.8 | 35.1 | 28.70 | 31.35 | 1.76 | 1.67 | 0.68 | 4.80 | 348 |
+| ViT-L/16 | 448 | 8 | bf16-cast | yes | 35.0 | 35.0 | 35.1 | 232.65 | 241.99 | 2.87 | 1.67 | 1.72 | 5.30 | 44 |
+| ViT-L/16 | 448 | 32 | bf16-cast | yes | 29.5 | 29.5 | 29.5 | 1079.48 | 1126.51 | 4.15 | 1.67 | 2.80 | 7.04 | 30 |
+| ViT-L/16 | 512 | 1 | bf16-cast | yes | 26.0 | 26.0 | 26.2 | 38.54 | 41.60 | 1.78 | 1.67 | 0.68 | 4.84 | 261 |
+| ViT-L/16 | 512 | 8 | bf16-cast | yes | 25.1 | 25.1 | 25.2 | 322.42 | 335.25 | 2.89 | 1.67 | 1.72 | 5.61 | 32 |
+| ViT-L/16 | 512 | 32 | bf16-cast | yes | 21.0 | 21.0 | 21.1 | 1517.50 | 1579.47 | 4.25 | 1.67 | 2.80 | 8.24 | 30 |
+| ViT-L/16 | 224 | 1 | fp16-autocast | yes | 54.9 | 55.0 | 55.7 | 18.05 | 20.54 | 2.67 | 2.61 | 2.20 | 5.48 | 550 |
+| ViT-L/16 | 224 | 8 | fp16-autocast | yes | 111.5 | 111.3 | 111.9 | 72.14 | 77.71 | 2.68 | 2.61 | 2.19 | 5.63 | 140 |
+| ViT-L/16 | 224 | 32 | fp16-autocast | yes | 122.8 | 122.5 | 122.9 | 262.18 | 266.99 | 2.75 | 2.61 | 2.19 | 6.15 | 39 |
+| ViT-L/16 | 448 | 1 | fp16-autocast | yes | 26.5 | 26.5 | 26.7 | 38.01 | 40.77 | 2.69 | 2.61 | 2.19 | 5.60 | 265 |
+| ViT-L/16 | 448 | 8 | fp16-autocast | yes | 29.6 | 29.5 | 29.6 | 273.30 | 291.08 | 2.78 | 2.61 | 2.19 | 6.61 | 37 |
+| ViT-L/16 | 448 | 32 | fp16-autocast | yes | 27.1 | 27.1 | 27.2 | 1157.49 | 1208.83 | 4.15 | 2.61 | 3.27 | 10.07 | 30 |
+| ViT-L/16 | 512 | 1 | fp16-autocast | yes | 20.3 | 20.3 | 20.4 | 49.98 | 55.71 | 2.70 | 2.61 | 2.19 | 5.67 | 203 |
+| ViT-L/16 | 512 | 8 | fp16-autocast | yes | 19.1 | 19.1 | 19.1 | 420.91 | 452.29 | 2.82 | 2.61 | 2.19 | 7.21 | 30 |
+| ViT-L/16 | 512 | 32 | fp16-autocast | yes | 17.1 | 17.1 | 17.1 | 1881.89 | 1938.18 | 5.35 | 2.61 | 4.34 | 12.49 | 30 |
+| ViT-L/16 | 224 | 1 | bf16-autocast | yes | 54.0 | 54.1 | 54.8 | 18.25 | 20.63 | 2.67 | 2.61 | 2.20 | 5.48 | 541 |
+| ViT-L/16 | 224 | 8 | bf16-autocast | yes | 109.9 | 109.8 | 110.4 | 73.69 | 80.10 | 2.68 | 2.61 | 2.19 | 5.63 | 138 |
+| ViT-L/16 | 224 | 32 | bf16-autocast | yes | 106.8 | 106.6 | 106.9 | 304.41 | 318.86 | 2.76 | 2.61 | 2.19 | 6.15 | 34 |
+| ViT-L/16 | 448 | 1 | bf16-autocast | yes | 25.0 | 25.0 | 25.1 | 40.35 | 43.71 | 2.69 | 2.61 | 2.19 | 5.60 | 250 |
+| ViT-L/16 | 448 | 8 | bf16-autocast | yes | 29.6 | 29.5 | 29.6 | 267.51 | 282.78 | 2.78 | 2.61 | 2.19 | 6.61 | 37 |
+| ViT-L/16 | 448 | 32 | bf16-autocast | yes | 25.1 | 25.0 | 25.1 | 1329.73 | 1370.93 | 4.15 | 2.61 | 3.27 | 10.07 | 30 |
+| ViT-L/16 | 512 | 1 | bf16-autocast | yes | 21.5 | 21.5 | 21.6 | 46.34 | 49.17 | 2.70 | 2.61 | 2.19 | 5.67 | 216 |
+| ViT-L/16 | 512 | 8 | bf16-autocast | yes | 22.9 | 22.9 | 23.0 | 352.76 | 360.09 | 2.82 | 2.61 | 2.19 | 7.21 | 30 |
+| ViT-L/16 | 512 | 32 | bf16-autocast | yes | 17.7 | 17.7 | 17.7 | 1794.67 | 1886.87 | 5.35 | 2.61 | 4.34 | 12.49 | 30 |
+| ViT-H+/16 | 224 | 1 | fp32 | yes | 16.3 | 16.3 | 16.3 | 62.44 | 65.35 | 4.82 | 4.76 | 4.35 | 8.06 | 163 |
+| ViT-H+/16 | 224 | 8 | fp32 | yes | 23.3 | 23.3 | 23.3 | 347.50 | 350.15 | 4.83 | 4.76 | 4.34 | 8.25 | 30 |
+| ViT-H+/16 | 224 | 32 | fp32 | yes | 21.4 | 21.4 | 21.4 | 1456.29 | 1624.25 | 4.94 | 4.76 | 4.34 | 8.90 | 30 |
+| ViT-H+/16 | 448 | 1 | fp32 | yes | 5.1 | 5.1 | 5.1 | 199.66 | 207.91 | 4.84 | 4.77 | 4.34 | 8.22 | 51 |
+| ViT-H+/16 | 448 | 8 | fp32 | yes | 4.7 | 4.7 | 4.7 | 1703.34 | 1769.10 | 4.97 | 4.76 | 4.34 | 9.48 | 30 |
+| ViT-H+/16 | 448 | 32 | fp32 | yes | 4.1 | 4.1 | 4.1 | 7814.99 | 7932.98 | 7.48 | 4.76 | 6.49 | 13.81 | 10 |
+| ViT-H+/16 | 512 | 1 | fp32 | yes | 3.4 | 3.4 | 3.4 | 292.03 | 304.02 | 4.86 | 4.76 | 4.34 | 8.31 | 35 |
+| ViT-H+/16 | 512 | 8 | fp32 | yes | 3.2 | 3.2 | 3.2 | 2549.56 | 2602.64 | 6.08 | 4.76 | 5.42 | 10.23 | 24 |
+| ViT-H+/16 | 512 | 32 | fp32 | yes | 3.1 | 3.1 | 3.1 | 10312.28 | 10388.94 | 9.27 | 4.76 | 8.12 | 16.83 | 10 |
+| ViT-H+/16 | 224 | 1 | fp16-cast | no: non-finite output | 39.1 | 39.2 | 39.5 | 25.62 | 28.30 | 3.69 | 3.69 | 2.23 | 6.03 | 392 |
+| ViT-H+/16 | 224 | 8 | fp16-cast | no: non-finite output | 58.3 | 58.3 | 58.4 | 137.31 | 145.33 | 3.69 | 3.69 | 2.23 | 6.13 | 73 |
+| ViT-H+/16 | 224 | 32 | fp16-cast | no: non-finite output | 53.3 | 53.3 | 53.4 | 596.94 | 623.34 | 3.69 | 3.69 | 2.23 | 6.45 | 30 |
+| ViT-H+/16 | 448 | 1 | fp16-cast | yes | 14.3 | 14.3 | 14.3 | 69.84 | 75.08 | 3.69 | 3.69 | 2.23 | 6.11 | 143 |
+| ViT-H+/16 | 448 | 8 | fp16-cast | yes | 13.5 | 13.5 | 13.5 | 588.51 | 610.10 | 3.69 | 3.69 | 2.23 | 6.74 | 30 |
+| ViT-H+/16 | 448 | 32 | fp16-cast | yes | 11.8 | 11.8 | 11.9 | 2699.35 | 2738.54 | 4.50 | 3.69 | 3.30 | 8.90 | 23 |
+| ViT-H+/16 | 512 | 1 | fp16-cast | yes | 10.9 | 10.9 | 10.9 | 91.36 | 97.73 | 3.69 | 3.69 | 2.23 | 6.15 | 109 |
+| ViT-H+/16 | 512 | 8 | fp16-cast | yes | 9.9 | 9.9 | 9.9 | 795.82 | 842.93 | 4.31 | 3.69 | 3.30 | 7.12 | 30 |
+| ViT-H+/16 | 512 | 32 | fp16-cast | yes | 8.7 | 8.7 | 8.7 | 3684.47 | 3775.57 | 5.69 | 3.69 | 4.37 | 10.41 | 17 |
+| ViT-H+/16 | 224 | 1 | bf16-cast | yes | 39.5 | 39.6 | 39.9 | 25.60 | 27.86 | 3.69 | 3.69 | 2.23 | 6.03 | 396 |
+| ViT-H+/16 | 224 | 8 | bf16-cast | yes | 59.5 | 59.5 | 59.6 | 133.67 | 143.87 | 3.69 | 3.69 | 2.23 | 6.13 | 75 |
+| ViT-H+/16 | 224 | 32 | bf16-cast | yes | 53.9 | 53.8 | 53.9 | 595.78 | 622.36 | 3.69 | 3.69 | 2.23 | 6.45 | 30 |
+| ViT-H+/16 | 448 | 1 | bf16-cast | yes | 14.1 | 14.1 | 14.2 | 70.74 | 75.58 | 3.69 | 3.69 | 2.23 | 6.11 | 142 |
+| ViT-H+/16 | 448 | 8 | bf16-cast | yes | 13.8 | 13.8 | 13.8 | 578.57 | 613.58 | 3.69 | 3.69 | 2.23 | 6.74 | 30 |
+| ViT-H+/16 | 448 | 32 | bf16-cast | yes | 13.0 | 13.0 | 13.0 | 2527.14 | 2709.95 | 4.51 | 3.69 | 3.30 | 8.90 | 25 |
+| ViT-H+/16 | 512 | 1 | bf16-cast | yes | 11.0 | 11.0 | 11.0 | 90.83 | 96.08 | 3.69 | 3.69 | 2.23 | 6.15 | 110 |
+| ViT-H+/16 | 512 | 8 | bf16-cast | yes | 10.1 | 10.1 | 10.1 | 781.23 | 829.00 | 4.31 | 3.69 | 3.30 | 7.12 | 30 |
+| ViT-H+/16 | 512 | 32 | bf16-cast | yes | 9.7 | 9.7 | 9.7 | 3507.97 | 3594.97 | 5.68 | 3.69 | 4.37 | 10.41 | 19 |
+| ViT-H+/16 | 224 | 1 | fp16-autocast | yes | 26.8 | 26.8 | 27.0 | 37.57 | 41.35 | 4.82 | 4.76 | 4.35 | 8.06 | 268 |
+| ViT-H+/16 | 224 | 8 | fp16-autocast | yes | 48.3 | 48.2 | 48.4 | 163.79 | 180.50 | 4.84 | 4.76 | 4.34 | 8.25 | 61 |
+| ViT-H+/16 | 224 | 32 | fp16-autocast | yes | 46.4 | 46.4 | 46.5 | 685.44 | 712.38 | 4.92 | 4.76 | 4.34 | 8.90 | 30 |
+| ViT-H+/16 | 448 | 1 | fp16-autocast | yes | 11.0 | 11.0 | 11.1 | 90.96 | 97.64 | 4.85 | 4.76 | 4.34 | 8.22 | 111 |
+| ViT-H+/16 | 448 | 8 | fp16-autocast | yes | 11.4 | 11.4 | 11.4 | 703.89 | 719.57 | 4.96 | 4.76 | 4.34 | 9.48 | 30 |
+| ViT-H+/16 | 448 | 32 | fp16-autocast | yes | 10.3 | 10.3 | 10.3 | 3109.29 | 3155.43 | 7.46 | 4.76 | 6.49 | 13.81 | 20 |
+| ViT-H+/16 | 512 | 1 | fp16-autocast | yes | 8.4 | 8.4 | 8.4 | 118.85 | 128.78 | 4.86 | 4.76 | 4.34 | 8.31 | 84 |
+| ViT-H+/16 | 512 | 8 | fp16-autocast | yes | 8.4 | 8.4 | 8.4 | 955.63 | 978.68 | 5.00 | 4.76 | 4.34 | 10.23 | 30 |
+| ViT-H+/16 | 512 | 32 | fp16-autocast | yes | 7.7 | 7.7 | 7.7 | 4181.13 | 4208.33 | 8.69 | 4.76 | 7.56 | 16.83 | 15 |
+| ViT-H+/16 | 224 | 1 | bf16-autocast | yes | 26.2 | 26.2 | 26.3 | 38.55 | 42.25 | 4.82 | 4.76 | 4.35 | 8.06 | 262 |
+| ViT-H+/16 | 224 | 8 | bf16-autocast | yes | 47.6 | 47.6 | 47.7 | 167.57 | 178.89 | 4.84 | 4.76 | 4.34 | 8.25 | 60 |
+| ViT-H+/16 | 224 | 32 | bf16-autocast | yes | 46.1 | 46.1 | 46.2 | 689.87 | 733.20 | 4.92 | 4.76 | 4.34 | 8.90 | 30 |
+| ViT-H+/16 | 448 | 1 | bf16-autocast | yes | 11.1 | 11.1 | 11.1 | 90.91 | 97.00 | 4.85 | 4.76 | 4.34 | 8.22 | 111 |
+| ViT-H+/16 | 448 | 8 | bf16-autocast | yes | 11.6 | 11.6 | 11.6 | 687.04 | 726.88 | 4.96 | 4.76 | 4.34 | 9.48 | 30 |
+| ViT-H+/16 | 448 | 32 | bf16-autocast | yes | 10.6 | 10.6 | 10.6 | 3011.35 | 3111.12 | 7.46 | 4.76 | 6.49 | 13.81 | 20 |
+| ViT-H+/16 | 512 | 1 | bf16-autocast | yes | 8.7 | 8.7 | 8.7 | 115.67 | 122.05 | 4.86 | 4.76 | 4.34 | 8.31 | 87 |
+| ViT-H+/16 | 512 | 8 | bf16-autocast | yes | 8.7 | 8.7 | 8.7 | 913.80 | 937.08 | 5.00 | 4.76 | 4.34 | 10.23 | 30 |
+| ViT-H+/16 | 512 | 32 | bf16-autocast | yes | 8.0 | 7.9 | 8.0 | 4035.76 | 4056.09 | 8.69 | 4.76 | 7.56 | 16.83 | 15 |
 
 ## 4. Repeats and spread
 
@@ -569,62 +569,64 @@ Spread = (largest − smallest) / median of the throughputs of the main run and 
 
 | Priority | Output | Dtype mode | Throughputs (img/s) | Spread | Result |
 | --- | --- | --- | --- | --- | --- |
-| P1 | frame embedding | fp32 | 608.4, 319.6, 334.1 | 86.44 % | above 5 % |
-| P1 | frame embedding | fp16-cast | 382.9, 671.4, 704.6 | 47.91 % | above 5 % |
-| P1 | frame embedding | bf16-cast | 487.4, 658.4, 706.9 | 33.34 % | above 5 % |
-| P1 | frame embedding | fp16-autocast | 702.5, 519.0, 536.4 | 34.20 % | above 5 % |
-| P1 | frame embedding | bf16-autocast | 608.8, 515.2, 531.7 | 17.60 % | above 5 % |
-| P2 | patch embeddings | fp32 | 2.6, 2.4, 2.6 | 7.87 % | above 5 % |
-| P2 | patch embeddings | fp16-cast | 8.2, 6.9, 7.6 | 16.04 % | above 5 % |
-| P2 | patch embeddings | bf16-cast | 8.3, 6.9, 7.6 | 18.01 % | above 5 % |
-| P2 | patch embeddings | fp16-autocast | 6.2, 5.9, 7.6 | 27.59 % | above 5 % |
-| P2 | patch embeddings | bf16-autocast | 6.3, 5.9, 7.7 | 28.34 % | above 5 % |
+| P1 | frame embedding | fp32 | 587.8, 492.1, 516.0 | 18.53 % | above 5 % |
+| P1 | frame embedding | fp16-cast | 847.4, 810.6, 820.7 | 4.48 % | pass |
+| P1 | frame embedding | bf16-cast | 818.7, 817.1, 820.5 | 0.42 % | pass |
+| P1 | frame embedding | fp16-autocast | 733.7, 713.0, 734.3 | 2.91 % | pass |
+| P1 | frame embedding | bf16-autocast | 718.4, 747.3, 775.0 | 7.58 % | above 5 % |
+| P2 | patch embeddings | fp32 | 3.2, 4.0, 3.5 | 23.21 % | above 5 % |
+| P2 | patch embeddings | fp16-cast | 9.9, 11.1, 10.0 | 12.23 % | above 5 % |
+| P2 | patch embeddings | bf16-cast | 10.1, 10.5, 10.1 | 4.81 % | pass |
+| P2 | patch embeddings | fp16-autocast | 8.4, 8.8, 8.6 | 5.05 % | above 5 % |
+| P2 | patch embeddings | bf16-autocast | 8.7, 8.5, 8.9 | 3.53 % | pass |
 
 ## 5. Compile rows
 
-10 of 10 compile rows are more than 10 % faster than the median of their eager runs. On 2026-11-06 the user decided that the compile rows join the baseline (D7).
+9 of 10 compile rows are more than 10 % faster than the median of their eager runs. On 2026-11-06 the user decided that the compile rows join the baseline (D7).
 
 | Priority | Dtype mode | Status | Compiled (img/s) | Eager median (img/s) | Gain | Note |
 | --- | --- | --- | --- | --- | --- | --- |
-| P1 | fp32 | done | 471.1 | 334.1 (3 runs) | +41.0 % | first call 4.9 s |
-| P1 | fp16-cast | done | 1333.1 | 671.4 (3 runs) | +98.6 % | first call 4.4 s |
-| P1 | bf16-cast | done | 1377.2 | 658.4 (3 runs) | +109.2 % | first call 4.3 s |
-| P1 | fp16-autocast | done | 1108.9 | 536.4 (3 runs) | +106.8 % | first call 5.1 s |
-| P1 | bf16-autocast | done | 1342.4 | 531.7 (3 runs) | +152.5 % | first call 4.9 s |
-| P2 | fp32 | done | 2.9 | 2.6 (3 runs) | +11.3 % | first call 11.7 s |
-| P2 | fp16-cast | done | 10.5 | 7.6 (3 runs) | +37.4 % | first call 9.6 s |
-| P2 | bf16-cast | done | 9.0 | 7.6 (3 runs) | +19.0 % | first call 10.0 s |
-| P2 | fp16-autocast | done | 10.4 | 6.2 (3 runs) | +67.9 % | first call 12.6 s |
-| P2 | bf16-autocast | done | 10.1 | 6.3 (3 runs) | +60.0 % | first call 12.7 s |
+| P1 | fp32 | done | 642.3 | 516.0 (3 runs) | +24.5 % | first call 1.2 s |
+| P1 | fp16-cast | done | 1860.0 | 820.7 (3 runs) | +126.7 % | first call 1.0 s |
+| P1 | bf16-cast | done | 1848.4 | 818.7 (3 runs) | +125.8 % | first call 1.0 s |
+| P1 | fp16-autocast | done | 1502.1 | 733.7 (3 runs) | +104.7 % | first call 1.1 s |
+| P1 | bf16-autocast | done | 1497.1 | 747.3 (3 runs) | +100.3 % | first call 1.1 s |
+| P2 | fp32 | done | 3.8 | 3.5 (3 runs) | +9.5 % | first call 3.2 s |
+| P2 | fp16-cast | done | 12.2 | 10.0 (3 runs) | +22.4 % | first call 2.4 s |
+| P2 | bf16-cast | done | 12.0 | 10.1 (3 runs) | +18.8 % | first call 2.4 s |
+| P2 | fp16-autocast | done | 11.1 | 8.6 (3 runs) | +30.0 % | first call 2.4 s |
+| P2 | bf16-autocast | done | 11.1 | 8.7 (3 runs) | +27.2 % | first call 2.4 s |
 
 ## Skipped, deferred and error lines
 
 | Model size | Dtype mode | Input resolution | Batch size | Compile | Repeat | Status | Need (GB) | Available (GB) | Reason |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| ViT-7B/16 | fp16-cast | 224 | 1 | no | 0 | deferred | 20.15 | 20.60 | ViT-7B/16 runs in its own session (D8) |
-| ViT-7B/16 | fp16-cast | 224 | 8 | no | 0 | deferred | 20.34 | 20.60 | ViT-7B/16 runs in its own session (D8) |
-| ViT-7B/16 | fp16-cast | 224 | 32 | no | 0 | deferred | 21.02 | 20.60 | ViT-7B/16 runs in its own session (D8) |
-| ViT-7B/16 | fp16-cast | 448 | 1 | no | 0 | deferred | 20.29 | 20.60 | ViT-7B/16 runs in its own session (D8) |
-| ViT-7B/16 | fp16-cast | 448 | 8 | no | 0 | deferred | 21.48 | 20.60 | ViT-7B/16 runs in its own session (D8) |
-| ViT-7B/16 | fp16-cast | 448 | 32 | no | 0 | deferred | 25.56 | 20.60 | ViT-7B/16 runs in its own session (D8) |
-| ViT-7B/16 | fp16-cast | 512 | 1 | no | 0 | deferred | 20.37 | 20.60 | ViT-7B/16 runs in its own session (D8) |
-| ViT-7B/16 | fp16-cast | 512 | 8 | no | 0 | deferred | 22.15 | 20.60 | ViT-7B/16 runs in its own session (D8) |
-| ViT-7B/16 | fp16-cast | 512 | 32 | no | 0 | deferred | 28.23 | 20.60 | ViT-7B/16 runs in its own session (D8) |
-| ViT-7B/16 | bf16-cast | 224 | 1 | no | 0 | deferred | 20.15 | 20.60 | ViT-7B/16 runs in its own session (D8) |
-| ViT-7B/16 | bf16-cast | 224 | 8 | no | 0 | deferred | 20.34 | 20.60 | ViT-7B/16 runs in its own session (D8) |
-| ViT-7B/16 | bf16-cast | 224 | 32 | no | 0 | deferred | 21.02 | 20.60 | ViT-7B/16 runs in its own session (D8) |
-| ViT-7B/16 | bf16-cast | 448 | 1 | no | 0 | deferred | 20.29 | 20.60 | ViT-7B/16 runs in its own session (D8) |
-| ViT-7B/16 | bf16-cast | 448 | 8 | no | 0 | deferred | 21.48 | 20.60 | ViT-7B/16 runs in its own session (D8) |
-| ViT-7B/16 | bf16-cast | 448 | 32 | no | 0 | deferred | 25.56 | 20.60 | ViT-7B/16 runs in its own session (D8) |
-| ViT-7B/16 | bf16-cast | 512 | 1 | no | 0 | deferred | 20.37 | 20.60 | ViT-7B/16 runs in its own session (D8) |
-| ViT-7B/16 | bf16-cast | 512 | 8 | no | 0 | deferred | 22.15 | 20.60 | ViT-7B/16 runs in its own session (D8) |
-| ViT-7B/16 | bf16-cast | 512 | 32 | no | 0 | deferred | 28.23 | 20.60 | ViT-7B/16 runs in its own session (D8) |
+| ViT-7B/16 | fp16-cast | 224 | 1 | no | 0 | deferred | 20.15 | 33.77 | ViT-7B/16 runs in its own session (D8) |
+| ViT-7B/16 | fp16-cast | 224 | 8 | no | 0 | deferred | 20.34 | 33.77 | ViT-7B/16 runs in its own session (D8) |
+| ViT-7B/16 | fp16-cast | 224 | 32 | no | 0 | deferred | 21.02 | 33.77 | ViT-7B/16 runs in its own session (D8) |
+| ViT-7B/16 | fp16-cast | 448 | 1 | no | 0 | deferred | 20.29 | 33.77 | ViT-7B/16 runs in its own session (D8) |
+| ViT-7B/16 | fp16-cast | 448 | 8 | no | 0 | deferred | 21.48 | 33.77 | ViT-7B/16 runs in its own session (D8) |
+| ViT-7B/16 | fp16-cast | 448 | 32 | no | 0 | deferred | 25.56 | 33.77 | ViT-7B/16 runs in its own session (D8) |
+| ViT-7B/16 | fp16-cast | 512 | 1 | no | 0 | deferred | 20.37 | 33.77 | ViT-7B/16 runs in its own session (D8) |
+| ViT-7B/16 | fp16-cast | 512 | 8 | no | 0 | deferred | 22.15 | 33.77 | ViT-7B/16 runs in its own session (D8) |
+| ViT-7B/16 | fp16-cast | 512 | 32 | no | 0 | deferred | 28.23 | 33.77 | ViT-7B/16 runs in its own session (D8) |
+| ViT-7B/16 | bf16-cast | 224 | 1 | no | 0 | deferred | 20.15 | 33.77 | ViT-7B/16 runs in its own session (D8) |
+| ViT-7B/16 | bf16-cast | 224 | 8 | no | 0 | deferred | 20.34 | 33.77 | ViT-7B/16 runs in its own session (D8) |
+| ViT-7B/16 | bf16-cast | 224 | 32 | no | 0 | deferred | 21.02 | 33.77 | ViT-7B/16 runs in its own session (D8) |
+| ViT-7B/16 | bf16-cast | 448 | 1 | no | 0 | deferred | 20.29 | 33.77 | ViT-7B/16 runs in its own session (D8) |
+| ViT-7B/16 | bf16-cast | 448 | 8 | no | 0 | deferred | 21.48 | 33.77 | ViT-7B/16 runs in its own session (D8) |
+| ViT-7B/16 | bf16-cast | 448 | 32 | no | 0 | deferred | 25.56 | 33.77 | ViT-7B/16 runs in its own session (D8) |
+| ViT-7B/16 | bf16-cast | 512 | 1 | no | 0 | deferred | 20.37 | 33.77 | ViT-7B/16 runs in its own session (D8) |
+| ViT-7B/16 | bf16-cast | 512 | 8 | no | 0 | deferred | 22.15 | 33.77 | ViT-7B/16 runs in its own session (D8) |
+| ViT-7B/16 | bf16-cast | 512 | 32 | no | 0 | deferred | 28.23 | 33.77 | ViT-7B/16 runs in its own session (D8) |
 
 ## Machine state and versions
 
 | Item | Values |
 | --- | --- |
 | power_source | AC Power |
+| adapter_watts | 94 |
+| battery_percent | 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89 |
 | low_power_mode | off |
 | thermal | No thermal warning level has been recorded; No performance warning level has been recorded; No CPU power status has been recorded |
 | chip | Apple M5 Max |
