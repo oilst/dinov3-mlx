@@ -685,6 +685,13 @@ def _latest(lines: list[dict], phase: str) -> list[dict]:
     return list(found.values())
 
 
+def _form_mark(line: dict) -> str:
+    """Mark a coreml-ne row above batch size 1: the batch API or the batch-size-8 package (F4)."""
+    if line["backend"] != "coreml-ne" or line["batch_size"] == 1:
+        return ""
+    return " (batch API)" if line.get("ne_batch_form") == "batch-api" else " (b8 package)"
+
+
 def _size_name(line: dict) -> str:
     return line["model_size"] + (" (plain graph)" if line.get("plain") else "")
 
@@ -780,7 +787,7 @@ def table_text(lines: list[dict]) -> str:
         )
         out.append(
             f"| {line['model_size']} | {line['side']} | {line['batch_size']} | {line['backend']}"
-            f"{' (b8 package)' if line.get('ne_batch_form') == 'package' else ''} | "
+            f"{_form_mark(line)} | "
             f"{line['status']} | {line.get('valid')} | {_parity_text(line.get('parity'))} | "
             f"{_fmt(ips)} | {_fmt(row['ratio'], 3)} | "
             f"{partner['dtype_mode'] if partner else '–'} | "
