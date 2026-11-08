@@ -102,7 +102,13 @@ def coreml_spec(
     rewrite: bool = True,
     **fields: object,
 ) -> Spec:
-    """Return one worker spec. backend: a Core ML backend, "mlx", "convert" or "plan"."""
+    """Return one worker spec. backend: a Core ML backend, "mlx", "convert" or "plan".
+
+    A coreml-ne worker at batch size 8 runs the batch-size-1 package with the batch API (F4 of
+    explore.html, plan amendment of 2026-11-08), unless the spec sets ne_batch_form "package".
+    """
+    if backend == "coreml-ne" and batch_size > 1 and phase != "convert":
+        fields.setdefault("ne_batch_form", "batch-api")
     return {
         "phase": phase,
         "backend": backend,
@@ -167,18 +173,15 @@ def matrix_plan(model_sizes: list[str] | None = None) -> list[Spec]:
     for model_size in model_sizes or MAIN_MODEL_SIZES:
         for side in MATRIX_SIDES:
             for batch_size in MATRIX_BATCH_SIZES:
-                backends = _rotate(["coreml-ne", "coreml-gpu", "mlx"], group)
-                for position, backend in enumerate(backends):
+                backends = ["coreml-ne", "coreml-gpu", "mlx"]
+                if batch_size > 1:  # the batch-size-8 package on the Neural Engine: is F4 gone?
+                    backends.append("coreml-ne-package")
+                for position, backend in enumerate(_rotate(backends, group)):
+                    fields: dict = {"group": group, "position": position}
+                    if backend == "coreml-ne-package":
+                        backend, fields["ne_batch_form"] = "coreml-ne", "package"
                     specs.append(
-                        coreml_spec(
-                            "matrix",
-                            backend,
-                            model_size,
-                            side,
-                            batch_size,
-                            group=group,
-                            position=position,
-                        )
+                        coreml_spec("matrix", backend, model_size, side, batch_size, **fields)
                     )
                 group += 1
     return specs
@@ -213,6 +216,24 @@ def pairs_plan(
                             output=output,
                         )
                     )
+    if "P1" in priorities and 8 in batch_sizes:
+        model_size, side, _, output = PRIORITY["P1"]
+        specs.append(
+            coreml_spec(
+                "pairs",
+                "coreml-ne",
+                model_size,
+                side,
+                8,
+                run_id=run_id,
+                group="P1-b8-f4",
+                round=0,
+                position=0,
+                priority="P1",
+                output=output,
+                ne_batch_form="package",
+            )
+        )
     return specs
 
 
@@ -325,6 +346,7 @@ SPEC_KEYS = [
     "output",
     "case",
     "ne_batch_size",
+    "ne_batch_form",
 ]
 
 
@@ -424,9 +446,9 @@ def _identity(item: dict) -> tuple:
 
 
 def skip_done(specs: list[Spec], lines: list[dict]) -> list[Spec]:
-    """Leave out each spec that has a line with the status "done" or "deferred"."""
-    done = {_identity(line) for line in lines if line["status"] in ("done", "deferred")}
-    return [spec for spec in specs if _identity(spec) not in done]
+    """Leave out each spec whose latest line has the status "done" or "deferred"."""
+    latest = {_identity(line): line["status"] for line in lines}
+    return [spec for spec in specs if latest.get(_identity(spec)) not in ("done", "deferred")]
 
 
 # The two-stream run (Section 3.6).
@@ -528,11 +550,15 @@ def stream_worker(spec: Spec) -> dict:
         from dinov3_apple.coreml import load_package, package_path
 
         batch_size = spec["ne_batch_size"]
-        path = package_path(spec["model_size"], spec["side"], batch_size)
+        path = package_path(spec["model_size"], spec["side"], 1)
         model, _, _ = load_package(path, "CPU_AND_NE")
-        feed = {"pixels": make_batch(read_inputs(), spec["side"], batch_size)}
+        batch = make_batch(read_inputs(), spec["side"], batch_size)
+        if batch_size == 1:
+            feed: object = {"pixels": batch}
+        else:  # the batch API on the batch-size-1 package (F4)
+            feed = [{"pixels": batch[i : i + 1]} for i in range(batch_size)]
         result = _stream_loop(lambda: model.predict(feed), spec)
-        result |= {"backend": "coreml-ne", "package": path.name}
+        result |= {"backend": "coreml-ne", "package": path.name, "ne_batch_form": "batch-api"}
     else:
         import mlx.core as mx
 
@@ -604,6 +630,7 @@ def worker_main(spec_json: str) -> None:
                 backend,
                 rewrite=spec["rewrite"],
                 parity_only=spec["phase"] == "parity",
+                batch_api=spec.get("ne_batch_form") == "batch-api",
             )
     except MemoryError as error:
         result = {"status": "skipped", "reason": f"load check in the worker: {error}"}
@@ -648,9 +675,13 @@ def _latest(lines: list[dict], phase: str) -> list[dict]:
     found: dict[tuple, dict] = {}
     for line in lines:
         if line.get("phase") == phase:
-            found[_identity(line) + (line.get("run_id"), line.get("round"), line.get("case"))] = (
-                line
+            extra = (
+                line.get("run_id"),
+                line.get("round"),
+                line.get("case"),
+                line.get("ne_batch_form"),
             )
+            found[_identity(line) + extra] = line
     return list(found.values())
 
 
@@ -748,7 +779,8 @@ def table_text(lines: list[dict]) -> str:
             else (line.get("reason") or line.get("validity_note") or "")
         )
         out.append(
-            f"| {line['model_size']} | {line['side']} | {line['batch_size']} | {line['backend']} | "
+            f"| {line['model_size']} | {line['side']} | {line['batch_size']} | {line['backend']}"
+            f"{' (b8 package)' if line.get('ne_batch_form') == 'package' else ''} | "
             f"{line['status']} | {line.get('valid')} | {_parity_text(line.get('parity'))} | "
             f"{_fmt(ips)} | {_fmt(row['ratio'], 3)} | "
             f"{partner['dtype_mode'] if partner else '–'} | "
@@ -771,7 +803,8 @@ def table_text(lines: list[dict]) -> str:
     groups: dict[tuple, list[dict]] = {}
     for row in pair_rows:
         if row["ratio"] is not None:
-            groups.setdefault((row["line"]["group"], row["line"]["backend"]), []).append(row)
+            key = (row["line"]["group"], row["line"]["backend"])
+            groups.setdefault(key, []).append(row)
     for (group, backend), rows in sorted(groups.items()):
         runs: dict[str, list[float]] = {}
         for row in rows:
@@ -791,6 +824,17 @@ def table_text(lines: list[dict]) -> str:
             "Table 5. The paired ratio Core ML / mlx at P1 (frame) and P2 (patch), median over the "
             "rounds of each run (run 1: build, run 2: verify). Report only: Step 6c has no speed target."
         ),
+    ]
+    for line in lines:
+        if line.get("group") == "P1-b8-f4":
+            out.append("")
+            out.append(
+                f"F4 evidence (run {line.get('run_id')}): the ViT-S/16 batch-size-8 package on "
+                f"CPU_AND_NE gives valid {line.get('valid')}, parity "
+                f"{_parity_text(line.get('parity'))}. The coreml-ne rows at batch size 8 run the "
+                "batch-size-1 package with the batch API."
+            )
+    out += [
         "",
         "## 6 Two-stream run",
         "",
@@ -839,6 +883,8 @@ def plan_of(args: argparse.Namespace) -> list[Spec]:
         specs = convert_plan(sizes)
     elif args.subcommand == "parity":
         specs = parity_plan(sizes)
+        if args.plain:
+            specs = [spec for spec in specs if spec["rewrite"] is False]
     elif args.subcommand == "matrix":
         specs = matrix_plan(sizes)
     elif args.subcommand == "pairs":
@@ -867,6 +913,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         p.add_argument("--rounds", type=int, default=5 if name == "pairs" else 3)
         p.add_argument("--run", default="1")
         p.add_argument("--skip-done", action="store_true")
+        p.add_argument("--plain", action="store_true", help="parity: only the plain graph")
         p.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
     if args.worker is None and args.subcommand is None:

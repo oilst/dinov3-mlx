@@ -8,13 +8,15 @@ fp16 and is exact in real numbers:
 - score scaling: ne_attention divides the scores by SCORE_SCALE before the max subtraction and
   multiplies them back after it;
 - residual-stream scale: the residual stream is divided by a power of two r. The embeddings get
-  1 / r, and the weights and biases of o_proj and down_proj get 1 / r. LayerScale stays a separate
-  multiplication (no fold: the fold made most LayerScale products subnormal in fp16).
+  1 / r, and the weights and biases of o_proj and down_proj get 1 / r. Each layer norm ε becomes
+  ε / r². LayerScale stays a separate multiplication (no fold: the fold made most LayerScale
+  products subnormal in fp16).
 
 This module imports coremltools only inside the functions that need it, so the torch-only parts
 (the rewrite, the package names) work without it.
 """
 
+import shutil
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -48,6 +50,9 @@ SCORE_SCALE = 256.0  # a power of two: the division adds no rounding error
 SCORE_FLOOR = -60000.0  # the clip of the shifted scores, before the multiplication by SCORE_SCALE
 NE_ATTENTION = "coreml-ne"  # the name of ne_attention in transformers.AttentionInterface
 MAX_STREAM_VALUE = 32768.0  # the largest residual-stream value after the scale: half of fp16
+# The version of the Neural Engine rewrite in the package name. "ne": score scale and residual-stream
+# scale (first J1 and J2 of the build); "ne2": plus ε / r² (plan amendment of 2026-11-08).
+REWRITE_VERSION = "ne2"
 COREMLTOOLS_VERSION = "9.0"  # the version of the coreml dependency group and of the _cast patch
 COREML_DIR = Path.home() / ".cache" / "dinov3-apple" / "coreml"
 TOKEN_RANGE_TABLE = REPO_ROOT / "results" / "token-range-mlx.md"
@@ -187,8 +192,9 @@ def rewrite_for_neural_engine(model: DINOv3ViTModel, residual_scale: int) -> Neu
         residual_scale: r, a power of two (residual_scale()).
 
     Returns:
-        The module pixels -> tokens. In fp32 it gives the tokens of the Hugging Face backbone, with
-        the layer norm ε acting as ε r².
+        The module pixels -> tokens. In fp32 it gives the tokens of the Hugging Face backbone: each
+        layer norm sees the tokens divided by r, and its ε becomes ε / r² (plan amendment of
+        2026-11-08), so it gives its old output.
 
     Raises:
         ValueError: If residual_scale is not a power of two.
@@ -199,6 +205,8 @@ def rewrite_for_neural_engine(model: DINOv3ViTModel, residual_scale: int) -> Neu
         config = getattr(module, "config", None)
         if config is not None:
             config._attn_implementation = NE_ATTENTION
+        if isinstance(module, torch.nn.LayerNorm):
+            module.eps = module.eps / residual_scale**2
     with torch.no_grad():
         for layer in model.model.layer:
             for proj in (layer.attention.o_proj, layer.mlp.down_proj):
@@ -263,7 +271,7 @@ def package_path(model_size: str, side: int, batch_size: int, rewrite: bool = Tr
     """
     stem = f"{model_slug(model_size)}-{side}-b{batch_size}"
     if rewrite:
-        stem += f"-ne-s{SCORE_SCALE:g}-r{residual_scale(model_size)}"
+        stem += f"-{REWRITE_VERSION}-s{SCORE_SCALE:g}-r{residual_scale(model_size)}"
     else:
         stem += "-plain"
     return COREML_DIR / f"{stem}-ct{COREMLTOOLS_VERSION}.mlpackage"
@@ -332,6 +340,9 @@ def convert_module(module: torch.nn.Module, shape: tuple[int, ...], path: Path) 
     mlmodel = convert_traced(traced, shape)
     convert_s = time.perf_counter() - start
     path.parent.mkdir(parents=True, exist_ok=True)
+    for old in (path, compiled_path(path)):  # compile_model does not overwrite a .mlmodelc
+        if old.exists():
+            shutil.rmtree(old)
     start = time.perf_counter()
     mlmodel.save(str(path))
     save_s = time.perf_counter() - start
@@ -368,7 +379,8 @@ def convert_backbone(model_size: str, side: int, batch_size: int, rewrite: bool 
 
     Returns:
         The fields of convert_module plus the package name, the rewrite and the lifetime peak of
-        the process footprint.
+        the process footprint. Only the compiled model stays on disk: the .mlpackage holds the
+        same weights again (ViT-H+/16: 1.68 GB), and the workers load the .mlmodelc.
 
     Raises:
         RunRuleError: For ViT-7B/16, before any weight read.
@@ -384,6 +396,7 @@ def convert_backbone(model_size: str, side: int, batch_size: int, rewrite: bool 
     load_s = time.perf_counter() - start
     module = rewrite_for_neural_engine(model, scale) if rewrite else NeuralEngineBackbone(model, 1)
     fields = convert_module(module, (batch_size, 3, side, side), path)
+    shutil.rmtree(path)  # the workers load the .mlmodelc; the package would hold the weights twice
     return {
         "package": path.name,
         "rewrite": rewrite_fields(model_size) if rewrite else None,
@@ -449,6 +462,7 @@ def run_coreml(
     backend: str,
     rewrite: bool = True,
     parity_only: bool = False,
+    batch_api: bool = False,
     warm_up: TimeBudget = WARM_UP,
     timed: TimeBudget = TIMED,
 ) -> dict:
@@ -459,6 +473,10 @@ def run_coreml(
     output, warms up and times the batches (Section 3.4). model.predict returns NumPy arrays, so
     the output is on the host: the frame time and the patch time are the same call.
 
+    With batch_api the worker runs the batch-size-1 package with one call on a list of batch_size
+    inputs (the batch API of Core ML). At batch size 8 the Neural Engine computes the patch
+    embedding of the batch-size-8 package wrong (finding F4 of explore.html).
+
     Args:
         model_size: A key of MODEL_IDS.
         side: The square input resolution.
@@ -466,6 +484,7 @@ def run_coreml(
         backend: A key of COMPUTE_UNITS.
         rewrite: True for the Neural Engine rewrite, False for the plain graph.
         parity_only: True for the parity of the 3 test images only.
+        batch_api: True to run the batch-size-1 package with the batch API.
         warm_up: The time budget of the warm-up batches.
         timed: The time budget of the timed batches.
 
@@ -477,7 +496,7 @@ def run_coreml(
     start_time = datetime.now(UTC).isoformat(timespec="seconds")
     base = read_footprint()
     compute_unit = COMPUTE_UNITS[backend]
-    path = package_path(model_size, side, batch_size, rewrite)
+    path = package_path(model_size, side, 1 if batch_api else batch_size, rewrite)
     model, first_load_s, cached_load_s = load_package(path, compute_unit)
     load_peak = read_footprint().lifetime_max_bytes
     reference, _ = read_reference(model_size)
@@ -491,6 +510,7 @@ def run_coreml(
         "first_load_s": first_load_s,
         "cached_load_s": cached_load_s,
         "load_time_s": first_load_s,
+        "ne_batch_form": "batch-api" if batch_api else "package",
     }
     if parity_only:
         start = time.perf_counter()
@@ -518,9 +538,13 @@ def run_coreml(
         }
     else:
         batch = make_batch(inputs, side, batch_size)
-        feed = {"pixels": batch}
+        if batch_api:  # one call with a list of batch-size-1 inputs (F4)
+            feed: Any = [{"pixels": batch[i : i + 1]} for i in range(batch_size)]
+        else:
+            feed = {"pixels": batch}
         start = time.perf_counter()
-        tokens = model.predict(feed)["tokens"]
+        result = model.predict(feed)
+        tokens = result[0]["tokens"] if batch_api else result["tokens"]
         line["first_call_s"] = time.perf_counter() - start
         key = f"{TEST_IMAGES[0]}/{side}x{side}"
         validity = output_validity(tokens[0], reference.get(key))

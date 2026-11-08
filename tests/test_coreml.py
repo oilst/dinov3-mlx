@@ -90,22 +90,19 @@ def test_ne_attention_fp16_stays_finite() -> None:
 @pytest.mark.parametrize("scale", [1, 8])
 def test_rewrite_is_exact_in_fp32(name: str, scale: int) -> None:
     """T3: the rewritten backbone gives the tokens of the Hugging Face backbone. The layer norm
-    sees the residual stream divided by r, so its ε acts as ε r²: the reference gets ε r²."""
+    sees the residual stream divided by r, and its ε becomes ε / r² (plan amendment)."""
     model = small_hf_model(seed=3, name=name)
     reference = copy.deepcopy(model)
-    for module in reference.modules():
-        if isinstance(module, torch.nn.LayerNorm):
-            module.eps = module.eps * scale**2
     pixels = torch.from_numpy(small_pixels((2, 3, 64, 64)))
     with torch.no_grad():
         expected = reference(pixel_values=pixels).last_hidden_state
         output = coreml.rewrite_for_neural_engine(model, scale)(pixels)
     assert output.shape == expected.shape
-    assert _relative(output, expected) <= 1e-5
+    assert _relative(output, expected) <= 1e-6
 
 
 def test_rewrite_keeps_layer_scale() -> None:
-    """T4: no LayerScale fold; o_proj and down_proj divided by r bit for bit."""
+    """T4: no LayerScale fold; o_proj and down_proj divided by r bit for bit; ε / r²."""
     model = small_hf_model(seed=4, name="vits16plus")
     original = copy.deepcopy(model)
     backbone = coreml.rewrite_for_neural_engine(model, 8)
@@ -120,6 +117,9 @@ def test_rewrite_keeps_layer_scale() -> None:
             assert torch.equal(proj.weight, old.weight / 8)
             assert torch.equal(proj.bias, old.bias / 8)
         assert torch.equal(layer.attention.q_proj.weight, before.attention.q_proj.weight)
+        assert layer.norm1.eps == before.norm1.eps / 64
+        assert layer.norm2.eps == before.norm2.eps / 64
+    assert model.norm.eps == original.norm.eps / 64
     assert model.config._attn_implementation == coreml.NE_ATTENTION
 
 
@@ -150,7 +150,7 @@ def test_package_path_and_line_fields() -> None:
     import bench_coreml
 
     path = coreml.package_path("ViT-L/16", 512, 8)
-    assert path.name == f"vitl16-512-b8-ne-s256-r8-ct{coreml.COREMLTOOLS_VERSION}.mlpackage"
+    assert path.name == f"vitl16-512-b8-ne2-s256-r8-ct{coreml.COREMLTOOLS_VERSION}.mlpackage"
     assert path.parent == coreml.COREML_DIR
     plain = coreml.package_path("ViT-S/16", 224, 1, rewrite=False)
     assert plain.name == f"vits16-224-b1-plain-ct{coreml.COREMLTOOLS_VERSION}.mlpackage"
@@ -172,6 +172,9 @@ def test_package_path_and_line_fields() -> None:
     assert line["cached_load_s"] == 0.1
     assert line["phase"] == "matrix"
     assert line["backend"] == "coreml-ne"
+    assert line["ne_batch_form"] == "batch-api"  # F4: batch size 8 on the batch-size-1 package
+    pairs = bench_coreml.pairs_plan(["P1"], [8], 1, "1")
+    assert [p.get("ne_batch_form") for p in pairs if p["group"] == "P1-b8-f4"] == ["package"]
 
     rng = np.random.default_rng(0)
     reference = rng.standard_normal((5 + 196, 384)).astype(np.float32)
