@@ -1,0 +1,562 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Prior Ports Measured</title>
+<style>
+/* Explainer page. White page, black text, no dark mode. */
+:root { --bg: #ffffff; --fg: #111414; --muted: #4a5655; --rule: #d6dedd; --panel: #f5f8f7; --accent: #057379; --cls: #057379; --patch: #9fd3d1; --reg: #e0a336; --bad: #b3261e; color-scheme: light; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif; }
+main { max-width: 62rem; margin: 0 auto; padding: 40px 20px 64px; display: grid; gap: 1.75rem; }
+h1 { font-size: 1.9rem; line-height: 1.15; margin: 0; }
+h2 { font-size: 1.3rem; margin: 0; }
+h3 { font-size: 1.05rem; margin: 0; }
+section { display: grid; gap: 0.8rem; }
+p, ul, ol { margin: 0; max-width: 46rem; }
+li + li { margin-top: 0.25rem; }
+code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.86em; }
+pre { margin: 0; background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 0.8rem 1rem; overflow-x: auto; }
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 0.92rem; }
+th, td { text-align: left; vertical-align: top; padding: 0.45rem 0.7rem 0.45rem 0; border-bottom: 1px solid var(--rule); }
+th { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); border-bottom: 1.5px solid var(--fg); }
+td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+td.bad { color: var(--bad); }
+.caption, figcaption { font-size: 0.88rem; color: var(--muted); }
+figure { margin: 0; display: grid; gap: 0.4rem; }
+.fig { border: 1px solid var(--rule); border-radius: 6px; padding: 0.5rem; overflow-x: auto; }
+.fig svg { display: block; width: 100%; height: auto; min-width: 640px; }
+.note { border-left: 3px solid var(--accent); padding: 0.3rem 0 0.3rem 0.9rem; }
+nav ol { columns: 2; }
+a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+<header>
+  <h1>Prior Ports Measured</h1>
+  <p>Explainer for roadmap step 6b. Date: 2026-11-08. It follows <a href="01-prior-ports.html">01-prior-ports.html</a> (Step 1 read the ports) and <a href="04-2-rope.html">04-2-rope.html</a> (the RoPE of our port).</p>
+</header>
+
+<nav>
+  <h2>Contents</h2>
+  <ol>
+    <li><a href="#why">Why measure the ports</a></li>
+    <li><a href="#changes">What a port changes</a></li>
+    <li><a href="#coreml">The Core ML exports and the spec-array input</a></li>
+    <li><a href="#pairs">The paired cell and the prior-art ratio</a></li>
+    <li><a href="#variants">The port-change variants</a></li>
+    <li><a href="#bf16rope">Why the bf16 RoPE costs parity</a></li>
+    <li><a href="#results">Results</a></li>
+    <li><a href="#code">The code of Step 6b</a></li>
+    <li><a href="#surprises">Surprises</a></li>
+    <li><a href="#sources">Sources</a></li>
+  </ol>
+</nav>
+
+<section id="why">
+  <h2>1 Why measure the ports</h2>
+  <p>Step 1 read the code of four MLX ports of DINOv3, but did not run them. Step 6 made our compiled forward pass about as fast as <code>torch.compile</code> on torch-mps. Step 6b asks two questions: how fast are the other public ports and Core ML exports with our harness, and what does each change of a port cost in parity?</p>
+  <p>Two kinds of candidates exist. <b>Core ML exports</b> (C7 to C9) are model files: Apple's coremltools runs them, and no code of the candidate runs. <b>Python MLX ports</b> (C1, C2) are code. The permission system of the agent sessions refused to run that code, so their rows wait for the user (question Q1, ADR 0013). To answer the parity question without their code, we put each change of a port into our own backbone, one at a time: the <b>port-change variants</b> V1 to V5.</p>
+</section>
+
+<section id="changes">
+  <h2>2 What a port changes</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Part</th><th>Hugging Face (reference output)</th><th>C1, C2 (Meta-based MLX ports)</th><th>C7 to C9 (Core ML exports)</th><th>Ours</th><th>Variant</th></tr></thead>
+    <tbody>
+      <tr><td>RoPE periods</td><td>fp32 frequencies</td><td>bf16, from the base or the Meta checkpoint</td><td>C9: the bf16 periods of the Meta checkpoint</td><td>fp32 (ADR 0006)</td><td>V3</td></tr>
+      <tr><td>RoPE tables</td><td>fp32</td><td>bf16 coordinates, angles, sin and cos</td><td>constants in the precision of the export</td><td>fp32</td><td>V1, V2</td></tr>
+      <tr><td>RoPE rotation</td><td>in the dtype of q and k</td><td>q and k go to bf16 (all tokens), rotate, go back</td><td>in the precision of the export</td><td>fp32, concat-free</td><td>V1</td></tr>
+      <tr><td>Attention</td><td>SDPA</td><td>matmul, softmax, matmul</td><td>matmul, softmax, matmul</td><td><code>mx.fast.scaled_dot_product_attention</code></td><td>V4</td></tr>
+      <tr><td>Input</td><td>fp32 pixels</td><td>fp32 pixels</td><td>C7, C8: an 8-bit RGB image</td><td>fp32 pixels</td><td>V5</td></tr>
+      <tr><td>Batch size</td><td>any</td><td>any</td><td>1 (fixed shape)</td><td>any</td><td>–</td></tr>
+      <tr><td>Graph</td><td>eager</td><td>eager; RoPE tables again in each block</td><td>compiled ML program</td><td><code>mx.compile</code></td><td>–</td></tr>
+    </tbody>
+  </table></div>
+  <p class="caption">Table 1. The changes of each design against the Hugging Face backbone, from a reading of the code and of the operation lists of the Core ML programs (Table 2 of <code>specs/06b-prior-art/explore.html</code>). The last column names the variant that puts the change into our backbone.</p>
+</section>
+
+<section id="coreml">
+  <h2>3 The Core ML exports and the spec-array input</h2>
+  <p>C7 (SharpAI) and C8 (rinpatch) take an 8-bit RGB image. Core ML scales and normalizes it inside the program. Our stored pixels are fp32, normalized, and not on the 8-bit grid: a round to 0..255 moves each pixel by up to 0.5 / 255 / std. That alone drops the patch 1st percentile to about 0.999, below the fp32 threshold 0.9999. To measure the backbone and not the interface, the worker changes the input feature of the <em>loaded</em> spec to a FLOAT32 multiArray. The 0..255 values go in without a round. The package on disk does not change.</p>
+  <figure>
+    <div class="fig"><svg viewBox="0 0 960 250" role="img" aria-label="Image input and spec-array input of a Core ML export">
+      <rect width="960" height="250" fill="#ffffff"/>
+      <g font-family="-apple-system, Helvetica, Arial, sans-serif" font-size="13" fill="#111414">
+        <rect x="20" y="40" width="170" height="54" rx="6" fill="#f5f8f7" stroke="#d6dedd"/>
+        <text x="105" y="62" text-anchor="middle" font-weight="600">stored pixels</text>
+        <text x="105" y="80" text-anchor="middle">fp32, normalized</text>
+        <rect x="250" y="20" width="200" height="44" rx="6" fill="#ffffff" stroke="#b3261e"/>
+        <text x="350" y="40" text-anchor="middle">× std + mean, × 255,</text>
+        <text x="350" y="56" text-anchor="middle" fill="#b3261e">round to uint8 (image)</text>
+        <rect x="250" y="76" width="200" height="44" rx="6" fill="#ffffff" stroke="#057379"/>
+        <text x="350" y="96" text-anchor="middle">× std + mean, × 255,</text>
+        <text x="350" y="112" text-anchor="middle" fill="#057379">no round (spec-array)</text>
+        <rect x="510" y="40" width="200" height="54" rx="6" fill="#f5f8f7" stroke="#d6dedd"/>
+        <text x="610" y="62" text-anchor="middle" font-weight="600">Core ML program</text>
+        <text x="610" y="80" text-anchor="middle">÷ 255, − mean, ÷ std, backbone</text>
+        <rect x="770" y="40" width="170" height="54" rx="6" fill="#f5f8f7" stroke="#d6dedd"/>
+        <text x="855" y="62" text-anchor="middle" font-weight="600">patch embeddings</text>
+        <text x="855" y="80" text-anchor="middle">parity in the driver</text>
+        <line x1="190" y1="67" x2="248" y2="42" stroke="#111414"/>
+        <line x1="190" y1="67" x2="248" y2="98" stroke="#111414"/>
+        <line x1="450" y1="42" x2="508" y2="62" stroke="#111414"/>
+        <line x1="450" y1="98" x2="508" y2="72" stroke="#111414"/>
+        <line x1="710" y1="67" x2="768" y2="67" stroke="#111414"/>
+        <text x="20" y="160" font-weight="600">The spec edit (in memory only):</text>
+        <text x="20" y="182">spec.description.input[0].type: imageType {width 448, height 448, RGB}</text>
+        <text x="20" y="202">→ multiArrayType {shape [1, 3, 448, 448], dataType FLOAT32}; MLModel(spec, weights_dir=package/Data/com.apple.CoreML/weights)</text>
+        <text x="20" y="230" fill="#4a5655">C9 (VimalMollyn) has a FLOAT32 multiArray input already: the normalized pixels go in as they are.</text>
+      </g>
+    </svg></div>
+    <figcaption>Figure 1. Two ways into an image-input export. The timed and parity rows use the spec-array input (D3). One report-only row for each image-input export uses the 8-bit image, as a user gets it.</figcaption>
+  </figure>
+  <pre><code>def load_export(path, input_kind, units):          # scripts/prior_art_coreml_worker.py
+    import coremltools as ct                           # only inside the function: venv-coreml
+    unit = getattr(ct.ComputeUnit, units)              # CPU_AND_GPU for the paired rows (D4)
+    if input_kind != "spec-array":
+        return ct.models.MLModel(str(path), compute_units=unit)
+    spec = ct.utils.load_spec(str(path))
+    feature = spec.description.input[0]                # imageType in the package
+    height, width = feature.type.imageType.height, feature.type.imageType.width
+    feature.type.multiArrayType.shape[:] = [1, 3, height, width]   # the oneof moves to multiArray
+    feature.type.multiArrayType.dataType = ct.proto.FeatureTypes_pb2.ArrayFeatureType.FLOAT32
+    weights = path / "Data" / "com.apple.CoreML" / "weights"       # the weights stay on disk
+    return ct.models.MLModel(spec, weights_dir=str(weights), compute_units=unit)</code></pre>
+  <p>The exports give their outputs in three layouts. <code>export_outputs</code> maps each to a frame embedding (or none) and patch embeddings (N, D). <code>grid_tokens</code> turns the grid (1, D, h, w) of C7 into (h · w, D) in row-major order, the token order of our backbone. <code>export_parity</code> then builds a token sequence as <code>check_validity</code> does: the frame embedding (or the reference CLS row), the 4 reference register rows and the patch embeddings. The cosine does not depend on the length of a vector, so the L2-normalized outputs of C7 and C8 need no change.</p>
+</section>
+
+<section id="pairs">
+  <h2>4 The paired cell and the prior-art ratio</h2>
+  <p>The Explore found that one export run of less than 1 s is noise on this Mac: the same pair gave ratios from 0.65 to 1.12. So each cell runs as the paired runs of Step 6 do (ADR 0012): one driver holds the GPU lock, each worker runs in its own subprocess with the full time budget of <code>bench.py</code> (2 s warm-up, at least 10 s and 30 batches timed), and the cell runs in 5 rounds.</p>
+  <figure>
+    <div class="fig"><svg viewBox="0 0 960 230" role="img" aria-label="Order of the workers in two rounds of J1">
+      <rect width="960" height="230" fill="#ffffff"/>
+      <g font-family="-apple-system, Helvetica, Arial, sans-serif" font-size="12" fill="#111414">
+        <text x="20" y="24" font-weight="600" font-size="13">Round 1 (odd): ours first</text>
+        <g transform="translate(20,36)">
+          <rect x="0" y="0" width="70" height="30" fill="#057379"/><text x="35" y="19" text-anchor="middle" fill="#fff">ours G1</text>
+          <rect x="74" y="0" width="50" height="30" fill="#9fd3d1"/><text x="99" y="19" text-anchor="middle">E1</text>
+          <rect x="128" y="0" width="50" height="30" fill="#9fd3d1"/><text x="153" y="19" text-anchor="middle">E2</text>
+          <rect x="190" y="0" width="70" height="30" fill="#057379"/><text x="225" y="19" text-anchor="middle" fill="#fff">ours G2</text>
+          <rect x="264" y="0" width="50" height="30" fill="#9fd3d1"/><text x="289" y="19" text-anchor="middle">E3</text>
+          <rect x="326" y="0" width="70" height="30" fill="#057379"/><text x="361" y="19" text-anchor="middle" fill="#fff">ours G3</text>
+          <rect x="400" y="0" width="50" height="30" fill="#9fd3d1"/><text x="425" y="19" text-anchor="middle">E4</text>
+          <rect x="454" y="0" width="50" height="30" fill="#9fd3d1"/><text x="479" y="19" text-anchor="middle">E5</text>
+          <text x="520" y="19">… G4 (E6), G5 (E7); batch sizes 1 and 8 in each group</text>
+        </g>
+        <text x="20" y="110" font-weight="600" font-size="13">Round 2 (even): the groups rotate by one, ours last</text>
+        <g transform="translate(20,122)">
+          <rect x="0" y="0" width="50" height="30" fill="#9fd3d1"/><text x="25" y="19" text-anchor="middle">E3</text>
+          <rect x="54" y="0" width="70" height="30" fill="#057379"/><text x="89" y="19" text-anchor="middle" fill="#fff">ours G2</text>
+          <rect x="136" y="0" width="50" height="30" fill="#9fd3d1"/><text x="161" y="19" text-anchor="middle">E4</text>
+          <rect x="190" y="0" width="50" height="30" fill="#9fd3d1"/><text x="215" y="19" text-anchor="middle">E5</text>
+          <rect x="244" y="0" width="70" height="30" fill="#057379"/><text x="279" y="19" text-anchor="middle" fill="#fff">ours G3</text>
+          <text x="330" y="19">… G4, G5, G1</text>
+        </g>
+        <text x="20" y="190">Ratio of one round = ours (img/s, patch output) ÷ export (img/s). Cell = the lower median of 5 ratios, the spread and the verdict.</text>
+        <text x="20" y="210" fill="#4a5655">Two exports with the same configuration (E1 and E2; E4 and E5) share the worker of ours in each round.</text>
+      </g>
+    </svg></div>
+    <figcaption>Figure 2. The order of the workers of job J1: 5 groups by the cell of ours, 24 workers for each round, 120 in all.</figcaption>
+  </figure>
+  <pre><code>def cell_row(ours, other, fields=None):                 # src/dinov3_apple/prior_art.py
+    by_round = {line["round"]: line for line in ours if _done(line)}
+    pairs = [(by_round[line["round"]], line)              # a failed side drops only its round
+             for line in other if _done(line) and line["round"] in by_round]
+    ratios = [a["patch"]["throughput_ips"] / b["patch"]["throughput_ips"] for a, b in pairs]
+    median = _lower_median(ratios)                       # ADR 0004
+    return PriorArtRow(ratios, median, (max(ratios) - min(ratios)) / min(ratios),
+                       single_verdict(median), len(ratios), ...)   # inside the noise: 1 ± 0.03</code></pre>
+  <p>The same function gives the change ratios of the variants (J4): there the first side is the variant and the second side is V0, so a ratio above 1 means the change is faster.</p>
+</section>
+
+<section id="variants">
+  <h2>5 The port-change variants</h2>
+  <p>A port mixes several changes. A variant puts exactly one of them into our backbone, so its cost in parity and speed has one cause. <code>variant_forward(model, variant)</code> builds the compiled forward pass of a variant: it replaces the attention module of each block where the variant needs it, selects the RoPE tables, and compiles <code>model.forward_with_rope</code> with <code>inputs=model.state</code>, as <code>compile_backbone</code> does. <code>forward_with_rope</code> passes the tables to each block without a look, so V1 can use the table layout of the port.</p>
+  <figure>
+    <div class="fig"><svg viewBox="0 0 960 300" role="img" aria-label="Where each variant changes one block">
+      <rect width="960" height="300" fill="#ffffff"/>
+      <g font-family="-apple-system, Helvetica, Arial, sans-serif" font-size="13" fill="#111414">
+        <rect x="20" y="120" width="110" height="50" rx="6" fill="#f5f8f7" stroke="#d6dedd"/><text x="75" y="149" text-anchor="middle">pixels</text>
+        <rect x="160" y="120" width="120" height="50" rx="6" fill="#f5f8f7" stroke="#d6dedd"/><text x="220" y="141" text-anchor="middle">patch embedding,</text><text x="220" y="158" text-anchor="middle">prefix tokens</text>
+        <rect x="310" y="120" width="90" height="50" rx="6" fill="#f5f8f7" stroke="#d6dedd"/><text x="355" y="149" text-anchor="middle">norm1, qkv</text>
+        <rect x="430" y="120" width="110" height="50" rx="6" fill="#ffffff" stroke="#057379" stroke-width="2"/><text x="485" y="141" text-anchor="middle">RoPE rotation</text><text x="485" y="158" text-anchor="middle">of q and k</text>
+        <rect x="570" y="120" width="110" height="50" rx="6" fill="#ffffff" stroke="#057379" stroke-width="2"/><text x="625" y="149" text-anchor="middle">attention</text>
+        <rect x="710" y="120" width="110" height="50" rx="6" fill="#f5f8f7" stroke="#d6dedd"/><text x="765" y="141" text-anchor="middle">o_proj, MLP,</text><text x="765" y="158" text-anchor="middle">LayerScale</text>
+        <rect x="850" y="120" width="90" height="50" rx="6" fill="#f5f8f7" stroke="#d6dedd"/><text x="895" y="149" text-anchor="middle">final norm</text>
+        <line x1="130" y1="145" x2="158" y2="145" stroke="#111414"/><line x1="280" y1="145" x2="308" y2="145" stroke="#111414"/><line x1="400" y1="145" x2="428" y2="145" stroke="#111414"/><line x1="540" y1="145" x2="568" y2="145" stroke="#111414"/><line x1="680" y1="145" x2="708" y2="145" stroke="#111414"/><line x1="820" y1="145" x2="848" y2="145" stroke="#111414"/>
+        <rect x="430" y="30" width="110" height="50" rx="6" fill="#ffffff" stroke="#e0a336" stroke-width="2"/><text x="485" y="51" text-anchor="middle">RoPE tables</text><text x="485" y="68" text-anchor="middle">(one grid)</text>
+        <line x1="485" y1="80" x2="485" y2="118" stroke="#e0a336" stroke-width="2"/>
+        <text x="20" y="215" font-weight="600" fill="#e0a336">tables</text>
+        <text x="80" y="215">V1, V2: bf16 tables of the ports · V3: Meta periods (bf16 periods, fp32 tables)</text>
+        <text x="20" y="240" font-weight="600" fill="#057379">rotation</text>
+        <text x="80" y="240">V1: q and k of all tokens to bf16, rotate the patch tokens in bf16, back</text>
+        <text x="20" y="265" font-weight="600" fill="#057379">attention</text>
+        <text x="80" y="265">V4: softmax(matmul(q, kᵀ) · scale) @ v in the matmul dtype; the score matrix lives in memory</text>
+        <text x="20" y="290" font-weight="600">input</text>
+        <text x="80" y="290">V5: the stored pixels round to the 8-bit grid and back (the input of C7 and C8 as shipped)</text>
+        <text x="20" y="100" fill="#4a5655">One block of 12 (ViT-S/16) or 32 (ViT-H+/16); every block gets the same change.</text>
+      </g>
+    </svg></div>
+    <figcaption>Figure 3. Where each variant changes our backbone. V0 changes nothing: it must give the output of <code>compile_backbone</code> bit for bit (test T8 on the small model, AC6 on ViT-S/16).</figcaption>
+  </figure>
+  <h3>5.1 V1: the RoPE of C1 and C2</h3>
+  <pre><code>def port_rope_tables(grid_h, grid_w, head_dim, base):     # src/dinov3_apple/port_variants.py
+    bf16 = mx.bfloat16                                      # pos_embed_rope_dtype="bf16" of the ports
+    periods = base ** (2 * mx.arange(head_dim // 4, dtype=bf16) / (head_dim // 2))
+    coords_h = mx.arange(0.5, grid_h, dtype=bf16) / grid_h  # every step rounds to bf16
+    coords_w = mx.arange(0.5, grid_w, dtype=bf16) / grid_w
+    mesh = mx.stack(mx.meshgrid(coords_h, coords_w, indexing="ij"), axis=-1).reshape(-1, 2)
+    mesh = 2.0 * mesh - 1.0
+    angles = 2 * math.pi * mesh[:, :, None] / periods[None, None, :]   # up to about 2π
+    angles = mx.tile(angles.reshape(angles.shape[0], -1), (1, 2))
+    return mx.cos(angles), mx.sin(angles)                   # (N, head_dim): no prefix rows
+
+def port_rotate(x, cos, sin):
+    prefix = x.shape[-2] - cos.shape[0]                     # the 5 prefix tokens: no rotation
+    patches = x[..., prefix:, :]
+    half = x.shape[-1] // 2
+    rotated = mx.concatenate([-patches[..., half:], patches[..., :half]], axis=-1)  # rotate_half
+    return mx.concatenate([x[..., :prefix, :], patches * cos + rotated * sin], axis=-2)
+
+class Bf16RotationAttention(Attention):
+    def __call__(self, x, cos, sin):
+        q, k, v = self.qkv(x)
+        # all tokens go to bf16, also the prefix tokens, also in the fp32 dtype mode
+        q, k = (port_rotate(t.astype(mx.bfloat16), cos, sin).astype(t.dtype) for t in (q, k))
+        a = mx.fast.scaled_dot_product_attention(q, k, v, scale=self.scale, mask=None)
+        return self.output(a)</code></pre>
+  <p>A NumPy oracle (test T6) rounds to bf16 after each step, with round to nearest even. The GPU agrees with it within one bf16 step: the GPU and NumPy compute cos and sin with other code, so a value next to a rounding boundary can round the other way.</p>
+  <h3>5.2 V2 and V3: the tables only</h3>
+  <p>V2 takes the bf16 tables of V1, casts them to fp32, adds identity rows for the prefix tokens and gives them to our fp32 rotation (<code>variant_tables</code> with <code>rope_layout</code>). So V1 minus V2 is the cost of the bf16 rotation, and V2 is the cost of the bf16 tables. V3 keeps every step in fp32 but uses the periods of the Meta checkpoints: <code>meta_periods</code> rounds 100^(k / 16) to bf16 (1.0, 1.3359375, 1.78125, 2.375, …), as C9 and the Meta hub code do. Its largest angle difference to the Hugging Face tables is 0.00791 rad at 14 × 14 and 0.00825 rad at 32 × 32 (test T7, the values of Step 4).</p>
+  <h3>5.3 V4: the unfused attention</h3>
+  <pre><code>class UnfusedAttention(Attention):
+    def __call__(self, x, cos, sin):
+        q, k, v = self.qkv(x)
+        q, k = apply_rope(q, cos, sin), apply_rope(k, cos, sin)     # our fp32 rotation
+        scores = mx.matmul(q, k.swapaxes(-1, -2)) * self.scale        # (B, heads, T, T) in memory
+        return self.output(mx.matmul(mx.softmax(scores, axis=-1), v))</code></pre>
+  <h3>5.4 V5: the 8-bit input</h3>
+  <pre><code>def eight_bit_pixels(pixels):                                  # src/dinov3_apple/prior_art.py
+    levels = np.clip(np.rint((pixels * std + mean) * 255), 0, 255)  # what an RGB image keeps
+    return ((levels / 255 - mean) / std).astype(np.float32)         # moves ≤ 0.5 / 255 / std</code></pre>
+  <h3>5.5 Build one variant</h3>
+  <pre><code>def variant_forward(model, variant):
+    attention = {"V1": Bf16RotationAttention, "V4": UnfusedAttention}.get(variant)
+    if attention is not None:
+        for block in model.layer:
+            replacement = attention(model.config)
+            replacement.update(block.attention.parameters())   # the same weights, a new __call__
+            block.attention = replacement                       # the backbone keeps the variant
+    traced = mx.compile(lambda p, c, s: model.forward_with_rope(p, c, s), inputs=model.state)
+    ...
+    def forward(pixels):
+        if grid not in tables:
+            tables[grid] = variant_tables(model, variant, *grid)   # V1: (N, head_dim) bf16
+        if variant == "V5":
+            pixels = mx.array(eight_bit_pixels(np.array(pixels.astype(mx.float32))))
+        return traced(pixels, *tables[grid])</code></pre>
+</section>
+
+<section id="bf16rope">
+  <h2>6 Why the bf16 RoPE costs parity</h2>
+  <p>bf16 keeps 8 significant bits. Near an angle of 2π (the angles of the shortest period at the edge of the grid) one bf16 step is 2<sup>−5</sup> = 0.031 rad. The tables of the ports differ from the fp32 tables by up to 0.0314 at 14 × 14 (test T6). That is four times the angle error of the Meta periods (0.0079 rad, V3). The rotation of V1 adds a second error: q and k of every token, also of the prefix tokens, round to bf16 before the attention, in every dtype mode. In the fp32 dtype mode this throws away 16 of the 24 bits of q and k in each of the 12 or 32 blocks.</p>
+  <p>Job J3 measured each variant on the 12 configurations of Step 2 at batch size 1 (Table 3 in Section 7). In the fp32 dtype mode:</p>
+  <ul>
+    <li><b>V1, the RoPE of the ports,</b> drops the worst patch 1st percentile from 1.000000 to 0.999530 (ViT-S/16) and 0.998381 (ViT-H+/16). Only 3 of 12 and 1 of 12 configurations pass the fp32 thresholds.</li>
+    <li><b>V2, the bf16 tables with our fp32 rotation,</b> gives 0.999619 and 0.998675. So the tables cause most of the cost; the bf16 rotation of q and k adds the rest.</li>
+    <li><b>V3, the Meta periods,</b> gives 0.999998 and 0.999990 and passes 12 of 12. A bf16 period with fp32 angles is close enough; bf16 angles are not.</li>
+  </ul>
+  <p>In the bf16-cast dtype mode the backbone rounds its activations to bf16 anyway. There V1 lowers the worst patch 1st percentile from 0.999560 to 0.999283 (ViT-S/16) and from 0.986725 to 0.974840 (ViT-H+/16), and every configuration still passes the bf16 thresholds. The cost of the bf16 RoPE grows with the model size: ViT-H+/16 has 32 blocks, ViT-S/16 has 12.</p>
+</section>
+
+<section id="results">
+  <h2>7 Results</h2>
+  <p>Job J1 paired each export with our compiled forward pass in 5 rounds, compute units CPU_AND_GPU (results/prior-art.jsonl, 120 workers on 2026-11-08 between 00:10 and 00:35). In 12 of 14 cells the spread of the 5 ratios is at most 0.024: the full time budget makes the pairs repeatable.</p>
+  <figure>
+    <div class="fig"><svg viewBox="0 0 960 464" role="img" aria-label="Prior-art ratios of the Core ML cells">
+<rect width="960" height="464" fill="#ffffff"/>
+<g font-family="-apple-system, Helvetica, Arial, sans-serif" font-size="12" fill="#111414">
+<text x="20" y="24" font-weight="600" font-size="13">Prior-art ratio = ours ÷ export (patch output, 5 paired rounds; bar: lower median)</text>
+<line x1="383.6" y1="40" x2="383.6" y2="414" stroke="#d6dedd"/>
+<text x="383.6" y="430" text-anchor="middle">0.8</text>
+<line x1="437.3" y1="40" x2="437.3" y2="414" stroke="#d6dedd"/>
+<text x="437.3" y="430" text-anchor="middle">0.9</text>
+<line x1="490.9" y1="40" x2="490.9" y2="414" stroke="#111414"/>
+<text x="490.9" y="430" text-anchor="middle">1.0</text>
+<line x1="598.2" y1="40" x2="598.2" y2="414" stroke="#d6dedd"/>
+<text x="598.2" y="430" text-anchor="middle">1.2</text>
+<line x1="705.5" y1="40" x2="705.5" y2="414" stroke="#d6dedd"/>
+<text x="705.5" y="430" text-anchor="middle">1.4</text>
+<line x1="812.7" y1="40" x2="812.7" y2="414" stroke="#d6dedd"/>
+<text x="812.7" y="430" text-anchor="middle">1.6</text>
+<line x1="920.0" y1="40" x2="920.0" y2="414" stroke="#d6dedd"/>
+<text x="920.0" y="430" text-anchor="middle">1.8</text>
+<text x="496.9" y="448">ours faster →</text><text x="484.9" y="448" text-anchor="end">← export faster</text>
+<text x="20" y="62">E1 FP32 ViT-S/16 224 px, b1</text>
+<circle cx="528.5" cy="58" r="3.5" fill="none" stroke="#057379"/>
+<circle cx="523.9" cy="58" r="3.5" fill="none" stroke="#057379"/>
+<circle cx="528.9" cy="58" r="3.5" fill="none" stroke="#057379"/>
+<circle cx="528.5" cy="58" r="3.5" fill="none" stroke="#057379"/>
+<circle cx="529.8" cy="58" r="3.5" fill="none" stroke="#057379"/>
+<line x1="528.5" y1="50" x2="528.5" y2="66" stroke="#057379" stroke-width="3"/>
+<text x="320" y="62" text-anchor="end" fill="#057379">1.070</text>
+<text x="20" y="88">E1 FP32 ViT-S/16 224 px, b8</text>
+<circle cx="781.6" cy="84" r="3.5" fill="none" stroke="#057379"/>
+<circle cx="771.7" cy="84" r="3.5" fill="none" stroke="#057379"/>
+<circle cx="777.2" cy="84" r="3.5" fill="none" stroke="#057379"/>
+<circle cx="777.6" cy="84" r="3.5" fill="none" stroke="#057379"/>
+<circle cx="785.7" cy="84" r="3.5" fill="none" stroke="#057379"/>
+<line x1="777.6" y1="76" x2="777.6" y2="92" stroke="#057379" stroke-width="3"/>
+<text x="320" y="88" text-anchor="end" fill="#057379">1.535</text>
+<text x="20" y="114">E2 INT8 ViT-S/16 224 px, b1</text>
+<circle cx="571.0" cy="110" r="3.5" fill="none" stroke="#057379"/>
+<circle cx="566.7" cy="110" r="3.5" fill="none" stroke="#057379"/>
+<circle cx="570.1" cy="110" r="3.5" fill="none" stroke="#057379"/>
+<circle cx="569.7" cy="110" r="3.5" fill="none" stroke="#057379"/>
+<circle cx="570.5" cy="110" r="3.5" fill="none" stroke="#057379"/>
+<line x1="570.1" y1="102" x2="570.1" y2="118" stroke="#057379" stroke-width="3"/>
+<text x="320" y="114" text-anchor="end" fill="#057379">1.148</text>
+<text x="20" y="140">E2 INT8 ViT-S/16 224 px, b8</text>
+<circle cx="866.2" cy="136" r="3.5" fill="none" stroke="#057379"/>
+<circle cx="824.2" cy="136" r="3.5" fill="none" stroke="#057379"/>
+<circle cx="827.7" cy="136" r="3.5" fill="none" stroke="#057379"/>
+<circle cx="825.9" cy="136" r="3.5" fill="none" stroke="#057379"/>
+<circle cx="832.2" cy="136" r="3.5" fill="none" stroke="#057379"/>
+<line x1="827.7" y1="128" x2="827.7" y2="144" stroke="#057379" stroke-width="3"/>
+<text x="320" y="140" text-anchor="end" fill="#057379">1.628</text>
+<text x="20" y="166">E3 FP16 ViT-S/16 512 px, b1</text>
+<circle cx="460.6" cy="162" r="3.5" fill="none" stroke="#b3261e"/>
+<circle cx="461.3" cy="162" r="3.5" fill="none" stroke="#b3261e"/>
+<circle cx="460.8" cy="162" r="3.5" fill="none" stroke="#b3261e"/>
+<circle cx="462.2" cy="162" r="3.5" fill="none" stroke="#b3261e"/>
+<circle cx="459.0" cy="162" r="3.5" fill="none" stroke="#b3261e"/>
+<line x1="460.8" y1="154" x2="460.8" y2="170" stroke="#b3261e" stroke-width="3"/>
+<text x="320" y="166" text-anchor="end" fill="#b3261e">0.944</text>
+<text x="20" y="192">E3 FP16 ViT-S/16 512 px, b8</text>
+<circle cx="452.6" cy="188" r="3.5" fill="none" stroke="#b3261e"/>
+<circle cx="459.2" cy="188" r="3.5" fill="none" stroke="#b3261e"/>
+<circle cx="447.6" cy="188" r="3.5" fill="none" stroke="#b3261e"/>
+<circle cx="458.8" cy="188" r="3.5" fill="none" stroke="#b3261e"/>
+<circle cx="449.9" cy="188" r="3.5" fill="none" stroke="#b3261e"/>
+<line x1="452.6" y1="180" x2="452.6" y2="196" stroke="#b3261e" stroke-width="3"/>
+<text x="320" y="192" text-anchor="end" fill="#b3261e">0.929</text>
+<text x="20" y="218">E4 FP32 ViT-B/16 448 px, b1</text>
+<circle cx="532.0" cy="214" r="3.5" fill="none" stroke="#057379"/>
+<circle cx="526.5" cy="214" r="3.5" fill="none" stroke="#057379"/>
+<circle cx="527.6" cy="214" r="3.5" fill="none" stroke="#057379"/>
+<circle cx="526.1" cy="214" r="3.5" fill="none" stroke="#057379"/>
+<circle cx="524.1" cy="214" r="3.5" fill="none" stroke="#057379"/>
+<line x1="526.5" y1="206" x2="526.5" y2="222" stroke="#057379" stroke-width="3"/>
+<text x="320" y="218" text-anchor="end" fill="#057379">1.066</text>
+<text x="20" y="244">E4 FP32 ViT-B/16 448 px, b8</text>
+<circle cx="535.8" cy="240" r="3.5" fill="none" stroke="#057379"/>
+<circle cx="539.5" cy="240" r="3.5" fill="none" stroke="#057379"/>
+<circle cx="542.6" cy="240" r="3.5" fill="none" stroke="#057379"/>
+<circle cx="541.3" cy="240" r="3.5" fill="none" stroke="#057379"/>
+<circle cx="542.2" cy="240" r="3.5" fill="none" stroke="#057379"/>
+<line x1="541.3" y1="232" x2="541.3" y2="248" stroke="#057379" stroke-width="3"/>
+<text x="320" y="244" text-anchor="end" fill="#057379">1.094</text>
+<text x="20" y="270">E5 FP32 ViT-B/16 448 px, b1</text>
+<circle cx="521.9" cy="266" r="3.5" fill="none" stroke="#057379"/>
+<circle cx="510.1" cy="266" r="3.5" fill="none" stroke="#057379"/>
+<circle cx="522.3" cy="266" r="3.5" fill="none" stroke="#057379"/>
+<circle cx="522.4" cy="266" r="3.5" fill="none" stroke="#057379"/>
+<circle cx="518.0" cy="266" r="3.5" fill="none" stroke="#057379"/>
+<line x1="521.9" y1="258" x2="521.9" y2="274" stroke="#057379" stroke-width="3"/>
+<text x="320" y="270" text-anchor="end" fill="#057379">1.058</text>
+<text x="20" y="296">E5 FP32 ViT-B/16 448 px, b8</text>
+<circle cx="533.8" cy="292" r="3.5" fill="none" stroke="#057379"/>
+<circle cx="534.9" cy="292" r="3.5" fill="none" stroke="#057379"/>
+<circle cx="535.8" cy="292" r="3.5" fill="none" stroke="#057379"/>
+<circle cx="529.2" cy="292" r="3.5" fill="none" stroke="#057379"/>
+<circle cx="538.5" cy="292" r="3.5" fill="none" stroke="#057379"/>
+<line x1="534.9" y1="284" x2="534.9" y2="300" stroke="#057379" stroke-width="3"/>
+<text x="320" y="296" text-anchor="end" fill="#057379">1.082</text>
+<text x="20" y="322">E6 FP16 ViT-B/16 448 px, b1</text>
+<circle cx="481.4" cy="318" r="3.5" fill="none" stroke="#4a5655"/>
+<circle cx="477.4" cy="318" r="3.5" fill="none" stroke="#4a5655"/>
+<circle cx="478.4" cy="318" r="3.5" fill="none" stroke="#4a5655"/>
+<circle cx="478.8" cy="318" r="3.5" fill="none" stroke="#4a5655"/>
+<circle cx="475.8" cy="318" r="3.5" fill="none" stroke="#4a5655"/>
+<line x1="478.4" y1="310" x2="478.4" y2="326" stroke="#4a5655" stroke-width="3"/>
+<text x="320" y="322" text-anchor="end" fill="#4a5655">0.977</text>
+<text x="20" y="348">E6 FP16 ViT-B/16 448 px, b8</text>
+<circle cx="486.7" cy="344" r="3.5" fill="none" stroke="#4a5655"/>
+<circle cx="487.6" cy="344" r="3.5" fill="none" stroke="#4a5655"/>
+<circle cx="485.1" cy="344" r="3.5" fill="none" stroke="#4a5655"/>
+<circle cx="482.3" cy="344" r="3.5" fill="none" stroke="#4a5655"/>
+<circle cx="482.4" cy="344" r="3.5" fill="none" stroke="#4a5655"/>
+<line x1="485.1" y1="336" x2="485.1" y2="352" stroke="#4a5655" stroke-width="3"/>
+<text x="320" y="348" text-anchor="end" fill="#4a5655">0.989</text>
+<text x="20" y="374">E7 FP16 DINOv2 ViT-S/14 518 px, b1</text>
+<circle cx="420.7" cy="370" r="3.5" fill="none" stroke="#b3261e"/>
+<circle cx="416.6" cy="370" r="3.5" fill="none" stroke="#b3261e"/>
+<circle cx="414.9" cy="370" r="3.5" fill="none" stroke="#b3261e"/>
+<circle cx="415.9" cy="370" r="3.5" fill="none" stroke="#b3261e"/>
+<circle cx="372.3" cy="370" r="3.5" fill="none" stroke="#b3261e"/>
+<line x1="415.9" y1="362" x2="415.9" y2="378" stroke="#b3261e" stroke-width="3"/>
+<text x="320" y="374" text-anchor="end" fill="#b3261e">0.860</text>
+<text x="20" y="400">E7 FP16 DINOv2 ViT-S/14 518 px, b8</text>
+<circle cx="415.2" cy="396" r="3.5" fill="none" stroke="#b3261e"/>
+<circle cx="412.1" cy="396" r="3.5" fill="none" stroke="#b3261e"/>
+<circle cx="410.4" cy="396" r="3.5" fill="none" stroke="#b3261e"/>
+<circle cx="409.7" cy="396" r="3.5" fill="none" stroke="#b3261e"/>
+<circle cx="417.6" cy="396" r="3.5" fill="none" stroke="#b3261e"/>
+<line x1="412.1" y1="388" x2="412.1" y2="404" stroke="#b3261e" stroke-width="3"/>
+<text x="320" y="400" text-anchor="end" fill="#b3261e">0.853</text>
+</g></svg></div>
+    <figcaption>Figure 4. The prior-art ratio of each cell. Circles: the 5 rounds. Bar: the lower median. Teal: ours faster by more than the noise; grey: inside 1 ± 0.03; red: the export faster.</figcaption>
+  </figure>
+  <div class="table-wrap"><table>
+<thead><tr><th>Export</th><th>Model size, px</th><th>Precision</th><th>Batch size</th><th>Ours (dtype mode)</th><th>Ours img/s</th><th>Export img/s</th><th>Prior-art ratio</th><th>Spread</th><th>Worst patch p01</th><th>Parity</th></tr></thead><tbody>
+<tr><td>E1 (C7)</td><td>ViT-S/16, 224</td><td>FP32</td><td class='num'>1</td><td>fp32, 224 px</td><td class='num'>324.4</td><td class='num'>303.3</td><td class="num">1.070</td><td class='num'>0.010</td><td class='num'>1.000000</td><td>pass</td></tr>
+<tr><td>E1 (C7)</td><td>ViT-S/16, 224</td><td>FP32</td><td class='num'>8</td><td>fp32, 224 px</td><td class='num'>658.4</td><td class='num'>429.1</td><td class="num">1.535</td><td class='num'>0.017</td><td class='num'>1.000000</td><td>pass</td></tr>
+<tr><td>E2 (C7)</td><td>ViT-S/16, 224</td><td>INT8</td><td class='num'>1</td><td>fp32, 224 px</td><td class='num'>324.4</td><td class='num'>283.0</td><td class="num">1.148</td><td class='num'>0.007</td><td class='num'>0.998562</td><td>fail (report only)</td></tr>
+<tr><td>E2 (C7)</td><td>ViT-S/16, 224</td><td>INT8</td><td class='num'>8</td><td>fp32, 224 px</td><td class='num'>658.4</td><td class='num'>404.3</td><td class="num">1.628</td><td class='num'>0.048</td><td class='num'>0.998562</td><td>fail (report only)</td></tr>
+<tr><td>E3 (C9)</td><td>ViT-S/16, 512</td><td>FP16</td><td class='num'>1</td><td>fp16-cast, 512 px</td><td class='num'>231.4</td><td class='num'>245.2</td><td class="num bad">0.944</td><td class='num'>0.006</td><td class='num'>0.999992</td><td>pass</td></tr>
+<tr><td>E3 (C9)</td><td>ViT-S/16, 512</td><td>FP16</td><td class='num'>8</td><td>fp16-cast, 512 px</td><td class='num'>269.1</td><td class='num'>287.8</td><td class="num bad">0.929</td><td class='num'>0.024</td><td class='num'>0.999992</td><td>pass</td></tr>
+<tr><td>E4 (C7)</td><td>ViT-B/16, 448</td><td>FP32</td><td class='num'>1</td><td>fp32, 448 px</td><td class='num'>44.2</td><td class='num'>41.4</td><td class="num">1.066</td><td class='num'>0.014</td><td class='num'>1.000000</td><td>pass</td></tr>
+<tr><td>E4 (C7)</td><td>ViT-B/16, 448</td><td>FP32</td><td class='num'>8</td><td>fp32, 448 px</td><td class='num'>47.5</td><td class='num'>43.8</td><td class="num">1.094</td><td class='num'>0.012</td><td class='num'>1.000000</td><td>pass</td></tr>
+<tr><td>E5 (C8)</td><td>ViT-B/16, 448</td><td>FP32</td><td class='num'>1</td><td>fp32, 448 px</td><td class='num'>44.2</td><td class='num'>42.3</td><td class="num">1.058</td><td class='num'>0.022</td><td class='num'>1.000000</td><td>pass</td></tr>
+<tr><td>E5 (C8)</td><td>ViT-B/16, 448</td><td>FP32</td><td class='num'>8</td><td>fp32, 448 px</td><td class='num'>47.5</td><td class='num'>44.0</td><td class="num">1.082</td><td class='num'>0.016</td><td class='num'>1.000000</td><td>pass</td></tr>
+<tr><td>E6 (C7)</td><td>ViT-B/16, 448</td><td>FP16</td><td class='num'>1</td><td>fp16-cast, 448 px</td><td class='num'>127.5</td><td class='num'>130.5</td><td class="num">0.977</td><td class='num'>0.011</td><td class='num'>0.999994</td><td>pass</td></tr>
+<tr><td>E6 (C7)</td><td>ViT-B/16, 448</td><td>FP16</td><td class='num'>8</td><td>fp16-cast, 448 px</td><td class='num'>138.4</td><td class='num'>140.6</td><td class="num">0.989</td><td class='num'>0.010</td><td class='num'>0.999994</td><td>pass</td></tr>
+<tr><td>E7 (C9)</td><td>DINOv2 ViT-S/14 + 4 registers, 518</td><td>FP16</td><td class='num'>1</td><td>fp16-cast, 592 px</td><td class='num'>172.1</td><td class='num'>200.6</td><td class="num bad">0.860</td><td class='num'>0.116</td><td class='num'>–</td><td>finite only</td></tr>
+<tr><td>E7 (C9)</td><td>DINOv2 ViT-S/14 + 4 registers, 518</td><td>FP16</td><td class='num'>8</td><td>fp16-cast, 592 px</td><td class='num'>191.7</td><td class='num'>224.6</td><td class="num bad">0.853</td><td class='num'>0.017</td><td class='num'>–</td><td>finite only</td></tr>
+</tbody></table></div>
+  <p class="caption">Table 2. The Core ML cells (job J1). The parity of an export: the worst patch 1st percentile over the 3 test images with the spec-array input. E2 (INT8) has no pass rule; E7 (DINOv2) has no reference output, so its check is finite only. Red ratio: below 0.97.</p>
+  <ul>
+    <li><b>Every DINOv3 export reproduces our reference output with float input.</b> FP32: 1.000000 (at least 0.9999995). FP16: 0.999992 and 0.999994, above the fp16 thresholds. The ports of C7 to C9 cost nothing in parity on the GPU. INT8 (palettized weights) gives 0.998562, below the fp32 threshold.</li>
+    <li><b>FP32: ours is faster in every cell.</b> 1.058 to 1.094 at ViT-B/16 448 px and 1.070 at ViT-S/16 224 px with batch size 1. At batch size 8 the factor is 1.535: an export has a fixed batch size of 1, so a batch of 8 is 8 small calls.</li>
+    <li><b>FP16: the exports are equal or faster.</b> E6 (ViT-B/16, 448 px) is inside the noise (0.977 and 0.989). E3 (ViT-S/16, 512 px) is faster by 6 to 7 % (0.944 and 0.929) and the DINOv2 export E7 at the same token count by 14 to 15 % (0.860 and 0.853). The host transfer of our outputs is at most 1.0 % of our batch time in these cells (Table 2 notes of results/prior-art-table.md), so it does not explain the gap. The gap grows with the share of the attention in the compute: ViT-S/16 (D = 384) with 1029 and 1374 tokens, not ViT-B/16 (D = 768) with 789 tokens.</li>
+    <li><b>The 8-bit image input costs parity, not the backbone.</b> As shipped, E1 gives a patch 1st percentile of 0.998996 and E4 and E5 0.998874 (job J2), below the fp32 threshold. Our variant V5 on ViT-S/16 gives the same 0.998996 (Table 3).</li>
+    <li><b>ALL and CPU_AND_GPU give the same speed.</b> The ALL round is 0.973 to 1.002 of the CPU_AND_GPU median: Core ML runs these exports on the GPU.</li>
+  </ul>
+  <div class="table-wrap"><table>
+<thead><tr><th>Model size</th><th>Dtype mode</th><th>Variant</th><th>Pass</th><th>Worst frame</th><th>Worst patch mean</th><th>Worst patch p01</th></tr></thead><tbody>
+<tr><td>ViT-S/16</td><td>fp32</td><td>V0</td><td class="num">12 of 12</td><td class='num'>1.000000</td><td class='num'>1.000000</td><td class='num'>1.000000</td></tr>
+<tr><td>ViT-S/16</td><td>fp32</td><td>V1</td><td class="num bad">3 of 12</td><td class='num'>0.999854</td><td class='num'>0.999869</td><td class='num'>0.999530</td></tr>
+<tr><td>ViT-S/16</td><td>fp32</td><td>V2</td><td class="num bad">5 of 12</td><td class='num'>0.999946</td><td class='num'>0.999916</td><td class='num'>0.999619</td></tr>
+<tr><td>ViT-S/16</td><td>fp32</td><td>V3</td><td class="num">12 of 12</td><td class='num'>0.999999</td><td class='num'>0.999999</td><td class='num'>0.999998</td></tr>
+<tr><td>ViT-S/16</td><td>fp32</td><td>V4</td><td class="num">12 of 12</td><td class='num'>1.000000</td><td class='num'>1.000000</td><td class='num'>1.000000</td></tr>
+<tr><td>ViT-S/16</td><td>fp32</td><td>V5</td><td class="num bad">0 of 12</td><td class='num'>0.999779</td><td class='num'>0.999839</td><td class='num'>0.998996</td></tr>
+<tr><td>ViT-S/16</td><td>bf16-cast</td><td>V0</td><td class="num">12 of 12</td><td class='num'>0.999545</td><td class='num'>0.999779</td><td class='num'>0.999560</td></tr>
+<tr><td>ViT-S/16</td><td>bf16-cast</td><td>V1</td><td class="num">12 of 12</td><td class='num'>0.999513</td><td class='num'>0.999735</td><td class='num'>0.999283</td></tr>
+<tr><td>ViT-S/16</td><td>bf16-cast</td><td>V2</td><td class="num">12 of 12</td><td class='num'>0.999337</td><td class='num'>0.999732</td><td class='num'>0.999337</td></tr>
+<tr><td>ViT-S/16</td><td>bf16-cast</td><td>V3</td><td class="num">12 of 12</td><td class='num'>0.999615</td><td class='num'>0.999784</td><td class='num'>0.999542</td></tr>
+<tr><td>ViT-S/16</td><td>bf16-cast</td><td>V4</td><td class="num">12 of 12</td><td class='num'>0.999261</td><td class='num'>0.999615</td><td class='num'>0.999096</td></tr>
+<tr><td>ViT-S/16</td><td>bf16-cast</td><td>V5</td><td class="num">12 of 12</td><td class='num'>0.999151</td><td class='num'>0.999567</td><td class='num'>0.998644</td></tr>
+<tr><td>ViT-H+/16</td><td>fp32</td><td>V0</td><td class="num">12 of 12</td><td class='num'>1.000000</td><td class='num'>1.000000</td><td class='num'>1.000000</td></tr>
+<tr><td>ViT-H+/16</td><td>fp32</td><td>V1</td><td class="num bad">1 of 12</td><td class='num'>0.999988</td><td class='num'>0.999878</td><td class='num'>0.998381</td></tr>
+<tr><td>ViT-H+/16</td><td>fp32</td><td>V2</td><td class="num bad">3 of 12</td><td class='num'>0.999991</td><td class='num'>0.999874</td><td class='num'>0.998675</td></tr>
+<tr><td>ViT-H+/16</td><td>fp32</td><td>V3</td><td class="num">12 of 12</td><td class='num'>1.000000</td><td class='num'>0.999999</td><td class='num'>0.999990</td></tr>
+<tr><td>ViT-H+/16</td><td>fp32</td><td>V4</td><td class="num">12 of 12</td><td class='num'>1.000000</td><td class='num'>1.000000</td><td class='num'>1.000000</td></tr>
+<tr><td>ViT-H+/16</td><td>fp32</td><td>V5</td><td class="num bad">0 of 12</td><td class='num'>0.999793</td><td class='num'>0.994245</td><td class='num'>0.923926</td></tr>
+<tr><td>ViT-H+/16</td><td>bf16-cast</td><td>V0</td><td class="num">12 of 12</td><td class='num'>0.999833</td><td class='num'>0.999061</td><td class='num'>0.986725</td></tr>
+<tr><td>ViT-H+/16</td><td>bf16-cast</td><td>V1</td><td class="num">12 of 12</td><td class='num'>0.999865</td><td class='num'>0.998719</td><td class='num'>0.974840</td></tr>
+<tr><td>ViT-H+/16</td><td>bf16-cast</td><td>V2</td><td class="num">12 of 12</td><td class='num'>0.999891</td><td class='num'>0.999009</td><td class='num'>0.982967</td></tr>
+<tr><td>ViT-H+/16</td><td>bf16-cast</td><td>V3</td><td class="num">12 of 12</td><td class='num'>0.999883</td><td class='num'>0.998999</td><td class='num'>0.986709</td></tr>
+<tr><td>ViT-H+/16</td><td>bf16-cast</td><td>V4</td><td class="num">12 of 12</td><td class='num'>0.999867</td><td class='num'>0.998216</td><td class='num'>0.975250</td></tr>
+<tr><td>ViT-H+/16</td><td>bf16-cast</td><td>V5</td><td class="num bad">9 of 12</td><td class='num'>0.999654</td><td class='num'>0.992975</td><td class='num'>0.808768</td></tr>
+</tbody></table></div>
+  <p class="caption">Table 3. The parity of the port-change variants (job J3): 12 configurations at batch size 1, worst values. Pass: against the thresholds of the dtype mode (ADR 0003). Red: at least one configuration fails.</p>
+  <div class="table-wrap"><table>
+<thead><tr><th>Point</th><th>Dtype mode</th><th>Change</th><th>V0 img/s</th><th>Variant img/s</th><th>Ratios</th><th>Change ratio</th><th>Verdict</th></tr></thead><tbody>
+<tr><td>P1</td><td>fp32</td><td>V1</td><td class='num'>663.0</td><td class='num'>617.8</td><td class='num'>0.851, 0.912, 0.932</td><td class='num'>0.912</td><td>not above 1</td></tr>
+<tr><td>P1</td><td>fp32</td><td>V4</td><td class='num'>663.0</td><td class='num'>602.9</td><td class='num'>0.834, 0.897, 0.909</td><td class='num'>0.897</td><td>not above 1</td></tr>
+<tr><td>P1</td><td>bf16-cast</td><td>V1</td><td class='num'>1486.0</td><td class='num'>1461.3</td><td class='num'>0.956, 0.978, 0.983</td><td class='num'>0.978</td><td>not above 1, inside the noise</td></tr>
+<tr><td>P1</td><td>bf16-cast</td><td>V4</td><td class='num'>1486.0</td><td class='num'>1278.5</td><td class='num'>0.802, 0.866, 0.860</td><td class='num'>0.860</td><td>not above 1</td></tr>
+<tr><td>P2</td><td>fp32</td><td>V1</td><td class='num'>4.1</td><td class='num'>4.1</td><td class='num'>0.828, 1.007, 0.979</td><td class='num'>0.979</td><td>not above 1, inside the noise</td></tr>
+<tr><td>P2</td><td>fp32</td><td>V4</td><td class='num'>4.1</td><td class='num'>3.7</td><td class='num'>0.746, 0.900, 0.887</td><td class='num'>0.887</td><td>not above 1</td></tr>
+<tr><td>P2</td><td>bf16-cast</td><td>V1</td><td class='num'>13.4</td><td class='num'>13.3</td><td class='num'>1.046, 0.978, 0.990</td><td class='num'>0.990</td><td>not above 1, inside the noise</td></tr>
+<tr><td>P2</td><td>bf16-cast</td><td>V4</td><td class='num'>13.4</td><td class='num'>10.2</td><td class='num'>0.763, 0.764, 0.766</td><td class='num'>0.764</td><td>not above 1</td></tr>
+</tbody></table></div>
+  <p class="caption">Table 4. The change ratios of the variants (job J4): variant ÷ V0, patch output, 3 paired rounds, lower median. Below 1: the change is slower. P1: ViT-S/16, 224 px, batch size 8. P2: ViT-H+/16, 512 px, batch size 8.</p>
+  <ul>
+    <li><b>The unfused attention (V4) is the expensive change.</b> It costs 10 to 14 % at P1 and 11 to 24 % at P2. In bf16-cast at P2 (32 blocks, 1029 tokens) the score matrix in memory costs a quarter of the throughput. It costs no parity.</li>
+    <li><b>The bf16 RoPE (V1) is cheap in speed but not in parity.</b> It costs 9 % at P1 in fp32 (the casts of q and k) and stays inside the noise in the other three cells. In fp32 it fails the fp32 thresholds (Section 6).</li>
+  </ul>
+</section>
+
+<section id="code">
+  <h2>8 The code of Step 6b</h2>
+  <h3>8.1 <code>src/dinov3_apple/prior_art.py</code> (no backend)</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Name</th><th>What it does</th></tr></thead>
+    <tbody>
+      <tr><td><code>PRIOR_ART_DIR</code></td><td>The folder of the third-party files: <code>~/.cache/dinov3-apple/prior-art</code>, or <code>DINOV3_PRIOR_ART_DIR</code>.</td></tr>
+      <tr><td><code>Candidate</code>, <code>CANDIDATES</code></td><td>C1 to C9 with kind, license, commit, verdict ("measure", "gated", "skip") and the reason of a skip or a gate (AC1).</td></tr>
+      <tr><td><code>Export</code>, <code>EXPORTS</code></td><td>E1 to E7: candidate, model size, input resolution, precision, package path, input kind, outputs and the cell of ours. Properties: <code>path</code>, <code>tokens</code> (1374 for E7 and for our 592 px cell), <code>threshold_mode</code> (fp32 for FP32 and INT8, fp16-cast for FP16), <code>report_only</code> (INT8 and DINOv2).</td></tr>
+      <tr><td><code>Group</code>, <code>_groups</code>, <code>GROUPS</code>, <code>GROUP_OF_EXPORT</code></td><td>The 5 cells of ours (G1 to G5) and the exports that pair with each.</td></tr>
+      <tr><td><code>PORT_CELLS</code>, <code>VARIANTS</code>, <code>SPEED_POINTS</code></td><td>The 8 port cells of J5, the variants V0 to V5, and P1 and P2 for J4.</td></tr>
+      <tr><td><code>grid_tokens</code></td><td>(1, D, h, w) → (h · w, D), row-major.</td></tr>
+      <tr><td><code>export_outputs</code></td><td>The output names of C7, C8 and C9 → frame embedding (or None) and patch embeddings.</td></tr>
+      <tr><td><code>export_parity</code></td><td>The parity of one export output against the reference tokens, as <code>check_validity</code>; frame None without a frame embedding.</td></tr>
+      <tr><td><code>parity_passes</code>, <code>worst_parity</code></td><td>The verdict against <code>THRESHOLDS</code> (a missing frame does not count); the smallest value of each field over the test images.</td></tr>
+      <tr><td><code>eight_bit_pixels</code></td><td>V5: stored pixels to the 8-bit grid and back.</td></tr>
+      <tr><td><code>ours_spec</code>, <code>export_spec</code></td><td>The spec of one worker of ours (compiled, full budget) and of one Core ML worker.</td></tr>
+      <tr><td><code>coreml_plan</code></td><td>J1: 5 rounds × 24 workers, groups rotated, ours first in odd rounds and last in even rounds.</td></tr>
+      <tr><td><code>all_units_plan</code>, <code>image_input_plan</code></td><td>J2: the 14 export workers with ALL; the 3 parity-only workers with the 8-bit image input.</td></tr>
+      <tr><td><code>variant_parity_plan</code>, <code>variant_speed_plan</code></td><td>J3: V0 to V5 × ViT-S/16, ViT-H+/16 × fp32, bf16-cast. J4: V0, V1, V4 at P1 and P2, 3 rounds, the order rotates.</td></tr>
+      <tr><td><code>port_plan</code></td><td>J5 (gated): each port cell paired with ours, 5 rounds.</td></tr>
+      <tr><td><code>_rotate</code>, <code>_number</code>, <code>_done</code></td><td>Helpers: rotate a list, number the positions, a line that is done and has a patch throughput.</td></tr>
+      <tr><td><code>PriorArtRow</code>, <code>cell_row</code></td><td>One paired cell: the ratios, the lower median, the spread, the verdict, the median throughput of both sides.</td></tr>
+      <tr><td><code>prior_art_rows</code>, <code>variant_parity_rows</code>, <code>variant_speed_rows</code></td><td>The rows of Sections 2, 4 and 5 of <code>results/prior-art-table.md</code>.</td></tr>
+      <tr><td><code>slow_cell_facts</code></td><td>For each cell with a prior-art ratio below 0.97: the host share of ours (1 − patch ÷ device throughput) and the ratio of our device throughput to the export throughput (AC4).</td></tr>
+    </tbody>
+  </table></div>
+  <h3>8.2 <code>src/dinov3_apple/port_variants.py</code> (mlx)</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Name</th><th>What it does</th></tr></thead>
+    <tbody>
+      <tr><td><code>port_rope_tables</code></td><td>The bf16 RoPE tables of C1 and C2 (Section 5.1).</td></tr>
+      <tr><td><code>port_rotate</code></td><td>The rotation of the ports: patch tokens only, in the dtype of x.</td></tr>
+      <tr><td><code>Bf16RotationAttention</code></td><td>V1: q and k to bf16, <code>port_rotate</code>, back; then the fused SDPA.</td></tr>
+      <tr><td><code>UnfusedAttention</code></td><td>V4: matmul, softmax, matmul in the matmul dtype.</td></tr>
+      <tr><td><code>meta_periods</code>, <code>meta_rope_tables</code></td><td>V3: the bf16 periods of the Meta checkpoints; fp32 tables with them.</td></tr>
+      <tr><td><code>_with_prefix</code>, <code>variant_tables</code></td><td>The tables of each variant for one patch grid; V2 adds the identity rows of the prefix tokens.</td></tr>
+      <tr><td><code>variant_forward</code></td><td>The compiled forward pass of one variant (Section 5.5).</td></tr>
+      <tr><td><code>_tokens</code></td><td>One forward pass to fp32 NumPy tokens.</td></tr>
+      <tr><td><code>run_variant_parity</code></td><td>J3 worker: one load, the 12 configurations at batch size 1, parity and pass or fail; V0 also gives its largest difference to <code>compile_backbone</code> (AC6).</td></tr>
+      <tr><td><code>run_variant_speed</code></td><td>J4 worker: the phases and time budgets of <code>run_mlx_worker</code> for one variant.</td></tr>
+    </tbody>
+  </table></div>
+  <h3>8.3 Scripts</h3>
+  <ul>
+    <li><code>scripts/bench_prior_art.py</code>: the driver. Subcommands <code>coreml</code> (J1, J2), <code>variants</code> (J3, J4), <code>ports</code> (J5, gated by <code>--allow-third-party-python</code>), <code>table</code>. One GPU lock, a memory check before each worker, <code>other_heavy_jobs_seen</code> before and after each worker, <code>MLX_ENABLE_TF32=0</code> for every mlx worker.</li>
+    <li><code>scripts/prior_art_coreml_worker.py</code>: runs in <code>venv-coreml</code> with <code>-I</code>; standard library, NumPy, safetensors, coremltools and Pillow only.</li>
+    <li><code>scripts/prior_art_port_worker.py</code>: runs in <code>venv-mlx</code> with <code>-I</code>, only after the user's yes to Q1.</li>
+    <li><code>scripts/prior_art_meta_names.py</code>: our ViT-H+/16 weights in the Meta names for C2, from the safetensors files (no pickle).</li>
+  </ul>
+</section>
+
+<section id="surprises">
+  <h2>9 Surprises</h2>
+  <ol>
+    <li class="note"><b>The probes lied by up to 1.8 times.</b> Single Core ML runs of 10 batches were 1.4 to 1.8 times faster than the paired runs with the full time budget. On this Mac, a run below 1 s does not measure throughput.</li>
+    <li class="note"><b>The 8-bit input, not the port, costs the parity.</b> With float input every FP32 export reproduces our reference output to 6 decimals. The interface of an image-input export alone drops the patch 1st percentile below the fp32 threshold.</li>
+    <li class="note"><b>The bf16 tables are 4 times further off than the Meta periods.</b> The plan expected at most 0.02 between the bf16 and the fp32 tables; the measured value is 0.0314, one bf16 step at 2π.</li>
+    <li class="note"><b>The 8-bit input hurts the large model more.</b> V5 drops the worst patch 1st percentile to 0.998996 on ViT-S/16 but to 0.923926 on ViT-H+/16 in fp32 (Table 3): an input change of at most 0.5 / 255 / std grows through 32 blocks. A user who feeds 8-bit frames to ViT-H+/16 gets this cost before any port change.</li>
+    <li class="note"><b>Core ML in fp16 beats our fp16-cast on the small model at many tokens.</b> E3 and the DINOv2 export E7 are 6 to 15 % faster than our compiled forward pass, while every FP32 export is slower. Our host transfer is not the reason (at most 1.0 % of the batch time). The gap follows the attention share of the compute; Step 6c looks at Core ML in more detail.</li>
+    <li class="note"><b>The variant parity runs in seconds.</b> Job J3 ran 24 workers in 25 s: ViT-H+/16 in fp32 loads from the page cache in 0.3 s, and the 12 configurations at batch size 1 take about 1 s.</li>
+  </ol>
+</section>
+
+<section id="sources">
+  <h2>10 Sources</h2>
+  <ul>
+    <li><code>specs/06b-prior-art/explore.html</code>, <code>plan.html</code> and <code>verify.html</code>; <code>results/prior-art.jsonl</code> and <code>results/prior-art-table.md</code>.</li>
+    <li>ADR 0012 (the prior-art ratio) and ADR 0013 (third-party code).</li>
+    <li>github.com/riccardomusmeci/mlx-image at da92532: <code>src/mlxim/model/layers/rope_position_encoding.py</code>, <code>layers/attention.py</code>, <code>layers/functional.py</code> (read, not run).</li>
+    <li>github.com/etornam45/mlx_dinov3 at 43d139b: <code>dinov3/checkpoints/convert.py</code> (read, not run).</li>
+    <li>huggingface.co/SharpAI (C7), huggingface.co/rinpatch/dinov3-coreml (C8), github.com/VimalMollyn/dinov2-coreml (C9): the Core ML packages, run with coremltools 9.0.</li>
+  </ul>
+</section>
+</main>
+</body>
+</html>
