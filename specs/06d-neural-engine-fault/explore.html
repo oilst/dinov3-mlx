@@ -42,7 +42,7 @@ a { color: var(--accent); }
 <main>
 <header>
   <h1>Step 6d Neural Engine fault: Explore</h1>
-  <p>Roadmap step 6d. Status: waiting for the user to pick an option (Section 4). Date: 2026-11-08.</p>
+  <p>Roadmap step 6d. Status: option picked. On 2026-11-08 the user picked option A, rewrite version <code>ne3</code> (Table 8). Date: 2026-11-08.</p>
 </header>
 
 <section id="task">
@@ -243,7 +243,16 @@ a { color: var(--accent); }
     <p>A is exact, it is one function, and the probes already show the parity for the smallest and the largest model sizes, for r = 1 and r = 8, at 224, 448 and 512 px and at batch size 8. B gives the same parity with more code, two loads and a cost for each call. C leaves 13 of 15 configurations wrong, and the fix is cheap.</p>
     <p>For the plan: change the speed target of roadmap row 6d. Parity on CPU_AND_NE is reachable for every configuration. A two-stream gain is reachable at 224 px only (Table 6). The plan should set a two-stream target at P1 and one 224 px point of a larger model size (for example ViT-B/16 or ViT-L/16), and report P2 without a target.</p>
   </div>
-  <p>The user picks the option. The agent does not decide.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Decision</th><th>Option picked</th><th>By, date</th></tr></thead>
+      <tbody>
+        <tr><td>The fix of the Neural Engine fault</td><td>A: one constant prefix in the concat, rewrite version <code>ne3</code></td><td>The user, 2026-11-08 ("A: rewrite ne3")</td></tr>
+        <tr><td>The two-stream target</td><td>P1 and one 224 px point of a larger model size; P2 report only. In <code>plan.html</code> for the user's approval</td><td>Open</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 8.</b> The decisions of Step 6d. Q2, Q3 and Q4 of Section 5 stay open.</p>
 </section>
 
 <section id="questions">
