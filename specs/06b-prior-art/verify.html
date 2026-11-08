@@ -39,7 +39,7 @@ a { color: var(--accent); }
 <main>
 <header>
   <h1>Step 6b Prior-art comparison: Verify</h1>
-  <p>Roadmap step 6b. Status: Verify done on 2026-11-08 by a separate agent. Date: 2026-11-08. Base: <code>84dfb3e</code> (plan approval). Build commits: <code>2d58bed</code>, <code>f4471b1</code> (glossary), <code>4ab7e2c</code> and <code>32062a9</code> (the AC4 facts). The Learn commit <code>e4d086b</code> came after the Verify runs; Verify did not check it. The Close stage follows. All times on this page are UTC.</p>
+  <p>Roadmap step 6b. Status: Verify done on 2026-11-08 by a separate agent. Date: 2026-11-08. Base: <code>84dfb3e</code> (plan approval). Build commits: <code>2d58bed</code>, <code>f4471b1</code> (glossary), <code>4ab7e2c</code> and <code>32062a9</code> (the AC4 facts). The Learn commit <code>e4d086b</code> came after the Verify runs; Verify did not check it. The Close stage follows. All times on this page are UTC. Section 6 (added by the build session after Verify) gives the fixes: after them AC11 and AC12 pass, so 12 of 12 criteria pass.</p>
 </header>
 
 <section id="summary">
@@ -307,6 +307,39 @@ a { color: var(--accent); }
   </table>
 </div>
   <p class="caption"><b>Table 7.</b> Findings. Severity: high stops a result; medium changes a verdict or a criterion; low is a gap in the code, the tests or the words.</p>
+</section>
+
+<section id="fixes">
+  <h2>6 Fixes after Verify</h2>
+  <p>The build session wrote this section after the Verify agent ended. Sections 1 to 5 stay as the Verify agent wrote them. The fixes are in commits <code>e115388</code> (glossary), <code>3aa41b3</code> (code and tests) and <code>16c5ada</code> (run 2 of J1, the ALL round again, the table). Times in this section are local time (UTC + 1).</p>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Finding</th><th>Severity</th><th>Status</th><th>What changed, with the measured value</th></tr></thead>
+    <tbody>
+      <tr><td>V1</td><td>medium</td><td>fixed</td><td>J1 ran a second time with the same plan (5 rounds, 120 workers, 01:43 to 02:09; <code>results/prior-art-run2.jsonl</code>). In each of the 14 cells the two run medians differ by at most 0.016 (E6 b1: 0.977 and 0.992); the verdict of <code>pass_verdict</code> on the pooled median is the same as the run-1 verdict in 14 of 14 cells. E3 stays below 0.97 in both runs (b1 0.944 and 0.939, b8 0.929 and 0.936), and E7 too (0.860 and 0.867, 0.853 and 0.852), so the AC4 reasons of Table 2 hold for cells below 0.97 in both runs. The single Verify round (E3 0.991 and 0.986) is outside both runs. New: <code>between_runs</code> (test T5c) and a two-run table in Section 2 of <code>results/prior-art-table.md</code>.</td></tr>
+      <tr><td>V2</td><td>medium</td><td>fixed</td><td>The 14 ALL lines of J2 ran again (01:40 to 01:43) and replace the old lines in <code>results/prior-art.jsonl</code>; the old lines stay in commit <code>4ab7e2c</code>. Now 0 of 205 lines of <code>results/prior-art.jsonl</code> and 0 of 120 lines of run 2 have an entry in <code>other_heavy_jobs_seen</code>: AC11 passes. Fact: the parity of each ALL line equals the CPU_AND_GPU parity bit for bit, but the throughput of the new unpaired round is 0.877 to 1.314 of the run-1 median (the old round: 0.973 to 1.002), while run 2, one minute later, repeats run 1. The table now marks the ALL round as not paired. The pattern of <code>gpu_lock.py</code> is not changed (shared module; see the hand-over).</td></tr>
+      <tr><td>V3</td><td>medium</td><td>fixed</td><td>The port worker times the device, frame and patch phases of <code>time_batch_mlx</code>, with the copy and the cast of the input inside each call; the J5 ratio pairs the patch times of both sides. Gated code: not run (Q1).</td></tr>
+      <tr><td>V4</td><td>low</td><td>fixed</td><td>"Transfer share" (field <code>transfer_share</code>) replaces "host share" in the AC4 facts; <code>GLOSSARY.md</code> has the new term.</td></tr>
+      <tr><td>V5</td><td>low</td><td>fixed</td><td><code>port_apply_rope</code> holds the cast of all tokens to bf16, the rotation and the cast back; <code>Bf16RotationAttention</code> calls it, and T10 checks its prefix rows on fp32 q.</td></tr>
+      <tr><td>V6</td><td>low</td><td>fixed</td><td>Section 5 of the table has a column Valid: V1 at P2 fp32 is "0 of 3".</td></tr>
+      <tr><td>V7</td><td>low</td><td>fixed for new lines</td><td>A J3 line now has side null and batch size 1, and its log label says "12 configurations" (new test). The 24 J3 lines of the build keep side 512.</td></tr>
+      <tr><td>V8</td><td>low</td><td>fixed</td><td><code>port_weights</code> fills only the RoPE periods and the k-bias masks with the values of the port and stops with a KeyError for any other missing key (new test). Gated code: not run.</td></tr>
+      <tr><td>V9</td><td>medium</td><td>fixed</td><td>The ViT-H+/16 case of <code>test_converted_weights_match_hub</code> runs in the slow session only. The default session: 947 passed, 15 skipped in 51.60 s, wall time 54 s (01:39, under the GPU lock): AC12 passes.</td></tr>
+      <tr><td>V10</td><td>low</td><td>fixed</td><td>The build hand-over (<code>step6b-handover.md</code> in the shared notes folder) lists each deviation for the user to confirm.</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="caption"><b>Table 8.</b> The findings of Table 7 after the fixes.</p>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>AC</th><th>Result at Verify</th><th>Result after the fixes</th><th>Measured value after the fixes</th></tr></thead>
+    <tbody>
+      <tr><td>AC11</td><td>fail</td><td>pass</td><td>0 of 205 lines with an entry in <code>other_heavy_jobs_seen</code>; 197 of 197 worker lines with a memory check; TF32 0 in every fp32 line of ours.</td></tr>
+      <tr><td>AC12</td><td>fail</td><td>pass</td><td>Default session 947 passed, 0 failed, 51.60 s (wall 54 s); slow tests T15 and T16 pass; ruff format and ruff check clean.</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="caption"><b>Table 9.</b> The two criteria that failed at Verify, measured again after the fixes. AC1 to AC10 do not change.</p>
 </section>
 
 <section id="sources">
