@@ -1,0 +1,333 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Step 6b Prior-art comparison: Verify</title>
+<style>
+/* Spec page. White page, black text, no dark mode. */
+:root { --bg: #ffffff; --fg: #111414; --muted: #4a5655; --rule: #d6dedd; --panel: #f5f8f7; --accent: #057379; --pass: #1d7a3a; --fail: #b3261e; color-scheme: light; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif; }
+main { max-width: 64rem; margin: 0 auto; padding: 40px 16px 64px; display: grid; gap: 1.75rem; }
+main > *, section > * { min-width: 0; }
+h1 { font-size: 1.9rem; line-height: 1.15; margin: 0; }
+h2 { font-size: 1.3rem; margin: 0; }
+h3 { font-size: 1.05rem; margin: 0; }
+section { display: grid; gap: 0.8rem; min-width: 0; }
+p, ul, ol { margin: 0; max-width: 48rem; }
+li + li { margin-top: 0.25rem; }
+code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.86em; }
+p code, li code, td code { overflow-wrap: anywhere; }
+pre { margin: 0; background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 0.8rem 1rem; overflow-x: auto; }
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+th, td { text-align: left; vertical-align: top; padding: 0.45rem 0.7rem 0.45rem 0; border-bottom: 1px solid var(--rule); }
+th { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); border-bottom: 1.5px solid var(--fg); }
+td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.caption { font-size: 0.88rem; color: var(--muted); }
+.pass { color: var(--pass); font-weight: 600; }
+.fail { color: var(--fail); font-weight: 600; }
+figure { margin: 0; display: grid; gap: 0.5rem; }
+.fig { overflow-x: auto; }
+.fig svg { display: block; width: 100%; height: auto; min-width: 600px; max-width: 760px; border: 1px solid var(--rule); border-radius: 6px; background: #ffffff; }
+figcaption { font-size: 0.88rem; color: var(--muted); }
+a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+<header>
+  <h1>Step 6b Prior-art comparison: Verify</h1>
+  <p>Roadmap step 6b. Status: Verify done on 2026-11-08 by a separate agent. Date: 2026-11-08. Base: <code>84dfb3e</code> (plan approval). Build commits: <code>2d58bed</code>, <code>f4471b1</code> (glossary), <code>4ab7e2c</code> and <code>32062a9</code> (the AC4 facts). The Learn commit <code>e4d086b</code> came after the Verify runs; Verify did not check it. The Close stage follows. All times on this page are UTC.</p>
+</header>
+
+<section id="summary">
+  <h2>1 Summary</h2>
+  <p>This file checks the 12 acceptance criteria of <code>specs/06b-prior-art/plan.html</code> (Section 8, Table 6) against the four Step 6b build commits. A separate agent did the Verify stage. It did not build the step. It read the spec folder, the diff <code>84dfb3e..32062a9</code> of the Step 6b files and the result files. It ran ruff, the default session two times, the slow tests T15 and T16, the Verify subset of plan Section 7.3 and 14 mutation probes. Each GPU job ran under the GPU lock, one after the other. The agent changed no code and no result file of the build. Its result lines are in its scratchpad (Section 5).</p>
+  <p><b>Result:</b> <span id="result-line">10 of 12 criteria pass, 2 fail. AC11 fails: one build line has another heavy job in <code>other_heavy_jobs_seen</code>. AC12 fails: the default session takes 69 s and 68 s, above 60 s.</span></p>
+  <ul>
+    <li><b>Parity.</b> The Verify lines repeat the build parity bit for bit: the 14 Core ML cells of J1, the 12 J3 workers of ViT-S/16 (144 configuration rows) and the 3 image-input rows of J2. Each DINOv3 FP32 export gives a worst patch 1st percentile of 1.000000, FP16 0.999992 (E3) and 0.999994 (E6). V0 equals <code>compile_backbone</code> bit for bit (largest difference 0.0).</li>
+    <li><b>Prior-art ratios.</b> One Verify round of J1 puts 10 of 14 ratios inside the build spread &#177; 0.05. Four ratios are above it: E1 b8, E2 b1, E2 b8 and E5 b1 (finding V1). The two E3 cells move from 0.944 and 0.929 to 0.991 and 0.986. So the cells near 1 depend on the run, not only on the round. The FP32 cells stay above 1 and the E7 cells stay below 0.86.</li>
+    <li><b>Variant throughput.</b> One Verify round of J4 at P1 puts 4 of 4 change ratios inside the build spread &#177; 0.05. V4 (unfused attention) is slower than V0 in every row.</li>
+    <li><b>Run rules.</b> 197 of 197 worker lines of the build have a memory check with &laquo;ok&raquo;. One build line (J2, E5, batch size 1, ALL) has two entries in <code>other_heavy_jobs_seen</code>: a ruff call and dry runs of the Step 6c session. So AC11 fails (finding V2). The 45 Verify worker lines have 0 entries.</li>
+    <li><b>Tests.</b> The default session is green in two runs (944 passed, 14 skipped, 0 failed), but it takes 69 s and 68 s wall time, above the 60 s of AC12. The 22 test ids of <code>test_prior_art.py</code> take 0.17 s; one converted-weights test takes 13 to 14 s (finding V9). T15 and T16 pass. ruff is clean. 13 of 14 mutation probes make their test red; T10 misses one fault (finding V5).</li>
+    <li><b>Findings.</b> Section 4 gives 10 findings: 0 high, 4 medium (V1, V2, V3, V9) and 6 low (V4 to V8, V10).</li>
+  </ul>
+</section>
+
+<section id="criteria">
+  <h2>2 Acceptance criteria</h2>
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>AC</th><th>Criterion</th><th>Target</th><th>Measured value</th><th>Result</th><th>Evidence</th></tr></thead>
+    <tbody>
+      <tr><td>AC1</td><td>Section 1 of the table lists C1 to C9 with license, commit and verdict; each skip and each block has its reason</td><td>9 of 9</td><td>9 of 9 rows. 3 &laquo;measure&raquo; (C7 to C9), 2 &laquo;gated&raquo; (C1, C2) with the reason Q1, 4 &laquo;skip&raquo; (C3 to C6), each with a reason. T1 green in both default sessions. Mutation M1 (empty reason of C4) makes T1 red.</td><td><span class="pass">pass</span></td><td><code>results/prior-art-table.md</code> Section 1; T1; Table 6</td></tr>
+      <tr><td>AC2</td><td>Parity of each DINOv3 export on the GPU (E1, E3 to E6): FP32 exports pass the fp32 thresholds, FP16 exports the fp16 thresholds; E2 report only</td><td>5 of 5 pass</td><td>Build, worst over 10 lines each: E1 patch p01 1.000000; E3 0.999992 (mean 0.999997); E4 1.000000; E5 1.000000 (frame 1.000000); E6 0.999994. E2 (INT8) 0.998562, report only. Verify J1: the 14 worst-parity records equal the build records exactly. T3 green; T15 green (E1, 3 images, p01 &#8805; 0.9999).</td><td><span class="pass">pass</span></td><td>J1 lines; T3, T15; Table 4</td></tr>
+      <tr><td>AC3</td><td>Each of the 14 cells has 5 paired ratios, the lower median, the spread and the verdict</td><td>14 of 14, n = 5</td><td>14 of 14 cells with n = 5, lower median, spread 0.006 to 0.116 and verdict. The table, made again from the committed lines, is byte-equal to the committed file (at <code>4ab7e2c</code> and at <code>32062a9</code>). T4, T5 green; mutations M3, M4, M5 make them red. Verify round: 10 of 14 ratios inside the build spread &#177; 0.05 (finding V1).</td><td><span class="pass">pass</span></td><td>Section 2 of the table; T4, T5; Table 4</td></tr>
+      <tr><td>AC4</td><td>Each cell with a median ratio below 0.97 has a reason row in verify.html with a measured fact</td><td>1 reason for each such cell</td><td>4 cells below 0.97: E3 b1 0.944, E3 b8 0.929, E7 b1 0.860, E7 b8 0.853. Table 2 gives a reason row with measured facts for each. E6 (0.977, 0.989) is not below 0.97.</td><td><span class="pass">pass</span></td><td>Table 2</td></tr>
+      <tr><td>AC5</td><td>3 parity rows with the 8-bit image input (E1, E4, E5), each with its difference to the spec-array row; 14 throughput lines with ALL</td><td>3 + 14 lines</td><td>3 image rows: patch p01 0.998996 (E1, &minus;0.001004), 0.998874 (E4, &minus;0.001126), 0.998874 (E5, &minus;0.001126; frame 0.999910). 14 ALL lines, ALL &divide; CPU_AND_GPU 0.973 to 1.002. Verify J2: the 3 image rows equal the build rows exactly.</td><td><span class="pass">pass</span></td><td>Section 3 of the table; Table 5</td></tr>
+      <tr><td>AC6</td><td>V0 gives the output of compile_backbone bit for bit, on the small model and on ViT-S/16 fp32 at 224 px</td><td>largest difference 0.0</td><td>T8 (small model, 2 &times; 224 &times; 224 and 1 &times; 224 &times; 304): 0.0. T16 (ViT-S/16 fp32, iss-kibo-lab/224x224): 0.0. Build J3: <code>compiled_difference</code> 0.0 in 4 of 4 V0 lines; Verify J3: 0.0 in 2 of 2. Mutation M6 (V3 tables for V0) makes T8 red.</td><td><span class="pass">pass</span></td><td>T8, T16; J3 lines</td></tr>
+      <tr><td>AC7</td><td>V0 to V5 &times; ViT-S/16, ViT-H+/16 &times; fp32, bf16-cast, each on the 12 configurations, all finite, each with pass or fail</td><td>24 workers, 288 rows</td><td>24 workers, 288 configuration rows, 288 finite, each with a boolean <code>passes</code>. Verify J3 (ViT-S/16): 12 workers, 144 rows, every parity value equal to the build value (largest difference 0).</td><td><span class="pass">pass</span></td><td>Section 4 of the table; Table 5</td></tr>
+      <tr><td>AC8</td><td>V1 &divide; V0 and V4 &divide; V0 at P1 and P2 in fp32 and bf16-cast, each the lower median of 3 rounds, with the verdict</td><td>8 of 8 ratios</td><td>8 of 8 rows, n = 3, lower median, spread and verdict. Verify round at P1: 4 of 4 ratios inside the build spread &#177; 0.05 (Table 5).</td><td><span class="pass">pass</span></td><td>Section 5 of the table; Table 5</td></tr>
+      <tr><td>AC9</td><td>Each of the 8 port cells has 5 paired ratios with parity or the status &laquo;blocked&raquo; with the reason and the command of J5</td><td>8 of 8 rows</td><td>8 of 8 lines &laquo;blocked&raquo;, each with the reason (Q1) and the J5 command. <code>ports/driver.log</code>: &laquo;Q1 open: no third-party Python ran&raquo;, 0 worker commands. T13 green; mutation M11 makes T13 red.</td><td><span class="pass">pass</span></td><td>Section 6 of the table; T13</td></tr>
+      <tr><td>AC10</td><td>No candidate package in pyproject.toml or uv.lock; no candidate file in the repo; no pickle load in a worker; every third-party worker started with -I by the driver inside the GPU lock</td><td>0 violations</td><td>0 violations. <code>git ls-files</code>: no .mlpackage, no clone file, no .pth, .pt or .pkl file. pyproject.toml and uv.lock: no mlxim, mlx-image, mlx_dinov3 or MLXDINOv3; coremltools is only in the dependency group &laquo;coreml&raquo; of Step 6c (an Apple tool, not a candidate). No pickle, torch.load or np.load in the 6 Step 6b code files (3 workers, the driver, <code>prior_art.py</code>, <code>port_variants.py</code>). <code>coreml/driver.log</code>: 87 of 87 third-party commands are <code>venv-coreml/bin/python -I &lt;repo&gt;/scripts/prior_art_coreml_worker.py</code>; the driver ran 22:51 to 23:38 inside the lock hold 22:50:40 to 23:38:35 of &laquo;6b build chain&raquo;. Verify: 17 of 17 the same. T12, T14 green; mutations M10 and M12 make them red.</td><td><span class="pass">pass</span></td><td>T12, T14; git ls-files; driver.log; lock log</td></tr>
+      <tr><td>AC11</td><td>Each worker line has its memory check; 0 lines with an entry in other_heavy_jobs_seen; each fp32 worker of ours ran with MLX_ENABLE_TF32=0</td><td>0 violations</td><td>1 violation. Memory check: 197 of 197 worker lines &laquo;ok&raquo; (the 8 &laquo;blocked&raquo; lines start no worker). other_heavy_jobs_seen: 1 of 197 lines (line 189: J2, E5, batch size 1, ALL; a ruff call and dry runs of <code>scripts/bench_coreml.py</code> of the Step 6c session). TF32: 20 of 20 fp32 lines of ours with <code>mlx_enable_tf32</code> &laquo;0&raquo; and <code>tf32</code> false; 30 of 30 fp32 variant lines with &laquo;0&raquo;; a load with TF32 on stops with TF32ModeError, so a &laquo;done&raquo; fp32 line proves the setting. Verify: 45 of 45 worker lines with a memory check, 0 entries, TF32 0.</td><td><span class="fail">fail</span></td><td><code>results/prior-art.jsonl</code>; finding V2</td></tr>
+      <tr><td>AC12</td><td>uv run pytest green; default session wall time at most 60 s; slow session green; ruff format and ruff check clean</td><td>0 failed; &le; 60 s</td><td>1 of 2 targets missed. 0 failed: default session run 1 944 passed, 14 skipped in 66.52 s (wall 69 s); run 2 at <code>7c55e05</code> the same counts in 65.64 s (wall 68 s). T15 and T16 of the slow session: 2 passed in 2.07 s (the Verify subset runs only these two slow tests). ruff format --check: 85 files already formatted; ruff check: all checks passed. Time: the 22 test ids of <code>test_prior_art.py</code> take 0.17 s; <code>test_converted_weights_match_hub[ViT-H+/16]</code> takes 13.4 to 14.0 s; <code>test_gpu_lock.py</code> 10.1 s.</td><td><span class="fail">fail</span></td><td>Table 3; finding V9</td></tr>
+    </tbody>
+  </table>
+</div>
+  <p class="caption"><b>Table 1.</b> The 12 acceptance criteria of plan Table 6 with the measured values. &laquo;b1&raquo; and &laquo;b8&raquo; are the batch sizes 1 and 8. p01 is the patch 1st percentile.</p>
+
+  <h3>2.1 Reasons of the cells below 0.97 (AC4)</h3>
+  <p>The prior-art ratio of a cell is our patch throughput divided by the export throughput. Our patch time has two parts: the device time (the compiled forward pass to the end of <code>mx.eval</code>) and the move of the patch embeddings to the host. The device ratio is our device throughput divided by the export throughput. The transfer share is 1 &minus; patch throughput &divide; device throughput of ours.</p>
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>Cell</th><th>Ratio (build, Verify)</th><th>Measured facts</th><th>Reason</th></tr></thead>
+    <tbody>
+      <tr><td>E3 b1 (C9, ViT-S/16, 512 px, FP16; ours fp16-cast, 1029 tokens)</td><td class="num">0.944, 0.991</td><td>Device ratio 0.953 (build), 1.002 (Verify). Transfer share 0.010 and 0.011. In the Step 6 matrix the same configuration on torch-mps (compiled) is also faster than our mlx: patch ratio mlx &divide; torch-mps 0.906 (<code>results/speedup-table.md</code>, ViT-S/16, 512, 1, patch, fp16). The fp32 cells of ViT-S/16 (E1) and the fp16 cells of ViT-B/16 (E6, 0.977 and 0.975) do not show the gap.</td><td>The gap is in the GPU compute, not in the move to the host. It is the Step 6 reason &laquo;small width in a half dtype&raquo;: at an embedding dimension of 384 in fp16, the Apple GPU path of Core ML and torch-mps runs the blocks faster than our mlx kernels. The size of the gap changes between runs (0.944 against 0.991).</td></tr>
+      <tr><td>E3 b8</td><td class="num">0.929, 0.986</td><td>Device ratio 0.933, 0.991. Transfer share 0.005 and 0.005. Step 6 matrix: mlx &divide; torch-mps 0.868 at batch size 8.</td><td>As E3 b1.</td></tr>
+      <tr><td>E7 b1 (C9, DINOv2 ViT-S/14 + 4 registers, 518 px, FP16; ours ViT-S/16 at 592 px, fp16-cast, random pixels, 1374 tokens)</td><td class="num">0.860, 0.848</td><td>Device ratio 0.868, 0.854. Transfer share 0.009 and 0.007. The ratio is stable between the runs (build spread 0.116 from one round at 0.779; Verify inside the build range).</td><td>Two causes. (1) The small-width fp16 gap of E3, now at 1374 tokens. (2) The two sides are not the same model: DINOv2 has a learned position embedding and no RoPE, so our side does the RoPE rotation of q and k in each block and the export does not. The cell compares throughput at the same token count, not a port.</td></tr>
+      <tr><td>E7 b8</td><td class="num">0.853, 0.838</td><td>Device ratio 0.857, 0.842. Transfer share 0.005 and 0.005.</td><td>As E7 b1.</td></tr>
+    </tbody>
+  </table>
+</div>
+  <p class="caption"><b>Table 2.</b> The reason rows of AC4. Build facts: lower median over 5 rounds of <code>results/prior-art.jsonl</code>; they equal the facts of the new table section of <code>32062a9</code>. Verify facts: the one J1 round of Section 3.</p>
+</section>
+
+<section id="runs">
+  <h2>3 Verify runs</h2>
+  <p>Each GPU command ran in one script under one GPU lock call: <code>uv run python -m dinov3_apple.gpu_lock --label "6b verify subset" -- verify6b.sh</code>. The script ran the commands one after the other, each with its own log. The wait for the lock took 18 min (23:55:08 to 00:13:29). The benchmarks wrote to scratch files with <code>--results</code>. The free memory before each worker was 30.2 to 32.6 GB. Machine: Apple M5 Max, 64 GB, AC power, Low Power Mode off, no thermal warning. Versions: macOS 26.5.2, Python 3.12.13, mlx 0.32.4, coremltools 9.0 (venv-coreml).</p>
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>No.</th><th>Command</th><th>Time (UTC)</th><th>Wall time</th><th>Result</th></tr></thead>
+    <tbody>
+      <tr><td>R1</td><td><code>uv run ruff format --check src tests scripts</code>; <code>uv run ruff check src tests scripts</code> (outside the lock)</td><td>23:56</td><td class="num">&lt; 1 s</td><td>85 files already formatted; all checks passed</td></tr>
+      <tr><td>R2</td><td><code>uv run pytest</code> (default session, run 1)</td><td>00:13:29 to 00:14:38</td><td class="num">69 s</td><td>944 passed, 14 skipped in 66.52 s</td></tr>
+      <tr><td>R3</td><td><code>DINOV3_SLOW=1 uv run pytest tests/test_prior_art.py -k "end_to_end or variant_parity_vits16"</code></td><td>00:14:38 to 00:14:42</td><td class="num">4 s</td><td>2 passed (T15, T16) in 2.07 s</td></tr>
+      <tr><td>R4</td><td><code>bench_prior_art.py coreml --rounds 1 --results verify-j1.jsonl</code> (J1, one round)</td><td>00:14:42 to 00:19:52</td><td class="num">310 s</td><td>24 of 24 workers &laquo;done&raquo;</td></tr>
+      <tr><td>R5</td><td><code>bench_prior_art.py variants --parity --model-sizes ViT-S/16 --results verify-j3.jsonl</code> (J3)</td><td>00:19:52 to 00:19:58</td><td class="num">6 s</td><td>12 of 12 &laquo;done&raquo;</td></tr>
+      <tr><td>R6</td><td><code>bench_prior_art.py variants --speed --priority P1 --rounds 1 --results verify-j4.jsonl</code> (J4)</td><td>00:19:58 to 00:21:15</td><td class="num">77 s</td><td>6 of 6 &laquo;done&raquo;</td></tr>
+      <tr><td>R7</td><td><code>bench_prior_art.py coreml --image-input --results verify-j2.jsonl</code> (J2, image input)</td><td>00:21:15 to 00:21:18</td><td class="num">3 s</td><td>3 of 3 &laquo;done&raquo;</td></tr>
+      <tr><td>R8</td><td>14 mutation probes in a copy of <code>git archive 00bb056</code> (the Step 6b files equal <code>4ab7e2c</code>)</td><td>00:21:18 to 00:22:02</td><td class="num">44 s</td><td>M0 green; 13 of 14 probes red; M8 green (Table 6)</td></tr>
+      <tr><td>R9</td><td><code>uv run pytest</code> (default session, run 2, at <code>7c55e05</code>)</td><td>00:22:02 to 00:23:10</td><td class="num">68 s</td><td>944 passed, 14 skipped in 65.64 s</td></tr>
+    </tbody>
+  </table>
+</div>
+  <p class="caption"><b>Table 3.</b> The Verify commands. R2 to R9 ran under the GPU lock. The tree had uncommitted Step 6c files (<code>coreml.py</code>, <code>bench_coreml.py</code>, <code>test_coreml.py</code>); the 6c tests ran in the default session (18 tests, 0.49 s).</p>
+
+  <h3>3.1 Core ML cells: one Verify round against the build cells</h3>
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>Cell</th><th>Build ratios: median [min, max]</th><th>Verify ratio</th><th>Inside min &minus; 0.05 to max + 0.05</th><th>Ours img/s, build / Verify</th><th>Export img/s, build / Verify</th><th>Parity equal to build</th></tr></thead>
+    <tbody>
+      <tr><td>E1 b1</td><td class="num">1.070 [1.062, 1.072]</td><td class="num">1.099</td><td><span class="pass">yes</span></td><td class="num">324.4 / 391.9</td><td class="num">303.3 / 356.6</td><td>yes</td></tr>
+      <tr><td>E1 b8</td><td class="num">1.535 [1.523, 1.550]</td><td class="num">1.608</td><td><span class="fail">no</span> (+0.008)</td><td class="num">658.4 / 808.1</td><td class="num">429.1 / 502.7</td><td>yes</td></tr>
+      <tr><td>E2 b1</td><td class="num">1.148 [1.141, 1.149]</td><td class="num">1.240</td><td><span class="fail">no</span> (+0.041)</td><td class="num">324.4 / 391.9</td><td class="num">283.0 / 316.1</td><td>yes</td></tr>
+      <tr><td>E2 b8</td><td class="num">1.628 [1.621, 1.700]</td><td class="num">1.814</td><td><span class="fail">no</span> (+0.064)</td><td class="num">658.4 / 808.1</td><td class="num">404.3 / 445.6</td><td>yes</td></tr>
+      <tr><td>E3 b1</td><td class="num">0.944 [0.941, 0.947]</td><td class="num">0.991</td><td><span class="pass">yes</span></td><td class="num">231.4 / 265.9</td><td class="num">245.2 / 268.2</td><td>yes</td></tr>
+      <tr><td>E3 b8</td><td class="num">0.929 [0.919, 0.941]</td><td class="num">0.986</td><td><span class="pass">yes</span></td><td class="num">269.1 / 294.2</td><td class="num">287.8 / 298.2</td><td>yes</td></tr>
+      <tr><td>E4 b1</td><td class="num">1.066 [1.062, 1.077]</td><td class="num">1.114</td><td><span class="pass">yes</span></td><td class="num">44.2 / 43.3</td><td class="num">41.4 / 38.9</td><td>yes</td></tr>
+      <tr><td>E4 b8</td><td class="num">1.094 [1.084, 1.096]</td><td class="num">1.109</td><td><span class="pass">yes</span></td><td class="num">47.5 / 40.1</td><td class="num">43.8 / 36.2</td><td>yes</td></tr>
+      <tr><td>E5 b1</td><td class="num">1.058 [1.036, 1.059]</td><td class="num">1.147</td><td><span class="fail">no</span> (+0.039)</td><td class="num">44.2 / 43.3</td><td class="num">42.3 / 37.7</td><td>yes</td></tr>
+      <tr><td>E5 b8</td><td class="num">1.082 [1.071, 1.089]</td><td class="num">1.111</td><td><span class="pass">yes</span></td><td class="num">47.5 / 40.1</td><td class="num">44.0 / 36.1</td><td>yes</td></tr>
+      <tr><td>E6 b1</td><td class="num">0.977 [0.972, 0.982]</td><td class="num">0.975</td><td><span class="pass">yes</span></td><td class="num">127.5 / 106.3</td><td class="num">130.5 / 109.1</td><td>yes</td></tr>
+      <tr><td>E6 b8</td><td class="num">0.989 [0.984, 0.994]</td><td class="num">0.986</td><td><span class="pass">yes</span></td><td class="num">138.4 / 116.1</td><td class="num">140.6 / 117.8</td><td>yes</td></tr>
+      <tr><td>E7 b1</td><td class="num">0.860 [0.779, 0.869]</td><td class="num">0.848</td><td><span class="pass">yes</span></td><td class="num">172.1 / 151.6</td><td class="num">200.6 / 178.8</td><td>yes (finite only)</td></tr>
+      <tr><td>E7 b8</td><td class="num">0.853 [0.849, 0.863]</td><td class="num">0.838</td><td><span class="pass">yes</span></td><td class="num">191.7 / 165.6</td><td class="num">224.6 / 197.6</td><td>yes (finite only)</td></tr>
+    </tbody>
+  </table>
+</div>
+  <p class="caption"><b>Table 4.</b> J1, patch output, compute units CPU_AND_GPU. Build: 5 rounds from 23:09 to 23:35 on 2026-11-07. Verify: round 1 from 00:14:55 to 00:19:52 on 2026-11-08, with ours first in each cell, as in round 1 of the build. img/s of the build: lower median.</p>
+
+  <figure>
+<div class="fig">
+<svg viewBox="0 0 760 426" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Prior-art ratio of each Core ML cell: build range and Verify round">
+<style>text{font-family:-apple-system,Helvetica,Arial,sans-serif;font-size:11px;fill:#111414}.m{fill:#4a5655}</style>
+<rect x="0" y="0" width="760" height="426" fill="#ffffff"/>
+<line x1="220.0" y1="28" x2="220.0" y2="370" stroke="#d6dedd" stroke-width="0.8"/>
+<text x="220.0" y="384" text-anchor="middle" class="m">0.8</text>
+<line x1="270.0" y1="28" x2="270.0" y2="370" stroke="#d6dedd" stroke-width="0.8"/>
+<text x="270.0" y="384" text-anchor="middle" class="m">0.9</text>
+<line x1="320.0" y1="28" x2="320.0" y2="370" stroke="#111414" stroke-width="1.2"/>
+<text x="320.0" y="384" text-anchor="middle" class="m">1.0</text>
+<line x1="370.0" y1="28" x2="370.0" y2="370" stroke="#d6dedd" stroke-width="0.8"/>
+<text x="370.0" y="384" text-anchor="middle" class="m">1.1</text>
+<line x1="420.0" y1="28" x2="420.0" y2="370" stroke="#d6dedd" stroke-width="0.8"/>
+<text x="420.0" y="384" text-anchor="middle" class="m">1.2</text>
+<line x1="470.0" y1="28" x2="470.0" y2="370" stroke="#d6dedd" stroke-width="0.8"/>
+<text x="470.0" y="384" text-anchor="middle" class="m">1.3</text>
+<line x1="520.0" y1="28" x2="520.0" y2="370" stroke="#d6dedd" stroke-width="0.8"/>
+<text x="520.0" y="384" text-anchor="middle" class="m">1.4</text>
+<line x1="570.0" y1="28" x2="570.0" y2="370" stroke="#d6dedd" stroke-width="0.8"/>
+<text x="570.0" y="384" text-anchor="middle" class="m">1.5</text>
+<line x1="620.0" y1="28" x2="620.0" y2="370" stroke="#d6dedd" stroke-width="0.8"/>
+<text x="620.0" y="384" text-anchor="middle" class="m">1.6</text>
+<line x1="670.0" y1="28" x2="670.0" y2="370" stroke="#d6dedd" stroke-width="0.8"/>
+<text x="670.0" y="384" text-anchor="middle" class="m">1.7</text>
+<rect x="305.0" y="28" width="30.0" height="342" fill="#057379" fill-opacity="0.08"/>
+<text x="445" y="402" text-anchor="middle">ours ÷ export, patch output (above 1: ours is faster)</text>
+<text x="170" y="18">Grey band: build range ± 0.05. Black bar: build range (5 rounds). Tick: build median. Red dot: Verify round.</text>
+<text x="160" y="44" text-anchor="end">E1, batch size 1</text>
+<rect x="325.8" y="35" width="55.4" height="10" fill="#d6dedd"/>
+<rect x="350.8" y="38" width="5.4" height="4" fill="#111414"/>
+<line x1="355.1" y1="33" x2="355.1" y2="47" stroke="#111414" stroke-width="1.5"/>
+<circle cx="369.6" cy="40" r="4" fill="#b3261e"/>
+<text x="160" y="68" text-anchor="end">E1, batch size 8</text>
+<rect x="556.7" y="59" width="63.1" height="10" fill="#d6dedd"/>
+<rect x="581.7" y="62" width="13.1" height="4" fill="#111414"/>
+<line x1="587.3" y1="57" x2="587.3" y2="71" stroke="#111414" stroke-width="1.5"/>
+<circle cx="623.9" cy="64" r="4" fill="#b3261e"/>
+<text x="160" y="92" text-anchor="end">E2, batch size 1</text>
+<rect x="365.6" y="83" width="54.0" height="10" fill="#d6dedd"/>
+<rect x="390.6" y="86" width="4.0" height="4" fill="#111414"/>
+<line x1="393.9" y1="81" x2="393.9" y2="95" stroke="#111414" stroke-width="1.5"/>
+<circle cx="440.0" cy="88" r="4" fill="#b3261e"/>
+<text x="160" y="116" text-anchor="end">E2, batch size 8</text>
+<rect x="605.7" y="107" width="89.2" height="10" fill="#d6dedd"/>
+<rect x="630.7" y="110" width="39.2" height="4" fill="#111414"/>
+<line x1="634.0" y1="105" x2="634.0" y2="119" stroke="#111414" stroke-width="1.5"/>
+<circle cx="726.8" cy="112" r="4" fill="#b3261e"/>
+<text x="160" y="140" text-anchor="end">E3, batch size 1</text>
+<rect x="265.3" y="131" width="53.0" height="10" fill="#d6dedd"/>
+<rect x="290.3" y="134" width="3.0" height="4" fill="#111414"/>
+<line x1="291.9" y1="129" x2="291.9" y2="143" stroke="#111414" stroke-width="1.5"/>
+<circle cx="315.7" cy="136" r="4" fill="#b3261e"/>
+<text x="160" y="164" text-anchor="end">E3, batch size 8</text>
+<rect x="254.7" y="155" width="60.8" height="10" fill="#d6dedd"/>
+<rect x="279.7" y="158" width="10.8" height="4" fill="#111414"/>
+<line x1="284.3" y1="153" x2="284.3" y2="167" stroke="#111414" stroke-width="1.5"/>
+<circle cx="313.2" cy="160" r="4" fill="#b3261e"/>
+<text x="160" y="188" text-anchor="end">E4, batch size 1</text>
+<rect x="326.0" y="179" width="57.3" height="10" fill="#d6dedd"/>
+<rect x="351.0" y="182" width="7.3" height="4" fill="#111414"/>
+<line x1="353.2" y1="177" x2="353.2" y2="191" stroke="#111414" stroke-width="1.5"/>
+<circle cx="376.9" cy="184" r="4" fill="#b3261e"/>
+<text x="160" y="212" text-anchor="end">E4, batch size 8</text>
+<rect x="336.8" y="203" width="56.3" height="10" fill="#d6dedd"/>
+<rect x="361.8" y="206" width="6.3" height="4" fill="#111414"/>
+<line x1="366.9" y1="201" x2="366.9" y2="215" stroke="#111414" stroke-width="1.5"/>
+<circle cx="374.6" cy="208" r="4" fill="#b3261e"/>
+<text x="160" y="236" text-anchor="end">E5, batch size 1</text>
+<rect x="312.9" y="227" width="61.5" height="10" fill="#d6dedd"/>
+<rect x="337.9" y="230" width="11.5" height="4" fill="#111414"/>
+<line x1="348.9" y1="225" x2="348.9" y2="239" stroke="#111414" stroke-width="1.5"/>
+<circle cx="393.7" cy="232" r="4" fill="#b3261e"/>
+<text x="160" y="260" text-anchor="end">E5, batch size 8</text>
+<rect x="330.7" y="251" width="58.7" height="10" fill="#d6dedd"/>
+<rect x="355.7" y="254" width="8.7" height="4" fill="#111414"/>
+<line x1="361.0" y1="249" x2="361.0" y2="263" stroke="#111414" stroke-width="1.5"/>
+<circle cx="375.4" cy="256" r="4" fill="#b3261e"/>
+<text x="160" y="284" text-anchor="end">E6, batch size 1</text>
+<rect x="280.9" y="275" width="55.2" height="10" fill="#d6dedd"/>
+<rect x="305.9" y="278" width="5.2" height="4" fill="#111414"/>
+<line x1="308.3" y1="273" x2="308.3" y2="287" stroke="#111414" stroke-width="1.5"/>
+<circle cx="307.5" cy="280" r="4" fill="#b3261e"/>
+<text x="160" y="308" text-anchor="end">E6, batch size 8</text>
+<rect x="286.9" y="299" width="55.0" height="10" fill="#d6dedd"/>
+<rect x="311.9" y="302" width="5.0" height="4" fill="#111414"/>
+<line x1="314.6" y1="297" x2="314.6" y2="311" stroke="#111414" stroke-width="1.5"/>
+<circle cx="313.1" cy="304" r="4" fill="#b3261e"/>
+<text x="160" y="332" text-anchor="end">E7, batch size 1</text>
+<rect x="184.4" y="323" width="95.1" height="10" fill="#d6dedd"/>
+<rect x="209.4" y="326" width="45.1" height="4" fill="#111414"/>
+<line x1="250.1" y1="321" x2="250.1" y2="335" stroke="#111414" stroke-width="1.5"/>
+<circle cx="243.8" cy="328" r="4" fill="#b3261e"/>
+<text x="160" y="356" text-anchor="end">E7, batch size 8</text>
+<rect x="219.3" y="347" width="57.3" height="10" fill="#d6dedd"/>
+<rect x="244.3" y="350" width="7.3" height="4" fill="#111414"/>
+<line x1="246.5" y1="345" x2="246.5" y2="359" stroke="#111414" stroke-width="1.5"/>
+<circle cx="239.0" cy="352" r="4" fill="#b3261e"/>
+</svg>
+</div>
+    <figcaption><b>Figure 1.</b> Prior-art ratio of each Core ML cell. The black bar is the range of the 5 build rounds, the tick the build median, the grey band the range &#177; 0.05, the red dot the Verify round. The teal band is the noise band 1 &#177; 0.03. Four red dots are outside their grey band (E1 b8, E2 b1, E2 b8, E5 b1); all four are on the side &laquo;ours faster&raquo;.</figcaption>
+  </figure>
+  <p>The absolute throughput moved more than the ratios. The first group of the Verify round (G1, ViT-S/16 at 224 px) ran 10 to 23 % faster than the build medians (ours 21 and 23 %, the exports 10 to 18 %). The later groups (G3 to G5) ran 2 to 18 % slower on both sides. In a cell with two exports, the export that ran later got the larger ratio (E2 after E1: 1.240 against 1.099; E5 after E4: 1.147 against 1.114). The build shows the same effect in round 1: E2 b8 has its largest ratio there (1.700; rounds 2 to 5: 1.621 to 1.636). One round with ours first is therefore not a neutral check, and the spread inside one run does not show the change between runs.</p>
+
+  <h3>3.2 Variants and image input</h3>
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>Job</th><th>Row</th><th>Build</th><th>Verify</th><th>Result</th></tr></thead>
+    <tbody>
+      <tr><td>J4</td><td>P1 fp32 V1 &divide; V0</td><td>0.912 [0.851, 0.932]</td><td class="num">0.934</td><td>inside &#177; 0.05</td></tr>
+      <tr><td>J4</td><td>P1 fp32 V4 &divide; V0</td><td>0.897 [0.834, 0.909]</td><td class="num">0.936</td><td>inside &#177; 0.05</td></tr>
+      <tr><td>J4</td><td>P1 bf16-cast V1 &divide; V0</td><td>0.978 [0.956, 0.983]</td><td class="num">0.998</td><td>inside &#177; 0.05</td></tr>
+      <tr><td>J4</td><td>P1 bf16-cast V4 &divide; V0</td><td>0.860 [0.802, 0.866]</td><td class="num">0.894</td><td>inside &#177; 0.05</td></tr>
+      <tr><td>J3</td><td>ViT-S/16, fp32 and bf16-cast, V0 to V5, 12 configurations each</td><td>pass counts fp32 12, 3, 5, 12, 12, 0; bf16-cast 12 &times; 6</td><td>the same counts</td><td>144 of 144 parity records equal (largest difference 0)</td></tr>
+      <tr><td>J2</td><td>E1, E4, E5 with the 8-bit image input</td><td>p01 0.998996, 0.998874, 0.998874</td><td>the same</td><td>3 of 3 parity records equal</td></tr>
+    </tbody>
+  </table>
+</div>
+  <p class="caption"><b>Table 5.</b> J4 (one round at P1: V0 1,392 img/s bf16-cast, 602 img/s fp32), J3 and J2 against the build lines. Brackets: [min, max] of the 3 build rounds.</p>
+
+  <h3>3.3 Mutation probes</h3>
+  <p>The build note says that T1 to T5 and T8 to T10 were green at their first run, so they never went red. A mutation probe puts one fault into a copy of the code. The named test must go red. The probe M0 runs the 13 probed test ids without a fault: green.</p>
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>Probe</th><th>Plan test</th><th>File</th><th>Fault</th><th>Result</th></tr></thead>
+    <tbody>
+      <tr><td>M1</td><td>T1 <code>test_candidates_cover_the_explore_table</code></td><td><code>src/dinov3_apple/prior_art.py</code></td><td>the reason of C4 is empty</td><td><span class="pass">red</span>: 1 failed, 20 deselected in 0.07s</td></tr>
+      <tr><td>M2</td><td>T3 <code>test_export_parity_patch_only_and_normalized</code></td><td><code>src/dinov3_apple/prior_art.py</code></td><td>a grid output maps to tokens in column-major order</td><td><span class="pass">red</span>: 1 failed, 20 deselected in 0.07s</td></tr>
+      <tr><td>M3</td><td>T4 <code>test_coreml_pair_plan</code></td><td><code>src/dinov3_apple/prior_art.py</code></td><td>ours is first in every round</td><td><span class="pass">red</span>: 1 failed, 20 deselected in 0.07s</td></tr>
+      <tr><td>M4</td><td>T5 <code>test_cell_row_ratio_and_verdict</code></td><td><code>src/dinov3_apple/prior_art.py</code></td><td>the ratio is export &divide; ours</td><td><span class="pass">red</span>: 1 failed, 20 deselected in 0.07s</td></tr>
+      <tr><td>M5</td><td>T5 <code>test_cell_row_ratio_and_verdict</code></td><td><code>src/dinov3_apple/prior_art.py</code></td><td>the upper median, not the lower median</td><td><span class="pass">red</span>: 1 failed, 20 deselected in 0.07s</td></tr>
+      <tr><td>M6</td><td>T8 <code>test_variant_v0_is_bit_for_bit</code></td><td><code>src/dinov3_apple/port_variants.py</code></td><td>V0 gets the V3 tables (Meta periods)</td><td><span class="pass">red</span>: 1 failed, 20 deselected in 0.17s</td></tr>
+      <tr><td>M7</td><td>T9 <code>test_unfused_attention_matches_sdpa</code></td><td><code>src/dinov3_apple/port_variants.py</code></td><td>the unfused attention leaves out the scale</td><td><span class="pass">red</span>: 2 failed, 19 deselected in 0.20s</td></tr>
+      <tr><td>M8</td><td>T10 <code>test_bf16_rotation_rounds_prefix_tokens</code></td><td><code>src/dinov3_apple/port_variants.py</code></td><td><code>Bf16RotationAttention</code> keeps the 5 prefix tokens of q and k in fp32</td><td><span class="fail">green</span>: 1 passed, 20 deselected in 0.16s</td></tr>
+      <tr><td>M14</td><td>T10 <code>test_bf16_rotation_rounds_prefix_tokens</code></td><td><code>src/dinov3_apple/port_variants.py</code></td><td><code>port_rotate</code> uses the wrong sign of rotate_half</td><td><span class="pass">red</span>: 1 failed, 20 deselected in 0.18s</td></tr>
+      <tr><td>M9</td><td>T11 <code>test_eight_bit_pixels</code></td><td><code>src/dinov3_apple/prior_art.py</code></td><td>8-bit pixels with floor, not round</td><td><span class="pass">red</span>: 1 failed, 20 deselected in 0.07s</td></tr>
+      <tr><td>M10</td><td>T12 <code>test_workers_are_standalone_and_safe</code></td><td><code>scripts/prior_art_coreml_worker.py</code></td><td>the Core ML worker imports pickle</td><td><span class="pass">red</span>: 1 failed, 1 passed, 19 deselected in 0.08s</td></tr>
+      <tr><td>M11</td><td>T13 <code>test_ports_subcommand_is_gated</code></td><td><code>scripts/bench_prior_art.py</code></td><td>the ports subcommand runs the workers without the flag</td><td><span class="pass">red</span>: 1 failed, 20 deselected in 12.11s</td></tr>
+      <tr><td>M12</td><td>T14 <code>test_driver_env_and_command</code></td><td><code>scripts/bench_prior_art.py</code></td><td>a third-party worker starts without -I</td><td><span class="pass">red</span>: 1 failed, 20 deselected in 0.08s</td></tr>
+      <tr><td>M13</td><td>T14 <code>test_driver_env_and_command</code></td><td><code>scripts/bench_prior_art.py</code></td><td>the worker of ours gets MLX_ENABLE_TF32=1</td><td><span class="pass">red</span>: 1 failed, 20 deselected in 0.08s</td></tr>
+    </tbody>
+  </table>
+</div>
+  <p class="caption"><b>Table 6.</b> Mutation probes. &laquo;red&raquo;: the test catches the fault. &laquo;green&raquo;: the test does not catch it (finding V5).</p>
+</section>
+
+<section id="findings">
+  <h2>4 Findings</h2>
+  <p>The agent changed no code. Each finding gives the severity, the place and a fix. The user decides.</p>
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>No.</th><th>Severity</th><th>What</th><th>Where</th><th>Fix</th></tr></thead>
+    <tbody>
+      <tr><td>V1</td><td>medium</td><td>One Verify round puts 4 of 14 prior-art ratios outside the build spread + 0.05: E1 b8 1.608 (build [1.523, 1.550]), E2 b1 1.240 ([1.141, 1.149]), E2 b8 1.814 ([1.621, 1.700]), E5 b1 1.147 ([1.036, 1.059]). The E3 cells move from 0.944 and 0.929 to 0.991 and 0.986. The build cells come from one run of 5 rounds (D6 option B). The spread inside that run (0.006 to 0.048, without E7 b1) is smaller than the change to a second run 40 to 65 min later. So the verdicts near 1 (E3, E6) and the AC4 premise of E3 rest on one run.</td><td><code>results/prior-art-table.md</code> Section 2; plan Section 7.1, D6 of <code>explore.html</code></td><td>Run J1 a second time at another time (D6 option C, about 26 min). Report each cell with the run medians, the pooled median and the spread between runs, as the P1 and P2 rows of Step 6. Give the AC4 reason only to cells below 0.97 in both runs.</td></tr>
+      <tr><td>V2</td><td>medium</td><td>AC11 fails: line 189 of <code>results/prior-art.jsonl</code> (J2, E5, b1, ALL, 23:37:25) has two entries in <code>other_heavy_jobs_seen</code>: a zsh call of the Step 6c session with <code>uv run ruff format ... scripts/bench_coreml.py ...</code> and dry runs of <code>scripts/bench_coreml.py</code>. HEAVY_JOB_PATTERN matches each command line that names a <code>scripts/bench</code> file, also a ruff call. The row is report only; its ALL &divide; CPU_AND_GPU ratio is 0.978.</td><td><code>results/prior-art.jsonl</code>:189; <code>src/dinov3_apple/gpu_lock.py</code>:39</td><td>Run the 14 ALL workers again (<code>coreml --units ALL --rounds 1</code>, about 3 min) and replace the 14 J2 ALL lines. Later: let the pattern match only a Python process that runs <code>scripts/bench_*.py</code> without <code>--dry-run</code>.</td></tr>
+      <tr><td>V3</td><td>medium</td><td>The port worker (J5, gated) times another span than our worker. It builds and casts the input batch before the timed loop, so its timed call has no host-to-device copy and no cast; its call also moves the frame embeddings. <code>time_batch_mlx</code> puts <code>mx.array(batch)</code> inside each timed call, and our patch time leaves out the move of the frame embeddings. The size of the difference is not measured. At P1 bf16 one batch of ours takes 5.4 ms (1,486 img/s at batch size 8), so each 0.1 ms of difference moves the J5 ratio by about 2 %, inside the scale of the noise band (&#177; 0.03).</td><td><code>scripts/prior_art_port_worker.py</code>:147-154; <code>src/dinov3_apple/mlx_bench.py</code>:93-101</td><td>Time the port call with the three phases of <code>time_batch_mlx</code>: build <code>mx.array(batch)</code> inside the call, then record the device time, the frame time and the patch time. Pair the patch time of both sides. Do this before the user answers Q1.</td></tr>
+      <tr><td>V4</td><td>low</td><td>The new AC4 section of the table uses &laquo;host share&raquo; for 1 &minus; patch &divide; device throughput (the move of the outputs to the host). GLOSSARY.md gives &laquo;host share&raquo; another meaning: the time of a compiled call before <code>mx.eval</code> divided by the time to the end of <code>mx.eval</code>. One word has two meanings.</td><td><code>scripts/bench_prior_art.py</code>:547, 552; <code>src/dinov3_apple/prior_art.py</code>:836</td><td>Rename the field and the column to &laquo;transfer share&raquo; (<code>transfer_share</code>) and add the term to GLOSSARY.md. This page uses &laquo;transfer share&raquo;.</td></tr>
+      <tr><td>V5</td><td>low</td><td>T10 does not catch a fault of <code>Bf16RotationAttention</code>: with the prefix tokens kept in fp32 (mutation M8), T10 stays green. T10 checks the prefix rows of <code>port_rotate</code> on an input that the test casts itself, and checks only &laquo;V1 differs from V0&raquo; for the attention module.</td><td><code>tests/test_prior_art.py</code>:297-315; <code>src/dinov3_apple/port_variants.py</code>:95</td><td>Move the cast, the rotation and the cast back into one function (for example <code>port_apply_rope(t, cos, sin)</code>) that <code>Bf16RotationAttention</code> calls. In T10, call that function on fp32 q and assert that the prefix rows equal the bf16 values of q.</td></tr>
+      <tr><td>V6</td><td>low</td><td>Section 5 of the table gives no validity mark. The 3 lines of V1 at P2 fp32 have <code>valid</code> false (patch p01 below the fp32 threshold), but the row looks like the other rows.</td><td><code>scripts/bench_prior_art.py</code>:645-651</td><td>Add a column &laquo;Valid&raquo; with the count of valid lines of the variant (for example &laquo;0 of 3&raquo;).</td></tr>
+      <tr><td>V7</td><td>low</td><td>Each J3 line has <code>side</code> 512, and its driver.log label says &laquo;512px b1&raquo;. A J3 worker runs the 12 configurations at 224 to 512 px.</td><td><code>src/dinov3_apple/prior_art.py</code>:567; <code>scripts/bench_prior_art.py</code>:339</td><td>Write <code>side</code> null in a J3 line and &laquo;12 configurations&raquo; in its label.</td></tr>
+      <tr><td>V8</td><td>low</td><td><code>build_c2</code> (J5, gated) gives each model key that is not in our weights file its initial value, then loads with <code>strict=True</code>. So the strict load does not catch a missing weight of our Meta-names file; a wrong key map gives random weights without an error.</td><td><code>scripts/prior_art_port_worker.py</code>:83-86</td><td>Fill only a fixed list of keys (for example the RoPE periods and the k-bias mask). Stop with a KeyError for any other missing key. Write the filled keys into the result line.</td></tr>
+      <tr><td>V9</td><td>medium</td><td>AC12 fails: the default session takes 69 s and 68 s wall time (pytest 66.52 s and 65.64 s) in two runs under the GPU lock, above 60 s. The 22 test ids of <code>test_prior_art.py</code> take 0.17 s, so the Step 6b tests are not the cause. <code>test_converted_weights_match_hub[ViT-H+/16]</code> compares each tensor of the converted ViT-H+/16 weights with the Hub file and takes 13.4 to 14.0 s. <code>test_gpu_lock.py</code> takes 10.1 s.</td><td><code>tests/test_convert_meta_checkpoint.py</code>:92-93; <code>tests/test_gpu_lock.py</code></td><td>Move the ViT-H+/16 case of <code>test_converted_weights_match_hub</code> to the slow session and keep the ViT-S/16 case in the default session. The default session then takes about 52 s. Measure it again under the lock.</td></tr>
+      <tr><td>V10</td><td>low</td><td>The deviations of the build are only in test docstrings and in a running note of the build session: two source files instead of one (<code>port_variants.py</code>), the T6 bound 0.04 instead of 0.02, T9 with a bound relative to the largest V0 value, T12 with coremltools allowed in a dependency group, T16 against <code>compile_backbone</code> instead of the Step 5 parity, MLX_ENABLE_TF32=0 also for the port workers, T1 to T5 and T8 to T10 never red. The shared notes folder has no Step 6b build hand-over yet.</td><td><code>tests/test_prior_art.py</code>:211-217, 284, 375-380, 466</td><td>Write the build hand-over with each deviation, so that the user can confirm or reject it. Table 6 gives the red evidence for T1 to T5 and T8 to T14.</td></tr>
+    </tbody>
+  </table>
+</div>
+  <p class="caption"><b>Table 7.</b> Findings. Severity: high stops a result; medium changes a verdict or a criterion; low is a gap in the code, the tests or the words.</p>
+</section>
+
+<section id="sources">
+  <h2>5 Sources</h2>
+  <ul>
+    <li>Spec: <code>specs/06b-prior-art/explore.html</code>, <code>specs/06b-prior-art/plan.html</code> (Sections 3, 6, 7.3, 8).</li>
+    <li>Build: <code>git diff 84dfb3e..32062a9</code> of <code>src/dinov3_apple/prior_art.py</code>, <code>src/dinov3_apple/port_variants.py</code>, <code>scripts/bench_prior_art.py</code>, <code>scripts/prior_art_coreml_worker.py</code>, <code>scripts/prior_art_port_worker.py</code>, <code>scripts/prior_art_meta_names.py</code>, <code>tests/test_prior_art.py</code>, <code>GLOSSARY.md</code>.</li>
+    <li>Build results: <code>results/prior-art.jsonl</code> (205 lines), <code>results/prior-art-table.md</code>; driver logs in <code>tests/fixtures/generated/bench/prior-art/{coreml,variants,ports}/driver.log</code> (git ignores them).</li>
+    <li>Lock log: <code>~/.cache/dinov3-apple/gpu-lock.log</code> (build hold 22:50:40 to 23:38:35; Verify hold from 00:13:29).</li>
+    <li>Verify results (scratchpad of the Verify session, outside the repo): <code>verify-j1.jsonl</code>, <code>verify-j2.jsonl</code>, <code>verify-j3.jsonl</code>, <code>verify-j4.jsonl</code> with their <code>*-batches/</code> folders and driver logs; <code>junit-default.xml</code>, <code>junit-default2.xml</code>, <code>junit-slow.xml</code>; <code>vmut/mutations.json</code>.</li>
+    <li>Cross-reference: <code>results/speedup-table.md</code> (Step 6 matrix, ViT-S/16 at 512 px, fp16).</li>
+  </ul>
+<pre>uv run ruff format --check src tests scripts
+uv run ruff check src tests scripts
+uv run python -m dinov3_apple.gpu_lock -- uv run pytest
+DINOV3_SLOW=1 uv run python -m dinov3_apple.gpu_lock -- uv run pytest tests/test_prior_art.py -k "end_to_end or variant_parity_vits16"
+uv run python -m dinov3_apple.gpu_lock -- uv run python scripts/bench_prior_art.py coreml --rounds 1 --results &lt;scratch&gt;/verify-j1.jsonl
+uv run python -m dinov3_apple.gpu_lock -- uv run python scripts/bench_prior_art.py variants --parity --model-sizes ViT-S/16 --results &lt;scratch&gt;/verify-j3.jsonl
+uv run python -m dinov3_apple.gpu_lock -- uv run python scripts/bench_prior_art.py variants --speed --priority P1 --rounds 1 --results &lt;scratch&gt;/verify-j4.jsonl
+uv run python -m dinov3_apple.gpu_lock -- uv run python scripts/bench_prior_art.py coreml --image-input --results &lt;scratch&gt;/verify-j2.jsonl</pre>
+</section>
+</main>
+</body>
+</html>
