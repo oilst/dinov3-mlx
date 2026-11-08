@@ -223,11 +223,14 @@ def port_rotate(x, cos, sin):
     rotated = mx.concatenate([-patches[..., half:], patches[..., :half]], axis=-1)  # rotate_half
     return mx.concatenate([x[..., :prefix, :], patches * cos + rotated * sin], axis=-2)
 
+def port_apply_rope(x, cos, sin):
+    # all tokens go to bf16, also the prefix tokens, also in the fp32 dtype mode
+    return port_rotate(x.astype(mx.bfloat16), cos, sin).astype(x.dtype)
+
 class Bf16RotationAttention(Attention):
     def __call__(self, x, cos, sin):
         q, k, v = self.qkv(x)
-        # all tokens go to bf16, also the prefix tokens, also in the fp32 dtype mode
-        q, k = (port_rotate(t.astype(mx.bfloat16), cos, sin).astype(t.dtype) for t in (q, k))
+        q, k = port_apply_rope(q, cos, sin), port_apply_rope(k, cos, sin)
         a = mx.fast.scaled_dot_product_attention(q, k, v, scale=self.scale, mask=None)
         return self.output(a)</code></pre>
   <p>A NumPy oracle (test T6) rounds to bf16 after each step, with round to nearest even. The GPU agrees with it within one bf16 step: the GPU and NumPy compute cos and sin with other code, so a value next to a rounding boundary can round the other way.</p>
@@ -276,7 +279,7 @@ class Bf16RotationAttention(Attention):
 
 <section id="results">
   <h2>7 Results</h2>
-  <p>Job J1 paired each export with our compiled forward pass in 5 rounds, compute units CPU_AND_GPU (results/prior-art.jsonl, 120 workers on 2026-11-08 between 00:10 and 00:35). In 12 of 14 cells the spread of the 5 ratios is at most 0.024: the full time budget makes the pairs repeatable.</p>
+  <p>Job J1 paired each export with our compiled forward pass in 5 rounds, compute units CPU_AND_GPU (results/prior-art.jsonl, 120 workers on 2026-11-08 between 00:10 and 00:35). In 12 of 14 cells the spread of the 5 ratios is at most 0.024. A second run of J1 (results/prior-art-run2.jsonl, 01:43 to 02:09, after finding V1 of <code>verify.html</code>) gives the same run median within 0.016 in every cell, and the same verdict in 14 of 14 cells (Section 2 of results/prior-art-table.md): the full time budget and the pairs make the ratios repeatable.</p>
   <figure>
     <div class="fig"><svg viewBox="0 0 960 464" role="img" aria-label="Prior-art ratios of the Core ML cells">
 <rect width="960" height="464" fill="#ffffff"/>
@@ -435,7 +438,7 @@ class Bf16RotationAttention(Attention):
     <li><b>FP32: ours is faster in every cell.</b> 1.058 to 1.094 at ViT-B/16 448 px and 1.070 at ViT-S/16 224 px with batch size 1. At batch size 8 the factor is 1.535: an export has a fixed batch size of 1, so a batch of 8 is 8 small calls.</li>
     <li><b>FP16: the exports are equal or faster.</b> E6 (ViT-B/16, 448 px) is inside the noise (0.977 and 0.989). E3 (ViT-S/16, 512 px) is faster by 6 to 7 % (0.944 and 0.929) and the DINOv2 export E7 at the same token count by 14 to 15 % (0.860 and 0.853). The host transfer of our outputs is at most 1.0 % of our batch time in these cells (Table 2 notes of results/prior-art-table.md), so it does not explain the gap. The gap grows with the share of the attention in the compute: ViT-S/16 (D = 384) with 1029 and 1374 tokens, not ViT-B/16 (D = 768) with 789 tokens.</li>
     <li><b>The 8-bit image input costs parity, not the backbone.</b> As shipped, E1 gives a patch 1st percentile of 0.998996 and E4 and E5 0.998874 (job J2), below the fp32 threshold. Our variant V5 on ViT-S/16 gives the same 0.998996 (Table 3).</li>
-    <li><b>ALL and CPU_AND_GPU give the same speed.</b> The ALL round is 0.973 to 1.002 of the CPU_AND_GPU median: Core ML runs these exports on the GPU.</li>
+    <li><b>ALL runs the same program on the GPU, but an unpaired round drifts.</b> With ALL, every export gives the CPU_AND_GPU parity bit for bit, so Core ML does not move work to the Apple Neural Engine. The throughput of an unpaired ALL round is not a device effect: a first round (00:35) gave 0.973 to 1.002 of the CPU_AND_GPU median, a second round (01:40) 0.877 to 1.314, while run 2 of J1, one minute later, gave the CPU_AND_GPU values of run 1 again.</li>
   </ul>
   <div class="table-wrap"><table>
 <thead><tr><th>Model size</th><th>Dtype mode</th><th>Variant</th><th>Pass</th><th>Worst frame</th><th>Worst patch mean</th><th>Worst patch p01</th></tr></thead><tbody>
@@ -507,7 +510,8 @@ class Bf16RotationAttention(Attention):
       <tr><td><code>_rotate</code>, <code>_number</code>, <code>_done</code></td><td>Helpers: rotate a list, number the positions, a line that is done and has a patch throughput.</td></tr>
       <tr><td><code>PriorArtRow</code>, <code>cell_row</code></td><td>One paired cell: the ratios, the lower median, the spread, the verdict, the median throughput of both sides.</td></tr>
       <tr><td><code>prior_art_rows</code>, <code>variant_parity_rows</code>, <code>variant_speed_rows</code></td><td>The rows of Sections 2, 4 and 5 of <code>results/prior-art-table.md</code>.</td></tr>
-      <tr><td><code>slow_cell_facts</code></td><td>For each cell with a prior-art ratio below 0.97: the host share of ours (1 − patch ÷ device throughput) and the ratio of our device throughput to the export throughput (AC4).</td></tr>
+      <tr><td><code>between_runs</code></td><td>Two runs of J1: the run medians, the pooled lower median, the spread between the runs and <code>pass_verdict</code> (finding V1 of <code>verify.html</code>).</td></tr>
+      <tr><td><code>slow_cell_facts</code></td><td>For each cell with a prior-art ratio below 0.97: the transfer share of ours (1 − patch ÷ device throughput) and the ratio of our device throughput to the export throughput (AC4).</td></tr>
     </tbody>
   </table></div>
   <h3>8.2 <code>src/dinov3_apple/port_variants.py</code> (mlx)</h3>
@@ -516,7 +520,8 @@ class Bf16RotationAttention(Attention):
     <tbody>
       <tr><td><code>port_rope_tables</code></td><td>The bf16 RoPE tables of C1 and C2 (Section 5.1).</td></tr>
       <tr><td><code>port_rotate</code></td><td>The rotation of the ports: patch tokens only, in the dtype of x.</td></tr>
-      <tr><td><code>Bf16RotationAttention</code></td><td>V1: q and k to bf16, <code>port_rotate</code>, back; then the fused SDPA.</td></tr>
+      <tr><td><code>port_apply_rope</code></td><td>The cast of all tokens to bf16, <code>port_rotate</code> and the cast back, in one function, so test T10 checks the prefix tokens of the attention module (finding V5 of <code>verify.html</code>).</td></tr>
+      <tr><td><code>Bf16RotationAttention</code></td><td>V1: <code>port_apply_rope</code> on q and k; then the fused SDPA.</td></tr>
       <tr><td><code>UnfusedAttention</code></td><td>V4: matmul, softmax, matmul in the matmul dtype.</td></tr>
       <tr><td><code>meta_periods</code>, <code>meta_rope_tables</code></td><td>V3: the bf16 periods of the Meta checkpoints; fp32 tables with them.</td></tr>
       <tr><td><code>_with_prefix</code>, <code>variant_tables</code></td><td>The tables of each variant for one patch grid; V2 adds the identity rows of the prefix tokens.</td></tr>

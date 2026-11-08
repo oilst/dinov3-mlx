@@ -619,24 +619,40 @@ def write_table(lines: list[dict], run2: list[dict] | None = None) -> str:
             )
     out += [
         "",
-        "Compute units ALL (one round), against the median export throughput of J1:",
+        (
+            "Compute units ALL (one round, not paired), against the median export throughput of "
+            "J1 run 1 (CPU_AND_GPU). Parity equal: the worst parity of the ALL line equals the "
+            "worst parity of the CPU_AND_GPU lines, so Core ML ran the same program on the same "
+            "device. The ratio of an unpaired round changes with the time of the run (ADR 0012)."
+        ),
         "",
-        "| Export | Batch size | ALL img/s | CPU_AND_GPU img/s (J1 median) | ALL ÷ CPU_AND_GPU |",
-        "| --- | --- | --- | --- | --- |",
+        (
+            "| Export | Batch size | ALL img/s | CPU_AND_GPU img/s (J1 median) | ALL ÷ CPU_AND_GPU | "
+            "Parity equal |"
+        ),
+        "| --- | --- | --- | --- | --- | --- |",
     ]
     j1_ips = {
         (row.fields["export"], row.fields["batch_size"]): row.other_ips
         for row in j1_rows
         if isinstance(row, prior_art.PriorArtRow)
     }
+    j1_parity = {
+        (row.fields["export"], row.fields["batch_size"]): row.fields["parity"]
+        for row in j1_rows
+        if isinstance(row, prior_art.PriorArtRow)
+    }
     for line in lines:
         if line.get("job") == "J2" and line.get("units") == "ALL":
+            key = (line["export"], line["batch_size"])
             ips = (line.get("patch") or {}).get("throughput_ips")
-            base = j1_ips.get((line["export"], line["batch_size"]))
+            base = j1_ips.get(key)
             ratio = None if ips is None or base is None else ips / base
+            worst = (line.get("parity") or {}).get("worst")
+            equal = "–" if worst is None else ("yes" if worst == j1_parity.get(key) else "no")
             out.append(
                 f"| {line['export']} | {line['batch_size']} | {_f(ips, 1)} | {_f(base, 1)} | "
-                f"{_f(ratio, 3)} |"
+                f"{_f(ratio, 3)} | {equal} |"
             )
     out += [
         "",
