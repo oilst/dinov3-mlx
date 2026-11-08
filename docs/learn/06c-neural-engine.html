@@ -1,0 +1,415 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DINOv3 on the Neural Engine</title>
+<style>
+/* Explainer page. White page, black text, no dark mode. */
+:root { --bg: #ffffff; --fg: #111414; --muted: #4a5655; --rule: #d6dedd; --panel: #f5f8f7; --accent: #057379; --red: #b03a2e; --amber: #e0a336; color-scheme: light; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif; }
+main { max-width: 62rem; margin: 0 auto; padding: 40px 16px 64px; display: grid; gap: 1.75rem; }
+main > *, section > * { min-width: 0; }
+h1 { font-size: 1.9rem; line-height: 1.15; margin: 0; }
+h2 { font-size: 1.3rem; margin: 0; }
+h3 { font-size: 1.05rem; margin: 0; }
+section { display: grid; gap: 0.8rem; }
+p, ul, ol { margin: 0; max-width: 46rem; }
+li + li { margin-top: 0.25rem; }
+code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.86em; }
+p code, li code, td code { overflow-wrap: anywhere; }
+pre { margin: 0; background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 0.8rem 1rem; overflow-x: auto; }
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 0.92rem; }
+th, td { text-align: left; vertical-align: top; padding: 0.45rem 0.7rem 0.45rem 0; border-bottom: 1px solid var(--rule); }
+th { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); border-bottom: 1.5px solid var(--fg); }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+td.over { color: var(--red); font-weight: 600; }
+td.pass { color: var(--accent); font-weight: 600; }
+.caption, figcaption { font-size: 0.88rem; color: var(--muted); }
+figure { margin: 0; display: grid; gap: 0.4rem; }
+.fig { border: 1px solid var(--rule); border-radius: 6px; padding: 0.5rem; overflow-x: auto; }
+.fig svg { display: block; width: 100%; height: auto; min-width: 640px; }
+.note { border-left: 3px solid var(--accent); padding: 0.3rem 0 0.3rem 0.9rem; }
+nav ol { columns: 2; }
+.steps { font-size: 0.92rem; color: var(--muted); }
+a { color: var(--accent); }
+@media (max-width: 640px) { nav ol { columns: 1; } h1 { font-size: 1.6rem; } }
+</style>
+</head>
+<body>
+<main>
+<header>
+  <h1>DINOv3 on the Neural Engine</h1>
+  <p>Explainer for roadmap Step 6c. Date: 2026-11-08. It explains how the Apple Neural Engine runs the attention and the feed-forward network of DINOv3, the numeric range of DINOv3 in fp16, and every function that Step 6c adds to <code>src/dinov3_apple/coreml.py</code>.</p>
+  <p class="steps">Step 6 explainers: <a href="06-1-compiled-forward-pass.html">1 Compiled forward pass</a> · <a href="06-2-attention-and-batch-size.html">2 Attention and batch size</a> · <a href="06-3-quantized-weights.html">3 Quantized weights</a> · <a href="06-4-preprocessing.html">4 Preprocessing</a> · <a href="06b-prior-ports-measured.html">6b Prior ports</a> · 6c Neural Engine (this page). Numeric range: <a href="05-3-numeric-range.html">05-3</a>.</p>
+</header>
+
+<nav>
+  <h2>Contents</h2>
+  <ol>
+    <li><a href="#why">Why this explainer</a></li>
+    <li><a href="#path">From the torch backbone to the Neural Engine</a></li>
+    <li><a href="#range">The fp16 range of each tensor</a></li>
+    <li><a href="#attention">Attention on the Neural Engine</a></li>
+    <li><a href="#stream">The residual stream, LayerScale and the feed-forward network</a></li>
+    <li><a href="#input">The first ops: where the Neural Engine still breaks</a></li>
+    <li><a href="#run">Running a package</a></li>
+    <li><a href="#plan">The compute plan</a></li>
+    <li><a href="#results">The measured results of Step 6c</a></li>
+    <li><a href="#surprises">Surprises</a></li>
+    <li><a href="#functions">Every function of Step 6c</a></li>
+    <li><a href="#sources">Sources</a></li>
+  </ol>
+</nav>
+
+<section id="why">
+  <h2>1 Why this explainer</h2>
+  <p>Step 6 found that compiled <code>mlx</code> runs at the matmul limit of the GPU. The Apple Neural Engine is a second matrix accelerator on the same chip. Core ML is the only public way to run a model on it. Step 6c converts the Hugging Face backbone into Core ML packages and measures them on three compute units: CPU_AND_NE (<code>coreml-ne</code>), CPU_AND_GPU (<code>coreml-gpu</code>) and ALL (<code>coreml-all</code>).</p>
+  <p>The Neural Engine computes in fp16 only. DINOv3 has two value ranges far above the largest fp16 value, 65,504. So the step is mostly a lesson in numeric range. The result in four points:</p>
+  <ul>
+    <li>The plain fp16 package gives finite but wrong tokens on the Neural Engine (frame cosine 0.035 for ViT-S/16). The attention scores reach 2.5 million.</li>
+    <li>The Neural Engine rewrite (score scale 256, residual-stream scale r, ε / r²) is exact in real numbers. With it, every model size from ViT-S/16 to ViT-H+/16 passes the fp16 thresholds on CPU_AND_GPU and ALL.</li>
+    <li>On CPU_AND_NE the rewritten packages pass only where the compute plan keeps the first ops (input cast, patch embedding, first attention branch) on the CPU: ViT-S/16 and ViT-S+/16 at 224 px, batch size 1. Every other package gives wrong tokens. The fault shows first in the output of the embeddings. Its cause is open.</li>
+    <li>Where the Neural Engine output is right (ViT-S/16 at 224 px), the Neural Engine and mlx on the GPU add up: 2,503 img/s together against 1,984 for mlx alone at P1 (stream ratio 1.26). At 512 px the Neural Engine is 7 times slower than the GPU and adds nothing.</li>
+  </ul>
+  <p>The values come from <code>results/coreml.jsonl</code>, <code>results/coreml-table.md</code>, <code>specs/06c-neural-engine/explore.html</code> (probes p1 to p17) and the Q3 probes of the build (Section 6).</p>
+</section>
+
+<section id="path">
+  <h2>2 From the torch backbone to the Neural Engine</h2>
+  <p>A Core ML package is one converted backbone for one model size, input resolution and batch size. The conversion has five stages (Figure 1). The rewrite is the only new arithmetic.</p>
+  <figure>
+    <div class="fig"><svg viewBox="0 0 960 250" role="img" aria-labelledby="fig1-title" font-family="-apple-system, Helvetica Neue, Arial, sans-serif">
+      <title id="fig1-title">The path of one Core ML package: load, rewrite, trace, convert, save and compile, then the compute plan places each op on a device</title>
+      <defs><marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#4a5655"/></marker></defs>
+      <rect width="960" height="250" fill="#ffffff"/>
+      <g font-size="12" fill="#111414">
+        <rect x="16" y="40" width="140" height="70" rx="6" fill="#f5f8f7" stroke="#4a5655"/>
+        <text x="86" y="64" text-anchor="middle" font-weight="600">Hugging Face</text>
+        <text x="86" y="80" text-anchor="middle">backbone, fp32</text>
+        <text x="86" y="96" text-anchor="middle" font-size="10.5" fill="#4a5655">load_torch_backbone</text>
+        <path d="M156,75 H180" stroke="#4a5655" stroke-width="1.5" marker-end="url(#a1)"/>
+        <rect x="182" y="40" width="160" height="70" rx="6" fill="#e6f2f2" stroke="#057379" stroke-width="2"/>
+        <text x="262" y="60" text-anchor="middle" font-weight="600">Neural Engine rewrite</text>
+        <text x="262" y="76" text-anchor="middle" font-size="10.5">score scale 256, stream / r,</text>
+        <text x="262" y="90" text-anchor="middle" font-size="10.5">ε / r², no LayerScale fold</text>
+        <text x="262" y="104" text-anchor="middle" font-size="10" fill="#4a5655">rewrite_for_neural_engine</text>
+        <path d="M342,75 H366" stroke="#4a5655" stroke-width="1.5" marker-end="url(#a1)"/>
+        <rect x="368" y="40" width="130" height="70" rx="6" fill="#f5f8f7" stroke="#4a5655"/>
+        <text x="433" y="64" text-anchor="middle" font-weight="600">trace</text>
+        <text x="433" y="80" text-anchor="middle" font-size="10.5">fixed shape (B, 3, H, W)</text>
+        <text x="433" y="96" text-anchor="middle" font-size="10" fill="#4a5655">trace_module</text>
+        <path d="M498,75 H522" stroke="#4a5655" stroke-width="1.5" marker-end="url(#a1)"/>
+        <rect x="524" y="40" width="150" height="70" rx="6" fill="#f5f8f7" stroke="#4a5655"/>
+        <text x="599" y="60" text-anchor="middle" font-weight="600">ct.convert</text>
+        <text x="599" y="76" text-anchor="middle" font-size="10.5">ML Program, fp16 compute</text>
+        <text x="599" y="90" text-anchor="middle" font-size="10.5">_cast patch</text>
+        <text x="599" y="104" text-anchor="middle" font-size="10" fill="#4a5655">convert_traced</text>
+        <path d="M674,75 H698" stroke="#4a5655" stroke-width="1.5" marker-end="url(#a1)"/>
+        <rect x="700" y="40" width="240" height="70" rx="6" fill="#f5f8f7" stroke="#4a5655"/>
+        <text x="820" y="60" text-anchor="middle" font-weight="600">.mlpackage → .mlmodelc</text>
+        <text x="820" y="76" text-anchor="middle" font-size="10.5">~/.cache/dinov3-apple/coreml/</text>
+        <text x="820" y="90" text-anchor="middle" font-size="10.5">vits16-224-b1-ne2-s256-r1-ct9.0</text>
+        <text x="820" y="104" text-anchor="middle" font-size="10" fill="#4a5655">convert_module, package_path</text>
+        <path d="M820,110 V140" stroke="#4a5655" stroke-width="1.5" marker-end="url(#a1)"/>
+        <rect x="560" y="142" width="380" height="92" rx="6" fill="#ffffff" stroke="#4a5655"/>
+        <text x="750" y="162" text-anchor="middle" font-weight="600">Compute plan (MLComputePlan), one device for each op</text>
+        <rect x="576" y="174" width="110" height="46" rx="4" fill="#fdf3e1" stroke="#e0a336"/>
+        <text x="631" y="194" text-anchor="middle" font-weight="600">CPU</text>
+        <text x="631" y="210" text-anchor="middle" font-size="10">fp32 or fp16</text>
+        <rect x="696" y="174" width="110" height="46" rx="4" fill="#f5f8f7" stroke="#4a5655"/>
+        <text x="751" y="194" text-anchor="middle" font-weight="600">GPU</text>
+        <text x="751" y="210" text-anchor="middle" font-size="10">fp16, fused kernels</text>
+        <rect x="816" y="174" width="110" height="46" rx="4" fill="#e6f2f2" stroke="#057379"/>
+        <text x="871" y="194" text-anchor="middle" font-weight="600">Neural Engine</text>
+        <text x="871" y="210" text-anchor="middle" font-size="10">fp16 only</text>
+        <text x="16" y="160" font-size="11.5">The compute unit setting (CPU_AND_NE, CPU_AND_GPU, ALL) only allows devices.</text>
+        <text x="16" y="178" font-size="11.5">Core ML picks the device of each op when it loads the package.</text>
+        <text x="16" y="196" font-size="11.5">With ALL, this graph runs every op on the GPU.</text>
+        <text x="16" y="214" font-size="11.5" fill="#4a5655">The first load compiles for the Neural Engine; Core ML caches it.</text>
+      </g>
+    </svg></div>
+    <figcaption>Figure 1. The path of one package. The rewrite (teal) changes the torch graph before the trace; every later stage is coremltools and Core ML.</figcaption>
+  </figure>
+  <p>Three details of the conversion matter:</p>
+  <ul>
+    <li><b>The <code>_cast</code> patch.</b> coremltools 9.0 calls <code>int()</code> on a constant array with one value in the torch op <code>aten::Int</code>. numpy 2.5.4 refuses this. <code>patch_coremltools_cast</code> points the torch frontend at <code>_cast_with_item</code>, which calls <code>.item()</code> first. It never edits the installed package, and it raises <code>CoremltoolsVersionError</code> for any version other than 9.0 (ADR 0015).</li>
+    <li><b>Fixed shapes.</b> The trace makes the RoPE tables constants of one input shape. So each package has one batch size and one input resolution, and the name holds both, plus the rewrite version, the score scale, r and the coremltools version.</li>
+    <li><b>fp32 at the edges.</b> The input <code>pixels</code> is fp32 and the output <code>tokens</code> is fp32. The converter adds a <code>cast</code> to fp16 at the start and one to fp32 at the end. Every op between them runs in fp16.</li>
+  </ul>
+  <pre><code># src/dinov3_apple/coreml.py: _cast_with_item (the one changed line is marked)
+x = torch_ops._get_inputs(context, node, expected=1)[0]
+if x.can_be_folded_to_const():
+    value = x.val.item() if isinstance(x.val, np.ndarray) else x.val   # changed: .item()
+    res = x if isinstance(x.val, dtype) else mb.const(val=dtype(value), name=node.name)
+
+# patch_coremltools_cast
+if coremltools.__version__ != COREMLTOOLS_VERSION:     # "9.0"
+    raise CoremltoolsVersionError(...)
+torch_ops._cast = _cast_with_item   # _int and _bool look _cast up in the module at each call</code></pre>
+  <p class="caption">Code 1. The <code>_cast</code> patch. Test T13 checks that a second call changes nothing, that version "9.1" raises, and that <code>ops.py</code> keeps its SHA-256. Test T6 converts a small model without the patch (TypeError) and with it.</p>
+  <pre><code># convert_module: trace, convert, save, compile; each time goes into the J1 line
+patch_coremltools_cast()
+traced = trace_module(module, shape)      # torch.jit.trace in inference_mode(False), no_grad
+mlmodel = convert_traced(traced, shape)   # ML Program, FLOAT16 compute, macOS 15, fp32 in and out
+mlmodel.save(str(path))
+ct.models.utils.compile_model(str(path), str(compiled_path(path)))   # the .mlmodelc next to it</code></pre>
+  <p class="caption">Code 2. <code>convert_module</code>. <code>convert_backbone</code> adds the run rule (ViT-7B/16 raises <code>RunRuleError</code> before any weight read), the memory check of <code>convert_need_bytes</code> (the fp32 load plus 2 times the fp32 weights) and the rewrite.</p>
+</section>
+
+<section id="range">
+  <h2>3 The fp16 range of each tensor</h2>
+  <p>The Neural Engine stores every intermediate tensor in fp16. Table 1 shows the largest value of each tensor kind in fp32, over all blocks and 6 configurations (probe p6 of <code>explore.html</code>).</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Model size</th><th class="num">Scores q·kᵀ / √d</th><th class="num">q</th><th class="num">Residual stream</th><th class="num">FF branch output</th><th class="num">FF hidden</th><th class="num">r</th><th class="num">Scores / 256</th><th class="num">Stream / r</th></tr></thead>
+    <tbody>
+      <tr><td>ViT-S/16</td><td class="num over">2,528,498</td><td class="num">2,011</td><td class="num">1,748</td><td class="num">440</td><td class="num">283</td><td class="num">1</td><td class="num">9,877</td><td class="num">1,748</td></tr>
+      <tr><td>ViT-S+/16</td><td class="num over">147,636</td><td class="num">458</td><td class="num">5,274</td><td class="num">2,557</td><td class="num">6,620</td><td class="num">1</td><td class="num">577</td><td class="num">5,274</td></tr>
+      <tr><td>ViT-B/16</td><td class="num over">134,881</td><td class="num">331</td><td class="num">14,926</td><td class="num">2,861</td><td class="num">1,234</td><td class="num">1</td><td class="num">527</td><td class="num">14,926</td></tr>
+      <tr><td>ViT-L/16</td><td class="num">35,640</td><td class="num">146</td><td class="num over">158,177</td><td class="num">52,019</td><td class="num">1,989</td><td class="num">8</td><td class="num">139</td><td class="num">19,772</td></tr>
+      <tr><td>ViT-H+/16</td><td class="num">13,242</td><td class="num">117</td><td class="num over">142,796</td><td class="num">11,874</td><td class="num">6,127</td><td class="num">8</td><td class="num">52</td><td class="num">17,850</td></tr>
+    </tbody>
+  </table></div>
+  <p class="caption">Table 1. The largest absolute value of each tensor kind, torch-cpu fp32 (Table 3 of <code>explore.html</code>), and the values after the rewrite. Red: above 65,504. The FF branch output is before LayerScale; with r = 8 it is also 8 times smaller.</p>
+  <p>Two ranges are too large, and they are independent: the scores in the three small model sizes, the residual stream in the two large ones. The rewrite has one change for each (Sections 4 and 5).</p>
+</section>
+
+<section id="attention">
+  <h2>4 Attention on the Neural Engine</h2>
+  <p>The GPU path of Core ML, <code>mlx</code> and <code>torch-mps</code> keep the scores inside a fused attention kernel with fp32 accumulation. The converter writes no fused attention op for the Neural Engine: the Hugging Face attention becomes <code>matmul</code>, <code>softmax</code>, <code>matmul</code>. So the score matrix is a stored fp16 tensor. In block 1 of ViT-S/16 a score reaches 2,389,737; in fp16 it becomes inf, and the softmax gives inf or NaN (finding F1). Later blocks turn this into finite but wrong tokens.</p>
+  <figure>
+    <div class="fig"><svg viewBox="0 0 960 190" role="img" aria-labelledby="fig2-title" font-family="-apple-system, Helvetica Neue, Arial, sans-serif">
+      <title id="fig2-title">The attention scores of ViT-S/16 block 1 on a log scale against the fp16 range, before and after the division by 256</title>
+      <rect width="960" height="190" fill="#ffffff"/>
+      <g font-size="12" fill="#111414">
+        <line x1="60" y1="110" x2="900" y2="110" stroke="#111414" stroke-width="1.5"/>
+        <rect x="60" y="100" width="540" height="20" fill="#e6f2f2" stroke="#057379"/>
+        <text x="330" y="140" text-anchor="middle" fill="#057379">fp16 normal range: 6.1e-5 to 65,504</text>
+        <line x1="600" y1="80" x2="600" y2="125" stroke="#b03a2e" stroke-width="2"/>
+        <text x="600" y="74" text-anchor="middle" fill="#b03a2e" font-weight="600">65,504</text>
+        <circle cx="840" cy="110" r="7" fill="#b03a2e"/>
+        <text x="840" y="92" text-anchor="middle" fill="#b03a2e" font-weight="600">2.4 million</text>
+        <text x="840" y="140" text-anchor="middle" font-size="11">score q·kᵀ/√d → inf</text>
+        <circle cx="540" cy="110" r="7" fill="#057379"/>
+        <text x="540" y="92" text-anchor="middle" fill="#057379" font-weight="600">9,335</text>
+        <text x="540" y="160" text-anchor="middle" font-size="11">z = (q/√d/256)·kᵀ</text>
+        <path d="M832,104 C760,40 620,40 548,104" fill="none" stroke="#4a5655" stroke-dasharray="4 3"/>
+        <text x="690" y="44" text-anchor="middle" font-size="11" fill="#4a5655">÷ 256 before the matmul (exact: a power of two)</text>
+        <text x="60" y="180" font-size="11" fill="#4a5655">Log scale. After the row maximum is subtracted, (z − max z) · 256 ≤ 0, so the softmax never gets a value above 0.</text>
+      </g>
+    </svg></div>
+    <figcaption>Figure 2. Score scaling. The division by 256 brings the largest score of ViT-S/16 (block 1, probe p4) from 36 times the fp16 maximum to 14 % of it.</figcaption>
+  </figure>
+  <pre><code># src/dinov3_apple/coreml.py: ne_attention (registered as "coreml-ne" in transformers.AttentionInterface)
+s = SCORE_SCALE                                                 # 256.0, a power of two
+z = torch.matmul(query * (scaling / s), key.transpose(2, 3))    # at most 9,877 for ViT-S/16
+z = z - z.amax(-1, keepdim=True)                                # every value at most 0
+probs = torch.softmax(torch.clamp(z, min=SCORE_FLOOR / s) * s, dim=-1)   # SCORE_FLOOR = -60,000
+return torch.matmul(probs, value).transpose(1, 2).contiguous(), None</code></pre>
+  <p class="caption">Code 3. <code>ne_attention</code>. softmax(z) = softmax((z / s − max(z / s)) · s), so the function is exact in real numbers. The clip keeps (z − max z) · 256 above −60,000; exp(−60,000) is 0 in any dtype. Tests: T1 (fp64, scores up to 1e7, difference ≤ 1e-6 relative), T2 (fp16: eager attention gives a non-finite value, <code>ne_attention</code> stays finite with cosine ≥ 0.999).</p>
+  <p>The division does not cost precision. fp16 keeps a relative precision of 2⁻¹¹ at every scale, so z has the same relative error as the true score would have. The MIL program of a package keeps the order: <code>mul</code> by 2⁻¹¹ (that is 1/8/256 for head dimension 64), <code>matmul</code>, <code>reduce_max</code>, <code>sub</code>, <code>clip</code>, <code>mul</code> by 256, <code>softmax</code>. The converter does not move the scale behind the matmul. Probe p13 of the explore stage shows that score scaling works on the Neural Engine: the output of block 1 of ViT-S/16 at 224 px, batch size 1, has cosine 0.999992 there. On the GPU the Q3 probe of the build gives cosine 0.99999997 for the scores of block 1.</p>
+</section>
+
+<section id="stream">
+  <h2>5 The residual stream, LayerScale and the feed-forward network</h2>
+  <p>In ViT-L/16 and ViT-H+/16 a register token reaches 158,433 in the residual stream (<a href="05-3-numeric-range.html">05-3</a>). The stream is the sum x + λ₁·attention + λ₂·FF over all blocks. The rewrite divides the whole stream by a power of two r:</p>
+  <ul>
+    <li>the embeddings get 1 / r (<code>NeuralEngineBackbone.forward</code>);</li>
+    <li>the weights and the bias of <code>o_proj</code> (end of the attention branch) and <code>down_proj</code> (end of the feed-forward branch) get 1 / r, so each branch output is r times smaller;</li>
+    <li>LayerScale (λ) stays a separate multiplication;</li>
+    <li>each layer norm gets ε / r². A layer norm does not change when its input is scaled, except for ε: LN(x / r) with ε equals LN(x) with ε r². So ε / r² gives exactly the old output.</li>
+  </ul>
+  <pre><code># src/dinov3_apple/coreml.py: rewrite_for_neural_engine
+for module in model.modules():                   # the layers share model.config; set each config
+    config = getattr(module, "config", None)
+    if config is not None:
+        config._attn_implementation = NE_ATTENTION
+    if isinstance(module, torch.nn.LayerNorm):
+        module.eps = module.eps / residual_scale**2     # norm1, norm2 of each block, final norm
+with torch.no_grad():
+    for layer in model.model.layer:
+        for proj in (layer.attention.o_proj, layer.mlp.down_proj):
+            proj.weight.mul_(1.0 / residual_scale)      # exact: r is a power of two
+            if proj.bias is not None:
+                proj.bias.mul_(1.0 / residual_scale)
+return NeuralEngineBackbone(model, residual_scale)       # embeddings / r, RoPE, blocks, final norm
+
+# residual_scale: the smallest power of two with (largest token value) / r &lt;= 32,768
+value = largest_token_value(model_size, table)   # fp32 row of results/token-range-mlx.md
+scale = 1
+while value / scale > MAX_STREAM_VALUE:          # 32,768: half of the fp16 range
+    scale *= 2</code></pre>
+  <p class="caption">Code 4. The rewrite of the residual stream. <code>residual_scale</code> gives 1 for ViT-S/16, ViT-S+/16 and ViT-B/16 and 8 for ViT-L/16 and ViT-H+/16; ViT-7B/16 raises <code>RunRuleError</code> (its conversion would trace fp32 weights). Tests: T3 (the rewritten small models give the Hugging Face tokens within 1e-6 relative, r = 1 and 8), T4 (LayerScale unchanged, the projections divided by r bit for bit, ε / r²), T5.</p>
+  <h3>5.1 Why no LayerScale fold</h3>
+  <p>A first form folded λ into the weights of <code>o_proj</code> and <code>down_proj</code>. The LayerScale factors of DINOv3 go down to 3.6e-8. Folded, 94 % of the <code>o_proj</code> weights of block 1 of ViT-S/16 became subnormal in fp16 (below 6.1e-5), and 63 to 78 % in ViT-L/16 and ViT-H+/16. A subnormal fp16 value has fewer than 11 bits of precision, and some hardware flushes it to 0. The fold broke the parity also on the GPU (finding F2). With only the power of two in the weights, a weight changes only when it is already near 6.1e-5 · r.</p>
+  <h3>5.2 ε / r²: the GPU failure of the first run</h3>
+  <p>The first conversion of the build kept the Hugging Face ε (1e-5) and divided the stream by r = 8. Then each layer norm acted as if ε were 64 times larger. For a token with a small variance this changes the output. The effect is in the GPU rows of the first J2 run: ViT-L/16 frame 0.974 to 0.888, ViT-H+/16 patch 1st percentile 0.829 to 0.985, also on CPU_AND_GPU and ALL. With ε / r² (the plan amendment of 2026-11-08) every block of ViT-L/16 on CPU_AND_GPU has cosine ≥ 0.9999998 (Q3 probe), and every ViT-L/16 and ViT-H+/16 package passes on the GPU (frame ≥ 0.99999). A larger r does not help: with r = 64, ViT-L/16 on the GPU drops to frame 0.997 and patch 1st percentile 0.980, because λ · (branch / 64) goes below the normal fp16 range.</p>
+  <h3>5.3 The feed-forward network</h3>
+  <p>On the Neural Engine the feed-forward network is <code>layer_norm</code>, <code>linear</code> (up), <code>gelu</code> or <code>silu</code> with a <code>mul</code> (SwiGLU), <code>linear</code> (down), <code>mul</code> by λ₂ and <code>add</code>. Its hidden values stay below 6,620 (Table 1). Its branch output in ViT-L/16 block 1 reaches 52,019 before LayerScale, 79 % of the fp16 range; with r = 8 it is 6,502. The compute plan puts all these ops on the Neural Engine.</p>
+</section>
+
+<section id="input">
+  <h2>6 The first ops: where the Neural Engine still breaks</h2>
+  <p>With the rewrite, CPU_AND_GPU passes for every model size. CPU_AND_NE passes only for 2 of 15 parity packages (Table 2). The compute plan explains the pattern: the two that pass are the only ones where Core ML keeps the first ops on the CPU.</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Package (b1 unless named)</th><th class="num">Neural Engine cost share</th><th>Ops on the CPU</th><th class="num">Frame on CPU_AND_NE</th><th class="num">Frame on CPU_AND_GPU</th></tr></thead>
+    <tbody>
+      <tr><td>ViT-S/16, 224 px</td><td class="num">0.754</td><td>46: input cast, conv, layer norm, first attention branch</td><td class="num pass">0.99986</td><td class="num">0.999994</td></tr>
+      <tr><td>ViT-S+/16, 224 px</td><td class="num">0.764</td><td>46: the same</td><td class="num pass">0.9997</td><td class="num">0.99999</td></tr>
+      <tr><td>ViT-S/16, 448 px</td><td class="num">0.991</td><td>4: 3 reshape, 1 add</td><td class="num over">−0.015</td><td class="num">0.999995</td></tr>
+      <tr><td>ViT-S/16, 224 px, b8</td><td class="num">0.987</td><td>4: 3 reshape, 1 add</td><td class="num over">0.39 (probe)</td><td class="num">–</td></tr>
+      <tr><td>ViT-B/16, 224 px</td><td class="num">0.991</td><td>4: 3 reshape, 1 add</td><td class="num over">0.050</td><td class="num">0.999996</td></tr>
+      <tr><td>ViT-L/16, 224 px</td><td class="num">0.996</td><td>4: 3 reshape, 1 add</td><td class="num over">−0.010</td><td class="num">0.999993</td></tr>
+    </tbody>
+  </table></div>
+  <p class="caption">Table 2. The compute plan on CPU_AND_NE and the worst frame cosine of the 3 test images (J2 of the build). Green: passes 0.999; red: fails.</p>
+  <p>The Q3 probe of the build returns the token sequence after each block as an output. On CPU_AND_NE the first wrong value is the output of the embeddings, the input of block 1: cosine 0.19 for ViT-S/16 at 448 px and 0.31 for ViT-L/16 at 224 px, with the right largest value (16.3 and 1.9). Every later value of the block probe is wrong too, but it starts from this wrong input. So the first fault is in the embeddings or before them: the input cast, the 16 × 16 convolution with stride 16, the flatten and the concatenation with the CLS and register tokens. On the GPU the same probe gives cosine ≥ 0.9999998 for the block input.</p>
+  <p>Two tests narrowed it down, and neither fixed it:</p>
+  <ul>
+    <li><b>The patch embedding as reshape + matmul</b> (exact; probe P of the build). The output stays wrong (ViT-S/16 448 px frame −0.01 to 0.71, ViT-L/16 224 px 0.16), and for <code>iss-conference</code> at 448 px the parity is identical to the convolution package. So the convolution itself is not the cause. The build removed this change again.</li>
+    <li><b>An fp16 input</b> without the cast at the start (job J3 of the build). The output stays wrong with nearly the same values (ViT-S/16 448 px frame 0.0097 to 0.71). So the cast is not the cause either.</li>
+  </ul>
+  <p class="note">The explore stage first named this fault F4, "batch size 8 breaks the patch embedding". The build data show that batch size is not the cause: at 448 and 512 px, batch size 1 fails in the same way. The batch size changes only the compute plan.</p>
+</section>
+
+<section id="run">
+  <h2>7 Running a package</h2>
+  <pre><code># src/dinov3_apple/coreml.py: load_package
+model = ct.models.CompiledMLModel(str(compiled), compute_units=unit)   # first load: Neural Engine compile
+first_load_s = ...
+del model
+model = ct.models.CompiledMLModel(str(compiled), compute_units=unit)   # cached load
+return model, first_load_s, cached_load_s
+
+# run_coreml (not parity_only): one batch of the stored pixels, then the time budget of bench.py
+if batch_api:   # coreml-ne at batch size 8: the batch-size-1 package, one call with a list of 8 inputs
+    feed = [{"pixels": batch[i : i + 1]} for i in range(batch_size)]
+else:
+    feed = {"pixels": batch}
+result = model.predict(feed)                       # NumPy out: frame time = patch time
+validity = output_validity(tokens[0], reference)   # fp16 thresholds of ADR 0003 (R53)
+warm = _time_calls(lambda: model.predict(feed), warm_up)
+times = _time_calls(lambda: model.predict(feed), timed)</code></pre>
+  <p class="caption">Code 5. <code>load_package</code> and the timed part of <code>run_coreml</code>. With <code>parity_only</code>, <code>run_coreml</code> checks the 3 test images at batch size 1 and keeps the worst parity (<code>_worst</code>). <code>rewrite_fields</code> writes the score scale and r into the line.</p>
+  <p><code>output_validity</code> is the important line. A wrong Neural Engine output is finite (risk R53), so every Core ML worker checks the parity of its first output. A check for non-finite values would pass every failing row of Table 2.</p>
+</section>
+
+<section id="plan">
+  <h2>8 The compute plan</h2>
+  <p><code>MLComputePlan</code> (coremltools 9.0) gives for each op of a compiled package the preferred device, the supported devices and an estimated cost. <code>compute_plan_report</code> sums them: ops for each device, the cost share of each device, and a list of the ops off the Neural Engine with position, name, op type and cost. Constants have no device; the report counts them apart. <code>_device_name</code> turns "MLNeuralEngineComputeDevice" into "NeuralEngine".</p>
+  <ul>
+    <li>Every rewritten package puts 99.1 to 99.8 % of the estimated cost on the Neural Engine, except ViT-S/16 and ViT-S+/16 at 224 px batch size 1 (75 %).</li>
+    <li>The 4 CPU ops of the other packages are 3 <code>reshape</code> ops in block 1 (the split into heads) and one <code>add</code>.</li>
+    <li>With ALL, Core ML puts every op on the GPU. ALL is not a mix of GPU and Neural Engine for this graph, so <code>coreml-all</code> gives the parity and the speed of <code>coreml-gpu</code>.</li>
+  </ul>
+</section>
+
+<section id="results">
+  <h2>9 The measured results of Step 6c</h2>
+  <p>All values come from <code>results/coreml-table.md</code> (the build: J1 to J5 on 2026-11-08; run 2 of the paired runs comes from the Verify stage). The Core ML side runs fp16 packages of rewrite version <code>ne2</code>; the mlx side runs the compiled forward pass in the fastest valid fp16 dtype mode of Step 6.</p>
+  <h3>9.1 Parity (J2, batch size 1, worst of 3 test images)</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Model size</th><th>CPU_AND_NE: 224 / 448 / 512 px</th><th>CPU_AND_GPU and ALL: 224 / 448 / 512 px</th></tr></thead>
+    <tbody>
+      <tr><td>ViT-S/16</td><td><span class="pass">pass</span> (frame 0.99986) / fail / fail</td><td>pass / pass / pass (frame ≥ 0.999994)</td></tr>
+      <tr><td>ViT-S+/16</td><td><span class="pass">pass</span> (frame 0.9997) / fail / fail</td><td>pass / pass / pass</td></tr>
+      <tr><td>ViT-B/16</td><td>fail / fail / fail</td><td>pass / pass / pass</td></tr>
+      <tr><td>ViT-L/16</td><td>fail / fail / fail</td><td>pass / pass / pass (frame ≥ 0.999994)</td></tr>
+      <tr><td>ViT-H+/16</td><td>fail / fail / fail</td><td>pass / pass / pass (frame ≥ 0.999998)</td></tr>
+      <tr><td>ViT-S/16, plain graph</td><td>fail (frame 0.035, F1)</td><td>pass (224 px only)</td></tr>
+    </tbody>
+  </table></div>
+  <p class="caption">Table 3. Parity against the fp16 thresholds of ADR 0003 (0.999 / 0.999 / 0.99). Every failing Neural Engine row has a frame cosine between −0.05 and 0.71: the output is wrong, not a little off. The fp16 input (no cast at the start) gives the same wrong values for ViT-S/16 at 448 px (frame 0.0097 to 0.71).</p>
+  <h3>9.2 Speed (J3 matrix, J4 paired run 1)</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Configuration</th><th class="num">coreml-ne img/s</th><th class="num">coreml-gpu img/s</th><th class="num">mlx img/s</th><th class="num">ne / mlx</th><th class="num">gpu / mlx</th></tr></thead>
+    <tbody>
+      <tr><td>P1 at batch size 1 (ViT-S/16, 224 px), 5 rounds</td><td class="num pass">539.1</td><td class="num">461.1</td><td class="num">531.3</td><td class="num">1.016</td><td class="num">0.886</td></tr>
+      <tr><td>P1 (batch size 8), 5 rounds; ne: batch API</td><td class="num pass">689.4</td><td class="num">1,708.6</td><td class="num">1,773.1</td><td class="num">0.388</td><td class="num">0.975</td></tr>
+      <tr><td>ViT-S+/16, 224 px, b8 (matrix); ne: batch API</td><td class="num pass">590.5</td><td class="num">1,151.0</td><td class="num">1,191.0</td><td class="num">0.496</td><td class="num">0.966</td></tr>
+      <tr><td>ViT-L/16, 224 px, b8 (matrix)</td><td class="num over">64.0</td><td class="num">237.0</td><td class="num">228.4</td><td class="num">0.280</td><td class="num">1.038</td></tr>
+      <tr><td>ViT-H+/16, 224 px, b1 (matrix)</td><td class="num over">23.6</td><td class="num">74.8</td><td class="num">64.9</td><td class="num">0.364</td><td class="num">1.153</td></tr>
+      <tr><td>P2 at batch size 1 (ViT-H+/16, 512 px), 5 rounds</td><td class="num over">2.8</td><td class="num">15.2</td><td class="num">16.8</td><td class="num">0.167</td><td class="num">0.884</td></tr>
+      <tr><td>P2 (batch size 8), 5 rounds</td><td class="num over">2.8</td><td class="num">15.5</td><td class="num">19.7</td><td class="num">0.144</td><td class="num">0.775</td></tr>
+    </tbody>
+  </table></div>
+  <p class="caption">Table 4. Throughput (P1: frame, P2 and matrix: patch). Green: a valid Neural Engine output; red: a wrong output (its speed is the speed of the graph). Medians of 5 paired rounds for P1 and P2; 1 round for the matrix rows. <code>coreml-all</code> runs at the speed of <code>coreml-gpu</code> (P1 b8: 0.996 of mlx).</p>
+  <ul>
+    <li>The Neural Engine is fast only for small inputs: at ViT-S/16 and 224 px it matches mlx at batch size 1 and reaches 690 img/s with the batch API. At 512 px it takes 2.9 s for 8 images of ViT-H+/16, 7 times slower than the GPU.</li>
+    <li>Batch size 8 as one package does not help the Neural Engine (437 img/s for ViT-S/16, and a wrong output); 8 calls of the batch-size-1 package in one <code>predict</code> give 673 to 690 img/s.</li>
+    <li>Core ML on the GPU is close to compiled mlx at 224 px (0.89 to 1.15) and slower at 512 px (0.62 to 0.90).</li>
+  </ul>
+  <h3>9.3 The two-stream run (J5, run 1)</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Group</th><th class="num">ne alone</th><th class="num">mlx alone</th><th class="num">both: ne</th><th class="num">both: mlx</th><th class="num">both: sum</th><th class="num">Stream ratio</th></tr></thead>
+    <tbody>
+      <tr><td>P1, mlx at batch size 8; ne: batch API, valid</td><td class="num">695.1</td><td class="num">1,984.4</td><td class="num">648.4</td><td class="num">1,854.3</td><td class="num">2,502.7</td><td class="num pass">1.257</td></tr>
+      <tr><td>P1, mlx at batch size 1</td><td class="num">688.1</td><td class="num">526.1</td><td class="num">683.0</td><td class="num">529.5</td><td class="num">1,213.1</td><td class="num">2.302</td></tr>
+      <tr><td>P2, mlx at batch size 8; ne output wrong</td><td class="num">2.8</td><td class="num">16.7</td><td class="num">2.5</td><td class="num">13.7</td><td class="num">16.2</td><td class="num over">0.934</td></tr>
+      <tr><td>P2, mlx at batch size 1; ne output wrong</td><td class="num">2.8</td><td class="num">15.2</td><td class="num">2.6</td><td class="num">12.5</td><td class="num">15.1</td><td class="num over">0.996</td></tr>
+    </tbody>
+  </table></div>
+  <p class="caption">Table 5. img/s, median of 3 rounds of 10 s with a common start time. Stream ratio = (ne + mlx, both) / (mlx alone).</p>
+  <p>At P1 the Neural Engine is a real second accelerator: with both running, mlx loses 7 % and the Neural Engine 7 %, and the sum is 1.26 times mlx alone. At P2 the two compete: mlx loses 18 % and the Neural Engine adds only 2.5 img/s, so the sum is below mlx alone.</p>
+</section>
+
+<section id="surprises">
+  <h2>10 Surprises</h2>
+  <ol>
+    <li class="note"><b>A wrong output that looks fine.</b> The plain fp16 package on the Neural Engine gives finite tokens of normal size (largest value 4.0) with frame cosine 0.035.</li>
+    <li class="note"><b>The CPU saved the two passing packages.</b> ViT-S/16 and ViT-S+/16 at 224 px batch size 1 pass on CPU_AND_NE only because Core ML runs their first 46 ops on the CPU. A larger input or batch size moves these ops to the Neural Engine, and the output breaks.</li>
+    <li class="note"><b>Not the convolution.</b> The same wrong numbers come out when the patch embedding is a matmul.</li>
+    <li class="note"><b>ε matters at r = 8.</b> The layer norm ε, 1e-5, looks too small to matter. Multiplied by 64 it broke ViT-L/16 on the GPU (frame 0.888 at 512 px).</li>
+    <li class="note"><b>The LayerScale fold makes weights subnormal.</b> λ goes down to 3.6e-8. A fold that is exact in real numbers is not exact in fp16.</li>
+    <li class="note"><b>ALL means GPU.</b> For this graph Core ML never splits the work between the GPU and the Neural Engine. The two-stream run needs two processes.</li>
+    <li class="note"><b>Batch size 8 does not help the Neural Engine.</b> ViT-S/16 runs at about 540 img/s at batch size 1 and 450 img/s at batch size 8 (explore probes); the GPU gains 3 times from batch size 8.</li>
+  </ol>
+</section>
+
+<section id="functions">
+  <h2>11 Every function of Step 6c</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Function or class in <code>src/dinov3_apple/coreml.py</code></th><th>What it does</th><th>Section</th></tr></thead>
+    <tbody>
+      <tr><td><code>CoremltoolsVersionError</code></td><td>Raised by the patch for a coremltools version other than 9.0</td><td>2</td></tr>
+      <tr><td><code>_cast_with_item</code></td><td>The <code>aten::Int</code> op of coremltools 9.0 with <code>.item()</code></td><td>2</td></tr>
+      <tr><td><code>patch_coremltools_cast</code></td><td>Points the torch frontend at <code>_cast_with_item</code> at run time</td><td>2</td></tr>
+      <tr><td><code>ne_attention</code></td><td>Attention with score scale 256; registered as "coreml-ne"</td><td>4</td></tr>
+      <tr><td><code>NeuralEngineBackbone</code></td><td>pixels → tokens: embeddings / r, RoPE, each block, final layer norm</td><td>5</td></tr>
+      <tr><td><code>rewrite_for_neural_engine</code></td><td>Sets the attention, ε / r², <code>o_proj</code> and <code>down_proj</code> / r; returns the backbone</td><td>5</td></tr>
+      <tr><td><code>largest_token_value</code></td><td>Reads the fp32 row of a model size from the token-range table</td><td>5</td></tr>
+      <tr><td><code>residual_scale</code></td><td>The smallest power of two r with largest / r ≤ 32,768</td><td>5</td></tr>
+      <tr><td><code>package_path</code>, <code>compiled_path</code></td><td>The package name with every setting; the .mlmodelc next to it</td><td>2</td></tr>
+      <tr><td><code>trace_module</code>, <code>convert_traced</code></td><td>torch.jit.trace; ct.convert with fp16 compute</td><td>2</td></tr>
+      <tr><td><code>_op_counts</code>, <code>_size_bytes</code></td><td>Op counts of the MIL program; package size</td><td>2</td></tr>
+      <tr><td><code>convert_module</code></td><td>Trace, convert, save, compile, with the times</td><td>2</td></tr>
+      <tr><td><code>convert_need_bytes</code>, <code>convert_backbone</code></td><td>Memory need; run rule, memory check, load, rewrite, conversion</td><td>2</td></tr>
+      <tr><td><code>rewrite_fields</code></td><td>The field "rewrite" of a result line</td><td>7</td></tr>
+      <tr><td><code>load_package</code></td><td>First load and cached load of a compiled package</td><td>7</td></tr>
+      <tr><td><code>output_validity</code>, <code>_worst</code></td><td>The fp16 parity check of one image; the worst of 3 images</td><td>7</td></tr>
+      <tr><td><code>run_coreml</code>, <code>_time_calls</code></td><td>The Core ML worker: parity, warm-up, timed batches, batch API</td><td>7</td></tr>
+      <tr><td><code>_device_name</code>, <code>compute_plan_report</code></td><td>The compute plan of a compiled package</td><td>8</td></tr>
+    </tbody>
+  </table></div>
+  <p class="caption">Table 6. Every function and class that Step 6c adds to <code>src/</code>. The driver is <code>scripts/bench_coreml.py</code>; the tests are <code>tests/test_coreml.py</code> (T1 to T13).</p>
+</section>
+
+<section id="sources">
+  <h2>12 Sources</h2>
+  <ul>
+    <li>Repo code: <code>src/dinov3_apple/coreml.py</code>, <code>scripts/bench_coreml.py</code>, <code>tests/test_coreml.py</code>.</li>
+    <li>Results: <code>results/coreml.jsonl</code>, <code>results/coreml-table.md</code>; <code>results/token-range-mlx.md</code> for r.</li>
+    <li>Spec: <code>specs/06c-neural-engine/explore.html</code> (findings F1 to F4, Tables 2 to 7), <code>plan.html</code> (with the amendment of 2026-11-08), <code>verify.html</code>; ADR 0014 and ADR 0015.</li>
+    <li>Probes outside the repo: <code>~/.cache/dinov3-apple/coreml/probe-logs/</code> (explore p1 to p17) and <code>~/.cache/dinov3-apple/coreml/build-logs/</code> (Q3 probes of the build: <code>q3-probe-*.log</code>, <code>q3-r-*.log</code>, <code>P.log</code>, <code>F.log</code>).</li>
+    <li>coremltools 9.0: <code>converters/mil/frontend/torch/ops.py</code> (<code>_cast</code>), <code>models/compute_plan.py</code>, <code>models/_compiled_model.py</code> (the batch API of <code>predict</code>).</li>
+    <li>Hugging Face transformers: <code>models/dinov3_vit/modeling_dinov3_vit.py</code> (<code>DINOv3ViTEmbeddings</code>, <code>eager_attention_forward</code>, <code>DINOv3ViTLayer</code>).</li>
+    <li>Apple Machine Learning Research, "Deploying Transformers on the Apple Neural Engine" (2022), and github.com/apple/ml-ane-transformers: a layout for the Neural Engine that Step 6c did not try (plan Q1).</li>
+  </ul>
+</section>
+
+<footer class="steps">Previous: <a href="06b-prior-ports-measured.html">6b Prior ports measured</a> · Next: none. First Step 6 page: <a href="06-1-compiled-forward-pass.html">1 Compiled forward pass</a>.</footer>
+</main>
+</body>
+</html>
