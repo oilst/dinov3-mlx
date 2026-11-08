@@ -352,6 +352,7 @@ times = _time_calls(lambda: model.predict(feed), timed)</code></pre>
     </tbody>
   </table></div>
   <p class="caption">Table 5. img/s, median of 3 rounds of 10 s with a common start time. Stream ratio = (ne + mlx, both) / (mlx alone).</p>
+  <p>Run 2 of the Verify stage (P1 and P2 at batch size 8) agrees: stream ratio 1.312 at P1 (2,517 img/s against 1,958 for mlx alone) and 0.981 at P2. The paired ratios of run 2 differ from run 1 by at most 0.084 (coreml-ne at P1: 0.388 and 0.420).</p>
   <p>At P1 the Neural Engine is a real second accelerator: with both running, mlx loses 7 % and the Neural Engine 7 %, and the sum is 1.26 times mlx alone. At P2 the two compete: mlx loses 18 % and the Neural Engine adds only 2.5 img/s, so the sum is below mlx alone.</p>
 </section>
 
