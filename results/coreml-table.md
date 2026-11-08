@@ -176,56 +176,56 @@ Table 3. The compute plan of each package on CPU_AND_NE (job J2).
 
 | Model size | Input resolution | Batch size | Backend | Status | Valid | Parity (image 0) | img/s | Ratio to mlx | mlx dtype mode | mlx img/s | Reason |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| ViT-S/16 | 224 | 1 | coreml-ne (b8 package) | done | True | 0.9999 / 0.9999 / 0.9997 | 532.1 | 1.094 | fp16-cast | 486.2 |  |
-| ViT-S/16 | 224 | 1 | coreml-gpu (b8 package) | done | True | 1.0000 / 1.0000 / 1.0000 | 442.1 | 0.909 | fp16-cast | 486.2 |  |
-| ViT-S/16 | 224 | 8 | coreml-gpu (b8 package) | done | True | 1.0000 / 1.0000 / 1.0000 | 1,847.4 | 1.029 | fp16-cast | 1,795.6 |  |
+| ViT-S/16 | 224 | 1 | coreml-ne | done | True | 0.9999 / 0.9999 / 0.9997 | 532.1 | 1.094 | fp16-cast | 486.2 |  |
+| ViT-S/16 | 224 | 1 | coreml-gpu | done | True | 1.0000 / 1.0000 / 1.0000 | 442.1 | 0.909 | fp16-cast | 486.2 |  |
+| ViT-S/16 | 224 | 8 | coreml-gpu | done | True | 1.0000 / 1.0000 / 1.0000 | 1,847.4 | 1.029 | fp16-cast | 1,795.6 |  |
 | ViT-S/16 | 224 | 8 | coreml-ne (b8 package) | done | False | 0.3929 / 0.5538 / 0.3793 | 437.1 | 0.243 | fp16-cast | 1,795.6 | parity below the threshold: frame, patch_mean, patch_p01 |
-| ViT-S/16 | 224 | 8 | coreml-ne | done | True | 0.9999 / 0.9999 / 0.9997 | 673.0 | 0.375 | fp16-cast | 1,795.6 |  |
-| ViT-S/16 | 512 | 1 | coreml-ne (b8 package) | done | False | 0.6914 / 0.6608 / 0.3987 | 34.1 | 0.110 | fp16-cast | 309.3 | parity below the threshold: frame, patch_mean, patch_p01 |
-| ViT-S/16 | 512 | 1 | coreml-gpu (b8 package) | done | True | 1.0000 / 1.0000 / 1.0000 | 235.5 | 0.762 | fp16-cast | 309.3 |  |
+| ViT-S/16 | 224 | 8 | coreml-ne (batch API) | done | True | 0.9999 / 0.9999 / 0.9997 | 673.0 | 0.375 | fp16-cast | 1,795.6 |  |
+| ViT-S/16 | 512 | 1 | coreml-ne | done | False | 0.6914 / 0.6608 / 0.3987 | 34.1 | 0.110 | fp16-cast | 309.3 | parity below the threshold: frame, patch_mean, patch_p01 |
+| ViT-S/16 | 512 | 1 | coreml-gpu | done | True | 1.0000 / 1.0000 / 1.0000 | 235.5 | 0.762 | fp16-cast | 309.3 |  |
 | ViT-S/16 | 512 | 8 | coreml-ne (b8 package) | done | False | 0.3764 / 0.5694 / 0.3804 | 34.9 | 0.139 | fp16-cast | 251.1 | parity below the threshold: frame, patch_mean, patch_p01 |
-| ViT-S/16 | 512 | 8 | coreml-ne | done | False | 0.6914 / 0.6608 / 0.3987 | 36.4 | 0.145 | fp16-cast | 251.1 | parity below the threshold: frame, patch_mean, patch_p01 |
-| ViT-S/16 | 512 | 8 | coreml-gpu (b8 package) | done | True | 1.0000 / 1.0000 / 1.0000 | 155.6 | 0.619 | fp16-cast | 251.1 |  |
-| ViT-S+/16 | 224 | 1 | coreml-gpu (b8 package) | done | True | 1.0000 / 1.0000 / 1.0000 | 401.3 | 0.838 | fp16-cast | 478.9 |  |
-| ViT-S+/16 | 224 | 1 | coreml-ne (b8 package) | done | True | 0.9997 / 0.9998 / 0.9992 | 473.7 | 0.989 | fp16-cast | 478.9 |  |
-| ViT-S+/16 | 224 | 8 | coreml-gpu (b8 package) | done | True | 1.0000 / 1.0000 / 1.0000 | 1,151.0 | 0.966 | fp16-cast | 1,191.0 |  |
+| ViT-S/16 | 512 | 8 | coreml-ne (batch API) | done | False | 0.6914 / 0.6608 / 0.3987 | 36.4 | 0.145 | fp16-cast | 251.1 | parity below the threshold: frame, patch_mean, patch_p01 |
+| ViT-S/16 | 512 | 8 | coreml-gpu | done | True | 1.0000 / 1.0000 / 1.0000 | 155.6 | 0.619 | fp16-cast | 251.1 |  |
+| ViT-S+/16 | 224 | 1 | coreml-gpu | done | True | 1.0000 / 1.0000 / 1.0000 | 401.3 | 0.838 | fp16-cast | 478.9 |  |
+| ViT-S+/16 | 224 | 1 | coreml-ne | done | True | 0.9997 / 0.9998 / 0.9992 | 473.7 | 0.989 | fp16-cast | 478.9 |  |
+| ViT-S+/16 | 224 | 8 | coreml-gpu | done | True | 1.0000 / 1.0000 / 1.0000 | 1,151.0 | 0.966 | fp16-cast | 1,191.0 |  |
 | ViT-S+/16 | 224 | 8 | coreml-ne (b8 package) | done | False | 0.2597 / 0.4827 / 0.3499 | 396.5 | 0.333 | fp16-cast | 1,191.0 | parity below the threshold: frame, patch_mean, patch_p01 |
-| ViT-S+/16 | 224 | 8 | coreml-ne | done | True | 0.9997 / 0.9998 / 0.9992 | 590.5 | 0.496 | fp16-cast | 1,191.0 |  |
-| ViT-S+/16 | 512 | 1 | coreml-ne (b8 package) | done | False | 0.8188 / 0.6516 / 0.3154 | 33.1 | 0.157 | fp16-cast | 210.5 | parity below the threshold: frame, patch_mean, patch_p01 |
-| ViT-S+/16 | 512 | 1 | coreml-gpu (b8 package) | done | True | 1.0000 / 1.0000 / 1.0000 | 146.5 | 0.696 | fp16-cast | 210.5 |  |
+| ViT-S+/16 | 224 | 8 | coreml-ne (batch API) | done | True | 0.9997 / 0.9998 / 0.9992 | 590.5 | 0.496 | fp16-cast | 1,191.0 |  |
+| ViT-S+/16 | 512 | 1 | coreml-ne | done | False | 0.8188 / 0.6516 / 0.3154 | 33.1 | 0.157 | fp16-cast | 210.5 | parity below the threshold: frame, patch_mean, patch_p01 |
+| ViT-S+/16 | 512 | 1 | coreml-gpu | done | True | 1.0000 / 1.0000 / 1.0000 | 146.5 | 0.696 | fp16-cast | 210.5 |  |
 | ViT-S+/16 | 512 | 8 | coreml-ne (b8 package) | done | False | 0.3514 / 0.5209 / 0.2573 | 33.5 | 0.126 | fp16-cast | 265.5 | parity below the threshold: frame, patch_mean, patch_p01 |
-| ViT-S+/16 | 512 | 8 | coreml-ne | done | False | 0.8188 / 0.6516 / 0.3154 | 34.6 | 0.130 | fp16-cast | 265.5 | parity below the threshold: frame, patch_mean, patch_p01 |
-| ViT-S+/16 | 512 | 8 | coreml-gpu (b8 package) | done | True | 1.0000 / 1.0000 / 1.0000 | 177.4 | 0.668 | fp16-cast | 265.5 |  |
-| ViT-B/16 | 224 | 1 | coreml-ne (b8 package) | done | False | 0.1144 / 0.4013 / 0.2950 | 205.1 | 0.578 | fp16-cast | 354.6 | parity below the threshold: frame, patch_mean, patch_p01 |
-| ViT-B/16 | 224 | 1 | coreml-gpu (b8 package) | done | True | 1.0000 / 1.0000 / 1.0000 | 289.9 | 0.817 | fp16-cast | 354.6 |  |
-| ViT-B/16 | 224 | 8 | coreml-gpu (b8 package) | done | True | 1.0000 / 1.0000 / 1.0000 | 602.5 | 0.903 | fp16-cast | 667.6 |  |
+| ViT-S+/16 | 512 | 8 | coreml-ne (batch API) | done | False | 0.8188 / 0.6516 / 0.3154 | 34.6 | 0.130 | fp16-cast | 265.5 | parity below the threshold: frame, patch_mean, patch_p01 |
+| ViT-S+/16 | 512 | 8 | coreml-gpu | done | True | 1.0000 / 1.0000 / 1.0000 | 177.4 | 0.668 | fp16-cast | 265.5 |  |
+| ViT-B/16 | 224 | 1 | coreml-ne | done | False | 0.1144 / 0.4013 / 0.2950 | 205.1 | 0.578 | fp16-cast | 354.6 | parity below the threshold: frame, patch_mean, patch_p01 |
+| ViT-B/16 | 224 | 1 | coreml-gpu | done | True | 1.0000 / 1.0000 / 1.0000 | 289.9 | 0.817 | fp16-cast | 354.6 |  |
+| ViT-B/16 | 224 | 8 | coreml-gpu | done | True | 1.0000 / 1.0000 / 1.0000 | 602.5 | 0.903 | fp16-cast | 667.6 |  |
 | ViT-B/16 | 224 | 8 | coreml-ne (b8 package) | done | False | 0.0322 / 0.3320 / 0.2443 | 169.2 | 0.253 | fp16-cast | 667.6 | parity below the threshold: frame, patch_mean, patch_p01 |
-| ViT-B/16 | 224 | 8 | coreml-ne | done | False | 0.1144 / 0.4013 / 0.2950 | 235.5 | 0.353 | fp16-cast | 667.6 | parity below the threshold: frame, patch_mean, patch_p01 |
-| ViT-B/16 | 512 | 1 | coreml-gpu (b8 package) | done | True | 1.0000 / 1.0000 / 1.0000 | 84.4 | 0.752 | fp16-cast | 112.2 |  |
-| ViT-B/16 | 512 | 1 | coreml-ne (b8 package) | done | False | 0.3706 / 0.5356 / 0.3749 | 16.2 | 0.144 | fp16-cast | 112.2 | parity below the threshold: frame, patch_mean, patch_p01 |
+| ViT-B/16 | 224 | 8 | coreml-ne (batch API) | done | False | 0.1144 / 0.4013 / 0.2950 | 235.5 | 0.353 | fp16-cast | 667.6 | parity below the threshold: frame, patch_mean, patch_p01 |
+| ViT-B/16 | 512 | 1 | coreml-gpu | done | True | 1.0000 / 1.0000 / 1.0000 | 84.4 | 0.752 | fp16-cast | 112.2 |  |
+| ViT-B/16 | 512 | 1 | coreml-ne | done | False | 0.3706 / 0.5356 / 0.3749 | 16.2 | 0.144 | fp16-cast | 112.2 | parity below the threshold: frame, patch_mean, patch_p01 |
 | ViT-B/16 | 512 | 8 | coreml-ne (b8 package) | done | False | 0.2105 / 0.5057 / 0.3441 | 16.0 | 0.103 | fp16-cast | 155.5 | parity below the threshold: frame, patch_mean, patch_p01 |
-| ViT-B/16 | 512 | 8 | coreml-ne | done | False | 0.3706 / 0.5356 / 0.3749 | 16.8 | 0.108 | fp16-cast | 155.5 | parity below the threshold: frame, patch_mean, patch_p01 |
-| ViT-B/16 | 512 | 8 | coreml-gpu (b8 package) | done | True | 1.0000 / 1.0000 / 1.0000 | 113.7 | 0.731 | fp16-cast | 155.5 |  |
-| ViT-L/16 | 224 | 1 | coreml-ne (b8 package) | done | False | 0.1578 / 0.2320 / 0.0839 | 60.4 | 0.401 | fp16-autocast | 150.9 | parity below the threshold: frame, patch_mean, patch_p01 |
-| ViT-L/16 | 224 | 1 | coreml-gpu (b8 package) | done | True | 1.0000 / 1.0000 / 1.0000 | 137.1 | 0.909 | fp16-autocast | 150.9 |  |
-| ViT-L/16 | 224 | 8 | coreml-gpu (b8 package) | done | True | 1.0000 / 1.0000 / 1.0000 | 237.0 | 1.038 | fp16-autocast | 228.4 |  |
+| ViT-B/16 | 512 | 8 | coreml-ne (batch API) | done | False | 0.3706 / 0.5356 / 0.3749 | 16.8 | 0.108 | fp16-cast | 155.5 | parity below the threshold: frame, patch_mean, patch_p01 |
+| ViT-B/16 | 512 | 8 | coreml-gpu | done | True | 1.0000 / 1.0000 / 1.0000 | 113.7 | 0.731 | fp16-cast | 155.5 |  |
+| ViT-L/16 | 224 | 1 | coreml-ne | done | False | 0.1578 / 0.2320 / 0.0839 | 60.4 | 0.401 | fp16-autocast | 150.9 | parity below the threshold: frame, patch_mean, patch_p01 |
+| ViT-L/16 | 224 | 1 | coreml-gpu | done | True | 1.0000 / 1.0000 / 1.0000 | 137.1 | 0.909 | fp16-autocast | 150.9 |  |
+| ViT-L/16 | 224 | 8 | coreml-gpu | done | True | 1.0000 / 1.0000 / 1.0000 | 237.0 | 1.038 | fp16-autocast | 228.4 |  |
 | ViT-L/16 | 224 | 8 | coreml-ne (b8 package) | done | False | 0.2457 / 0.2703 / 0.1114 | 52.9 | 0.232 | fp16-autocast | 228.4 | parity below the threshold: frame, patch_mean, patch_p01 |
-| ViT-L/16 | 224 | 8 | coreml-ne | done | False | 0.1578 / 0.2320 / 0.0839 | 64.0 | 0.280 | fp16-autocast | 228.4 | parity below the threshold: frame, patch_mean, patch_p01 |
-| ViT-L/16 | 512 | 1 | coreml-ne (b8 package) | done | False | 0.8671 / 0.5057 / 0.1808 | 5.6 | 0.148 | fp16-autocast | 37.5 | parity below the threshold: frame, patch_mean, patch_p01 |
-| ViT-L/16 | 512 | 1 | coreml-gpu (b8 package) | done | True | 1.0000 / 1.0000 / 1.0000 | 31.6 | 0.843 | fp16-autocast | 37.5 |  |
+| ViT-L/16 | 224 | 8 | coreml-ne (batch API) | done | False | 0.1578 / 0.2320 / 0.0839 | 64.0 | 0.280 | fp16-autocast | 228.4 | parity below the threshold: frame, patch_mean, patch_p01 |
+| ViT-L/16 | 512 | 1 | coreml-ne | done | False | 0.8671 / 0.5057 / 0.1808 | 5.6 | 0.148 | fp16-autocast | 37.5 | parity below the threshold: frame, patch_mean, patch_p01 |
+| ViT-L/16 | 512 | 1 | coreml-gpu | done | True | 1.0000 / 1.0000 / 1.0000 | 31.6 | 0.843 | fp16-autocast | 37.5 |  |
 | ViT-L/16 | 512 | 8 | coreml-ne (b8 package) | done | False | 0.2912 / 0.3392 / 0.0772 | 5.5 | 0.120 | fp16-autocast | 45.6 | parity below the threshold: frame, patch_mean, patch_p01 |
-| ViT-L/16 | 512 | 8 | coreml-ne | done | False | 0.8671 / 0.5057 / 0.1808 | 5.6 | 0.124 | fp16-autocast | 45.6 | parity below the threshold: frame, patch_mean, patch_p01 |
-| ViT-L/16 | 512 | 8 | coreml-gpu (b8 package) | done | True | 1.0000 / 1.0000 / 1.0000 | 38.0 | 0.833 | fp16-autocast | 45.6 |  |
-| ViT-H+/16 | 224 | 1 | coreml-gpu (b8 package) | done | True | 1.0000 / 1.0000 / 0.9995 | 74.8 | 1.153 | fp16-autocast | 64.9 |  |
-| ViT-H+/16 | 224 | 1 | coreml-ne (b8 package) | done | False | 0.1102 / 0.3193 / 0.1340 | 23.6 | 0.364 | fp16-autocast | 64.9 | parity below the threshold: frame, patch_mean, patch_p01 |
-| ViT-H+/16 | 224 | 8 | coreml-gpu (b8 package) | done | True | 1.0000 / 1.0000 / 0.9995 | 105.9 | 1.024 | fp16-autocast | 103.4 |  |
+| ViT-L/16 | 512 | 8 | coreml-ne (batch API) | done | False | 0.8671 / 0.5057 / 0.1808 | 5.6 | 0.124 | fp16-autocast | 45.6 | parity below the threshold: frame, patch_mean, patch_p01 |
+| ViT-L/16 | 512 | 8 | coreml-gpu | done | True | 1.0000 / 1.0000 / 1.0000 | 38.0 | 0.833 | fp16-autocast | 45.6 |  |
+| ViT-H+/16 | 224 | 1 | coreml-gpu | done | True | 1.0000 / 1.0000 / 0.9995 | 74.8 | 1.153 | fp16-autocast | 64.9 |  |
+| ViT-H+/16 | 224 | 1 | coreml-ne | done | False | 0.1102 / 0.3193 / 0.1340 | 23.6 | 0.364 | fp16-autocast | 64.9 | parity below the threshold: frame, patch_mean, patch_p01 |
+| ViT-H+/16 | 224 | 8 | coreml-gpu | done | True | 1.0000 / 1.0000 / 0.9995 | 105.9 | 1.024 | fp16-autocast | 103.4 |  |
 | ViT-H+/16 | 224 | 8 | coreml-ne (b8 package) | done | False | 0.0511 / 0.2793 / 0.1069 | 23.2 | 0.225 | fp16-autocast | 103.4 | parity below the threshold: frame, patch_mean, patch_p01 |
-| ViT-H+/16 | 224 | 8 | coreml-ne | done | False | 0.1102 / 0.3193 / 0.1340 | 24.3 | 0.235 | fp16-autocast | 103.4 | parity below the threshold: frame, patch_mean, patch_p01 |
-| ViT-H+/16 | 512 | 1 | coreml-ne (b8 package) | done | False | 0.3230 / 0.4677 / 0.1442 | 2.8 | 0.162 | fp16-autocast | 17.3 | parity below the threshold: frame, patch_mean, patch_p01 |
-| ViT-H+/16 | 512 | 1 | coreml-gpu (b8 package) | done | True | 1.0000 / 1.0000 / 1.0000 | 15.5 | 0.897 | fp16-autocast | 17.3 |  |
+| ViT-H+/16 | 224 | 8 | coreml-ne (batch API) | done | False | 0.1102 / 0.3193 / 0.1340 | 24.3 | 0.235 | fp16-autocast | 103.4 | parity below the threshold: frame, patch_mean, patch_p01 |
+| ViT-H+/16 | 512 | 1 | coreml-ne | done | False | 0.3230 / 0.4677 / 0.1442 | 2.8 | 0.162 | fp16-autocast | 17.3 | parity below the threshold: frame, patch_mean, patch_p01 |
+| ViT-H+/16 | 512 | 1 | coreml-gpu | done | True | 1.0000 / 1.0000 / 1.0000 | 15.5 | 0.897 | fp16-autocast | 17.3 |  |
 | ViT-H+/16 | 512 | 8 | coreml-ne (b8 package) | done | False | 0.3548 / 0.4525 / 0.1303 | 2.7 | 0.138 | fp16-cast | 19.7 | parity below the threshold: frame, patch_mean, patch_p01 |
-| ViT-H+/16 | 512 | 8 | coreml-ne | done | False | 0.3230 / 0.4677 / 0.1442 | 2.8 | 0.144 | fp16-cast | 19.7 | parity below the threshold: frame, patch_mean, patch_p01 |
-| ViT-H+/16 | 512 | 8 | coreml-gpu (b8 package) | done | True | 1.0000 / 1.0000 / 1.0000 | 16.8 | 0.851 | fp16-cast | 19.7 |  |
+| ViT-H+/16 | 512 | 8 | coreml-ne (batch API) | done | False | 0.3230 / 0.4677 / 0.1442 | 2.8 | 0.144 | fp16-cast | 19.7 | parity below the threshold: frame, patch_mean, patch_p01 |
+| ViT-H+/16 | 512 | 8 | coreml-gpu | done | True | 1.0000 / 1.0000 / 1.0000 | 16.8 | 0.851 | fp16-cast | 19.7 |  |
 
 Table 4. The matrix: patch embeddings, 1 round (job J3). The ratio is Core ML / mlx of the same paired group.
 
@@ -233,17 +233,28 @@ Table 4. The matrix: patch embeddings, 1 round (job J3). The ratio is Core ML / 
 
 | Group | Backend | Run medians | Pooled median | Spread between runs | Verdict D21 | Core ML img/s (median) | mlx img/s (median) | Rounds |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| P1-b1 | coreml-gpu | 0.984 | 0.984 | 0.000 | not above 1 | 461.0 | 468.4 | 1 |
-| P1-b1 | coreml-ne | 1.133 | 1.133 | 0.000 | above 1 | 530.7 | 468.4 | 1 |
-| P1-b8 | coreml-all | 0.984 | 0.984 | 0.000 | not above 1 | 1,803.2 | 1,831.9 | 1 |
-| P1-b8 | coreml-gpu | 1.029 | 1.029 | 0.000 | above 1 | 1,884.3 | 1,831.9 | 1 |
-| P1-b8 | coreml-ne | 0.376 | 0.376 | 0.000 | not above 1 | 689.4 | 1,831.9 | 1 |
+| P1-b1 | coreml-gpu | 0.886 | 0.886 | 0.000 | not above 1 | 461.1 | 531.3 | 5 |
+| P1-b1 | coreml-ne | 1.016 | 1.016 | 0.000 | above 1 | 539.1 | 531.3 | 5 |
+| P1-b8 | coreml-all | 0.996 | 0.996 | 0.000 | not above 1 | 1,765.0 | 1,773.1 | 5 |
+| P1-b8 | coreml-gpu | 0.975 | 0.975 | 0.000 | not above 1 | 1,708.6 | 1,773.1 | 5 |
+| P1-b8 | coreml-ne | 0.388 | 0.388 | 0.000 | not above 1 | 689.4 | 1,773.1 | 5 |
+| P2-b1 | coreml-gpu | 0.884 | 0.884 | 0.000 | not above 1 | 15.2 | 16.8 | 5 |
+| P2-b1 | coreml-ne | 0.167 | 0.167 | 0.000 | not above 1 | 2.8 | 16.8 | 5 |
+| P2-b8 | coreml-all | 0.737 | 0.737 | 0.000 | not above 1 | 13.9 | 19.7 | 5 |
+| P2-b8 | coreml-gpu | 0.775 | 0.775 | 0.000 | not above 1 | 15.5 | 19.7 | 5 |
+| P2-b8 | coreml-ne | 0.144 | 0.144 | 0.000 | not above 1 | 2.8 | 19.7 | 5 |
 
 Table 5. The paired ratio Core ML / mlx at P1 (frame) and P2 (patch), median over the rounds of each run (run 1: build, run 2: verify). Report only: Step 6c has no speed target.
+
+F4 evidence (run 1): the ViT-S/16 batch-size-8 package on CPU_AND_NE gives valid False, parity 0.3929 / 0.5538 / 0.3793. The coreml-ne rows at batch size 8 run the batch-size-1 package with the batch API.
 
 ## 6 Two-stream run
 
 | Group | Run | Neural Engine batch size | ne alone img/s | mlx alone img/s | both: ne img/s | both: mlx img/s | both: total img/s | Stream ratio | Rounds |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| P1-b1 | 1 | 8 | 688.1 | 526.1 | 683.0 | 529.5 | 1,213.1 | 2.302 | 3 |
+| P1-b8 | 1 | 8 | 695.1 | 1,984.4 | 648.4 | 1,854.3 | 2,502.7 | 1.257 | 3 |
+| P2-b1 | 1 | 1 | 2.8 | 15.2 | 2.6 | 12.5 | 15.1 | 0.996 | 3 |
+| P2-b8 | 1 | 1 | 2.8 | 16.7 | 2.5 | 13.7 | 16.2 | 0.934 | 3 |
 
 Table 6. The two-stream run: Core ML on CPU_AND_NE and compiled mlx on the GPU, alone and at the same time, 10 s per case. Stream ratio = (ne + mlx, both) / (mlx alone), median over the rounds.
