@@ -705,7 +705,7 @@ figcaption { font-size: 0.88rem; color: var(--muted); max-width: 52rem; }
           <tr><td>4 MLX port</td><td>ViT-S/16 in MLX and the weight converter</td><td>Patch embedding, RoPE, attention, LayerScale, MLP</td><td>Done</td></tr>
           <tr><td>5 All sizes</td><td>All model sizes in fp32, fp16 and bf16</td><td>SwiGLU, model scaling, numeric range</td><td>Done</td></tr>
           <tr class="sel"><td>6 Speed</td><td>Compiled graphs, batch sizes, quantized weights</td><td>Attention cost at high input resolution</td><td>Next</td></tr>
-          <tr><td>6b Prior-art comparison</td><td>The related public repos measured with our harness: frame throughput and parity at the same model size, input resolution and batch size</td><td>Which parts of the backbone each port changes, and the parity cost</td><td>Open</td></tr>
+          <tr><td>6b Prior-art comparison</td><td>The related public repos measured with our harness: frame throughput and parity at the same model size, input resolution and batch size</td><td>Which parts of the backbone each port changes, and the parity cost</td><td>Done (the Python ports wait for the user)</td></tr>
           <tr><td>6c Neural Engine</td><td>Core ML on the Apple Neural Engine, alone and in parallel with the GPU, against <code>mlx</code></td><td>Attention and the feed-forward network on the Apple Neural Engine, numeric range in fp16</td><td>Open</td></tr>
           <tr><td>7 Release</td><td>Public API, README with results, CI, first public push</td><td>None</td><td>Open</td></tr>
           <tr><td>8 Fine-tuning</td><td>8a: reference fine-tuning setup in MLX. 8b: DoRA and other adapters</td><td>DINO loss, iBOT loss, KoLeo regularizer, Gram anchoring</td><td>Open</td></tr>
@@ -829,6 +829,7 @@ figcaption { font-size: 0.88rem; color: var(--muted); max-width: 52rem; }
         <li>Write the result lines and the table <code>results/prior-art-table.md</code>.</li>
       </ol>
       <p>Third-party code runs in its own virtual environment outside the repo, and no candidate package enters <code>pyproject.toml</code>. The step ends when each candidate has a result row or a recorded reason. The explainer <code>docs/learn/06b-prior-ports-measured.html</code> covers which parts of the backbone each port changes and what each change costs in parity and speed.</p>
+      <p>Result (2026-11-08): our compiled forward pass is faster than each FP32 Core ML export (prior-art ratio 1.05 to 1.09, and 1.53 at P1 with batch size 8). The FP16 exports are equal or faster (0.85 to 0.99). Every DINOv3 export reproduces the reference output with float input. In our own code, the bf16 RoPE of the Meta-based MLX ports fails the fp32 thresholds, and the unfused attention costs 10 to 24 % of the throughput. The Python ports C1 and C2 wait for the user's answer to Q1 (ADR 0012, ADR 0013, <code>results/prior-art-table.md</code>).</p>
     </div>
 
     <div class="sub" id="step-6c">
