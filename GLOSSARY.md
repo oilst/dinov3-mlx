@@ -535,3 +535,27 @@ A pytest session with `DINOV3_SLOW=1`.
 
 **CPU stream**:
 The CPU device of MLX (`mx.cpu`). Some tests run the MLX backbone there as a second device; it rounds differently from the GPU.
+
+**Core ML package**:
+One converted backbone for one model size, input resolution and batch size (`.mlpackage`, with its compiled `.mlmodelc`), in `~/.cache/dinov3-apple/coreml/`. Its name holds every setting.
+
+**Compute plan**:
+The device and the estimated cost of each op of a compiled Core ML package, from `MLComputePlan`.
+
+**Neural Engine rewrite**:
+The exact changes to the Hugging Face backbone before the Core ML conversion that keep every value inside fp16: score scale, residual-stream scale and layer norm ε / r².
+
+**Score scale**:
+The power of two (256) that divides the query before q·kᵀ. The softmax gets (z − max z) · 256.
+
+**Residual-stream scale**:
+The power of two r that divides the embeddings and the weights and bias of `o_proj` and `down_proj`. The layer norms remove it; their ε becomes ε / r².
+
+**Batch API**:
+One Core ML `predict` call with a list of batch-size-1 inputs.
+
+**Two-stream run**:
+Core ML on the Neural Engine and compiled mlx on the GPU at the same time, in two processes with a common start time.
+
+**Stream ratio**:
+The summed throughput of both sides of a two-stream run divided by the throughput of mlx alone in the same round.
