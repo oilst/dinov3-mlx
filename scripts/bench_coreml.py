@@ -558,7 +558,8 @@ def stream_worker(spec: Spec) -> dict:
         else:  # the batch API on the batch-size-1 package (F4)
             feed = [{"pixels": batch[i : i + 1]} for i in range(batch_size)]
         result = _stream_loop(lambda: model.predict(feed), spec)
-        result |= {"backend": "coreml-ne", "package": path.name, "ne_batch_form": "batch-api"}
+        form = "batch-api" if batch_size > 1 else "package"
+        result |= {"backend": "coreml-ne", "package": path.name, "ne_batch_form": form}
     else:
         import mlx.core as mx
 
@@ -671,18 +672,45 @@ def _parity_text(parity: dict | None) -> str:
     return f"{parity['frame']:.4f} / {parity['patch_mean']:.4f} / {parity['patch_p01']:.4f}"
 
 
+def _current(line: dict) -> bool:
+    """True for a line of the current rewrite version, the plain graph or a line without a
+    package (mlx, deferred). The lines of an old rewrite version stay in the results file."""
+    from dinov3_apple.coreml import REWRITE_VERSION
+
+    package = line.get("package") or ""
+    return not package or "-plain-" in package or f"-{REWRITE_VERSION}-" in package
+
+
 def _latest(lines: list[dict], phase: str) -> list[dict]:
+    """Return the latest line of each configuration of one phase, of the current rewrite version."""
     found: dict[tuple, dict] = {}
     for line in lines:
-        if line.get("phase") == phase:
+        if line.get("phase") == phase and _current(line):
             extra = (
                 line.get("run_id"),
                 line.get("round"),
                 line.get("case"),
-                line.get("ne_batch_form"),
+                line.get("ne_batch_form") or "package",
             )
             found[_identity(line) + extra] = line
     return list(found.values())
+
+
+def _ne_valid(lines: list[dict], model_size: str, side: int, batch_size: int) -> str:
+    """Return "yes" if a current coreml-ne line of the matrix or the paired runs at this model size,
+    input resolution and batch size (batch API above 1) has a valid output, else "no"."""
+    for line in lines:
+        if (
+            line.get("phase") in ("matrix", "pairs")
+            and line["backend"] == "coreml-ne"
+            and (line["model_size"], line["side"], line["batch_size"])
+            == (model_size, side, batch_size)
+            and (batch_size == 1 or line.get("ne_batch_form") == "batch-api")
+            and line.get("valid")
+            and _current(line)
+        ):
+            return "yes"
+    return "no"
 
 
 def _form_mark(line: dict) -> str:
@@ -698,7 +726,7 @@ def _size_name(line: dict) -> str:
 
 def table_text(lines: list[dict]) -> str:
     """Return the Markdown text of results/coreml-table.md."""
-    from dinov3_apple.speedup import pass_verdict, spread_between_runs
+    from dinov3_apple.speedup import NOISE, pass_verdict, spread_between_runs
 
     out = [
         "# Core ML on the Neural Engine",
@@ -821,7 +849,9 @@ def table_text(lines: list[dict]) -> str:
         output = rows[0]["line"].get("output") or "patch"
         out.append(
             f"| {group} | {backend} | {', '.join(f'{m:.3f}' for m in medians)} | {pooled:.3f} | "
-            f"{spread_between_runs(medians):.3f} | {pass_verdict(medians, pooled)} | "
+            f"{f'{spread_between_runs(medians):.3f}' if len(medians) > 1 else '–'} | "
+            f"{pass_verdict(medians, pooled)}"
+            f"{', inside the noise' if abs(pooled - 1) <= NOISE else ''} | "
             f"{np.median([r['line'][output]['throughput_ips'] for r in rows]):,.1f} | "
             f"{np.median([r['mlx'][output]['throughput_ips'] for r in rows]):,.1f} | {len(rows)} |"
         )
@@ -845,8 +875,8 @@ def table_text(lines: list[dict]) -> str:
         "",
         "## 6 Two-stream run",
         "",
-        "| Group | Run | Neural Engine batch size | ne alone img/s | mlx alone img/s | both: ne img/s | both: mlx img/s | both: total img/s | Stream ratio | Rounds |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| Group | Run | Neural Engine batch size | Neural Engine output valid | ne alone img/s | mlx alone img/s | both: ne img/s | both: mlx img/s | both: total img/s | Stream ratio | Rounds |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     streams: dict[tuple, dict[int, dict[str, dict]]] = {}
     for line in lines:
@@ -862,8 +892,10 @@ def table_text(lines: list[dict]) -> str:
         both_ne = [r["both"]["sides"]["ne"]["throughput_ips"] for r in full]
         both_mlx = [r["both"]["sides"]["mlx"]["throughput_ips"] for r in full]
         ratios = [r["both"]["total_ips"] / r["mlx"]["sides"]["mlx"]["throughput_ips"] for r in full]
+        first = full[0]["ne"]
+        valid = _ne_valid(lines, first["model_size"], first["side"], ne_batch)
         out.append(
-            f"| {group} | {run_id} | {ne_batch} | {np.median(ne_alone):,.1f} | "
+            f"| {group} | {run_id} | {ne_batch} | {valid} | {np.median(ne_alone):,.1f} | "
             f"{np.median(mlx_alone):,.1f} | {np.median(both_ne):,.1f} | {np.median(both_mlx):,.1f} | "
             f"{np.median([a + b for a, b in zip(both_ne, both_mlx, strict=True)]):,.1f} | "
             f"{np.median(ratios):.3f} | {len(full)} |"
@@ -873,7 +905,9 @@ def table_text(lines: list[dict]) -> str:
         (
             "Table 6. The two-stream run: Core ML on CPU_AND_NE and compiled mlx on the GPU, alone and "
             "at the same time, 10 s per case. Stream ratio = (ne + mlx, both) / (mlx alone), median "
-            "over the rounds."
+            "over the rounds. The stream worker checks no output; the column «Neural Engine output "
+            "valid» comes from the coreml-ne lines of the matrix and the paired runs (finding V2 of "
+            "verify.html)."
         ),
         "",
     ]

@@ -6,6 +6,18 @@ Made by `scripts/bench_coreml.py table` from `results/coreml.jsonl` on 2026-11-0
 
 | Package | Status | Trace s | Convert s | Save s | Compile s | Size MB | Ops | Peak footprint GB |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| vits16-224-b1-plain-ct9.0.mlpackage | done | 0.4 | 2.0 | 0.0 | 0.1 | 43.4 | 1229 | 0.49 |
+| ViT-7B/16 | deferred: ViT-7B/16 is deferred (D6 of explore.html) | – | – | – | – | – | – | – |
+| vitl16-224-b1-ne2-s256-r8-ct9.0.mlpackage | done | 1.2 | 7.6 | 0.1 | 0.1 | 606.7 | 2623 | 2.20 |
+| vitl16-448-b1-ne2-s256-r8-ct9.0.mlpackage | done | 3.2 | 8.0 | 0.1 | 0.1 | 606.8 | 2623 | 2.21 |
+| vitl16-512-b1-ne2-s256-r8-ct9.0.mlpackage | done | 4.1 | 6.9 | 0.1 | 0.1 | 606.9 | 2623 | 2.20 |
+| vitl16-224-b8-ne2-s256-r8-ct9.0.mlpackage | done | 4.3 | 7.6 | 0.1 | 0.1 | 606.7 | 2623 | 2.21 |
+| vitl16-512-b8-ne2-s256-r8-ct9.0.mlpackage | done | 25.9 | 7.8 | 0.1 | 0.2 | 606.9 | 2623 | 4.38 |
+| vith16plus-224-b1-ne2-s256-r8-ct9.0.mlpackage | done | 2.5 | 18.4 | 0.9 | 0.2 | 1,681.7 | 3583 | 4.94 |
+| vith16plus-448-b1-ne2-s256-r8-ct9.0.mlpackage | done | 6.7 | 15.7 | 0.6 | 0.2 | 1,681.9 | 3583 | 4.96 |
+| vith16plus-512-b1-ne2-s256-r8-ct9.0.mlpackage | done | 9.1 | 14.7 | 0.2 | 0.2 | 1,681.9 | 3583 | 5.00 |
+| vith16plus-224-b8-ne2-s256-r8-ct9.0.mlpackage | done | 10.8 | 14.5 | 0.3 | 0.2 | 1,681.8 | 3583 | 4.99 |
+| vith16plus-512-b8-ne2-s256-r8-ct9.0.mlpackage | done | 61.2 | 14.6 | 0.5 | 0.2 | 1,682.0 | 3583 | 5.60 |
 | vits16-224-b1-ne2-s256-r1-ct9.0.mlpackage | done | 0.4 | 2.1 | 0.0 | 0.1 | 43.5 | 1325 | 0.52 |
 | vits16-448-b1-ne2-s256-r1-ct9.0.mlpackage | done | 0.6 | 2.0 | 0.0 | 0.1 | 43.6 | 1325 | 0.57 |
 | vits16-512-b1-ne2-s256-r1-ct9.0.mlpackage | done | 0.7 | 2.0 | 0.0 | 0.1 | 43.7 | 1325 | 0.62 |
@@ -21,18 +33,6 @@ Made by `scripts/bench_coreml.py table` from `results/coreml.jsonl` on 2026-11-0
 | vitb16-512-b1-ne2-s256-r1-ct9.0.mlpackage | done | 1.4 | 2.8 | 0.0 | 0.1 | 171.8 | 1325 | 1.05 |
 | vitb16-224-b8-ne2-s256-r1-ct9.0.mlpackage | done | 1.4 | 2.9 | 0.0 | 0.1 | 171.6 | 1325 | 0.94 |
 | vitb16-512-b8-ne2-s256-r1-ct9.0.mlpackage | done | 8.7 | 2.9 | 0.0 | 0.1 | 171.8 | 1325 | 2.80 |
-| vitl16-224-b1-ne2-s256-r8-ct9.0.mlpackage | done | 1.2 | 7.6 | 0.1 | 0.1 | 606.7 | 2623 | 2.20 |
-| vitl16-448-b1-ne2-s256-r8-ct9.0.mlpackage | done | 3.2 | 8.0 | 0.1 | 0.1 | 606.8 | 2623 | 2.21 |
-| vitl16-512-b1-ne2-s256-r8-ct9.0.mlpackage | done | 4.1 | 6.9 | 0.1 | 0.1 | 606.9 | 2623 | 2.20 |
-| vitl16-224-b8-ne2-s256-r8-ct9.0.mlpackage | done | 4.3 | 7.6 | 0.1 | 0.1 | 606.7 | 2623 | 2.21 |
-| vitl16-512-b8-ne2-s256-r8-ct9.0.mlpackage | done | 25.9 | 7.8 | 0.1 | 0.2 | 606.9 | 2623 | 4.38 |
-| vith16plus-224-b1-ne2-s256-r8-ct9.0.mlpackage | done | 2.5 | 18.4 | 0.9 | 0.2 | 1,681.7 | 3583 | 4.94 |
-| vith16plus-448-b1-ne2-s256-r8-ct9.0.mlpackage | done | 6.7 | 15.7 | 0.6 | 0.2 | 1,681.9 | 3583 | 4.96 |
-| vith16plus-512-b1-ne2-s256-r8-ct9.0.mlpackage | done | 9.1 | 14.7 | 0.2 | 0.2 | 1,681.9 | 3583 | 5.00 |
-| vith16plus-224-b8-ne2-s256-r8-ct9.0.mlpackage | done | 10.8 | 14.5 | 0.3 | 0.2 | 1,681.8 | 3583 | 4.99 |
-| vith16plus-512-b8-ne2-s256-r8-ct9.0.mlpackage | done | 61.2 | 14.6 | 0.5 | 0.2 | 1,682.0 | 3583 | 5.60 |
-| vits16-224-b1-plain-ct9.0.mlpackage | done | 0.4 | 2.0 | 0.0 | 0.1 | 43.4 | 1229 | 0.49 |
-| ViT-7B/16 | deferred: ViT-7B/16 is deferred (D6 of explore.html) | – | – | – | – | – | – | – |
 
 Table 1. The conversion of each package (job J1).
 
@@ -40,54 +40,9 @@ Table 1. The conversion of each package (job J1).
 
 | Model size | Input resolution | Backend | Status | Valid | Parity | Largest token value | First load s | Cached load s | Peak footprint GB |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| ViT-S/16 | 224 | coreml-ne | done | True | 0.9999 / 0.9999 / 0.9996 | 9.1 | 0.07 | 0.022 | 0.37 |
-| ViT-S/16 | 224 | coreml-gpu | done | True | 1.0000 / 1.0000 / 1.0000 | 9.2 | 0.16 | 0.024 | 0.57 |
-| ViT-S/16 | 224 | coreml-all | done | True | 1.0000 / 1.0000 / 1.0000 | 9.2 | 0.40 | 0.028 | 0.57 |
-| ViT-S/16 | 448 | coreml-ne | done | False | -0.0147 / -0.0686 / -0.2907 | 19.6 | 2.58 | 0.024 | 0.41 |
-| ViT-S/16 | 448 | coreml-gpu | done | True | 1.0000 / 1.0000 / 1.0000 | 9.2 | 0.17 | 0.026 | 0.61 |
-| ViT-S/16 | 448 | coreml-all | done | True | 1.0000 / 1.0000 / 1.0000 | 9.2 | 0.40 | 0.026 | 0.61 |
-| ViT-S/16 | 512 | coreml-ne | done | False | 0.0669 / 0.3480 / -0.1178 | 9.2 | 2.88 | 0.025 | 0.42 |
-| ViT-S/16 | 512 | coreml-gpu | done | True | 1.0000 / 1.0000 / 1.0000 | 9.2 | 0.18 | 0.025 | 0.64 |
-| ViT-S/16 | 512 | coreml-all | done | True | 1.0000 / 1.0000 / 1.0000 | 9.2 | 0.40 | 0.025 | 0.64 |
-| ViT-S+/16 | 224 | coreml-ne | done | True | 0.9997 / 0.9997 / 0.9988 | 10.9 | 1.68 | 0.023 | 0.38 |
-| ViT-S+/16 | 224 | coreml-gpu | done | True | 1.0000 / 1.0000 / 0.9999 | 10.9 | 0.19 | 0.025 | 0.59 |
-| ViT-S+/16 | 224 | coreml-all | done | True | 1.0000 / 1.0000 / 0.9999 | 10.9 | 0.42 | 0.027 | 0.59 |
-| ViT-S+/16 | 448 | coreml-ne | done | False | -0.0123 / -0.0122 / -0.1145 | 24.9 | 2.57 | 0.024 | 0.41 |
-| ViT-S+/16 | 448 | coreml-gpu | done | True | 1.0000 / 1.0000 / 1.0000 | 11.0 | 0.18 | 0.027 | 0.63 |
-| ViT-S+/16 | 448 | coreml-all | done | True | 1.0000 / 1.0000 / 1.0000 | 11.0 | 0.42 | 0.029 | 0.63 |
-| ViT-S+/16 | 512 | coreml-ne | done | False | -0.0035 / 0.0507 / -0.0238 | 10.8 | 2.84 | 0.023 | 0.42 |
-| ViT-S+/16 | 512 | coreml-gpu | done | True | 1.0000 / 1.0000 / 1.0000 | 11.0 | 0.19 | 0.029 | 0.65 |
-| ViT-S+/16 | 512 | coreml-all | done | True | 1.0000 / 1.0000 / 1.0000 | 11.0 | 0.43 | 0.027 | 0.65 |
-| ViT-B/16 | 224 | coreml-ne | done | False | 0.0503 / -0.0260 / -0.0992 | 40.0 | 2.60 | 0.024 | 0.41 |
-| ViT-B/16 | 224 | coreml-gpu | done | True | 1.0000 / 1.0000 / 1.0000 | 17.9 | 0.22 | 0.035 | 0.73 |
-| ViT-B/16 | 224 | coreml-all | done | True | 1.0000 / 1.0000 / 1.0000 | 17.9 | 0.47 | 0.037 | 0.73 |
-| ViT-B/16 | 448 | coreml-ne | done | False | -0.0517 / -0.0818 / -0.1505 | 27.2 | 3.35 | 0.024 | 0.45 |
-| ViT-B/16 | 448 | coreml-gpu | done | True | 1.0000 / 1.0000 / 1.0000 | 14.8 | 0.24 | 0.036 | 0.79 |
-| ViT-B/16 | 448 | coreml-all | done | True | 1.0000 / 1.0000 / 1.0000 | 14.8 | 0.52 | 0.036 | 0.80 |
-| ViT-B/16 | 512 | coreml-ne | done | False | -0.0350 / -0.0034 / -0.0835 | 18.1 | 3.74 | 0.027 | 0.47 |
-| ViT-B/16 | 512 | coreml-gpu | done | True | 1.0000 / 1.0000 / 1.0000 | 14.4 | 0.22 | 0.036 | 0.84 |
-| ViT-B/16 | 512 | coreml-all | done | True | 1.0000 / 1.0000 / 1.0000 | 14.4 | 0.46 | 0.037 | 0.84 |
-| ViT-L/16 | 224 | coreml-ne | done | False | -0.0253 / 0.0122 / -0.0662 | 16.7 | 7.09 | 0.041 | 0.40 |
-| ViT-L/16 | 224 | coreml-gpu | done | False | 0.9740 / 0.9711 / 0.8979 | 16.9 | 0.54 | 0.093 | 1.16 |
-| ViT-L/16 | 224 | coreml-all | done | False | 0.9740 / 0.9711 / 0.8979 | 16.9 | 1.13 | 0.106 | 1.16 |
-| ViT-L/16 | 448 | coreml-ne | done | False | -0.0067 / 0.0979 / -0.0313 | 15.9 | 9.26 | 0.047 | 0.47 |
-| ViT-L/16 | 448 | coreml-gpu | done | False | 0.9140 / 0.9525 / 0.8379 | 9.5 | 0.52 | 0.094 | 1.26 |
-| ViT-L/16 | 448 | coreml-all | done | False | 0.9140 / 0.9525 / 0.8379 | 9.5 | 1.17 | 0.099 | 1.26 |
-| ViT-L/16 | 512 | coreml-ne | done | False | -0.0381 / 0.0719 / -0.0338 | 11.4 | 9.95 | 0.049 | 0.50 |
-| ViT-L/16 | 512 | coreml-gpu | done | False | 0.8879 / 0.9581 / 0.8555 | 9.5 | 0.63 | 0.092 | 1.32 |
-| ViT-L/16 | 512 | coreml-all | done | False | 0.8879 / 0.9581 / 0.8555 | 9.5 | 1.11 | 0.105 | 1.32 |
-| ViT-H+/16 | 224 | coreml-ne | done | False | -0.0068 / 0.0208 / -0.0548 | 9.2 | 16.42 | 0.062 | 0.44 |
-| ViT-H+/16 | 224 | coreml-gpu | done | False | 0.9978 / 0.9835 / 0.8291 | 12.3 | 1.34 | 0.230 | 2.27 |
-| ViT-H+/16 | 224 | coreml-all | done | False | 0.9978 / 0.9835 / 0.8291 | 12.3 | 2.33 | 0.258 | 2.27 |
-| ViT-H+/16 | 448 | coreml-ne | done | False | -0.0085 / 0.0131 / -0.0616 | 8.8 | 18.06 | 0.071 | 0.52 |
-| ViT-H+/16 | 448 | coreml-gpu | done | False | 0.9982 / 0.9975 / 0.9833 | 9.7 | 1.45 | 0.249 | 2.39 |
-| ViT-H+/16 | 448 | coreml-all | done | False | 0.9982 / 0.9975 / 0.9833 | 9.7 | 2.44 | 0.238 | 2.39 |
-| ViT-H+/16 | 512 | coreml-ne | done | False | -0.0300 / 0.0006 / -0.1082 | 26.9 | 18.74 | 0.088 | 0.55 |
-| ViT-H+/16 | 512 | coreml-gpu | done | False | 0.9982 / 0.9980 / 0.9851 | 9.9 | 1.75 | 0.236 | 2.47 |
-| ViT-H+/16 | 512 | coreml-all | error | None | – | – | – | – | – |
-| ViT-S/16 (plain graph) | 224 | coreml-ne | done | False | 0.0345 / 0.1373 / 0.0654 | 4.0 | 0.07 | 0.021 | 0.37 |
-| ViT-S/16 (plain graph) | 224 | coreml-gpu | done | True | 1.0000 / 1.0000 / 1.0000 | 9.2 | 0.10 | 0.025 | 0.56 |
-| ViT-S/16 (plain graph) | 224 | coreml-all | done | True | 1.0000 / 1.0000 / 1.0000 | 9.2 | 0.43 | 0.024 | 0.56 |
+| ViT-S/16 (plain graph) | 224 | coreml-ne | done | False | 0.0345 / 0.1373 / 0.0654 | 4.0 | 1.46 | 0.021 | 0.38 |
+| ViT-S/16 (plain graph) | 224 | coreml-gpu | done | True | 1.0000 / 1.0000 / 1.0000 | 9.2 | 0.15 | 0.023 | 0.56 |
+| ViT-S/16 (plain graph) | 224 | coreml-all | done | True | 1.0000 / 1.0000 / 1.0000 | 9.2 | 0.37 | 0.027 | 0.56 |
 | ViT-L/16 | 224 | coreml-ne | done | False | -0.0100 / -0.0019 / -0.1147 | 18.3 | 6.10 | 0.041 | 0.40 |
 | ViT-L/16 | 224 | coreml-gpu | done | True | 1.0000 / 1.0000 / 1.0000 | 15.7 | 0.53 | 0.094 | 1.16 |
 | ViT-L/16 | 224 | coreml-all | done | True | 1.0000 / 1.0000 / 1.0000 | 15.7 | 1.00 | 0.095 | 1.16 |
@@ -106,9 +61,6 @@ Table 1. The conversion of each package (job J1).
 | ViT-H+/16 | 512 | coreml-ne | done | False | 0.0054 / 0.0145 / -0.1007 | 31.6 | 38.18 | 0.084 | 0.55 |
 | ViT-H+/16 | 512 | coreml-gpu | done | True | 1.0000 / 1.0000 / 1.0000 | 9.8 | 6.64 | 0.252 | 2.47 |
 | ViT-H+/16 | 512 | coreml-all | done | True | 1.0000 / 1.0000 / 1.0000 | 9.8 | 2.04 | 0.209 | 2.47 |
-| ViT-S/16 (plain graph) | 224 | coreml-ne | done | False | 0.0345 / 0.1373 / 0.0654 | 4.0 | 1.46 | 0.021 | 0.38 |
-| ViT-S/16 (plain graph) | 224 | coreml-gpu | done | True | 1.0000 / 1.0000 / 1.0000 | 9.2 | 0.15 | 0.023 | 0.56 |
-| ViT-S/16 (plain graph) | 224 | coreml-all | done | True | 1.0000 / 1.0000 / 1.0000 | 9.2 | 0.37 | 0.027 | 0.56 |
 | ViT-S/16 | 224 | coreml-ne | done | True | 0.9999 / 0.9999 / 0.9996 | 9.1 | 1.53 | 0.021 | 0.38 |
 | ViT-S/16 | 224 | coreml-gpu | done | True | 1.0000 / 1.0000 / 1.0000 | 9.2 | 0.17 | 0.023 | 0.57 |
 | ViT-S/16 | 224 | coreml-all | done | True | 1.0000 / 1.0000 / 1.0000 | 9.2 | 0.39 | 0.024 | 0.57 |
@@ -143,21 +95,7 @@ Table 2. The parity of each package on each compute unit at batch size 1 (job J2
 
 | Package | Ops | Ops per device | Neural Engine cost share | Ops off the Neural Engine |
 | --- | --- | --- | --- | --- |
-| vits16-224-b1-ne-s256-r1-ct9.0.mlpackage | 571 | CPU 46, NeuralEngine 525 | 0.754 | ios18.mul 9, ios18.reshape 5, ios18.transpose 5, ios18.concat 5, ios18.linear 4, ios18.slice_by_index 4, ios18.add 3, split 2, ios18.matmul 2, ios18.cast 1, ios18.conv 1, ios18.layer_norm 1, ios16.reduce_max 1, ios18.sub 1, ios18.clip 1, ios18.softmax 1 |
-| vits16-448-b1-ne-s256-r1-ct9.0.mlpackage | 571 | CPU 4, NeuralEngine 567 | 0.991 | ios18.reshape 3, ios18.add 1 |
-| vits16-512-b1-ne-s256-r1-ct9.0.mlpackage | 571 | CPU 4, NeuralEngine 567 | 0.992 | ios18.reshape 3, ios18.add 1 |
-| vits16-224-b8-ne-s256-r1-ct9.0.mlpackage | 571 | CPU 4, NeuralEngine 567 | 0.987 | ios18.reshape 3, ios18.add 1 |
-| vits16-512-b8-ne-s256-r1-ct9.0.mlpackage | 571 | CPU 4, NeuralEngine 567 | 0.992 | ios18.reshape 3, ios18.add 1 |
-| vits16plus-224-b1-ne-s256-r1-ct9.0.mlpackage | 595 | CPU 46, NeuralEngine 549 | 0.764 | ios18.mul 9, ios18.reshape 5, ios18.transpose 5, ios18.concat 5, ios18.linear 4, ios18.slice_by_index 4, ios18.add 3, split 2, ios18.matmul 2, ios18.cast 1, ios18.conv 1, ios18.layer_norm 1, ios16.reduce_max 1, ios18.sub 1, ios18.clip 1, ios18.softmax 1 |
-| vits16plus-448-b1-ne-s256-r1-ct9.0.mlpackage | 595 | CPU 4, NeuralEngine 591 | 0.992 | ios18.reshape 3, ios18.add 1 |
-| vits16plus-512-b1-ne-s256-r1-ct9.0.mlpackage | 595 | CPU 4, NeuralEngine 591 | 0.993 | ios18.reshape 3, ios18.add 1 |
-| vits16plus-224-b8-ne-s256-r1-ct9.0.mlpackage | 595 | CPU 4, NeuralEngine 591 | 0.988 | ios18.reshape 3, ios18.add 1 |
-| vits16plus-512-b8-ne-s256-r1-ct9.0.mlpackage | 595 | CPU 4, NeuralEngine 591 | 0.993 | ios18.reshape 3, ios18.add 1 |
-| vitb16-224-b1-ne-s256-r1-ct9.0.mlpackage | 571 | CPU 4, NeuralEngine 567 | 0.991 | ios18.reshape 3, ios18.add 1 |
-| vitb16-448-b1-ne-s256-r1-ct9.0.mlpackage | 571 | CPU 4, NeuralEngine 567 | 0.993 | ios18.reshape 3, ios18.add 1 |
-| vitb16-512-b1-ne-s256-r1-ct9.0.mlpackage | 571 | CPU 4, NeuralEngine 567 | 0.994 | ios18.reshape 3, ios18.add 1 |
-| vitb16-224-b8-ne-s256-r1-ct9.0.mlpackage | 571 | CPU 4, NeuralEngine 567 | 0.991 | ios18.reshape 3, ios18.add 1 |
-| vitb16-512-b8-ne-s256-r1-ct9.0.mlpackage | 571 | CPU 4, NeuralEngine 567 | 0.994 | ios18.reshape 3, ios18.add 1 |
+| vits16-224-b1-plain-ct9.0.mlpackage | 523 | CPU 42, NeuralEngine 481 | 0.754 | ios18.mul 8, ios18.reshape 5, ios18.transpose 5, ios18.concat 5, ios18.linear 4, ios18.slice_by_index 4, ios18.add 3, split 2, ios18.matmul 2, ios18.cast 1, ios18.conv 1, ios18.layer_norm 1, ios18.softmax 1 |
 | vitl16-224-b1-ne2-s256-r8-ct9.0.mlpackage | 1147 | CPU 4, NeuralEngine 1143 | 0.996 | ios18.reshape 3, ios18.add 1 |
 | vitl16-448-b1-ne2-s256-r8-ct9.0.mlpackage | 1147 | CPU 4, NeuralEngine 1143 | 0.997 | ios18.reshape 3, ios18.add 1 |
 | vitl16-512-b1-ne2-s256-r8-ct9.0.mlpackage | 1147 | CPU 4, NeuralEngine 1143 | 0.997 | ios18.reshape 3, ios18.add 1 |
@@ -168,7 +106,6 @@ Table 2. The parity of each package on each compute unit at batch size 1 (job J2
 | vith16plus-512-b1-ne2-s256-r8-ct9.0.mlpackage | 1587 | CPU 4, NeuralEngine 1583 | 0.998 | ios18.reshape 3, ios18.add 1 |
 | vith16plus-224-b8-ne2-s256-r8-ct9.0.mlpackage | 1587 | CPU 4, NeuralEngine 1583 | 0.998 | ios18.reshape 3, ios18.add 1 |
 | vith16plus-512-b8-ne2-s256-r8-ct9.0.mlpackage | 1587 | CPU 4, NeuralEngine 1583 | 0.998 | ios18.reshape 3, ios18.add 1 |
-| vits16-224-b1-plain-ct9.0.mlpackage | 523 | CPU 42, NeuralEngine 481 | 0.754 | ios18.mul 8, ios18.reshape 5, ios18.transpose 5, ios18.concat 5, ios18.linear 4, ios18.slice_by_index 4, ios18.add 3, split 2, ios18.matmul 2, ios18.cast 1, ios18.conv 1, ios18.layer_norm 1, ios18.softmax 1 |
 
 Table 3. The compute plan of each package on CPU_AND_NE (job J2).
 
@@ -233,13 +170,13 @@ Table 4. The matrix: patch embeddings, 1 round (job J3). The ratio is Core ML / 
 
 | Group | Backend | Run medians | Pooled median | Spread between runs | Verdict D21 | Core ML img/s (median) | mlx img/s (median) | Rounds |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| P1-b1 | coreml-gpu | 0.886 | 0.886 | 0.000 | not above 1 | 461.1 | 531.3 | 5 |
-| P1-b1 | coreml-ne | 1.016 | 1.016 | 0.000 | above 1 | 539.1 | 531.3 | 5 |
-| P1-b8 | coreml-all | 0.996, 0.961 | 0.983 | 0.036 | not above 1 | 1,755.0 | 1,773.0 | 10 |
+| P1-b1 | coreml-gpu | 0.886 | 0.886 | – | not above 1 | 461.1 | 531.3 | 5 |
+| P1-b1 | coreml-ne | 1.016 | 1.016 | – | above 1, inside the noise | 539.1 | 531.3 | 5 |
+| P1-b8 | coreml-all | 0.996, 0.961 | 0.983 | 0.036 | not above 1, inside the noise | 1,755.0 | 1,773.0 | 10 |
 | P1-b8 | coreml-gpu | 0.975, 0.960 | 0.969 | 0.015 | not above 1 | 1,705.5 | 1,773.0 | 10 |
 | P1-b8 | coreml-ne | 0.388, 0.420 | 0.392 | 0.084 | not above 1 | 687.6 | 1,773.0 | 10 |
-| P2-b1 | coreml-gpu | 0.884 | 0.884 | 0.000 | not above 1 | 15.2 | 16.8 | 5 |
-| P2-b1 | coreml-ne | 0.167 | 0.167 | 0.000 | not above 1 | 2.8 | 16.8 | 5 |
+| P2-b1 | coreml-gpu | 0.884 | 0.884 | – | not above 1 | 15.2 | 16.8 | 5 |
+| P2-b1 | coreml-ne | 0.167 | 0.167 | – | not above 1 | 2.8 | 16.8 | 5 |
 | P2-b8 | coreml-all | 0.737, 0.740 | 0.739 | 0.004 | not above 1 | 14.1 | 19.9 | 10 |
 | P2-b8 | coreml-gpu | 0.775, 0.822 | 0.790 | 0.061 | not above 1 | 15.5 | 19.9 | 10 |
 | P2-b8 | coreml-ne | 0.144, 0.140 | 0.143 | 0.024 | not above 1 | 2.8 | 19.9 | 10 |
@@ -252,13 +189,13 @@ F4 evidence (run 2): the ViT-S/16 batch-size-8 package on CPU_AND_NE gives valid
 
 ## 6 Two-stream run
 
-| Group | Run | Neural Engine batch size | ne alone img/s | mlx alone img/s | both: ne img/s | both: mlx img/s | both: total img/s | Stream ratio | Rounds |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| P1-b1 | 1 | 8 | 688.1 | 526.1 | 683.0 | 529.5 | 1,213.1 | 2.302 | 3 |
-| P1-b8 | 1 | 8 | 695.1 | 1,984.4 | 648.4 | 1,854.3 | 2,502.7 | 1.257 | 3 |
-| P1-b8 | 2 | 8 | 688.0 | 1,958.4 | 652.8 | 1,914.2 | 2,517.3 | 1.312 | 3 |
-| P2-b1 | 1 | 1 | 2.8 | 15.2 | 2.6 | 12.5 | 15.1 | 0.996 | 3 |
-| P2-b8 | 1 | 1 | 2.8 | 16.7 | 2.5 | 13.7 | 16.2 | 0.934 | 3 |
-| P2-b8 | 2 | 1 | 2.8 | 19.9 | 2.7 | 15.9 | 18.6 | 0.981 | 3 |
+| Group | Run | Neural Engine batch size | Neural Engine output valid | ne alone img/s | mlx alone img/s | both: ne img/s | both: mlx img/s | both: total img/s | Stream ratio | Rounds |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| P1-b1 | 1 | 8 | yes | 688.1 | 526.1 | 683.0 | 529.5 | 1,213.1 | 2.302 | 3 |
+| P1-b8 | 1 | 8 | yes | 695.1 | 1,984.4 | 648.4 | 1,854.3 | 2,502.7 | 1.257 | 3 |
+| P1-b8 | 2 | 8 | yes | 688.0 | 1,958.4 | 652.8 | 1,914.2 | 2,517.3 | 1.312 | 3 |
+| P2-b1 | 1 | 1 | no | 2.8 | 15.2 | 2.6 | 12.5 | 15.1 | 0.996 | 3 |
+| P2-b8 | 1 | 1 | no | 2.8 | 16.7 | 2.5 | 13.7 | 16.2 | 0.934 | 3 |
+| P2-b8 | 2 | 1 | no | 2.8 | 19.9 | 2.7 | 15.9 | 18.6 | 0.981 | 3 |
 
-Table 6. The two-stream run: Core ML on CPU_AND_NE and compiled mlx on the GPU, alone and at the same time, 10 s per case. Stream ratio = (ne + mlx, both) / (mlx alone), median over the rounds.
+Table 6. The two-stream run: Core ML on CPU_AND_NE and compiled mlx on the GPU, alone and at the same time, 10 s per case. Stream ratio = (ne + mlx, both) / (mlx alone), median over the rounds. The stream worker checks no output; the column «Neural Engine output valid» comes from the coreml-ne lines of the matrix and the paired runs (finding V2 of verify.html).

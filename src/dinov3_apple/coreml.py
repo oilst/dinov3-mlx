@@ -267,7 +267,8 @@ def package_path(model_size: str, side: int, batch_size: int, rewrite: bool = Tr
         rewrite: True for the Neural Engine rewrite, False for the plain graph (F1 evidence).
 
     Returns:
-        For example ~/.cache/dinov3-apple/coreml/vits16-224-b8-ne-s256-r1-ct9.0.mlpackage.
+        For example ~/.cache/dinov3-apple/coreml/vits16-224-b8-ne2-s256-r1-ct9.0.mlpackage. After
+        convert_backbone only its compiled model (compiled_path) stays on disk.
     """
     stem = f"{model_slug(model_size)}-{side}-b{batch_size}"
     if rewrite:
