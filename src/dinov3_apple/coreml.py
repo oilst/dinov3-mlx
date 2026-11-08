@@ -12,6 +12,10 @@ fp16 and is exact in real numbers:
   ε / r². LayerScale stays a separate multiplication (no fold: the fold made most LayerScale
   products subnormal in fp16).
 
+The Neural Engine also writes a wrong token concat when the concat has two or more constant inputs
+(the concat fault, Step 6d). ne_embeddings puts the CLS token and the register tokens in one
+constant prefix, and convert_module refuses a graph with the concat fault (constant_concats).
+
 This module imports coremltools only inside the functions that need it, so the torch-only parts
 (the rewrite, the package names) work without it.
 """
@@ -51,8 +55,9 @@ SCORE_FLOOR = -60000.0  # the clip of the shifted scores, before the multiplicat
 NE_ATTENTION = "coreml-ne"  # the name of ne_attention in transformers.AttentionInterface
 MAX_STREAM_VALUE = 32768.0  # the largest residual-stream value after the scale: half of fp16
 # The version of the Neural Engine rewrite in the package name. "ne": score scale and residual-stream
-# scale (first J1 and J2 of the build); "ne2": plus ε / r² (plan amendment of 2026-11-08).
-REWRITE_VERSION = "ne2"
+# scale (first J1 and J2 of Step 6c); "ne2": plus ε / r² (plan amendment of 2026-11-08); "ne3": plus
+# one constant prefix in the embeddings (Step 6d).
+REWRITE_VERSION = "ne3"
 COREMLTOOLS_VERSION = "9.0"  # the version of the coreml dependency group and of the _cast patch
 COREML_DIR = Path.home() / ".cache" / "dinov3-apple" / "coreml"
 TOKEN_RANGE_TABLE = REPO_ROOT / "results" / "token-range-mlx.md"
@@ -64,6 +69,10 @@ THRESHOLD_MODE = "fp16-cast"
 
 class CoremltoolsVersionError(RuntimeError):
     """The _cast patch is for coremltools 9.0 only. A new release needs a fresh check."""
+
+
+class NeuralEngineGraphError(RuntimeError):
+    """A converted graph has a concat with two or more constant inputs (the concat fault)."""
 
 
 # The _cast patch.
@@ -156,11 +165,31 @@ def ne_attention(
 AttentionInterface.register(NE_ATTENTION, ne_attention)
 
 
+def ne_embeddings(embeddings: torch.nn.Module, pixels: torch.Tensor) -> torch.Tensor:
+    """The tokens (B, 5 + N, D) of DINOv3ViTEmbeddings.forward, with one constant prefix.
+
+    The Neural Engine writes a wrong concat when the concat has two or more constant inputs (the
+    concat fault, Step 6d). The CLS token and the register tokens go in as one constant of 5 rows.
+    In fp32 the output is bit-equal to the Hugging Face embeddings.
+
+    Args:
+        embeddings: The DINOv3ViTEmbeddings module of a backbone.
+        pixels: (B, 3, H, W).
+
+    Returns:
+        The CLS token, the 4 register tokens and the N patch tokens.
+    """
+    patches = embeddings.patch_embeddings(pixels).flatten(2).transpose(1, 2)  # (B, N, D)
+    prefix = torch.cat([embeddings.cls_token, embeddings.register_tokens], dim=1)  # (1, 5, D)
+    return torch.cat([prefix.expand(pixels.shape[0], -1, -1), patches], dim=1)
+
+
 class NeuralEngineBackbone(torch.nn.Module):
     """A module pixels -> tokens after the final layer norm, with the residual stream divided by r.
 
-    It runs the parts of DINOv3ViTModel.forward one by one (embeddings, RoPE, each block, the final
-    layer norm), without the output plumbing of the Hugging Face forward.
+    It runs the parts of DINOv3ViTModel.forward one by one (embeddings with one constant prefix,
+    RoPE, each block, the final layer norm), without the output plumbing of the Hugging Face
+    forward.
 
     Attributes:
         model: The Hugging Face backbone.
@@ -175,7 +204,7 @@ class NeuralEngineBackbone(torch.nn.Module):
     def forward(self, pixels: torch.Tensor) -> torch.Tensor:
         """Return the tokens (B, 5 + N, D) of pixels (B, 3, H, W)."""
         model = self.model
-        hidden = model.embeddings(pixels)
+        hidden = ne_embeddings(model.embeddings, pixels)
         if self.residual_scale != 1:
             hidden = hidden * (1.0 / self.residual_scale)
         rope = model.rope_embeddings(pixels)
@@ -315,6 +344,29 @@ def _op_counts(mlmodel: Any) -> dict[str, int]:
     return counts
 
 
+def _is_constant(value: Any) -> bool:
+    """True for a MIL value that a const op makes, or a value with val set and no producing op."""
+    if value.op is not None:
+        return value.op.op_type == "const"
+    return value.val is not None
+
+
+def constant_concats(mlmodel: Any) -> list[str]:
+    """Return the names of the concat ops with two or more constant inputs (the concat fault).
+
+    Args:
+        mlmodel: The MLModel of ct.convert (it holds the MIL program).
+
+    Returns:
+        The op names, in program order. An empty list for a graph without the concat fault.
+    """
+    names = []
+    for op in mlmodel._mil_program.functions["main"].operations:
+        if op.op_type == "concat" and sum(_is_constant(value) for value in op.values) >= 2:
+            names.append(op.name)
+    return names
+
+
 def _size_bytes(path: Path) -> int:
     return sum(file.stat().st_size for file in path.rglob("*") if file.is_file())
 
@@ -328,8 +380,11 @@ def convert_module(module: torch.nn.Module, shape: tuple[int, ...], path: Path) 
         path: The .mlpackage path. The .mlmodelc goes next to it.
 
     Returns:
-        The times of the trace, the conversion, the save and the compile, the package size and
-        the op counts.
+        The times of the trace, the conversion, the save and the compile, the package size, the op
+        counts and the number of concats with two or more constant inputs (always 0).
+
+    Raises:
+        NeuralEngineGraphError: If the converted graph has the concat fault. No package is written.
     """
     import coremltools as ct
 
@@ -340,6 +395,11 @@ def convert_module(module: torch.nn.Module, shape: tuple[int, ...], path: Path) 
     start = time.perf_counter()
     mlmodel = convert_traced(traced, shape)
     convert_s = time.perf_counter() - start
+    faults = constant_concats(mlmodel)
+    if faults:
+        raise NeuralEngineGraphError(
+            f"concats with two or more constant inputs (the concat fault): {', '.join(faults)}"
+        )
     path.parent.mkdir(parents=True, exist_ok=True)
     for old in (path, compiled_path(path)):  # compile_model does not overwrite a .mlmodelc
         if old.exists():
@@ -357,6 +417,7 @@ def convert_module(module: torch.nn.Module, shape: tuple[int, ...], path: Path) 
         "compile_s": compile_s,
         "package_bytes": _size_bytes(path),
         "ops": _op_counts(mlmodel),
+        "constant_concats": len(faults),
     }
 
 
@@ -475,8 +536,8 @@ def run_coreml(
     the output is on the host: the frame time and the patch time are the same call.
 
     With batch_api the worker runs the batch-size-1 package with one call on a list of batch_size
-    inputs (the batch API of Core ML). At batch size 8 the Neural Engine computes the patch
-    embedding of the batch-size-8 package wrong (finding F4 of explore.html).
+    inputs (the batch API of Core ML). In Step 6c (rewrite ne2) the batch-size-8 package was wrong
+    on the Neural Engine (the concat fault); Step 6d runs both forms.
 
     Args:
         model_size: A key of MODEL_IDS.
@@ -539,7 +600,7 @@ def run_coreml(
         }
     else:
         batch = make_batch(inputs, side, batch_size)
-        if batch_api:  # one call with a list of batch-size-1 inputs (F4)
+        if batch_api:  # one call with a list of batch-size-1 inputs
             feed: Any = [{"pixels": batch[i : i + 1]} for i in range(batch_size)]
         else:
             feed = {"pixels": batch}
@@ -605,6 +666,7 @@ def compute_plan_report(compiled: Path, compute_unit: str = "CPU_AND_NE") -> dic
 
     Returns:
         ops (the ops with a device: the constants have none), constants, ops_per_device,
+        op_devices (the devices of each op type without the opset prefix, for example "concat"),
         cost_share (the estimated cost share of each device, sum 1), neural_engine_share and
         off_neural_engine: position, name, op type, device, supported devices and cost of each op
         that does not run on the Neural Engine.
@@ -617,6 +679,7 @@ def compute_plan_report(compiled: Path, compute_unit: str = "CPU_AND_NE") -> dic
     )
     operations = plan.model_structure.program.functions["main"].block.operations
     per_device: dict[str, int] = {}
+    op_devices: dict[str, dict[str, int]] = {}
     cost: dict[str, float] = {}
     off: list[dict] = []
     constants = 0
@@ -627,6 +690,8 @@ def compute_plan_report(compiled: Path, compute_unit: str = "CPU_AND_NE") -> dic
             continue
         device = _device_name(usage.preferred_compute_device)
         per_device[device] = per_device.get(device, 0) + 1
+        by_type = op_devices.setdefault(op.operator_name.rsplit(".", 1)[-1], {})  # ios18.concat
+        by_type[device] = by_type.get(device, 0) + 1
         estimate = plan.get_estimated_cost_for_mlprogram_operation(op)
         weight = 0.0 if estimate is None else float(estimate.weight)
         cost[device] = cost.get(device, 0.0) + weight
@@ -651,6 +716,7 @@ def compute_plan_report(compiled: Path, compute_unit: str = "CPU_AND_NE") -> dic
         "ops": sum(per_device.values()),
         "constants": constants,
         "ops_per_device": per_device,
+        "op_devices": op_devices,
         "cost_share": share,
         "neural_engine_share": share.get("NeuralEngine", 0.0),
         "off_neural_engine_cost": total_off / total if total else 0.0,

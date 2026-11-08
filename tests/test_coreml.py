@@ -1,13 +1,15 @@
-"""Tests T1 to T13 of specs/06c-neural-engine/plan.html: Core ML on the Neural Engine.
+"""Tests T1 to T13 of specs/06c-neural-engine/plan.html and T14 to T17 of
+specs/06d-neural-engine-fault/plan.html: Core ML on the Neural Engine.
 
-T1 to T5, T9 and T13 use synthetic tensors or the small models of small_model.py in torch only and
-run in the default session. Every test that converts or loads a Core ML package (T6 to T8, T10 to
-T12) runs in the slow session (DINOV3_SLOW=1).
+T1 to T5, T9, T13 and T14 use synthetic tensors or the small models of small_model.py in torch only
+and run in the default session. Every test that converts or loads a Core ML package (T6 to T8, T10
+to T12, T15 to T17) runs in the slow session (DINOV3_SLOW=1).
 """
 
 import copy
 import hashlib
 import types
+from collections import Counter
 from pathlib import Path
 
 import numpy as np
@@ -123,6 +125,23 @@ def test_rewrite_keeps_layer_scale() -> None:
     assert model.config._attn_implementation == coreml.NE_ATTENTION
 
 
+# T14: the embeddings with one constant prefix (Step 6d).
+
+
+@pytest.mark.parametrize("name", ["vits16", "vits16plus"])
+@pytest.mark.parametrize("batch_size", [1, 2])
+@pytest.mark.parametrize("side", [32, 64])
+def test_ne_embeddings_equal_hugging_face(name: str, batch_size: int, side: int) -> None:
+    """T14: ne_embeddings gives the tokens of model.embeddings bit for bit."""
+    model = small_hf_model(seed=14, name=name)
+    pixels = torch.from_numpy(small_pixels((batch_size, 3, side, side)))
+    with torch.no_grad():
+        expected = model.embeddings(pixels)
+        output = coreml.ne_embeddings(model.embeddings, pixels)
+    assert output.shape == expected.shape
+    assert torch.equal(output, expected)
+
+
 # T5: the residual-stream scale.
 
 
@@ -150,7 +169,7 @@ def test_package_path_and_line_fields() -> None:
     import bench_coreml
 
     path = coreml.package_path("ViT-L/16", 512, 8)
-    assert path.name == f"vitl16-512-b8-ne2-s256-r8-ct{coreml.COREMLTOOLS_VERSION}.mlpackage"
+    assert path.name == f"vitl16-512-b8-ne3-s256-r8-ct{coreml.COREMLTOOLS_VERSION}.mlpackage"
     assert path.parent == coreml.COREML_DIR
     plain = coreml.package_path("ViT-S/16", 224, 1, rewrite=False)
     assert plain.name == f"vits16-224-b1-plain-ct{coreml.COREMLTOOLS_VERSION}.mlpackage"
@@ -172,9 +191,7 @@ def test_package_path_and_line_fields() -> None:
     assert line["cached_load_s"] == 0.1
     assert line["phase"] == "matrix"
     assert line["backend"] == "coreml-ne"
-    assert line["ne_batch_form"] == "batch-api"  # F4: batch size 8 on the batch-size-1 package
-    pairs = bench_coreml.pairs_plan(["P1"], [8], 1, "1")
-    assert [p.get("ne_batch_form") for p in pairs if p["group"] == "P1-b8-f4"] == ["package"]
+    assert line["ne_batch_form"] == "batch-api"  # the default form at batch size 8
 
     rng = np.random.default_rng(0)
     reference = rng.standard_normal((5 + 196, 384)).astype(np.float32)
@@ -190,6 +207,92 @@ def test_package_path_and_line_fields() -> None:
     for cases in schedule:
         assert sorted(cases) == sorted(bench_coreml.STREAM_CASES)
     assert len({cases[0] for cases in schedule}) == 3
+
+
+def _ne_line(model_size: str, side: int, batch_size: int, form: str, ips: float, valid: bool):
+    return {
+        "phase": "matrix",
+        "backend": "coreml-ne",
+        "model_size": model_size,
+        "side": side,
+        "batch_size": batch_size,
+        "status": "done",
+        "valid": valid,
+        "ne_batch_form": form,
+        "package": f"x-{coreml.REWRITE_VERSION}-y",
+        "patch": {"throughput_ips": ips},
+    }
+
+
+def test_step6d_plans() -> None:
+    """The jobs of Table 3 of specs/06d-neural-engine-fault/plan.html: J1 25 packages, J2 70
+    workers, J3 70 workers, J4 60 workers, J5 27 cases. The Neural Engine side of J4 and J5 takes
+    the faster valid form of the matrix."""
+    import bench_coreml
+
+    assert bench_coreml.RUN == "S6d"
+    assert bench_coreml.RESULTS.name == "coreml-6d.jsonl"
+    assert bench_coreml.TABLE.name == "coreml-6d-table.md"
+    assert bench_coreml.POINTS["P3"] == ("ViT-L/16", 224, 8, "patch")
+    assert bench_coreml.mlx_mode("ViT-L/16", 224, 8) == "fp16-autocast"
+
+    convert = bench_coreml.convert_plan()
+    assert len(convert) == 25
+    assert all(spec["backend"] == "convert" and spec["rewrite"] for spec in convert)
+    assert len(bench_coreml.parity_plan()) == 70
+    matrix = bench_coreml.matrix_plan()
+    assert len(matrix) == 70
+    forms = Counter(spec.get("ne_batch_form") for spec in matrix if spec["backend"] == "coreml-ne")
+    assert forms == {None: 10, "batch-api": 10, "package": 10}
+
+    lines = [
+        _ne_line("ViT-S/16", 224, 8, "package", 500.0, True),
+        _ne_line("ViT-S/16", 224, 8, "batch-api", 680.0, True),
+        _ne_line("ViT-S/16", 224, 1, "package", 300.0, True),
+        _ne_line("ViT-L/16", 224, 8, "package", 90.0, True),
+        _ne_line("ViT-L/16", 224, 8, "batch-api", 120.0, False),  # invalid: never chosen
+        _ne_line("ViT-L/16", 224, 1, "package", 60.0, True),
+    ]
+    assert bench_coreml.faster_ne_form("ViT-S/16", 224, lines) == "batch-api"
+    assert bench_coreml.faster_ne_form("ViT-L/16", 224, lines) == "package"
+    assert bench_coreml.stream_ne_choice("ViT-S/16", 224, lines) == (8, "batch-api")
+    assert bench_coreml.stream_ne_choice("ViT-L/16", 224, lines) == (8, "package")
+    assert bench_coreml.stream_ne_choice("ViT-H+/16", 512, []) == (1, "package")
+
+    points = bench_coreml.parse_points(["P1-b8", "P1-b1", "P3-b8", "P2-b8"])
+    pairs = bench_coreml.pairs_plan(points, 5, "1", lines)
+    assert len(pairs) == 60
+    assert {spec["backend"] for spec in pairs} == {"coreml-ne", "coreml-gpu", "mlx"}
+    ne = {(s["group"], s.get("ne_batch_form")) for s in pairs if s["backend"] == "coreml-ne"}
+    assert ne == {
+        ("P1-b8", "batch-api"),
+        ("P1-b1", None),
+        ("P3-b8", "package"),
+        ("P2-b8", "batch-api"),  # no matrix line: the default form
+    }
+    streams = bench_coreml.streams_plan(points[:1] + points[2:], 3, "1", lines)
+    assert len(streams) == 27
+    p3 = {(s["ne_batch_size"], s["ne_batch_form"]) for s in streams if s["priority"] == "P3"}
+    assert p3 == {(8, "package")}
+
+
+def test_disk_check_skips_a_worker(tmp_path: Path) -> None:
+    """Below DISK_WORKER_BYTES free disk a worker does not start; its line says "disk"."""
+    import bench_coreml
+
+    from dinov3_apple.memory import GB
+
+    def runner(spec: dict, bench_dir: Path) -> dict:
+        raise AssertionError("the worker must not start")
+
+    spec = bench_coreml.coreml_spec("convert", "convert", "ViT-S/16", 224, 1)
+    results = tmp_path / "lines.jsonl"
+    counts = bench_coreml.run_specs([spec], results, tmp_path, runner=runner, disk=lambda: 5 * GB)
+    assert counts == {"skipped": 1}
+    line = bench_coreml.read_lines(results)[0]
+    assert line["reason"].startswith("disk:")
+    assert line["disk_free_bytes"] == 5 * GB
+    assert bench_coreml.DISK_JOB_BYTES == 10 * GB
 
 
 def test_line_reason_has_no_local_folders() -> None:
@@ -324,10 +427,10 @@ def test_compute_plan_report(small_package: Path) -> None:
 # T10 to T12: ViT-S/16 and ViT-7B/16 (slow session, gated weights).
 
 
-def _package(model_size: str, rewrite: bool) -> Path:
-    path = coreml.package_path(model_size, 224, 1, rewrite=rewrite)
+def _package(model_size: str, rewrite: bool, side: int = 224) -> Path:
+    path = coreml.package_path(model_size, side, 1, rewrite=rewrite)
     if not coreml.compiled_path(path).exists():
-        coreml.convert_backbone(model_size, 224, 1, rewrite=rewrite)
+        coreml.convert_backbone(model_size, side, 1, rewrite=rewrite)
     return path
 
 
@@ -376,3 +479,99 @@ def test_convert_refuses_vit7b16_before_load(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr(coreml, "load_torch_backbone", no_load)
     with pytest.raises(RunRuleError):
         coreml.convert_backbone("ViT-7B/16", 224, 1)
+
+
+# T15 to T17: the concat fault and the ne3 packages (Step 6d, slow session).
+
+
+class _Embeddings(torch.nn.Module):
+    """pixels -> the tokens of the embeddings: the Hugging Face form or the ne3 form."""
+
+    def __init__(self, embeddings: torch.nn.Module, ne3: bool) -> None:
+        super().__init__()
+        self.embeddings = embeddings
+        self.ne3 = ne3
+
+    def forward(self, pixels: torch.Tensor) -> torch.Tensor:
+        if self.ne3:
+            return coreml.ne_embeddings(self.embeddings, pixels)
+        return self.embeddings(pixels)
+
+
+@slow
+def test_constant_concats_finds_the_fault(tmp_path: Path) -> None:
+    """T15: the Hugging Face form has one concat with two constant inputs, the ne3 form none.
+    convert_module refuses the Hugging Face form and writes no package."""
+    coreml.patch_coremltools_cast()
+    embeddings = small_hf_model(seed=15, name="vits16").embeddings
+    shape = (1, 3, 64, 64)
+    found = {}
+    for ne3 in (False, True):
+        traced = coreml.trace_module(_Embeddings(embeddings, ne3), shape)
+        found[ne3] = coreml.constant_concats(coreml.convert_traced(traced, shape))
+    assert len(found[False]) == 1
+    assert found[True] == []
+    path = tmp_path / "hf-embeddings.mlpackage"
+    with pytest.raises(coreml.NeuralEngineGraphError):
+        coreml.convert_module(_Embeddings(embeddings, ne3=False), shape, path)
+    assert not path.exists()
+    assert not coreml.compiled_path(path).exists()
+
+
+def _token_cosines(expected: np.ndarray, tokens: np.ndarray) -> np.ndarray:
+    expected = expected.astype(np.float64)
+    tokens = tokens.astype(np.float64)
+    dots = (expected * tokens).sum(-1)
+    return dots / (np.linalg.norm(expected, axis=-1) * np.linalg.norm(tokens, axis=-1))
+
+
+@slow
+def test_embeddings_part_on_neural_engine(tmp_path: Path) -> None:
+    """T16: the ne3 embeddings of ViT-S/16 at 448 px are right on CPU_AND_NE, with the concat on
+    the Neural Engine. A new macOS or Core ML release that changes the concat fault shows here."""
+    from dinov3_apple.reference import load_torch_backbone
+
+    embeddings = load_torch_backbone("ViT-S/16", "cpu", "fp32").embeddings
+    shape = (1, 3, 448, 448)
+    pixels = read_inputs()[f"{TEST_IMAGES[0]}/448x448"].astype(np.float32)
+    with torch.no_grad():
+        expected = embeddings(torch.from_numpy(pixels))[0].numpy()
+    path = tmp_path / "vits16-448-embeddings-ne3.mlpackage"
+    fields = coreml.convert_module(_Embeddings(embeddings, ne3=True), shape, path)
+    assert fields["constant_concats"] == 0
+    assert fields["ops"].get("concat") == 1
+    model, _, _ = coreml.load_package(path, "CPU_AND_NE")
+    tokens = model.predict({"pixels": pixels})["tokens"][0]
+    cosines = _token_cosines(expected, tokens)
+    assert len(cosines) == 789
+    assert int((~(cosines >= 0.999)).sum()) == 0, cosines.min()  # a NaN counts as wrong
+    report = coreml.compute_plan_report(coreml.compiled_path(path), "CPU_AND_NE")
+    assert report["op_devices"]["concat"] == {"NeuralEngine": 1}
+
+    # The Hugging Face form, for the test log only (probe E1 of explore.html: 788 wrong tokens).
+    traced = coreml.trace_module(_Embeddings(embeddings, ne3=False), shape)
+    hf_path = tmp_path / "vits16-448-embeddings-hf.mlpackage"
+    coreml.convert_traced(traced, shape).save(str(hf_path))
+    ct.models.utils.compile_model(str(hf_path), str(coreml.compiled_path(hf_path)))
+    hf_model, _, _ = coreml.load_package(hf_path, "CPU_AND_NE")
+    hf_tokens = hf_model.predict({"pixels": pixels})["tokens"][0]
+    wrong = int((~(_token_cosines(expected, hf_tokens) >= 0.999)).sum())
+    print(f"Hugging Face form on CPU_AND_NE: {wrong} of 789 tokens below cosine 0.999")
+
+
+@slow
+def test_vits16_448_package_passes_on_neural_engine() -> None:
+    """T17: the J1 package vits16-448-b1-ne3 on CPU_AND_NE passes the fp16 thresholds of ADR 0003
+    for the 3 test images (with ne2: frame -0.0147)."""
+    path = _package("ViT-S/16", rewrite=True, side=448)
+    model, _, _ = coreml.load_package(path, "CPU_AND_NE")
+    reference, _ = read_reference("ViT-S/16")
+    inputs = read_inputs()
+    threshold = THRESHOLDS["fp16-cast"]
+    for image in TEST_IMAGES:
+        key = f"{image}/448x448"
+        tokens = model.predict({"pixels": inputs[key].astype(np.float32)})["tokens"]
+        parity = measure_parity(reference[key], tokens[0])
+        assert parity.frame >= threshold.frame, image
+        assert parity.patch_mean >= threshold.patch_mean, image
+        assert parity.patch_p01 >= threshold.patch_p01, image

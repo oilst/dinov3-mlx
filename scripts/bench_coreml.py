@@ -1,15 +1,17 @@
-"""The driver of all Step 6c benchmarks: the conversion, the parity and the compute plan, the
+"""The driver of all Step 6d benchmarks: the conversion, the parity and the compute plan, the
 matrix, the paired runs, the two-stream run and the result table (Section 7 of
-specs/06c-neural-engine/plan.html).
+specs/06d-neural-engine-fault/plan.html; the jobs of Step 6c with the rewrite version ne3).
 
 Each worker runs in its own subprocess, one after the other. Before each worker the driver reads
 the machine state, stops on battery power or in Low Power Mode, and checks the free memory against
 the need of the worker. A worker that does not fit gives a "skipped" line. Before and after each
-worker the driver writes the heavy jobs outside the GPU lock into other_heavy_jobs_seen. The driver
-takes the GPU lock in main; a dry run takes no lock and loads no model.
+worker the driver writes the heavy jobs outside the GPU lock into other_heavy_jobs_seen. A job does
+not start below DISK_JOB_BYTES of free disk; a worker does not start below DISK_WORKER_BYTES (status
+"skipped", reason "disk: ..."). The driver takes the GPU lock in main; a dry run takes no lock and
+loads no model.
 
-Results: results/coreml.jsonl (every phase; the field "phase" tells them apart) and
-results/coreml-table.md. The per-batch files of the mlx workers and driver.log:
+Results: results/coreml-6d.jsonl (every phase; the field "phase" tells them apart) and
+results/coreml-6d-table.md. The Step 6c lines stay in results/coreml.jsonl. The per-batch files of the mlx workers and driver.log:
 tests/fixtures/generated/bench/coreml/<subcommand>/.
 
 Usage (always through the GPU lock and with the coreml dependency group):
@@ -17,6 +19,7 @@ Usage (always through the GPU lock and with the coreml dependency group):
     uv run --group coreml python scripts/bench_coreml.py parity
     uv run --group coreml python scripts/bench_coreml.py matrix
     uv run --group coreml python scripts/bench_coreml.py pairs --rounds 5 --run 1
+    uv run --group coreml python scripts/bench_coreml.py pairs --points P1-b8 P3-b8 P2-b8 --run 2
     uv run --group coreml python scripts/bench_coreml.py streams --rounds 3
     uv run --group coreml python scripts/bench_coreml.py table
 """
@@ -25,6 +28,7 @@ import argparse
 import json
 import logging
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -54,11 +58,11 @@ from dinov3_apple.machine import (
 from dinov3_apple.memory import GB, available_memory_bytes, send_checks_to
 
 REPO_ROOT = Path(__file__).parents[1]
-RESULTS = REPO_ROOT / "results" / "coreml.jsonl"
-TABLE = REPO_ROOT / "results" / "coreml-table.md"
+RESULTS = REPO_ROOT / "results" / "coreml-6d.jsonl"
+TABLE = REPO_ROOT / "results" / "coreml-6d-table.md"
 BENCH_ROOT = REPO_ROOT / "tests" / "fixtures" / "generated" / "bench" / "coreml"
 LOG_FORMAT = "%(asctime)s %(name)s %(message)s"
-RUN = "S6c"
+RUN = "S6d"
 CORE_ML_MODE = "fp16-cast"  # Core ML lines: fp16 weights, fp16 compute precision (ADR 0003)
 WORKER_TIMEOUT_S = 1200
 STDERR_LINES = 20
@@ -72,6 +76,14 @@ STREAM_CASES = ["ne", "mlx", "both"]
 STREAM_SECONDS = 10.0
 STREAM_LEAD_S = 2.0
 STREAM_READY_TIMEOUT_S = 900.0
+DISK_JOB_BYTES = 10 * GB  # a job does not start below this free disk (Section 3.2)
+DISK_WORKER_BYTES = 6 * GB  # a worker does not start below this free disk
+# The speed points of the paired runs and the two-stream run: P1 and P2 of Step 6 and P3 (Table 2
+# of the plan). P3 stays local to this script, so Step 6 and Step 6b do not change.
+POINTS = PRIORITY | {"P3": ("ViT-L/16", 224, 8, "patch")}
+PAIR_POINTS = ["P1-b8", "P1-b1", "P3-b8", "P2-b8"]
+STREAM_POINTS = ["P1-b8", "P3-b8", "P2-b8"]
+DEFAULT_NE_FORM = "batch-api"  # the faster form at P1 in Step 6c (689 img/s against 501 img/s)
 
 logger = logging.getLogger("bench_coreml")
 
@@ -81,7 +93,8 @@ Runner = Callable[[Spec, Path], dict]
 
 def mlx_mode(model_size: str, side: int, batch_size: int) -> str:
     """Return the dtype mode of the mlx side: the fastest valid fp16 dtype mode of the Step 6
-    matrix (Section 3.5): fp16-cast for ViT-S/16 to ViT-B/16 and at P2, else fp16-autocast."""
+    matrix (Section 3.5): fp16-cast for ViT-S/16 to ViT-B/16 and at P2, else fp16-autocast (also
+    at P3)."""
     if (model_size, side, batch_size) == PRIORITY["P2"][:3]:
         return "fp16-cast"
     return "fp16-autocast" if model_size in ("ViT-L/16", "ViT-H+/16") else "fp16-cast"
@@ -105,8 +118,8 @@ def coreml_spec(
 ) -> Spec:
     """Return one worker spec. backend: a Core ML backend, "mlx", "convert" or "plan".
 
-    A coreml-ne worker at batch size 8 runs the batch-size-1 package with the batch API (F4 of
-    explore.html, plan amendment of 2026-11-08), unless the spec sets ne_batch_form "package".
+    A coreml-ne worker at batch size 8 runs the batch-size-1 package with the batch API, unless
+    the spec sets ne_batch_form "package" (the batch-size-8 package).
     """
     if backend == "coreml-ne" and batch_size > 1 and phase != "convert":
         fields.setdefault("ne_batch_form", "batch-api")
@@ -138,28 +151,24 @@ def stream_schedule(rounds: int) -> list[list[str]]:
 
 
 def convert_plan(model_sizes: list[str] | None = None) -> list[Spec]:
-    """J1: the 26 packages (Table 2) and the deferred line of ViT-7B/16."""
+    """J1: the 25 ne3 packages (Section 3.2). No plain package: the Step 6c F1 lines stay."""
     specs = []
     for model_size in model_sizes or MAIN_MODEL_SIZES:
         for side in PARITY_SIDES:
             specs.append(coreml_spec("convert", "convert", model_size, side, 1))
         for side in MATRIX_SIDES:
             specs.append(coreml_spec("convert", "convert", model_size, side, 8))
-    specs.append(coreml_spec("convert", "convert", "ViT-S/16", 224, 1, rewrite=False))
-    specs.append(coreml_spec("convert", "deferred", "ViT-7B/16", 224, 1))
     return specs
 
 
 def parity_plan(model_sizes: list[str] | None = None) -> list[Spec]:
-    """J2: the 15 parity packages on the 3 compute units, the plain ViT-S/16 package (F1) and the
-    compute plan of each of the 26 packages on CPU_AND_NE."""
+    """J2: the 15 parity packages on the 3 compute units and the compute plan of each of the 25
+    packages on CPU_AND_NE."""
     specs = []
     for model_size in model_sizes or MAIN_MODEL_SIZES:
         for side in PARITY_SIDES:
             for backend in CORE_ML_BACKENDS:
                 specs.append(coreml_spec("parity", backend, model_size, side, 1))
-    for backend in CORE_ML_BACKENDS:
-        specs.append(coreml_spec("parity", backend, "ViT-S/16", 224, 1, rewrite=False))
     for spec in convert_plan(model_sizes):
         if spec["backend"] == "convert":
             specs.append(spec | {"phase": "plan", "backend": "plan"})
@@ -168,14 +177,15 @@ def parity_plan(model_sizes: list[str] | None = None) -> list[Spec]:
 
 def matrix_plan(model_sizes: list[str] | None = None) -> list[Spec]:
     """J3: one paired group (coreml-ne, coreml-gpu, mlx) for each model size, input resolution
-    and batch size, in a rotated order (ADR 0004)."""
+    and batch size, in a rotated order (ADR 0004). At batch size 8 the group has both Neural
+    Engine forms: the batch API and the batch-size-8 package (Section 3.4)."""
     specs = []
     group = 0
     for model_size in model_sizes or MAIN_MODEL_SIZES:
         for side in MATRIX_SIDES:
             for batch_size in MATRIX_BATCH_SIZES:
                 backends = ["coreml-ne", "coreml-gpu", "mlx"]
-                if batch_size > 1:  # the batch-size-8 package on the Neural Engine: is F4 gone?
+                if batch_size > 1:  # the second Neural Engine form: the batch-size-8 package
                     backends.append("coreml-ne-package")
                 for position, backend in enumerate(_rotate(backends, group)):
                     fields: dict = {"group": group, "position": position}
@@ -188,101 +198,116 @@ def matrix_plan(model_sizes: list[str] | None = None) -> list[Spec]:
     return specs
 
 
-def pairs_plan(
-    priorities: list[str], batch_sizes: list[int], rounds: int, run_id: str
-) -> list[Spec]:
-    """J4: paired groups at P1 and P2: coreml-ne, coreml-gpu and mlx, plus coreml-all at batch
-    size 8, in an order that rotates with the round."""
-    specs = []
-    for round_ in range(rounds):
-        for priority in priorities:
-            model_size, side, _, output = PRIORITY[priority]
-            for batch_size in batch_sizes:
-                backends = ["coreml-ne", "coreml-gpu", "mlx"]
-                if batch_size == 8:
-                    backends.append("coreml-all")
-                for position, backend in enumerate(_rotate(backends, round_)):
-                    specs.append(
-                        coreml_spec(
-                            "pairs",
-                            backend,
-                            model_size,
-                            side,
-                            batch_size,
-                            run_id=run_id,
-                            group=f"{priority}-b{batch_size}",
-                            round=round_,
-                            position=position,
-                            priority=priority,
-                            output=output,
-                        )
-                    )
-    if "P1" in priorities and 8 in batch_sizes:
-        model_size, side, _, output = PRIORITY["P1"]
-        specs.append(
-            coreml_spec(
-                "pairs",
-                "coreml-ne",
-                model_size,
-                side,
-                8,
-                run_id=run_id,
-                group="P1-b8-f4",
-                round=0,
-                position=0,
-                priority="P1",
-                output=output,
-                ne_batch_form="package",
+def parse_points(names: list[str]) -> list[tuple[str, int]]:
+    """Return the speed point and the batch size of each name: "P3-b8" -> ("P3", 8)."""
+    points = []
+    for name in names:
+        priority, _, batch = name.partition("-b")
+        if priority not in POINTS or not batch.isdigit():
+            raise ValueError(
+                f"a point is P1, P2 or P3 with a batch size, for example P3-b8: {name}"
             )
-        )
-    return specs
+        points.append((priority, int(batch)))
+    return points
 
 
-def ne_batch_size(model_size: str, side: int, lines: list[dict]) -> int:
-    """Return the faster batch size (1 or 8) of coreml-ne in the matrix lines; 1 without lines."""
-    best: dict[int, float] = {}
+def _ne_throughputs(model_size: str, side: int, lines: list[dict]) -> dict[tuple[int, str], float]:
+    """Return the throughput of each valid coreml-ne form of the matrix lines of the current
+    rewrite version: {(batch size, ne_batch_form): img/s}. The latest line of a form counts."""
+    found: dict[tuple[int, str], float] = {}
     for line in lines:
         if (
             line.get("phase") == "matrix"
             and line["backend"] == "coreml-ne"
-            and line["model_size"] == model_size
-            and line["side"] == side
+            and (line["model_size"], line["side"]) == (model_size, side)
             and line["status"] == "done"
             and line.get("valid")
+            and _current(line)
         ):
-            best[line["batch_size"]] = line["patch"]["throughput_ips"]
-    return max(best, key=best.__getitem__) if best else 1
+            form = line.get("ne_batch_form") or "package"
+            found[(line["batch_size"], form)] = line["patch"]["throughput_ips"]
+    return found
+
+
+def faster_ne_form(model_size: str, side: int, lines: list[dict], batch_size: int = 8) -> str:
+    """Return the faster valid Neural Engine form at one batch size above 1 in the matrix lines:
+    "package" or "batch-api". DEFAULT_NE_FORM without a valid line."""
+    found = {
+        form: ips
+        for (batch, form), ips in _ne_throughputs(model_size, side, lines).items()
+        if batch == batch_size
+    }
+    return max(found, key=found.__getitem__) if found else DEFAULT_NE_FORM
+
+
+def stream_ne_choice(model_size: str, side: int, lines: list[dict]) -> tuple[int, str]:
+    """Return the batch size and the form of the fastest valid Neural Engine line of the matrix
+    (batch size 1, the batch-size-8 package or the batch API). (1, "package") without lines."""
+    found = _ne_throughputs(model_size, side, lines)
+    return max(found, key=found.__getitem__) if found else (1, "package")
+
+
+def pairs_plan(
+    points: list[tuple[str, int]], rounds: int, run_id: str, lines: list[dict]
+) -> list[Spec]:
+    """J4: paired groups (coreml-ne, coreml-gpu, mlx) at each point, in an order that rotates with
+    the round. Above batch size 1 coreml-ne runs the faster valid form of the matrix."""
+    specs = []
+    for round_ in range(rounds):
+        for priority, batch_size in points:
+            model_size, side, _, output = POINTS[priority]
+            for position, backend in enumerate(_rotate(["coreml-ne", "coreml-gpu", "mlx"], round_)):
+                fields: dict = {}
+                if backend == "coreml-ne" and batch_size > 1:
+                    fields["ne_batch_form"] = faster_ne_form(model_size, side, lines, batch_size)
+                specs.append(
+                    coreml_spec(
+                        "pairs",
+                        backend,
+                        model_size,
+                        side,
+                        batch_size,
+                        run_id=run_id,
+                        group=f"{priority}-b{batch_size}",
+                        round=round_,
+                        position=position,
+                        priority=priority,
+                        output=output,
+                        **fields,
+                    )
+                )
+    return specs
 
 
 def streams_plan(
-    priorities: list[str], batch_sizes: list[int], rounds: int, run_id: str, lines: list[dict]
+    points: list[tuple[str, int]], rounds: int, run_id: str, lines: list[dict]
 ) -> list[Spec]:
-    """J5: the two-stream run. The mlx side runs the batch size of the group; the Neural Engine
-    side runs the faster batch size of the matrix (Section 3.6)."""
+    """J5: the two-stream run. The mlx side runs the batch size of the point; the Neural Engine
+    side runs the fastest valid form of the matrix (Section 3.4)."""
     specs = []
-    for priority in priorities:
-        model_size, side, _, output = PRIORITY[priority]
-        ne_batch = ne_batch_size(model_size, side, lines)
-        for batch_size in batch_sizes:
-            for round_, cases in enumerate(stream_schedule(rounds)):
-                for position, case in enumerate(cases):
-                    specs.append(
-                        coreml_spec(
-                            "streams",
-                            "streams",
-                            model_size,
-                            side,
-                            batch_size,
-                            run_id=run_id,
-                            group=f"{priority}-b{batch_size}",
-                            round=round_,
-                            position=position,
-                            priority=priority,
-                            output=output,
-                            case=case,
-                            ne_batch_size=ne_batch,
-                        )
+    for priority, batch_size in points:
+        model_size, side, _, output = POINTS[priority]
+        ne_batch, ne_form = stream_ne_choice(model_size, side, lines)
+        for round_, cases in enumerate(stream_schedule(rounds)):
+            for position, case in enumerate(cases):
+                specs.append(
+                    coreml_spec(
+                        "streams",
+                        "streams",
+                        model_size,
+                        side,
+                        batch_size,
+                        run_id=run_id,
+                        group=f"{priority}-b{batch_size}",
+                        round=round_,
+                        position=position,
+                        priority=priority,
+                        output=output,
+                        case=case,
+                        ne_batch_size=ne_batch,
+                        ne_batch_form=ne_form,
                     )
+                )
     return specs
 
 
@@ -382,6 +407,11 @@ def _summary(line: dict) -> str:
     return text
 
 
+def free_disk_bytes() -> int:
+    """Return the free disk of the volume of the Core ML packages (the home folder)."""
+    return shutil.disk_usage(Path.home()).free
+
+
 def run_specs(
     specs: list[Spec],
     results: Path,
@@ -389,8 +419,12 @@ def run_specs(
     runner: Runner = run_worker,
     pattern: str = HEAVY_JOB_PATTERN,
     registry: Path = LOCK_REGISTRY,
+    disk: Callable[[], int] = free_disk_bytes,
 ) -> Counter:
     """Run the workers one after the other and append one line for each.
+
+    Before each worker the driver checks the memory and the free disk. A worker that does not fit
+    gives a "skipped" line.
 
     Raises:
         MachineStateError: On battery power or in Low Power Mode. No line is written.
@@ -402,6 +436,7 @@ def run_specs(
         need = spec_need(spec)
         available = available_memory_bytes()
         fits = available >= need
+        disk_free = disk()
         label = (
             f"{spec['phase']} {spec['backend']} {spec['model_size']} {spec['side']}px "
             f"b{spec['batch_size']}{'' if spec.get('rewrite', True) else ' plain'}"
@@ -411,8 +446,14 @@ def run_specs(
             f"memory check: {label}: needs {need / GB:.1f} GB, "
             f"{available / GB:.1f} GB available, {'ok' if fits else 'does not fit'}"
         )
+        logger.info(f"disk check: {label}: {disk_free / GB:.1f} GB free")
         seen = other_heavy_jobs(pattern, registry)
-        if fits:
+        if disk_free < DISK_WORKER_BYTES:
+            worker = {
+                "status": "skipped",
+                "reason": f"disk: {disk_free / GB:.1f} GB free, below {DISK_WORKER_BYTES / GB:.0f} GB",
+            }
+        elif fits:
             worker = runner(spec, bench_dir)
         else:
             worker = {
@@ -422,6 +463,7 @@ def run_specs(
         seen += other_heavy_jobs(pattern, registry)
         line = spec_line(spec, worker, need, available, machine)
         line["other_heavy_jobs_seen"] = sorted(set(seen))
+        line["disk_free_bytes"] = disk_free
         results.parent.mkdir(parents=True, exist_ok=True)
         with results.open("a") as file:
             file.write(json.dumps(line) + "\n")
@@ -553,15 +595,16 @@ def stream_worker(spec: Spec) -> dict:
         from dinov3_apple.coreml import load_package, package_path
 
         batch_size = spec["ne_batch_size"]
-        path = package_path(spec["model_size"], spec["side"], 1)
+        form = spec.get("ne_batch_form") or "package"
+        batch_api = batch_size > 1 and form == "batch-api"
+        path = package_path(spec["model_size"], spec["side"], 1 if batch_api else batch_size)
         model, _, _ = load_package(path, "CPU_AND_NE")
         batch = make_batch(read_inputs(), spec["side"], batch_size)
-        if batch_size == 1:
-            feed: object = {"pixels": batch}
-        else:  # the batch API on the batch-size-1 package (F4)
-            feed = [{"pixels": batch[i : i + 1]} for i in range(batch_size)]
+        if batch_api:  # one call with a list of batch-size-1 inputs
+            feed: object = [{"pixels": batch[i : i + 1]} for i in range(batch_size)]
+        else:
+            feed = {"pixels": batch}
         result = _stream_loop(lambda: model.predict(feed), spec)
-        form = "batch-api" if batch_size > 1 else "package"
         result |= {"backend": "coreml-ne", "package": path.name, "ne_batch_form": form}
     else:
         import mlx.core as mx
@@ -699,16 +742,16 @@ def _latest(lines: list[dict], phase: str) -> list[dict]:
     return list(found.values())
 
 
-def _ne_valid(lines: list[dict], model_size: str, side: int, batch_size: int) -> str:
+def _ne_valid(lines: list[dict], model_size: str, side: int, batch_size: int, form: str) -> str:
     """Return "yes" if a current coreml-ne line of the matrix or the paired runs at this model size,
-    input resolution and batch size (batch API above 1) has a valid output, else "no"."""
+    input resolution, batch size and form has a valid output, else "no"."""
     for line in lines:
         if (
             line.get("phase") in ("matrix", "pairs")
             and line["backend"] == "coreml-ne"
             and (line["model_size"], line["side"], line["batch_size"])
             == (model_size, side, batch_size)
-            and (batch_size == 1 or line.get("ne_batch_form") == "batch-api")
+            and (line.get("ne_batch_form") or "package") == form
             and line.get("valid")
             and _current(line)
         ):
@@ -717,7 +760,7 @@ def _ne_valid(lines: list[dict], model_size: str, side: int, batch_size: int) ->
 
 
 def _form_mark(line: dict) -> str:
-    """Mark a coreml-ne row above batch size 1: the batch API or the batch-size-8 package (F4)."""
+    """Mark a coreml-ne row above batch size 1: the batch API or the batch-size-8 package."""
     if line["backend"] != "coreml-ne" or line["batch_size"] == 1:
         return ""
     return " (batch API)" if line.get("ne_batch_form") == "batch-api" else " (b8 package)"
@@ -732,11 +775,12 @@ def table_text(lines: list[dict]) -> str:
     from dinov3_apple.speedup import NOISE, pass_verdict, spread_between_runs
 
     out = [
-        "# Core ML on the Neural Engine",
+        "# Core ML on the Neural Engine: rewrite ne3",
         "",
         (
-            "Made by `scripts/bench_coreml.py table` from `results/coreml.jsonl` "
-            f"on {datetime.now(UTC).date()}. Step 6c (specs/06c-neural-engine/plan.html). Core ML "
+            "Made by `scripts/bench_coreml.py table` from `results/coreml-6d.jsonl` "
+            f"on {datetime.now(UTC).date()}. Step 6d (specs/06d-neural-engine-fault/plan.html). "
+            "Core ML "
             "packages run with fp16 compute precision; the mlx side runs the compiled forward pass in "
             "the fastest valid fp16 dtype mode of Step 6. Parity: frame / patch mean / patch 1st "
             "percentile, the worst of the 3 test images (parity) or image 0 (speed)."
@@ -744,8 +788,8 @@ def table_text(lines: list[dict]) -> str:
         "",
         "## 1 Conversion",
         "",
-        "| Package | Status | Trace s | Convert s | Save s | Compile s | Size MB | Ops | Peak footprint GB |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| Package | Status | Trace s | Convert s | Save s | Compile s | Size MB | Ops | Constant concats | Peak footprint GB |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for line in _latest(lines, "convert"):
         ops = sum((line.get("ops") or {}).values()) if line.get("ops") else None
@@ -755,12 +799,15 @@ def table_text(lines: list[dict]) -> str:
             f"{_fmt(line.get('trace_s'))} | {_fmt(line.get('convert_s'))} | "
             f"{_fmt(line.get('save_s'))} | {_fmt(line.get('compile_s'))} | "
             f"{_fmt((line.get('package_bytes') or 0) / 1e6 if line.get('package_bytes') else None)} | "
-            f"{ops if ops is not None else '–'} | "
+            f"{ops if ops is not None else '–'} | {line.get('constant_concats', '–')} | "
             f"{_fmt(line.get('footprint_peak_bytes') / 1e9 if line.get('footprint_peak_bytes') else None, 2)} |"
         )
     out += [
         "",
-        "Table 1. The conversion of each package (job J1).",
+        (
+            "Table 1. The conversion of each package (job J1). Constant concats: the concats with "
+            "two or more constant inputs (the concat fault); convert_module refuses more than 0."
+        ),
         "",
         "## 2 Parity",
         "",
@@ -785,17 +832,19 @@ def table_text(lines: list[dict]) -> str:
         "",
         "## 3 Compute plan",
         "",
-        "| Package | Ops | Ops per device | Neural Engine cost share | Ops off the Neural Engine |",
-        "| --- | --- | --- | --- | --- |",
+        "| Package | Ops | Ops per device | Concat devices | Neural Engine cost share | Ops off the Neural Engine |",
+        "| --- | --- | --- | --- | --- | --- |",
     ]
     for line in _latest(lines, "plan"):
         if line["status"] != "done":
-            out.append(f"| {line.get('package')} | {line['status']} | – | – | – |")
+            out.append(f"| {line.get('package')} | {line['status']} | – | – | – | – |")
             continue
         off = Counter(row["op_type"] for row in line["off_neural_engine"])
+        concat = (line.get("op_devices") or {}).get("concat", {})
         out.append(
             f"| {line['package']} | {line['ops']} | "
             f"{', '.join(f'{k} {v}' for k, v in sorted(line['ops_per_device'].items()))} | "
+            f"{', '.join(f'{k} {v}' for k, v in sorted(concat.items())) or '–'} | "
             f"{line['neural_engine_share']:.3f} | "
             f"{', '.join(f'{k} {v}' for k, v in off.most_common()) or '–'} |"
         )
@@ -832,7 +881,7 @@ def table_text(lines: list[dict]) -> str:
             "of the same paired group."
         ),
         "",
-        "## 5 Paired runs at P1 and P2",
+        "## 5 Paired runs at P1, P3 and P2",
         "",
         "| Group | Backend | Run medians | Pooled median | Spread between runs | Verdict D21 | Core ML img/s (median) | mlx img/s (median) | Rounds |",
         "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
@@ -851,7 +900,8 @@ def table_text(lines: list[dict]) -> str:
         pooled = float(np.median([row["ratio"] for row in rows]))
         output = rows[0]["line"].get("output") or "patch"
         out.append(
-            f"| {group} | {backend} | {', '.join(f'{m:.3f}' for m in medians)} | {pooled:.3f} | "
+            f"| {group} | {backend}{_form_mark(rows[0]['line'])} | "
+            f"{', '.join(f'{m:.3f}' for m in medians)} | {pooled:.3f} | "
             f"{f'{spread_between_runs(medians):.3f}' if len(medians) > 1 else '–'} | "
             f"{pass_verdict(medians, pooled)}"
             f"{', inside the noise' if abs(pooled - 1) <= NOISE else ''} | "
@@ -861,32 +911,27 @@ def table_text(lines: list[dict]) -> str:
     out += [
         "",
         (
-            "Table 5. The paired ratio Core ML / mlx at P1 (frame) and P2 (patch), median over the "
-            "rounds of each run (run 1: build, run 2: verify). Report only: Step 6c has no speed target."
+            "Table 5. The paired ratio Core ML / mlx at P1 (ViT-S/16 224 px, frame), P3 (ViT-L/16 "
+            "224 px, patch) and P2 (ViT-H+/16 512 px, patch), median over the rounds of each run "
+            "(run 1: build, run 2: verify). Above batch size 1 coreml-ne runs the faster valid "
+            "form of the matrix. Report only: no speed target (AC10)."
         ),
+        "",
     ]
-    for line in lines:
-        if line.get("group") == "P1-b8-f4":
-            out.append("")
-            out.append(
-                f"F4 evidence (run {line.get('run_id')}): the ViT-S/16 batch-size-8 package on "
-                f"CPU_AND_NE gives valid {line.get('valid')}, parity "
-                f"{_parity_text(line.get('parity'))}. The coreml-ne rows at batch size 8 run the "
-                "batch-size-1 package with the batch API."
-            )
     out += [
         "",
         "## 6 Two-stream run",
         "",
-        "| Group | Run | Neural Engine batch size | Neural Engine output valid | ne alone img/s | mlx alone img/s | both: ne img/s | both: mlx img/s | both: total img/s | Stream ratio | Rounds |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| Group | Run | Neural Engine batch size | Neural Engine form | Neural Engine output valid | ne alone img/s | mlx alone img/s | both: ne img/s | both: mlx img/s | both: total img/s | Stream ratio | Rounds |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     streams: dict[tuple, dict[int, dict[str, dict]]] = {}
     for line in lines:
         if line.get("phase") == "streams" and line["status"] == "done":
-            key = (line["group"], line["run_id"], line["ne_batch_size"])
+            form = line.get("ne_batch_form") or "package"
+            key = (line["group"], line["run_id"], line["ne_batch_size"], form)
             streams.setdefault(key, {}).setdefault(line["round"], {})[line["case"]] = line
-    for (group, run_id, ne_batch), rounds in sorted(streams.items()):
+    for (group, run_id, ne_batch, form), rounds in sorted(streams.items()):
         full = [r for r in rounds.values() if set(r) == set(STREAM_CASES)]
         if not full:
             continue
@@ -896,9 +941,9 @@ def table_text(lines: list[dict]) -> str:
         both_mlx = [r["both"]["sides"]["mlx"]["throughput_ips"] for r in full]
         ratios = [r["both"]["total_ips"] / r["mlx"]["sides"]["mlx"]["throughput_ips"] for r in full]
         first = full[0]["ne"]
-        valid = _ne_valid(lines, first["model_size"], first["side"], ne_batch)
+        valid = _ne_valid(lines, first["model_size"], first["side"], ne_batch, form)
         out.append(
-            f"| {group} | {run_id} | {ne_batch} | {valid} | {np.median(ne_alone):,.1f} | "
+            f"| {group} | {run_id} | {ne_batch} | {form} | {valid} | {np.median(ne_alone):,.1f} | "
             f"{np.median(mlx_alone):,.1f} | {np.median(both_ne):,.1f} | {np.median(both_mlx):,.1f} | "
             f"{np.median([a + b for a, b in zip(both_ne, both_mlx, strict=True)]):,.1f} | "
             f"{np.median(ratios):.3f} | {len(full)} |"
@@ -909,8 +954,8 @@ def table_text(lines: list[dict]) -> str:
             "Table 6. The two-stream run: Core ML on CPU_AND_NE and compiled mlx on the GPU, alone and "
             "at the same time, 10 s per case. Stream ratio = (ne + mlx, both) / (mlx alone), median "
             "over the rounds. The stream worker checks no output; the column «Neural Engine output "
-            "valid» comes from the coreml-ne lines of the matrix and the paired runs (finding V2 of "
-            "verify.html)."
+            "valid» comes from the coreml-ne lines of the matrix and the paired runs of the same "
+            "batch size and form (finding V2 of the Step 6c verify.html)."
         ),
         "",
     ]
@@ -927,15 +972,14 @@ def plan_of(args: argparse.Namespace) -> list[Spec]:
         specs = convert_plan(sizes)
     elif args.subcommand == "parity":
         specs = parity_plan(sizes)
-        if args.plain:
-            specs = [spec for spec in specs if spec["rewrite"] is False]
     elif args.subcommand == "matrix":
         specs = matrix_plan(sizes)
     elif args.subcommand == "pairs":
-        specs = pairs_plan(args.priority, args.batch_sizes, args.rounds, str(args.run))
+        points = parse_points(args.points or PAIR_POINTS)
+        specs = pairs_plan(points, args.rounds, str(args.run), read_lines(args.results))
     else:
-        lines = read_lines(RESULTS)
-        specs = streams_plan(args.priority, args.batch_sizes, args.rounds, str(args.run), lines)
+        points = parse_points(args.points or STREAM_POINTS)
+        specs = streams_plan(points, args.rounds, str(args.run), read_lines(args.results))
     if args.skip_done:
         specs = skip_done(specs, read_lines(args.results))
     return specs
@@ -952,12 +996,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         p = sub.add_parser(name)
         p.add_argument("--results", type=Path, default=RESULTS)
         p.add_argument("--model-sizes", nargs="+", default=None)
-        p.add_argument("--priority", nargs="+", default=["P1", "P2"])
-        p.add_argument("--batch-sizes", nargs="+", type=int, default=[8, 1])
+        p.add_argument(
+            "--points", nargs="+", default=None, help="pairs and streams: for example P3-b8"
+        )
         p.add_argument("--rounds", type=int, default=5 if name == "pairs" else 3)
         p.add_argument("--run", default="1")
         p.add_argument("--skip-done", action="store_true")
-        p.add_argument("--plain", action="store_true", help="parity: only the plain graph")
         p.add_argument("--dry-run", action="store_true")
         p.add_argument("--table", type=Path, default=TABLE, help="table: the output file")
     args = parser.parse_args(argv)
@@ -990,6 +1034,13 @@ def main(argv: Sequence[str] | None = None) -> None:
         handlers=[logging.StreamHandler(sys.stderr), logging.FileHandler(bench_dir / "driver.log")],
     )
     with heavy_job(f"scripts/bench_coreml.py {args.subcommand}"):
+        disk_free = free_disk_bytes()  # after the wait for the lock: the disk can change meanwhile
+        logger.info(
+            f"disk check: {disk_free / GB:.1f} GB free (a job needs {DISK_JOB_BYTES / GB:.0f} GB)"
+        )
+        if disk_free < DISK_JOB_BYTES:
+            logger.error("stop: not enough free disk for the job")
+            sys.exit(2)
         logger.info(f"run of {len(specs)} workers: {args.subcommand}")
         try:
             counts = run_specs(specs, args.results, bench_dir)

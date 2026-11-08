@@ -543,7 +543,13 @@ One converted backbone for one model size, input resolution and batch size (`.ml
 The device and the estimated cost of each op of a compiled Core ML package, from `MLComputePlan`.
 
 **Neural Engine rewrite**:
-The exact changes to the Hugging Face backbone before the Core ML conversion that keep every value inside fp16: score scale, residual-stream scale and layer norm ε / r².
+The exact changes to the Hugging Face backbone before the Core ML conversion that keep every value inside fp16 and the Neural Engine output right: score scale, residual-stream scale, layer norm ε / r² and the constant prefix. Its version is part of the package name (`ne3`).
+
+**Concat fault**:
+The Neural Engine writes a wrong token concat when the concat has two or more constant inputs. `constant_concats` finds such a concat in a converted graph.
+
+**Constant prefix**:
+The CLS token and the 4 register tokens as one constant of 5 rows, in front of the patch tokens (`ne_embeddings`).
 
 **Score scale**:
 The power of two (256) that divides the query before q·kᵀ. The softmax gets (z − max z) · 256.
