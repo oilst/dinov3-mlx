@@ -241,7 +241,27 @@ a { color: var(--accent); }
     <li>The Neural Engine runs <code>linear</code>, <code>matmul</code>, <code>softmax</code>, <code>layer_norm</code>, <code>gelu</code>, <code>silu</code>, <code>reduce_max</code> and <code>clip</code>. The converter writes no <code>scaled_dot_product_attention</code> op: the Hugging Face SDPA path becomes <code>matmul</code>, <code>softmax</code>, <code>matmul</code>. A fused attention op on the Neural Engine is not available from this graph.</li>
   </ul>
 
-  <!--CHAIN2-->
+  <h3>2.10 Probe chain 2: batch size 8 and ViT-L/16</h3>
+  <p>Chain 2 ran on 2026-11-08 between 00:50 and 01:12 (its first start timed out in the lock queue). It had no ViT-H+/16 probe; the build measures ViT-H+/16 in J2.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Value of block 1</th><th>CPU_AND_NE, batch size 1</th><th>CPU_AND_NE, batch size 8</th><th>CPU_AND_GPU, batch size 8</th></tr></thead>
+      <tbody>
+        <tr><td>Input tokens (patch embedding, CLS token, register tokens)</td><td class="num">0.99999</td><td class="num fail">0.133</td><td class="num">1.0</td></tr>
+        <tr><td>Layer norm 1</td><td class="num">0.999999</td><td class="num fail">0.854</td><td class="num">1.0</td></tr>
+        <tr><td>Scores z = q·kᵀ / (√d · 256); largest |z| (true 9,335)</td><td class="num">0.999999; 9,344</td><td class="num fail">0.981; 9,424</td><td class="num">1.0; 9,336</td></tr>
+        <tr><td>Attention output</td><td class="num">0.99937</td><td class="num">0.99101</td><td class="num">0.99990</td></tr>
+        <tr><td>Block output</td><td class="num">0.999992</td><td class="num fail">0.842</td><td class="num">0.999999</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 13.</b> Cosine of 5 of the 14 values of block 1 of ViT-S/16 with score scaling, 224 px, against torch-cpu fp32 (probes p13 and p14; all images of the batch are iss-kibo-lab).</p>
+  <div class="warn">
+    <p><b>Finding F4.</b> At batch size 8 the Neural Engine gives wrong input tokens: cosine 0.133 before block 1, with the right largest value (10.66). The 8 images of the batch are equal, so the fault is in the order of the values inside the patch embedding (<code>conv</code>, <code>reshape</code>, <code>transpose</code>, <code>concat</code>), not a mix of images. At batch size 1 the compute plan keeps the input <code>cast</code>, the <code>conv</code> and the ops up to the first attention on the CPU (p12: 46 ops, 24.6 % of the estimated cost), and the output is right. At batch size 8 the plan puts all of them on the Neural Engine (p12: 4 ops on the CPU, 1.3 % of the cost). The ViT-S/16 package at batch size 8 without the fold (p15) gives frame 0.385, the same as with the fold (p7): the fold did not cause the P1 failure.</p>
+  </div>
+  <p>Score scaling works on the Neural Engine: at batch size 1 the scores of block 1 have cosine 0.999999 and a largest value of 9,344 (true 9,335), and the block output has cosine 0.999992. The softmax output has cosine 0.952 (rows close to one-hot, rounded to fp16), but the attention output has 0.99937.</p>
+  <p>ViT-L/16 at 224 px batch size 1 with the power-of-two scale (r = 8, no fold, p16) still fails: on CPU_AND_NE frame 0.092, and on CPU_AND_GPU frame 0.990 and patch 1st percentile 0.943. The same graph with the fold gave nearly the same values (p10). So ViT-L/16 has a second fp16 limit that the rewrite does not remove, also on the GPU. Step 5 could not show it, because ViT-L/16 in fp16-cast overflows at block 1 there. A candidate cause is the layer norm ε: with r = 8 the ε of each layer norm acts as 64 · ε on the unscaled tokens. The plan sets ε to ε / r², and the build runs the block probe on the first wrong block of ViT-L/16 (plan Q3).</p>
+  <p>Consequences for the plan (amended after the approval, with this evidence): the <code>coreml-ne</code> rows at batch size 8 use the batch-size-1 package with the batch API of Core ML (<code>predict</code> on a list of 8 inputs), which is also the faster form (540 against 452 img/s); the batch-size-8 package runs on CPU_AND_NE once at P1 as F4 evidence. The layer norm ε becomes ε / r². ViT-L/16 and ViT-H+/16 may be expected failures in AC4 and AC5 with the evidence of a block probe.</p>
 </section>
 
 <section id="decisions">
