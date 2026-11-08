@@ -539,6 +539,24 @@ def write_table(lines: list[dict]) -> str:
             )
         else:
             out.append(f"{head} – | – | – | – | – | {row['reason']} | – | – | – | – |")
+    facts = prior_art.slow_cell_facts(lines)
+    if facts:
+        out += [
+            "",
+            (
+                "Cells with a prior-art ratio below 0.97 (AC4), with measured facts. Host share: "
+                "1 − patch ÷ device throughput of ours (the move of the outputs to the host). "
+                "Device ratio: our device throughput ÷ the export throughput."
+            ),
+            "",
+            "| Export | Batch size | Tokens | Prior-art ratio | Host share of ours | Device ratio |",
+            "| --- | --- | --- | --- | --- | --- |",
+        ]
+        for fact in facts:
+            out.append(
+                f"| {fact['export']} | {fact['batch_size']} | {fact['tokens']} | "
+                f"{fact['ratio']:.3f} | {fact['host_share']:.3f} | {fact['device_ratio']:.3f} |"
+            )
     out += [
         "",
         "## 3 Report-only rows (J2)",

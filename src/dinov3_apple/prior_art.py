@@ -789,3 +789,53 @@ def variant_speed_rows(lines: list[dict]) -> list[PriorArtRow]:
                 if row is not None:
                     rows.append(row)
     return rows
+
+
+def slow_cell_facts(lines: list[dict], limit: float = 0.97) -> list[dict]:
+    """Return the measured facts of each J1 cell with a prior-art ratio below limit (AC4).
+
+    The facts: the host share of ours (1 − patch throughput ÷ device throughput: the time of the
+    move of the outputs to the host) and the ratio of our device throughput to the export
+    throughput (the lower median over the rounds), with the token count of the export.
+    """
+    j1 = [line for line in lines if line.get("job") == "J1"]
+    facts = []
+    for row in prior_art_rows(lines):
+        if not isinstance(row, PriorArtRow) or row.median >= limit:
+            continue
+        name, batch_size = row.fields["export"], row.fields["batch_size"]
+        ours = [
+            line
+            for line in j1
+            if line["side_kind"] == "ours"
+            and line["group"] == GROUP_OF_EXPORT[name]
+            and line["batch_size"] == batch_size
+            and _done(line)
+            and isinstance(line.get("device"), dict)
+        ]
+        exports = {
+            line["round"]: line
+            for line in j1
+            if line["side_kind"] == "export"
+            and line["export"] == name
+            and line["batch_size"] == batch_size
+            and _done(line)
+        }
+        device = _lower_median([line["device"]["throughput_ips"] for line in ours])
+        patch = _lower_median([line["patch"]["throughput_ips"] for line in ours])
+        device_ratios = [
+            line["device"]["throughput_ips"] / exports[line["round"]]["patch"]["throughput_ips"]
+            for line in ours
+            if line["round"] in exports
+        ]
+        facts.append(
+            {
+                "export": name,
+                "batch_size": batch_size,
+                "ratio": row.median,
+                "host_share": 1 - patch / device,
+                "device_ratio": _lower_median(device_ratios),
+                "tokens": EXPORTS[name].tokens,
+            }
+        )
+    return facts

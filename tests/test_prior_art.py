@@ -165,6 +165,23 @@ def test_cell_row_ratio_and_verdict() -> None:
     assert prior_art.single_verdict(1 + NOISE + 0.01) == "above 1"
 
 
+def test_slow_cell_facts() -> None:
+    """T5b (build addition for AC4): a cell below 0.97 gets the host share of ours and the ratio of
+    our device throughput to the export throughput."""
+    lines = []
+    for r in (1, 2, 3):
+        ours = _line("ours", r, 100.0, group="G2", config={"side": 512})
+        ours["device"] = {"throughput_ips": 110.0}
+        lines += [ours, _line("export", r, 120.0, export="E3", group="G2")]
+    facts = prior_art.slow_cell_facts(lines)
+    assert [(f["export"], f["batch_size"]) for f in facts] == [("E3", 8)]
+    fact = facts[0]
+    assert fact["ratio"] == pytest.approx(100 / 120)
+    assert fact["host_share"] == pytest.approx(1 - 100 / 110)
+    assert fact["device_ratio"] == pytest.approx(110 / 120)
+    assert fact["tokens"] == 1029
+
+
 # T6 to T11: the port-change variants.
 
 
