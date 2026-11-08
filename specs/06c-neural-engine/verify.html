@@ -376,6 +376,26 @@ uv run python -m dinov3_apple.gpu_lock -- uv run --group coreml python scripts/b
 uv run --group coreml python scripts/bench_coreml.py table</pre>
   <p>v7 called <code>dinov3_apple.coreml.run_coreml(model_size, 224, 1, "coreml-ne", parity_only=True)</code> for ViT-S/16 and ViT-H+/16; v8 called <code>compute_plan_report(path, "CPU_AND_NE")</code> for each <code>.mlmodelc</code> in <code>~/.cache/dinov3-apple/coreml/</code>. Each call ran in its own subprocess under one lock hold. The scripts are not in the repo; their output is in Sections 5 and 8.</p>
 </section>
+
+<section id="response">
+  <h2>13 Response of the build (2026-11-08, 04:20)</h2>
+  <p>The build session read the findings and acted as Table 7 shows. Commit of the fixes: <code>ddc3895</code>. The default session after the fixes: 946 passed, 15 skipped in 51.6 s.</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>No.</th><th>Severity</th><th>Action</th><th>State</th></tr></thead>
+    <tbody>
+      <tr><td>V1</td><td>high</td><td>Not fixed in Step 6c. The fix needs a new rewrite (embeddings off the Neural Engine, blocks on it), and plan Q3 says that this step tries no new rewrite. The orchestrator allowed one exception (the matmul patch embedding) only if a probe showed that it fixes the fault; it did not. The three-part proposal of V1 is the follow-up for the user (Section 11).</td><td>open: follow-up step</td></tr>
+      <tr><td>V2</td><td>medium</td><td>Table 6 of <code>results/coreml-table.md</code> has the column «Neural Engine output valid», from the coreml-ne lines of the matrix and the paired runs: yes at P1, no at P2. The stream worker still checks no output; that needs a new two-stream run (Core ML jobs), which the disk does not allow tonight.</td><td>partly fixed</td></tr>
+      <tr><td>V3</td><td>medium</td><td>Not fixed: a new compute-plan run needs Core ML jobs (free disk 6 GB). The 11 Verify reports of Section 8 describe current packages.</td><td>open</td></tr>
+      <tr><td>V4</td><td>medium</td><td><code>_latest</code> keeps only lines of the current rewrite version (<code>ne2</code>) and the plain graph, and treats a missing batch form as "package". Table 2 now has 48 rows: 45 of <code>ne2</code> and 3 of the plain graph.</td><td>fixed</td></tr>
+      <tr><td>V5</td><td>low</td><td>Recorded. AC7 takes the J2 rows; the two slow cached loads are b8 packages in the paired runs.</td><td>open</td></tr>
+      <tr><td>V7</td><td>low</td><td>ADR 0015 and the docstring of <code>package_path</code> now say that only the compiled model stays on disk, and name the Core ML bundle cache.</td><td>fixed</td></tr>
+      <tr><td>V8</td><td>low</td><td>Table 5 prints «–» for one run and adds «inside the noise» within 1 ± 0.03.</td><td>fixed</td></tr>
+      <tr><td>V9</td><td>low</td><td>Recorded for the user, together with the Core ML bundle cache of about 120 GB in <code>~/Library/Caches/python/com.apple.e5rt.e5bundlecache</code>.</td><td>open: the user</td></tr>
+      <tr><td>V10</td><td>low</td><td><code>stream_worker</code> writes «package» at batch size 1. The lines of runs 1 and 2 keep «batch-api».</td><td>fixed for new lines</td></tr>
+    </tbody>
+  </table></div>
+  <p class="caption">Table 7. The response of the build to each finding (V6 was resolved during Verify).</p>
+</section>
 </main>
 </body>
 </html>
