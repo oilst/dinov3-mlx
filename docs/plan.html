@@ -834,7 +834,14 @@ figcaption { font-size: 0.88rem; color: var(--muted); max-width: 52rem; }
 
     <div class="sub" id="step-6c">
       <h3>Step 6c. Neural Engine</h3>
-      <p>Step 6c explores Core ML on the Apple Neural Engine, alone and in parallel with the GPU, against <code>mlx</code>. The condition of <code>mission.md</code> (a profile shows that MLX cannot reach a goal) is met by the Step 6 matrix. The spec folder is <code>specs/06c-neural-engine/</code>. Its spec is in progress, so this section gives only the goal. The explainer covers how the Apple Neural Engine runs the attention and the feed-forward network, and its numeric range in fp16.</p>
+      <p>Step 6c explores Core ML on the Apple Neural Engine, alone and in parallel with the GPU, against <code>mlx</code>. The condition of <code>mission.md</code> (a profile shows that MLX cannot reach a goal) is met by the Step 6 matrix. The spec folder is <code>specs/06c-neural-engine/</code>.</p>
+      <ol class="steps">
+        <li>Rewrite the Hugging Face backbone so that every value fits fp16: score scale 256, a power-of-two residual-stream scale r with layer norm ε / r², no LayerScale fold (ADR 0014).</li>
+        <li>Convert one Core ML package for each model size, input resolution and batch size, outside the repo, with coremltools 9.0 and its <code>_cast</code> patch (ADR 0015).</li>
+        <li>Measure the parity and the compute plan of each package on CPU_AND_NE, CPU_AND_GPU and ALL.</li>
+        <li>Measure Core ML against compiled <code>mlx</code> in paired runs, and the two-stream run: Core ML on the Neural Engine and <code>mlx</code> on the GPU at the same time.</li>
+      </ol>
+      <p>Result (2026-11-08): with the rewrite, every model size from ViT-S/16 to ViT-H+/16 passes the fp16 thresholds on CPU_AND_GPU and ALL. On CPU_AND_NE only ViT-S/16 and ViT-S+/16 at 224 px pass: there Core ML runs the first ops on the CPU. Every other Neural Engine package gives wrong tokens; the fault shows first in the output of the embeddings, and its cause is open. Where the output is right, the two streams add up: 2,503 img/s at P1 against 1,984 img/s for <code>mlx</code> alone (stream ratio 1.26). At 512 px the Neural Engine is 7 times slower than the GPU. Core ML on the GPU runs at 0.62 to 1.15 times compiled <code>mlx</code>. Tables: <code>results/coreml-table.md</code>. The explainer <code>docs/learn/06c-neural-engine.html</code> covers how the Neural Engine runs the attention and the feed-forward network, and the numeric range of DINOv3 in fp16.</p>
     </div>
 
     <div class="sub" id="step-7">
