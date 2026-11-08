@@ -166,8 +166,8 @@ def test_cell_row_ratio_and_verdict() -> None:
 
 
 def test_slow_cell_facts() -> None:
-    """T5b (build addition for AC4): a cell below 0.97 gets the host share of ours and the ratio of
-    our device throughput to the export throughput."""
+    """T5b (build addition for AC4): a cell below 0.97 gets the transfer share of ours and the
+    ratio of our device throughput to the export throughput."""
     lines = []
     for r in (1, 2, 3):
         ours = _line("ours", r, 100.0, group="G2", config={"side": 512})
@@ -177,9 +177,27 @@ def test_slow_cell_facts() -> None:
     assert [(f["export"], f["batch_size"]) for f in facts] == [("E3", 8)]
     fact = facts[0]
     assert fact["ratio"] == pytest.approx(100 / 120)
-    assert fact["host_share"] == pytest.approx(1 - 100 / 110)
+    assert fact["transfer_share"] == pytest.approx(1 - 100 / 110)
     assert fact["device_ratio"] == pytest.approx(110 / 120)
     assert fact["tokens"] == 1029
+
+
+def test_between_runs() -> None:
+    """T5c (finding V1 of verify.html): two runs of J1 give the run medians, the pooled lower
+    median of all ratios, the spread between the run medians and pass_verdict."""
+    run1, run2 = [], []
+    for r, (a, b) in enumerate([(100, 95), (100, 96), (100, 97)], start=1):
+        run1 += [_line("ours", r, a, group="G2"), _line("export", r, b, export="E3", group="G2")]
+    for r, (a, b) in enumerate([(100, 101), (100, 102), (100, 99)], start=1):
+        run2 += [_line("ours", r, a, group="G2"), _line("export", r, b, export="E3", group="G2")]
+    rows = prior_art.between_runs(run1, run2)
+    assert [(row["export"], row["batch_size"]) for row in rows] == [("E3", 8)]
+    row = rows[0]
+    assert row["run_medians"] == pytest.approx([100 / 96, 100 / 101])
+    assert row["pooled"] == pytest.approx(100 / 99)
+    assert row["spread"] == pytest.approx((100 / 96 - 100 / 101) / (100 / 101))
+    assert row["verdict"] == "not above 1, inside the noise"
+    assert row["n"] == 6
 
 
 # T6 to T11: the port-change variants.
@@ -295,8 +313,14 @@ def test_unfused_attention_matches_sdpa(small_hf: object, dtype_mode: str, bound
 
 @pytest.mark.mlx
 def test_bf16_rotation_rounds_prefix_tokens(small_hf: object) -> None:
-    """T10."""
-    from dinov3_apple.port_variants import port_rope_tables, port_rotate, variant_forward
+    """T10. Bf16RotationAttention calls port_apply_rope, so a check of port_apply_rope on fp32 q
+    covers the cast of the prefix tokens (finding V5 of verify.html)."""
+    from dinov3_apple.port_variants import (
+        Bf16RotationAttention,
+        port_apply_rope,
+        port_rope_tables,
+        variant_forward,
+    )
 
     pixels = small_pixels((2, 3, 224, 224))
     want = _tokens(variant_forward(small_mlx_model(small_hf), "V0"), pixels)
@@ -306,13 +330,17 @@ def test_bf16_rotation_rounds_prefix_tokens(small_hf: object) -> None:
     # The rotation: the q of a prefix token is the bf16 value of the fp32 q, without a rotation.
     q = mx.array(small_pixels((2, 6, NUM_PREFIX_TOKENS + 196, HEAD_DIM), seed=4))
     cos, sin = port_rope_tables(14, 14, HEAD_DIM, THETA)
-    rotated = port_rotate(q.astype(mx.bfloat16), cos, sin).astype(mx.float32)
+    rotated = port_apply_rope(q, cos, sin)
+    assert rotated.dtype == mx.float32
     prefix = np.array(rotated[:, :, :NUM_PREFIX_TOKENS])
     assert np.array_equal(prefix, _bf16(np.array(q[:, :, :NUM_PREFIX_TOKENS])))
     cos32, sin32 = rope_layout(*rope_tables(14, 14, HEAD_DIM, THETA))
     exact = np.array(apply_rope(q, mx.array(cos32), mx.array(sin32)))
     patch_difference = np.abs(np.array(rotated) - exact)[:, :, NUM_PREFIX_TOKENS:]
     assert 0 < float(patch_difference.max()) <= 0.1 * float(np.abs(exact).max())
+    import inspect
+
+    assert "port_apply_rope" in inspect.getsource(Bf16RotationAttention.__call__)
 
 
 def test_eight_bit_pixels() -> None:
@@ -435,6 +463,34 @@ def test_driver_env_and_command(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
         bench_prior_art.main(["coreml", "--rounds", "1", "--results", str(tmp_path / "r.jsonl")])
     assert stop.value.code == 2
     assert not (tmp_path / "r.jsonl").exists()
+
+
+def test_variant_parity_line_names_twelve_configurations() -> None:
+    """Finding V7 of verify.html: a J3 line has no input resolution; its label names the 12
+    configurations."""
+    import bench_prior_art
+
+    spec = prior_art.variant_parity_plan(["ViT-S/16"])[0]
+    line = bench_prior_art.spec_line(spec, {"status": "done", "configurations": []}, 1, 2, None)
+    assert line["side"] is None and line["batch_size"] == 1
+    assert "12 configurations" in bench_prior_art.spec_label(spec)
+
+
+def test_port_weights_fill_only_known_keys() -> None:
+    """Finding V8 of verify.html: the port worker fills only the RoPE periods and the k-bias
+    masks with the values of the port; any other missing key stops it."""
+    import prior_art_port_worker as worker
+
+    params = {
+        "blocks.0.attn.qkv.weight": 1,
+        "blocks.0.attn.qkv.bias_mask": 2,
+        "rope_embed.periods": 3,
+    }
+    pairs, filled = worker.port_weights(params, {"blocks.0.attn.qkv.weight": 5})
+    assert dict(pairs) == {"blocks.0.attn.qkv.weight": 5, **{k: params[k] for k in filled}}
+    assert sorted(filled) == ["blocks.0.attn.qkv.bias_mask", "rope_embed.periods"]
+    with pytest.raises(KeyError):
+        worker.port_weights(params | {"norm.weight": 4}, {"blocks.0.attn.qkv.weight": 5})
 
 
 # T15 and T16: the slow session.

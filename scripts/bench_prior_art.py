@@ -66,6 +66,7 @@ REPO_ROOT = Path(__file__).parents[1]
 SCRIPTS = Path(__file__).parent
 RESULTS = REPO_ROOT / "results" / "prior-art.jsonl"
 TABLE = REPO_ROOT / "results" / "prior-art-table.md"
+RESULTS_RUN2 = REPO_ROOT / "results" / "prior-art-run2.jsonl"  # run 2 of J1 (finding V1)
 BENCH_ROOT = REPO_ROOT / "tests" / "fixtures" / "generated" / "bench" / "prior-art"
 COREML_WORKER = SCRIPTS / "prior_art_coreml_worker.py"
 PORT_WORKER = SCRIPTS / "prior_art_port_worker.py"
@@ -252,8 +253,10 @@ def spec_label(spec: Spec) -> str:
         return f"export {spec['export']} {spec['input']} {spec['units']} b{spec['batch_size']}"
     if spec["kind"] == "port":
         return f"port {spec['candidate']} {spec['model']} {spec['dtype']} b{spec['batch_size']}"
-    label = spec_config(spec).label
-    return f"{spec['kind']} {spec.get('variant', '')} {label}".replace("  ", " ")
+    config = spec_config(spec)
+    if spec["kind"] == "variant-parity":  # one worker runs the 12 configurations at batch size 1
+        return f"variant-parity {spec['variant']} {config.model_size} {config.dtype_mode} 12 configurations"
+    return f"{spec['kind']} {spec.get('variant', '')} {config.label}".replace("  ", " ")
 
 
 # The lines.
@@ -359,6 +362,7 @@ def spec_line(spec: Spec, worker: dict, need: int, available: int, machine: obje
             for key in ("configurations", "compiled_difference", "thresholds", "versions")
         }
         line["load_s"] = worker.get("load_time_s")
+        line["side"], line["batch_size"] = None, 1  # the 12 configurations, 224 to 512 px
     else:
         line |= {k: v for k, v in worker.items() if k not in ("status", "reason")}
     line |= {
@@ -481,9 +485,10 @@ def _parity_cells(parity: dict | None) -> str:
     return f"{_f(parity['frame'])} | {_f(parity['patch_mean'])} | {_f(parity['patch_p01'])}"
 
 
-def write_table(lines: list[dict]) -> str:
-    """Return results/prior-art-table.md: 1 the candidates, 2 the Core ML cells, 3 the image-input
-    and ALL rows, 4 the variant parity, 5 the variant speed, 6 the port cells."""
+def write_table(lines: list[dict], run2: list[dict] | None = None) -> str:
+    """Return results/prior-art-table.md: 1 the candidates, 2 the Core ML cells (with the second
+    run of J1 when run2 has lines), 3 the image-input and ALL rows, 4 the variant parity, 5 the
+    variant speed, 6 the port cells."""
     out = ["# Step 6b: prior-art comparison", ""]
     out += [
         (
@@ -544,18 +549,42 @@ def write_table(lines: list[dict]) -> str:
         out += [
             "",
             (
-                "Cells with a prior-art ratio below 0.97 (AC4), with measured facts. Host share: "
+                "Cells with a prior-art ratio below 0.97 (AC4), with measured facts. Transfer share: "
                 "1 − patch ÷ device throughput of ours (the move of the outputs to the host). "
                 "Device ratio: our device throughput ÷ the export throughput."
             ),
             "",
-            "| Export | Batch size | Tokens | Prior-art ratio | Host share of ours | Device ratio |",
+            (
+                "| Export | Batch size | Tokens | Prior-art ratio | Transfer share of ours | "
+                "Device ratio |"
+            ),
             "| --- | --- | --- | --- | --- | --- |",
         ]
         for fact in facts:
             out.append(
                 f"| {fact['export']} | {fact['batch_size']} | {fact['tokens']} | "
-                f"{fact['ratio']:.3f} | {fact['host_share']:.3f} | {fact['device_ratio']:.3f} |"
+                f"{fact['ratio']:.3f} | {fact['transfer_share']:.3f} | {fact['device_ratio']:.3f} |"
+            )
+    if run2:
+        out += [
+            "",
+            (
+                "Two runs of J1 (finding V1 of verify.html): run 1 is the table above; run 2 ran "
+                "later with the same plan. Pooled: the lower median of all paired ratios of both "
+                "runs. Spread between runs: (largest − smallest run median) ÷ smallest. Verdict: "
+                "pass_verdict of speedup.py (above 1 only if the pooled median and each run "
+                "median are above 1)."
+            ),
+            "",
+            "| Export | Batch size | Run 1 | Run 2 | Pooled | Spread between runs | n | Verdict |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- |",
+        ]
+        for cell in prior_art.between_runs(lines, run2):
+            run1_median, run2_median = cell["run_medians"]
+            out.append(
+                f"| {cell['export']} | {cell['batch_size']} | {run1_median:.3f} | "
+                f"{run2_median:.3f} | {cell['pooled']:.3f} | {cell['spread']:.3f} | {cell['n']} | "
+                f"{cell['verdict']} |"
             )
     out += [
         "",
@@ -638,16 +667,25 @@ def write_table(lines: list[dict]) -> str:
         "",
         (
             "| Point | Dtype mode | Variant | V0 img/s | Variant img/s | Ratios | Median | Spread | "
-            "Verdict |"
+            "Verdict | Valid |"
         ),
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for row in prior_art.variant_speed_rows(lines):
         ratios = ", ".join(f"{r:.3f}" for r in row.ratios)
+        variant_lines = [
+            line
+            for line in lines
+            if line.get("job") == "J4"
+            and line.get("status") == "done"
+            and (line["priority"], line["dtype_mode"], line["variant"])
+            == (row.fields["priority"], row.fields["dtype_mode"], row.fields["variant"])
+        ]
+        valid = f"{sum(bool(line.get('valid')) for line in variant_lines)} of {len(variant_lines)}"
         out.append(
             f"| {row.fields['priority']} | {row.fields['dtype_mode']} | {row.fields['variant']} | "
             f"{row.other_ips:.1f} | {row.ours_ips:.1f} | {ratios} | {row.median:.3f} | "
-            f"{row.spread:.3f} | {row.verdict} |"
+            f"{row.spread:.3f} | {row.verdict} | {valid} |"
         )
     out += [
         "",
@@ -739,6 +777,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     commands["table"].add_argument("--results", type=Path, default=RESULTS)
     commands["table"].add_argument("--table", type=Path, default=TABLE)
+    commands["table"].add_argument("--run2", type=Path, default=RESULTS_RUN2, help="run 2 of J1")
     args = parser.parse_args(argv)
     if args.worker is None and args.subcommand is None:
         parser.error("give a subcommand")
@@ -755,7 +794,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         worker_main(args.worker)
         return
     if args.subcommand == "table":
-        args.table.write_text(write_table(read_lines(args.results)))
+        args.table.write_text(write_table(read_lines(args.results), read_lines(args.run2)))
         print(f"wrote {args.table}")
         return
     missing = missing_venvs(venv_kinds(args))

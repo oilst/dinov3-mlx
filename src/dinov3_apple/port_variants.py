@@ -83,6 +83,18 @@ def port_rotate(x: mx.array, cos: mx.array, sin: mx.array) -> mx.array:
     return mx.concatenate([x[..., :prefix, :], patches * cos + rotated * sin], axis=-2)
 
 
+def port_apply_rope(x: mx.array, cos: mx.array, sin: mx.array) -> mx.array:
+    """Rotate queries or keys as the Meta-based ports do: all tokens to bf16 (the prefix tokens
+    too), port_rotate in bf16, then back to the dtype of x.
+
+    Args:
+        x: Queries or keys (B, heads, T, head_dim).
+        cos: The cos table of port_rope_tables, (N, head_dim), bf16.
+        sin: The sin table of port_rope_tables, (N, head_dim), bf16.
+    """
+    return port_rotate(x.astype(mx.bfloat16), cos, sin).astype(x.dtype)
+
+
 class Bf16RotationAttention(Attention):
     """Attention with the rotation of the Meta-based ports: q and k go to bf16 (all tokens, the 5
     prefix tokens too), the patch tokens rotate in bf16, then q and k go back (V1).
@@ -92,7 +104,7 @@ class Bf16RotationAttention(Attention):
 
     def __call__(self, x: mx.array, cos: mx.array, sin: mx.array) -> mx.array:
         q, k, v = self.qkv(x)
-        q, k = (port_rotate(t.astype(mx.bfloat16), cos, sin).astype(t.dtype) for t in (q, k))
+        q, k = port_apply_rope(q, cos, sin), port_apply_rope(k, cos, sin)
         a = mx.fast.scaled_dot_product_attention(q, k, v, scale=self.scale, mask=None)
         return self.output(a)
 

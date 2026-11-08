@@ -12,6 +12,7 @@ from convert_meta_checkpoint import (
 )
 from huggingface_hub import try_to_load_from_cache
 from safetensors import safe_open
+from under_test import SLOW
 
 from dinov3_apple.hub import MODEL_IDS
 
@@ -91,6 +92,10 @@ def _load(location: tuple[Path, str]) -> torch.Tensor:
 
 @pytest.mark.parametrize("model_size", MODEL_IDS)
 def test_converted_weights_match_hub(model_size: str) -> None:
+    """The default session checks ViT-S/16 only: the ViT-H+/16 file takes 14 s (finding V9 of
+    specs/06b-prior-art/verify.html). The slow session checks every converted file."""
+    if model_size != "ViT-S/16" and not SLOW:
+        pytest.skip("slow session: DINOV3_SLOW=1")
     model_id = MODEL_IDS[model_size]
     converted = sorted((CONVERTED_DIR / model_id).glob("*.safetensors"))
     hub = _hub_weight_files(model_id)

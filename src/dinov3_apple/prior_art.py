@@ -16,7 +16,7 @@ import numpy as np
 from dinov3_apple.bench import TIMED, WARM_UP, BenchConfig, TimeBudget
 from dinov3_apple.outputs import NUM_PREFIX_TOKENS
 from dinov3_apple.parity import THRESHOLDS, measure_parity
-from dinov3_apple.speedup import _lower_median, single_verdict
+from dinov3_apple.speedup import NOISE, _lower_median, pass_verdict, single_verdict
 from dinov3_apple.stored import IMAGENET_MEAN_VALUES, IMAGENET_STD_VALUES
 
 PRIOR_ART_DIR = Path(
@@ -794,7 +794,7 @@ def variant_speed_rows(lines: list[dict]) -> list[PriorArtRow]:
 def slow_cell_facts(lines: list[dict], limit: float = 0.97) -> list[dict]:
     """Return the measured facts of each J1 cell with a prior-art ratio below limit (AC4).
 
-    The facts: the host share of ours (1 − patch throughput ÷ device throughput: the time of the
+    The facts: the transfer share of ours (1 − patch throughput ÷ device throughput: the time of the
     move of the outputs to the host) and the ratio of our device throughput to the export
     throughput (the lower median over the rounds), with the token count of the export.
     """
@@ -833,9 +833,48 @@ def slow_cell_facts(lines: list[dict], limit: float = 0.97) -> list[dict]:
                 "export": name,
                 "batch_size": batch_size,
                 "ratio": row.median,
-                "host_share": 1 - patch / device,
+                "transfer_share": 1 - patch / device,
                 "device_ratio": _lower_median(device_ratios),
                 "tokens": EXPORTS[name].tokens,
             }
         )
     return facts
+
+
+def between_runs(run1: list[dict], run2: list[dict]) -> list[dict]:
+    """Return the cells of two runs of J1 (finding V1 of specs/06b-prior-art/verify.html).
+
+    For each export and batch size with a row in both runs: the lower median of each run, the
+    pooled lower median of all paired ratios, the spread between the run medians
+    ((largest − smallest) ÷ smallest) and pass_verdict, as the P1 and P2 rows of Step 6, with
+    the mark "inside the noise" within 1 ± NOISE.
+    """
+    second = {
+        (row.fields["export"], row.fields["batch_size"]): row
+        for row in prior_art_rows(run2)
+        if isinstance(row, PriorArtRow)
+    }
+    cells = []
+    for row in prior_art_rows(run1):
+        if not isinstance(row, PriorArtRow):
+            continue
+        key = (row.fields["export"], row.fields["batch_size"])
+        if key not in second:
+            continue
+        medians = [row.median, second[key].median]
+        pooled = _lower_median(row.ratios + second[key].ratios)
+        verdict = pass_verdict(medians, pooled)
+        if abs(pooled - 1) <= NOISE:
+            verdict += ", inside the noise"
+        cells.append(
+            {
+                "export": key[0],
+                "batch_size": key[1],
+                "run_medians": medians,
+                "pooled": pooled,
+                "spread": (max(medians) - min(medians)) / min(medians),
+                "verdict": verdict,
+                "n": len(row.ratios) + len(second[key].ratios),
+            }
+        )
+    return cells

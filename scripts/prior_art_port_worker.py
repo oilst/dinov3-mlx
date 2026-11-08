@@ -20,6 +20,7 @@ warm_up and timed (the fields of TimeBudget), limit_bytes (the MLX memory limit)
 """
 
 import json
+import re
 import sys
 import time
 from pathlib import Path
@@ -33,6 +34,8 @@ RANDOM_SEED = 0
 NUM_PREFIX_TOKENS = 5  # 1 CLS token and 4 register tokens
 # The model names of mlx-image (C1).
 MLXIM_NAMES = {"ViT-S/16": "vit_small_patch16_224.dinov3", "dinov2": "vit_small_patch14_518.dinov2"}
+# The parameters of C2 that our weights file does not have: the port keeps its own values for them.
+PORT_OWN_KEYS = re.compile(r"^rope_embed\.periods$|\.bias_mask$")
 
 
 def keep_going(budget: dict, batches: int, elapsed_s: float) -> bool:
@@ -44,14 +47,43 @@ def keep_going(budget: dict, batches: int, elapsed_s: float) -> bool:
     return batches < budget["min_batches"] or elapsed_s < budget["min_seconds"]
 
 
-def run_phase(call: object, budget: dict) -> list[float]:
-    """Run calls until the time budget ends and return the time of each call."""
-    times: list[float] = []
-    while keep_going(budget, len(times), sum(times)):
-        start = time.perf_counter()
-        call()
-        times.append(time.perf_counter() - start)
+def run_phase(call: object, budget: dict) -> list[tuple[float, float, float]]:
+    """Run batches until the time budget ends: phase of mlx_bench.py, copied. The elapsed time is
+    the sum of the patch times."""
+    times: list[tuple[float, float, float]] = []
+    elapsed = 0.0
+    while keep_going(budget, len(times), elapsed):
+        batch_times = call()
+        times.append(batch_times)
+        elapsed += batch_times[2]
     return times
+
+
+def summarize(times: list[float], batch_size: int) -> dict[str, float]:
+    """Return the throughput, the median and the p90 of the batch times: summarize of bench.py."""
+    values = np.asarray(times, dtype=np.float64)
+    return {
+        "throughput_ips": float(batch_size * len(values) / values.sum()),
+        "median_s": float(np.median(values)),
+        "p90_s": float(np.percentile(values, 90)),
+    }
+
+
+def port_weights(params: dict, loaded: dict) -> tuple[list[tuple[str, object]], list[str]]:
+    """Return the weight pairs of a strict load and the keys that keep the values of the port.
+
+    Only the RoPE periods and the k-bias masks (PORT_OWN_KEYS) keep the values of the port; any
+    other key that our weights file does not have stops the worker, so a wrong key map cannot
+    give random weights (finding V8 of specs/06b-prior-art/verify.html).
+
+    Raises:
+        KeyError: For a missing key outside PORT_OWN_KEYS.
+    """
+    missing = sorted(set(params) - set(loaded))
+    unknown = [key for key in missing if not PORT_OWN_KEYS.search(key)]
+    if unknown:
+        raise KeyError(f"not in our weights file: {unknown[:5]}")
+    return list(loaded.items()) + [(key, params[key]) for key in missing], missing
 
 
 def build_c1(spec: dict) -> object:
@@ -60,7 +92,7 @@ def build_c1(spec: dict) -> object:
     from mlxim.model import create_model
 
     name = MLXIM_NAMES[spec["model"]]
-    return create_model(name, weights=spec["weights"], num_classes=0, strict=True)
+    return create_model(name, weights=spec["weights"], num_classes=0, strict=True), []
 
 
 def build_c2(spec: dict) -> object:
@@ -80,11 +112,13 @@ def build_c2(spec: dict) -> object:
         ffn_ratio=6,
     )
     params = dict(tree_flatten(model.parameters()))
-    loaded = mx.load(spec["weights"])
-    weights = [(key, value.astype(params[key].dtype)) for key, value in loaded.items()]
-    weights += [(key, params[key]) for key in sorted(set(params) - set(loaded))]
-    model.load_weights(weights, strict=True)
-    return model
+    loaded = {
+        key: value.astype(params[key].dtype) if key in params else value
+        for key, value in mx.load(spec["weights"]).items()
+    }
+    weights, own = port_weights(params, loaded)
+    model.load_weights(weights, strict=True)  # strict: an extra key of our file stops the load
+    return model, own
 
 
 def forward_function(model: object, spec: dict) -> object:
@@ -123,7 +157,7 @@ def run(spec: dict) -> dict:
     mx.set_memory_limit(spec["limit_bytes"])
     dtype = {"fp32": mx.float32, "fp16": mx.float16, "bf16": mx.bfloat16}[spec["dtype"]]
     start = time.perf_counter()
-    model = build_c1(spec) if spec["candidate"] == "C1" else build_c2(spec)
+    model, own = build_c1(spec) if spec["candidate"] == "C1" else build_c2(spec)
     if dtype != mx.float32:
         model.set_dtype(dtype)  # the standard cast of MLX
     model.eval()
@@ -144,18 +178,24 @@ def run(spec: dict) -> dict:
 
     batch_size = spec["batch_size"]
     batch = np.concatenate([images[i % len(images)] for i in range(batch_size)])
-    x = mx.array(batch).astype(dtype)
-    mx.eval(x)
+    patch_dtype = mx.float32 if dtype == mx.float32 else mx.float16
 
-    def call() -> None:
-        frame, patches = forward(x)
+    def call() -> tuple[float, float, float]:
+        """One batch host to host with the three times of time_batch_mlx in mlx_bench.py: the
+        device time, the frame time and the patch time (finding V3 of verify.html)."""
+        t0 = time.perf_counter()
+        frame, patches = forward(mx.array(batch).astype(dtype))  # the copy and the cast inside
         mx.eval(frame, patches)
+        t1 = time.perf_counter()
         np.array(frame.astype(mx.float32))
-        np.array(patches.astype(mx.float16 if dtype != mx.float32 else mx.float32))
+        t2 = time.perf_counter()
+        np.array(patches.astype(patch_dtype))
+        t3 = time.perf_counter()
+        return t1 - t0, t2 - t0, (t1 - t0) + (t3 - t2)
 
     warm = run_phase(call, spec["warm_up"])
     times = run_phase(call, spec["timed"])
-    values = np.asarray(times, dtype=np.float64)
+    device, frame_t, patch_t = (list(column) for column in zip(*times, strict=True))
     return {
         "status": "done",
         "reason": "",
@@ -164,15 +204,14 @@ def run(spec: dict) -> dict:
         "output_names": ["embedding", "patch_embeddings"],
         "finite": finite,
         "warm_up_batches": len(warm),
-        "warm_up_s": sum(warm),
+        "warm_up_s": sum(t[2] for t in warm),
         "timed_batches": len(times),
-        "timed_s": sum(times),
-        "times_s": times,
-        "patch": {
-            "throughput_ips": float(batch_size * len(values) / values.sum()),
-            "median_s": float(np.median(values)),
-            "p90_s": float(np.percentile(values, 90)),
-        },
+        "timed_s": sum(patch_t),
+        "patch_times_s": patch_t,
+        "frame": summarize(frame_t, batch_size),
+        "patch": summarize(patch_t, batch_size),
+        "device": summarize(device, batch_size),
+        "own_values": own,
         "mlx": mx.__version__,
         "mlx_peak_bytes": mx.get_peak_memory(),
         "python": sys.version.split()[0],
