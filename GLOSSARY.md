@@ -238,6 +238,10 @@ One difference between a port and the Hugging Face backbone, for example bf16 Ro
 **Port-change variant**:
 Our backbone with one port change, to measure the cost of that change in parity and speed.
 
+**Transfer share**:
+1 − patch throughput ÷ device throughput of one worker of `mlx`: the part of the batch time that moves the outputs to the host.
+_Avoid_: host share (that term is for the profile of a compiled call)
+
 **Baseline**:
 The speed and the memory of the Hugging Face backbone on `torch-mps`. All speedups are relative to it.
 _Avoid_: reference (for speed)
