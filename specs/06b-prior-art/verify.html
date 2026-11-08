@@ -403,6 +403,140 @@ uv run python -m dinov3_apple.gpu_lock -- uv run python scripts/bench_prior_art.
   </div>
   <p class="caption"><b>Table 11.</b> The commands of this check. In the Step 6b test files, 25 test ids are in <code>tests/test_prior_art.py</code> (23 passed, T15 and T16 skipped in the default session) and 9 in <code>tests/test_convert_meta_checkpoint.py</code> (4 passed, 5 skipped).</p>
 </section>
+
+<section id="ac9-check">
+  <h2>8 Separate check of AC9 after J5 (2026-11-08)</h2>
+  <p>A fourth agent wrote this section. It did not write commit <code>d3b2532</code> (J5 and its code) or the sections 1 to 7. On 2026-11-08 the user answered Q1 with yes, and job J5 ran. The agent read AC9 and Sections 3.5 to 3.8 of <code>plan.html</code>, ADR 0003, ADR 0004 and ADR 0013, the diff of <code>d3b2532</code>, the J5 lines of <code>results/prior-art.jsonl</code>, Section 6 of <code>results/prior-art-table.md</code>, the J5 driver log and the lock log. <code>HEAD</code> is <code>e643520</code>. That commit changes only Step 6d files, so the Step 6b files at <code>HEAD</code> are equal to the files at <code>d3b2532</code>. The agent changed no code, no test and no result file of the build. It ran one Verify round of J5 into the new file <code>results/prior-art-verify-j5.jsonl</code>. Times in this section are UTC. The driver log of J5 uses local time (UTC + 1).</p>
+  <p><b>Result:</b> AC9 passes. 8 of 8 port cells have 5 paired rounds, the lower median, the spread and the verdict. 6 of 8 cells have the parity of the 3 test images against the reference output. The 2 dinov2 cells have the finite check only: they use random pixels, and DINOv2 has no reference output (D7, as the Core ML export E7). Section 6 of the table follows from the result lines byte for byte. The Verify round gives the same parity as the build, bit for bit, in 6 of 6 cells with parity. It puts 6 of 8 prior-art ratios inside the build range &#177; 0.05. The 2 C2 cells are above the range (V15). The verdict &laquo;above 1&raquo; holds in 48 of 48 ratios. Section 8.6 gives 5 findings: 0 high, 0 medium, 5 low.</p>
+
+  <h3>8.1 AC9</h3>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>AC</th><th>Criterion</th><th>Target</th><th>Measured value</th><th>Result</th><th>Evidence</th></tr></thead>
+    <tbody>
+      <tr><td>AC9</td><td>Python ports: each of the 8 port cells has either 5 paired ratios with parity (after the user's yes to Q1) or the status &laquo;blocked&raquo; with the reason and the command of J5</td><td>8 of 8 rows</td><td>8 of 8 rows &laquo;done&raquo;, each with n = 5 paired ratios (rounds 1 to 5 of run 2 of J5, lines 286 to 365). Lower median 1.162 to 1.533, verdict &laquo;above 1&raquo; in 8 of 8. Parity: 6 of 8 cells have the worst parity of 3 test images &#215; 5 lines with the thresholds of their dtype mode; 2 of 8 (dinov2, random pixels) have the finite check, by design (D7). Valid lines: bf16 5 of 5 (port-2, port-6); fp32 0 of 5 (port-1, port-4, port-5: patch p01 0.999850 and 0.999882 against 0.9999); fp16 0 of 5 (port-3: 100 % NaN); dinov2 5 of 5 finite. <code>bench_prior_art.py table</code> gives a file byte-equal to the committed table. A recount by hand from the JSON lines gives the same 8 rows (Table 14). NumPy parity from the output files of 4 port lines equals the line values (largest difference 0.0). <code>tests/test_prior_art.py</code>: 32 passed, 2 skipped (T15, T16). Mutations M15 to M17 make three new port tests red (Table 16).</td><td><span class="pass">pass</span></td><td>Section 6 of the table; J5 lines; Tables 13 to 16</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="caption"><b>Table 12.</b> AC9 after J5. &laquo;p01&raquo; is the patch 1st percentile. The build run 1 of J5 (lines 206 to 285, 20 errors, no parity) stays in the file; the rule &laquo;the last line of each round and side counts&raquo; replaces it with run 2.</p>
+
+  <h3>8.2 The 8 cells: build and Verify round</h3>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Cell</th><th>Port; ours</th><th>Build ratios, rounds 1 to 5</th><th>Build median (spread)</th><th>Build img/s ours, port</th><th>Verify ratio</th><th>Verify img/s ours, port</th><th>Inside build range &#177; 0.05</th><th>Worst parity: frame, patch mean, p01</th><th>Verify parity</th><th>Valid (build; Verify)</th></tr></thead>
+    <tbody>
+      <tr><td>port-1</td><td>C1 ViT-S/16, 224 px, fp32, b8; fp32</td><td class="num">1.344, 1.136, 1.162, 1.156, 1.168</td><td class="num">1.162 (0.183)</td><td class="num">720.4, 619.9</td><td class="num">1.190</td><td class="num">914.70, 768.47</td><td>yes</td><td class="num">0.999953, 0.999967, 0.999850</td><td>equal</td><td>0 of 5; no</td></tr>
+      <tr><td>port-2</td><td>C1 ViT-S/16, 224 px, bf16, b8; bf16-cast</td><td class="num">1.250, 1.260, 1.276, 1.285, 1.277</td><td class="num">1.276 (0.028)</td><td class="num">1520.8, 1183.9</td><td class="num">1.269</td><td class="num">1852.98, 1460.46</td><td>yes</td><td class="num">0.999625, 0.999805, 0.999509</td><td>equal</td><td>5 of 5; yes</td></tr>
+      <tr><td>port-3</td><td>C1 ViT-S/16, 224 px, fp16, b8; fp16-cast</td><td class="num">1.342, 1.382, 1.281, 1.334, 1.333</td><td class="num">1.334 (0.079)</td><td class="num">1557.0, 1167.6</td><td class="num">1.299</td><td class="num">1853.16, 1426.93</td><td>yes</td><td class="num">NaN, NaN, NaN</td><td>equal (NaN)</td><td>0 of 5; no (not finite)</td></tr>
+      <tr><td>port-4</td><td>C1 ViT-S/16, 224 px, fp32, b1; fp32</td><td class="num">1.273, 1.214, 1.204, 1.193, 1.199</td><td class="num">1.204 (0.067)</td><td class="num">321.6, 267.1</td><td class="num">1.282</td><td class="num">397.56, 310.03</td><td>yes</td><td class="num">0.999953, 0.999967, 0.999850</td><td>equal</td><td>0 of 5; no</td></tr>
+      <tr><td>port-5</td><td>C2 ViT-H+/16, 512 px, fp32, b8; fp32</td><td class="num">1.228, 1.162, 1.025, 1.168, 1.187</td><td class="num">1.168 (0.198)</td><td class="num">4.06, 3.96</td><td class="num">1.298</td><td class="num">5.63, 4.34</td><td><span class="fail">no</span> (above 1.278)</td><td class="num">0.999994, 0.999967, 0.999882</td><td>equal</td><td>0 of 5; no</td></tr>
+      <tr><td>port-6</td><td>C2 ViT-H+/16, 512 px, bf16, b8; bf16-cast</td><td class="num">1.265, 1.324, 1.371, 1.366, 1.369</td><td class="num">1.366 (0.084)</td><td class="num">15.2, 11.1</td><td class="num">1.450</td><td class="num">13.82, 9.53</td><td><span class="fail">no</span> (above 1.421)</td><td class="num">0.999924, 0.999859, 0.999616</td><td>equal</td><td>5 of 5; yes</td></tr>
+      <tr><td>port-7</td><td>C1 dinov2, 518 px, fp32, b8; ViT-S/16 fp32 at 592 px</td><td class="num">1.277, 1.280, 1.281, 1.288, 1.283</td><td class="num">1.281 (0.009)</td><td class="num">80.5, 62.8</td><td class="num">1.291</td><td class="num">72.21, 55.93</td><td>yes</td><td>finite only</td><td>finite</td><td>5 of 5; yes</td></tr>
+      <tr><td>port-8</td><td>C1 dinov2, 518 px, bf16, b8; ViT-S/16 bf16-cast at 592 px</td><td class="num">1.476, 1.510, 1.533, 1.561, 1.533</td><td class="num">1.533 (0.058)</td><td class="num">215.7, 139.9</td><td class="num">1.552</td><td class="num">194.19, 125.15</td><td>yes</td><td>finite only</td><td>finite</td><td>5 of 5; yes</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="caption"><b>Table 13.</b> The 8 port cells. Ratio: the prior-art ratio, ours &divide; port, patch output. Build: run 2 of J5 (22:09:53 to 22:37:34). Verify: one round (23:45:50 to 23:50:49), ours first in each pair, as in build round 1. &laquo;equal&raquo;: the parity of each of the 3 test images in the Verify line equals the build line bit for bit. In the build, each cell has one parity record over its 5 lines.</p>
+  <p>Facts from the lines and the code:</p>
+  <ol>
+    <li><b>First worker of a run.</b> Ours in port-1 round 1 is the first worker of each run. It gives 900.85 img/s (build run 2), 906.68 (build run 1) and 914.70 (Verify), against 627.6 to 722.5 in rounds 2 to 5. The port that follows is also fast (670.46, 768.47). The ratio of that round (1.344) is the largest of the cell. The lower median does not use it.</li>
+    <li><b>C2 throughput moves between runs.</b> Ours at P2 fp32 gives 3.03 to 4.78 img/s in the 5 build rounds and 5.63 in the Verify round; the Step 6 pairs gave 3.98 to 4.81. Build round 1 of port-5 times only 23 (ours) and 19 (port) batches: the 60 s limit of <code>TIMED</code> stops it. The prior-art ratio of the C2 cells changes with the run (V15).</li>
+    <li><b>dinov2 load path.</b> The mlx-vision file has 198 keys: separate query, key and value projections, no layer-scale keys, and <code>encoder.pos_embedding</code> with 1370 rows (1 CLS token and 37 &#215; 37 patches). So 1 prefix token is correct. <code>Attention.sanitize</code> of mlx-image joins q, k and v in the order of its reshape <code>(B, L, 3, heads, head_dim)</code>; the strict load accepts every key and shape. The model of mlx-image has LayerScale with the init value 1e-5, so the worker keeps 24 values (12 blocks &#215; ls1, ls2). The output is then not the DINOv2 output. The dinov2 cells measure throughput only, as the worker says.</li>
+    <li><b>C1 in fp16.</b> 100 % of the values of the 3 test outputs are NaN, in the build and in the Verify round. The attention of mlx-image (<code>mlxim/model/layers/functional.py</code>, line 70) computes q&middot;k<sup>T</sup> in the model dtype and multiplies by the scale after the matmul. A product above 65,504 in fp16 gives inf, and the softmax then gives NaN. This is a probable cause. The agent did not measure it.</li>
+  </ol>
+
+  <h3>8.3 Count by hand</h3>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Cell</th><th>Round</th><th>Lines (ours, port)</th><th>Ours img/s</th><th>Port img/s</th><th>Ratio</th></tr></thead>
+    <tbody>
+      <tr><td>port-2</td><td>1</td><td>288, 289</td><td class="num">1569.26</td><td class="num">1255.65</td><td class="num">1.2498</td></tr>
+      <tr><td>port-2</td><td>2</td><td>303, 302</td><td class="num">1292.74</td><td class="num">1025.73</td><td class="num">1.2603</td></tr>
+      <tr><td>port-2</td><td>3</td><td>332, 333</td><td class="num">1522.89</td><td class="num">1193.07</td><td class="num">1.2764</td></tr>
+      <tr><td>port-2</td><td>4</td><td>347, 346</td><td class="num">1520.85</td><td class="num">1183.57</td><td class="num">1.2850</td></tr>
+      <tr><td>port-2</td><td>5</td><td>360, 361</td><td class="num">1511.43</td><td class="num">1183.89</td><td class="num">1.2767</td></tr>
+      <tr><td>port-7</td><td>1</td><td>298, 299</td><td class="num">57.60</td><td class="num">45.10</td><td class="num">1.2772</td></tr>
+      <tr><td>port-7</td><td>2</td><td>313, 312</td><td class="num">68.55</td><td class="num">53.56</td><td class="num">1.2799</td></tr>
+      <tr><td>port-7</td><td>3</td><td>326, 327</td><td class="num">80.49</td><td class="num">62.84</td><td class="num">1.2809</td></tr>
+      <tr><td>port-7</td><td>4</td><td>341, 340</td><td class="num">81.00</td><td class="num">62.86</td><td class="num">1.2885</td></tr>
+      <tr><td>port-7</td><td>5</td><td>354, 355</td><td class="num">81.11</td><td class="num">63.22</td><td class="num">1.2830</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="caption"><b>Table 14.</b> Two cells counted by hand from the JSON lines, with a script that uses no repo code. Line numbers are in <code>results/prior-art.jsonl</code>.</p>
+  <ul>
+    <li><b>port-2 (parity).</b> Sorted ratios 1.2498, 1.2603, 1.2764, 1.2767, 1.2850. The lower median is the 3rd value: 1.276. Spread (1.2850 &minus; 1.2498) &divide; 1.2498 = 0.028. Lower median of ours 1520.85, of the port 1183.89. Parity of the 3 images (frame, patch mean, p01): iss-kibo-lab 0.999625, 0.999811, 0.999639; forest 0.999823, 0.999873, 0.999509; iss-conference 0.999729, 0.999805, 0.999574. Worst: 0.999625, 0.999805, 0.999509. The bf16 thresholds of ADR 0003 (0.998, 0.995, 0.96) pass, and the 5 lines are finite: 5 of 5 valid. All values equal Table 13 and the committed table.</li>
+    <li><b>port-7 (dinov2).</b> Sorted ratios 1.2772, 1.2799, 1.2809, 1.2830, 1.2885. Lower median 1.281; spread 0.009. Lower median of ours 80.49, of the port 62.84. No parity record; 5 of 5 lines finite: 5 of 5 valid. All values equal the committed table.</li>
+    <li><b>All 8 cells.</b> The same script gives the 8 rows of Section 6 (ratios, lower median, spread, both lower medians of the throughput, worst parity, valid count). The worst parity in the script handles NaN on its own (V11).</li>
+    <li><b>Parity from the output files.</b> A NumPy script (cosine in fp64, the 1st percentile with <code>np.quantile</code>) reads the output files of 4 port lines (port-1, port-3 and port-6 round 5, port-5 round 3) and the reference tokens. The values equal the line values (largest difference 0.0; port-3 NaN in 3 of 3 images). The patch count is 196 at 224 px and 1024 at 512 px, so 5 prefix tokens are removed in the port output of C1 and C2.</li>
+  </ul>
+
+  <h3>8.4 Third-party rules and run rules</h3>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Rule</th><th>Build (J5 runs 1 and 2)</th><th>Verify round</th><th>Result</th></tr></thead>
+    <tbody>
+      <tr><td>Port worker starts as <code>venv-mlx/bin/python -I</code> with our worker file (ADR 0013, rule 3)</td><td><code>ports/driver.log</code>: 80 of 80 port commands are <code>~/.cache/dinov3-apple/prior-art/venv-mlx/bin/python -I &lt;repo&gt;/scripts/prior_art_port_worker.py</code>; the other 80 commands are workers of ours in the repo venv</td><td>8 of 8 port commands the same</td><td><span class="pass">pass</span></td></tr>
+      <tr><td>Inside the GPU lock</td><td>Lock log: run 1 hold 20:36:11 to 20:54:38, lines 20:36:24 to 20:54:38; run 2 hold 22:09:41 to 22:37:34, lines 22:09:53 to 22:37:34. Jobs of the Step 6d session waited in this time (one wait ended with a timeout after 900 s)</td><td>Hold 23:45:37 to 23:50:49; 16 lines 23:45:50 to 23:50:49</td><td><span class="pass">pass</span></td></tr>
+      <tr><td>Memory check on each line</td><td>160 of 160 worker lines &laquo;ok&raquo;; free memory 25.9 GB or more, need 8.88 GB or less; largest peak of a port 5.88 GB (C2 fp32); the worker sets <code>mx.set_memory_limit</code></td><td>16 of 16 &laquo;ok&raquo;; 28.2 GB or more free</td><td><span class="pass">pass</span></td></tr>
+      <tr><td>No other heavy job seen</td><td>0 of 160 lines with an entry in <code>other_heavy_jobs_seen</code></td><td>0 of 16</td><td><span class="pass">pass</span></td></tr>
+      <tr><td><code>MLX_ENABLE_TF32=0</code></td><td>160 of 160 lines with <code>mlx_enable_tf32</code> &laquo;0&raquo;; 80 of 80 lines of ours with <code>tf32</code> false. For a port line the field comes from <code>worker_env</code>, not from a measure in the worker</td><td>16 of 16; 8 of 8</td><td><span class="pass">pass</span></td></tr>
+      <tr><td>No local folder in the committed lines</td><td>0 of 365 lines of <code>results/prior-art.jsonl</code> contain a local home folder path; <code>outputs_file</code> is repo-relative; error reasons use <code>~</code>. The table and <code>roadmap.md</code>: 0</td><td>0 of 16</td><td><span class="pass">pass</span></td></tr>
+      <tr><td>No pickle load (ADR 0013, rule 5)</td><td>The worker loads safetensors files only (<code>mx.load</code>, <code>safe_open</code>). C1 ViT-S/16 loads a local path; C1 dinov2 calls <code>create_model(weights=False)</code>, so no download. C2 imports <code>dinov3.models</code>, which does not import the pickle converter <code>checkpoints/convert.py</code>. venv-mlx has no torch (mlx 0.32.4, numpy, safetensors, huggingface_hub)</td><td>same code</td><td><span class="pass">pass</span></td></tr>
+      <tr><td>Machine state</td><td>AC power, Low Power Mode off, no thermal warning</td><td>same</td><td><span class="pass">pass</span></td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="caption"><b>Table 15.</b> The rules of ADR 0013 and of CLAUDE.md for the J5 lines. Run 1 of J5 has 80 lines (60 done without parity, 20 errors); run 2 has 80 lines, all done.</p>
+
+  <h3>8.5 Tests and mutation probes</h3>
+  <p><code>uv run python -m dinov3_apple.gpu_lock -- uv run pytest tests/test_prior_art.py -q</code>: 32 passed, 2 skipped (T15 and T16, slow session) in 0.27 s. Each probe puts one fault into a copy of <code>git archive HEAD</code> in the scratchpad of the agent, runs the 14 test ids with &laquo;port&raquo; in the name, and writes the file back. The repo files did not change: <code>git diff</code> shows no change of <code>src</code>, <code>scripts</code>, <code>tests</code> or the Step 6b results.</p>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Probe</th><th>File</th><th>Fault</th><th>Result</th></tr></thead>
+    <tbody>
+      <tr><td>M0</td><td>none</td><td>none, before and after the probes</td><td>green: 14 passed, 20 deselected (two times)</td></tr>
+      <tr><td>M15</td><td><code>scripts/prior_art_port_worker.py</code>:35</td><td><code>DINOV2_PREFIX_TOKENS</code> is 5, not 1</td><td><span class="pass">red</span>: <code>test_port_forward_of_dinov2_drops_only_the_cls_token</code> fails (1 failed, 13 passed)</td></tr>
+      <tr><td>M16</td><td><code>src/dinov3_apple/prior_art.py</code>:826</td><td>the first line of each round and side counts, not the last (<code>latest.setdefault</code>)</td><td><span class="pass">red</span>: <code>test_port_rows</code> fails (1 failed, 13 passed)</td></tr>
+      <tr><td>M17</td><td><code>scripts/bench_prior_art.py</code>:406</td><td>each port line with stored pixels gets the fp32 thresholds, not the thresholds of its dtype mode</td><td><span class="pass">red</span>: <code>test_port_line_has_the_parity_of_its_outputs[bf16-...]</code> fails (1 failed, 13 passed)</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="caption"><b>Table 16.</b> Mutation probes of the new port code. &laquo;red&raquo;: the test catches the fault.</p>
+
+  <h3>8.6 Findings</h3>
+  <p>The agent changed no code. Each finding gives the severity, the place and a fix. The user decides. None of them changes a number of the committed Section 6.</p>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>No.</th><th>Severity</th><th>What</th><th>Where</th><th>Fix</th></tr></thead>
+    <tbody>
+      <tr><td>V11</td><td>low</td><td><code>worst_parity</code> uses <code>min()</code>. With a NaN, <code>min()</code> keeps the first value: <code>min([0.9999, nan])</code> gives 0.9999, <code>min([nan, 0.9999])</code> gives nan. So a cell with NaN in a later line or image shows a finite worst value; only the Valid column shows the fault. Section 6 is correct now, because port-3 is NaN in 3 of 3 images of 5 of 5 lines. The Core ML rows of Section 2 use the same function.</td><td><code>src/dinov3_apple/prior_art.py</code>:442-447</td><td>Return NaN for a field when any value is NaN (<code>math.isnan</code>), else the minimum. Add a test with the lines [finite, NaN] and [NaN, finite].</td></tr>
+      <tr><td>V12</td><td>low</td><td><code>port_rows</code> takes the last line of each round and side over all J5 lines of the file. A line has no run id. If a later run stops early (battery, time-out, a smaller <code>--rounds</code>), the cell mixes two runs without a mark. Example: if run 2 had stopped after round 3, rounds 4 and 5 would come from run 1, whose port lines have no parity and no <code>valid</code>, and the table would show &laquo;3 of 5&raquo; valid.</td><td><code>src/dinov3_apple/prior_art.py</code>:818-827; <code>scripts/bench_prior_art.py</code>:358 (<code>spec_line</code>)</td><td>Write a run id (the start time of the driver) into each line. In <code>port_rows</code>, use for each cell only the lines of its newest run id, and name the run id in Section 6. Add a test with a partial second run.</td></tr>
+      <tr><td>V13</td><td>low</td><td>The note &laquo;random pixels: finite only&raquo; goes to each cell without a parity record. A cell with stored pixels whose parity stops with an error (<code>parity_fields</code> gives parity null and the note &laquo;parity error: &hellip;&raquo;) would get the wrong note.</td><td><code>scripts/bench_prior_art.py</code>:787-788</td><td>Write &laquo;random pixels: finite only&raquo; only when the lines have <code>input</code> &laquo;random&raquo;; else write the <code>validity_note</code> of the lines.</td></tr>
+      <tr><td>V14</td><td>low</td><td>A run with <code>--results results/&lt;name&gt;.jsonl</code> writes its driver log, its batch files and its output files to <code>results/&lt;name&gt;-batches/</code>. Git does not ignore this folder (only the <code>.safetensors</code> files), and the driver log has local folders. A <code>git add results/</code> would put them into the public repo. This check put a link at that path to <code>tests/fixtures/generated/bench/prior-art/verify-j5-batches</code> before the run and removed the link after it.</td><td><code>scripts/bench_prior_art.py</code>:905-906</td><td>Put the folder below <code>BENCH_ROOT</code> (<code>BENCH_ROOT / f"{stem}-batches" / subcommand</code>), or add <code>results/*-batches/</code> to <code>.gitignore</code>.</td></tr>
+      <tr><td>V15</td><td>low</td><td>The Verify round puts the 2 C2 cells above the build range &#177; 0.05: port-5 1.298 (build 1.025 to 1.228, median 1.168), port-6 1.450 (build 1.265 to 1.371, median 1.366). The 6 C1 cells are inside. Ours at P2 fp32 gives 3.03 to 5.63 img/s over the J5 runs. The verdict &laquo;above 1&raquo; holds in 6 of 6 ratios of each C2 cell, but the size of the C2 ratio rests on one run of 5 rounds. <code>roadmap.md</code> gives &laquo;1.16 to 1.53&raquo;.</td><td><code>results/prior-art-table.md</code> Section 6, rows port-5 and port-6; <code>roadmap.md</code> row 6b</td><td>Run J5 a second time at another time (about 30 min; as V1 for J1). Give each cell the two run medians, the pooled median and the spread between runs. Until then, give the C2 cells as &laquo;1.17 (one run)&raquo; and &laquo;1.37 (one run)&raquo;.</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="caption"><b>Table 17.</b> Findings of this check. Severity as in Table 7.</p>
+
+  <h3>8.7 Commands</h3>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>No.</th><th>Command</th><th>Time</th><th>Result</th></tr></thead>
+    <tbody>
+      <tr><td>A1</td><td><code>uv run python scripts/bench_prior_art.py table --table &lt;scratch&gt;/table-check.md</code>, then <code>cmp</code> with <code>results/prior-art-table.md</code> (outside the lock: no backend)</td><td>about 22:57</td><td>byte-equal</td></tr>
+      <tr><td>A2</td><td>Count by hand: a Python script over the JSON lines (no repo code); a NumPy script for the parity of 4 port lines</td><td>22:57 to 23:10</td><td>8 of 8 rows equal; parity difference 0.0</td></tr>
+      <tr><td>A3</td><td><code>uv run python scripts/bench_prior_art.py ports --rounds 1 --allow-third-party-python --results results/prior-art-verify-j5.jsonl --dry-run</code></td><td>22:58</td><td>16 workers, each fits; 26.9 GB free; no file written</td></tr>
+      <tr><td>A4</td><td><code>uv run python -m dinov3_apple.gpu_lock -- uv run pytest tests/test_prior_art.py -q</code></td><td>wait from 23:00:03; hold 23:24:44 to 23:24:47</td><td>32 passed, 2 skipped in 0.27 s</td></tr>
+      <tr><td>A5</td><td>Mutation probes M0, M15 to M17 in a copy of <code>git archive HEAD</code>, under the GPU lock</td><td>wait from 23:25:06; hold 23:45:27 to 23:45:37</td><td>M0 green; 3 of 3 probes red; M0 green after the probes</td></tr>
+      <tr><td>A6</td><td><code>uv run python -m dinov3_apple.gpu_lock -- uv run python scripts/bench_prior_art.py ports --rounds 1 --allow-third-party-python --results results/prior-art-verify-j5.jsonl</code></td><td>hold 23:45:37 to 23:50:49</td><td>16 of 16 workers &laquo;done&raquo;; 28.5 GB free before the run</td></tr>
+      <tr><td>A7</td><td>A1 again; <code>git status</code>; <code>git diff</code></td><td>23:52</td><td>byte-equal; no change of a code, test or result file of the build</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="caption"><b>Table 18.</b> The commands of this check. Before A6 the GPU lock was held by Core ML jobs of the Step 6d session (<code>bench_coreml.py matrix</code> to 23:24:31, <code>pairs</code> 23:24:55 to 23:45:09). No other heavy job ran during A6. New files: <code>results/prior-art-verify-j5.jsonl</code> (16 lines) and <code>tests/fixtures/generated/bench/prior-art/verify-j5-batches/ports/</code> (driver log, batch files, output files; git ignores it).</p>
+</section>
 </main>
 </body>
 </html>
