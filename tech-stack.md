@@ -36,7 +36,8 @@ Apple M5 Max, 64 GB unified memory, macOS 26.5.2. All benchmark results in this 
 | pillow | 13.0.0 |
 | pytest | 9.2.0 |
 | ruff | 0.17.4 |
-| coremltools | 9.0 (dependency group `coreml`, Step 6c, 2026-11-07). It is tested with torch 2.7 only; with numpy 2.5 its torch converter needs one patch (`specs/06c-neural-engine/explore.html`). |
+| coremltools | 9.0 (dependency group `coreml`, Step 6c, 2026-11-07). It is tested with torch 2.7 only; with numpy 2.5 its torch converter needs one patch: `patch_coremltools_cast` in `src/dinov3_apple/coreml.py` (ADR 0015). |
+| Core ML | The framework of macOS (Darwin 25.5 on this Mac). Step 6c packages: ML Program, fp16 compute precision, macOS 15 target, fixed shapes, outside the repo in `~/.cache/dinov3-apple/coreml/`. Compute units CPU_AND_NE (`coreml-ne`), CPU_AND_GPU (`coreml-gpu`) and ALL (`coreml-all`). ADR 0014 and ADR 0015. |
 
 Change a version only in its own commit, and record the new version here.
 
