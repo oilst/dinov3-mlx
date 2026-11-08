@@ -693,7 +693,7 @@ figcaption { font-size: 0.88rem; color: var(--muted); max-width: 52rem; }
   <!-- ================= 6. STEPS ================= -->
   <section id="steps" aria-labelledby="h-steps">
     <div class="sec-head"><span class="sec-num">6</span><h2 id="h-steps">Steps</h2></div>
-    <p>Table 8 gives an overview of the nine steps. The subsections give the actions and the done condition of each step. The <code>plan.html</code> of each step turns the done condition into numbered acceptance criteria.</p>
+    <p>Table 8 gives an overview of the eleven steps. The roadmap got Steps 6b and 6c on 2026-11-07, during Step 6. The subsections give the actions and the done condition of each step. The <code>plan.html</code> of each step turns the done condition into numbered acceptance criteria.</p>
     <div class="table-wrap">
       <table class="wide">
         <thead><tr><th>Step</th><th>Goal</th><th>DINOv3 topic of the explainer</th><th>Status</th></tr></thead>
@@ -705,6 +705,8 @@ figcaption { font-size: 0.88rem; color: var(--muted); max-width: 52rem; }
           <tr><td>4 MLX port</td><td>ViT-S/16 in MLX and the weight converter</td><td>Patch embedding, RoPE, attention, LayerScale, MLP</td><td>Done</td></tr>
           <tr><td>5 All sizes</td><td>All model sizes in fp32, fp16 and bf16</td><td>SwiGLU, model scaling, numeric range</td><td>Done</td></tr>
           <tr class="sel"><td>6 Speed</td><td>Compiled graphs, batch sizes, quantized weights</td><td>Attention cost at high input resolution</td><td>Next</td></tr>
+          <tr><td>6b Prior-art comparison</td><td>The related public repos measured with our harness: frame throughput and parity at the same model size, input resolution and batch size</td><td>Which parts of the backbone each port changes, and the parity cost</td><td>Open</td></tr>
+          <tr><td>6c Neural Engine</td><td>Core ML on the Apple Neural Engine, alone and in parallel with the GPU, against <code>mlx</code></td><td>Attention and the feed-forward network on the Apple Neural Engine, numeric range in fp16</td><td>Open</td></tr>
           <tr><td>7 Release</td><td>Public API, README with results, CI, first public push</td><td>None</td><td>Open</td></tr>
           <tr><td>8 Fine-tuning</td><td>8a: reference fine-tuning setup in MLX. 8b: DoRA and other adapters</td><td>DINO loss, iBOT loss, KoLeo regularizer, Gram anchoring</td><td>Open</td></tr>
         </tbody>
@@ -815,6 +817,25 @@ figcaption { font-size: 0.88rem; color: var(--muted); max-width: 52rem; }
       <p>The step ends when the speedup table covers all configurations. The explainer covers the attention cost at high input resolution and the effect of the batch size.</p>
     </div>
 
+    <div class="sub" id="step-6b">
+      <h3>Step 6b. Prior-art comparison</h3>
+      <p>Step 6b measures the related public repos with our harness: the MLX ports of DINOv2 and DINOv3, the Core ML exports and mlx-image. Step 6 showed that the speed of <code>mlx</code> is near the matmul limit of the GPU, at about the speed of <code>torch.compile</code>. Step 6b shows how the other repos compare at the same model size, input resolution and batch size. The spec folder is <code>specs/06b-prior-art/</code>.</p>
+      <ol class="steps">
+        <li>List each candidate repo with its license, its commit and a verdict (measure or skip), with the reason.</li>
+        <li>Measure the parity of each DINOv3 Core ML export against the reference output.</li>
+        <li>Measure the prior-art ratio of each Core ML export: our throughput divided by its throughput, in the same round, at batch sizes 1 and 8.</li>
+        <li>Build each port change as a variant of our own code, and measure its parity and its speed against our compiled forward pass.</li>
+        <li>Run the Python MLX ports only after the user allows third-party code (ADR 0013). Until then, their rows are "blocked".</li>
+        <li>Write the result lines and the table <code>results/prior-art-table.md</code>.</li>
+      </ol>
+      <p>Third-party code runs in its own virtual environment outside the repo, and no candidate package enters <code>pyproject.toml</code>. The step ends when each candidate has a result row or a recorded reason. The explainer <code>docs/learn/06b-prior-ports-measured.html</code> covers which parts of the backbone each port changes and what each change costs in parity and speed.</p>
+    </div>
+
+    <div class="sub" id="step-6c">
+      <h3>Step 6c. Neural Engine</h3>
+      <p>Step 6c explores Core ML on the Apple Neural Engine, alone and in parallel with the GPU, against <code>mlx</code>. The condition of <code>mission.md</code> (a profile shows that MLX cannot reach a goal) is met by the Step 6 matrix. The spec folder is <code>specs/06c-neural-engine/</code>. Its spec is in progress, so this section gives only the goal. The explainer covers how the Apple Neural Engine runs the attention and the feed-forward network, and its numeric range in fp16.</p>
+    </div>
+
     <div class="sub" id="step-7">
       <h3>Step 7. Release</h3>
       <p>Step 7 publishes the first version.</p>
@@ -852,11 +873,11 @@ figcaption { font-size: 0.88rem; color: var(--muted); max-width: 52rem; }
             <tr><td><code>test_batch_consistency</code></td><td>A batch of 1 and a batch of 8 give the same outputs.</td><td>The frame and patch thresholds of the dtype</td></tr>
             <tr><td><code>test_input_resolutions</code></td><td>224, 448 and 512 px, plus the own aspect ratio of each test image with a short side of 224 px. Step 2: one parity test for each configuration.</td><td>The frame and patch thresholds of the dtype</td></tr>
             <tr><td><code>test_rope_tables</code></td><td>The MLX RoPE tables against the Hugging Face tables. A report-only test gives the difference to the Meta tables, whose periods are bf16 (ADR 0006, changed in Step 4)</td><td>Largest difference ≤ 1e-6 in fp32</td></tr>
-            <tr><td><code>test_quantized</code></td><td>Parity of the models with 8-bit and 4-bit weights</td><td>Report only</td></tr>
+            <tr><td><code>test_quantized</code></td><td>Parity of the models with 8-bit and 4-bit weights (affine, group size 64) in fp16-autocast and bf16-autocast, against the reference output and against the unquantized output of the same dtype mode. Default session: ViT-S/16. Slow session: also ViT-H+/16 and ViT-7B/16. Each line records if the row passes the thresholds of its dtype mode.</td><td>Report only, with a fault bound (ADR 0011). 8 bits: frame ≥ 0.99, patch mean ≥ 0.99, patch 1st percentile ≥ 0.90. 4 bits: frame ≥ 0.75, patch mean ≥ 0.75; patch 1st percentile report only. The speedup table counts a quantized row as valid only if it passes the thresholds of its dtype mode.</td></tr>
           </tbody>
         </table>
       </div>
-      <p><b>Table 9.</b> Parity tests. Step 2 confirmed the fp32 and fp16 thresholds and set the patch thresholds. On 2026-11-06 the user gave bf16 its own thresholds (ADR 0003, <code>specs/02-reference/verify.html</code>). They hold for fp16 and bf16 in cast mode and in autocast mode. Default model sizes: ViT-S/16 and ViT-B/16 on <code>torch-cpu</code> and <code>torch-mps</code>; ViT-S/16, ViT-S+/16 and ViT-B/16 on <code>mlx</code> (changed in Step 5, decision D7 of <code>specs/05-all-sizes/explore.html</code>). The slow session runs all six model sizes, with ViT-7B/16 last.</p>
+      <p><b>Table 9.</b> Parity tests. Step 2 confirmed the fp32 and fp16 thresholds and set the patch thresholds. On 2026-11-06 the user gave bf16 its own thresholds (ADR 0003, <code>specs/02-reference/verify.html</code>). They hold for fp16 and bf16 in cast mode and in autocast mode. Step 6 gave <code>test_quantized</code> a fault bound (ADR 0011, Table 21 of <code>specs/06-speed/plan.html</code>): in Step 6, 8 bits pass the thresholds in 72 of 72 rows, 4 bits in 0 of 72 rows. Default model sizes: ViT-S/16 and ViT-B/16 on <code>torch-cpu</code> and <code>torch-mps</code>; ViT-S/16, ViT-S+/16 and ViT-B/16 on <code>mlx</code> (changed in Step 5, decision D7 of <code>specs/05-all-sizes/explore.html</code>). The slow session runs all six model sizes, with ViT-7B/16 last.</p>
       <p>The default session runs the default model sizes of the caption of Table 9. The other model sizes run when the variable <code>DINOV3_SLOW</code> is 1. On <code>mlx</code>, the default session also runs SwiGLU with the real weights (ViT-S+/16). Each test name includes the model size, the backend, the dtype and the input resolution.</p>
     </div>
 
@@ -898,15 +919,16 @@ figcaption { font-size: 0.88rem; color: var(--muted); max-width: 52rem; }
           <tbody>
             <tr><td>Model sizes</td><td>ViT-S/16, ViT-S+/16, ViT-B/16, ViT-L/16, ViT-H+/16, ViT-7B/16</td></tr>
             <tr><td>Backends</td><td><code>torch-mps</code> (baseline), <code>mlx</code></td></tr>
-            <tr><td>dtypes</td><td>fp32, fp16, bf16. In MLX also 8-bit and 4-bit weights for ViT-H+/16 and ViT-7B/16.</td></tr>
-            <tr><td>Input resolutions</td><td>224, 448 and 512 px</td></tr>
-            <tr><td>Batch sizes</td><td>1, 8 and 32, or smaller when the memory check fails</td></tr>
+            <tr><td>Compile rows</td><td>Since Step 6, every configuration has compile rows on both backends: <code>torch.compile</code> on <code>torch-mps</code> in every valid dtype mode (ADR 0009) and the compiled forward pass (<code>mx.compile</code>) on <code>mlx</code> (ADR 0010). The rows of one model size, input resolution and batch size run in one paired group. The Step 3 eager rows stay for the compile check.</td></tr>
+            <tr><td>dtypes</td><td>fp32, fp16, bf16, in the five dtype modes. ViT-7B/16 has no fp32 rows (ADR 0008); on <code>torch-mps</code> it has only fp16-cast and bf16-cast, because its autocast modes need fp32 weights there. In MLX also 8-bit and 4-bit weights for ViT-H+/16 and ViT-7B/16 (affine, group size 64, in fp16-autocast and bf16-autocast).</td></tr>
+            <tr><td>Input resolutions</td><td>224, 448 and 512 px. Step 6 adds 768 and 1024 px as Learn data only.</td></tr>
+            <tr><td>Batch sizes</td><td>1, 8 and 32, or smaller when the memory check fails. The batch-size sweep of Step 6 adds 64, 128 and 256 (ViT-S/16, 224 px) and 2, 4 and 16 (ViT-H+/16, 512 px).</td></tr>
             <tr><td>Outputs</td><td>Frame embedding, patch embeddings</td></tr>
             <tr><td>Metrics</td><td>Throughput, median and p90 latency at batch size 1, peak memory, load time, time of the first call</td></tr>
           </tbody>
         </table>
       </div>
-      <p><b>Table 11.</b> Benchmark matrix of Steps 3 and 6.</p>
+      <p><b>Table 11.</b> Benchmark matrix of Steps 3 and 6. Table 22 of <code>specs/06-speed/plan.html</code> gives the full matrix of Step 6.</p>
       <p>Our production use cases set two priority configurations. The first is ViT-S/16 with frame embeddings. The second is ViT-H+/16 and ViT-S/16 with patch embeddings at 512 px.</p>
     </div>
 

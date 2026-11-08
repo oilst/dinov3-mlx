@@ -249,7 +249,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Run one command under the GPU lock and return its exit code.
 
     Args:
-        argv: The arguments: [--timeout S] [--label L] -- command. None reads sys.argv.
+        argv: The arguments: [--timeout S] [--label L] -- command. None reads sys.argv. The
+            hidden options --poll, --lock-dir and --pattern are for the tests.
 
     Returns:
         The exit code of the command, or 1 after a timeout of the wait.
@@ -263,6 +264,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--poll", type=float, default=POLL_S, help=argparse.SUPPRESS)
     # The tests give a temporary folder for the lock file, the registry and the lock log.
     parser.add_argument("--lock-dir", type=Path, help=argparse.SUPPRESS)
+    # The tests give a pattern that matches no process, so that other jobs do not stop them.
+    parser.add_argument("--pattern", default=HEAVY_JOB_PATTERN, help=argparse.SUPPRESS)
     parser.add_argument("command", nargs=argparse.REMAINDER, help="-- command [arguments]")
     args = parser.parse_args(argv)
     command = args.command[1:] if args.command[:1] == ["--"] else args.command
@@ -280,7 +283,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             }
         )
         label = args.label or " ".join(command)
-        with heavy_job(label, poll_s=args.poll, timeout_s=args.timeout, **paths):
+        with heavy_job(
+            label, poll_s=args.poll, pattern=args.pattern, timeout_s=args.timeout, **paths
+        ):
             return subprocess.run(command, check=False).returncode
     except GpuLockTimeoutError as error:
         print(f"gpu_lock: {error}", file=sys.stderr)

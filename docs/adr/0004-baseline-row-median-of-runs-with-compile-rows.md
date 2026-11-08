@@ -26,5 +26,6 @@ Consequences:
 - A speedup at P1 and P2 compares with compiled torch. Step 6 must say so in its tables.
 - A baseline row with 1 run is one sample. Step 6 measures each speedup again with torch-mps and `mlx` runs in alternation in one session, and reports the median of the paired ratios (finding F1).
 - Plan Section 3.7 of `specs/03-baseline/plan.html` said "drop the compile rows". This ADR replaces that rule.
+- Widened by ADR 0009.
 
 Status: accepted on 2026-11-06. The compile rule is the user's decision; the median rule follows finding F1, which the user asked to fix.

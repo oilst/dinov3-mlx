@@ -271,17 +271,42 @@ def test_heavy_job_timeout_ends_a_wait(
 
 
 def test_gpu_lock_command_runs_the_command(tmp_path: Path) -> None:
-    """The command line returns the exit code of its command."""
+    """The command line returns the exit code of its command.
+
+    The temporary lock folder and a pattern that matches no process keep the test free of the
+    jobs and the lock of other sessions (V1 of specs/06-speed/verify.html).
+    """
+    nothing = f"[n]o-heavy-job-{uuid.uuid4().hex}"
     command = [sys.executable, "-m", "dinov3_apple.gpu_lock", "--lock-dir", str(tmp_path)]
     done = subprocess.run(
-        [*command, "--poll", "0.05", "--", sys.executable, "-c", "raise SystemExit(3)"],
+        [
+            *command,
+            *("--pattern", nothing, "--poll", "0.05", "--timeout", "30"),
+            *("--", sys.executable, "-c", "raise SystemExit(3)"),
+        ],
         check=False,
         env=child_env(),
         capture_output=True,
         timeout=60,
     )
-    assert done.returncode == 3
+    assert done.returncode == 3, done.stderr
+    assert (tmp_path / gpu_lock.LOG_PATH.name).exists()
     assert gpu_lock.LOG_PATH.name == "gpu-lock.log"
+
+
+def test_gpu_lock_command_keeps_the_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Without the hidden options, the command line uses the real pattern and lock paths."""
+    seen: dict[str, object] = {}
+
+    @contextmanager
+    def recording(label: str, **kwargs: object) -> Iterator[None]:
+        seen.update(kwargs, label=label)
+        yield
+
+    monkeypatch.setattr(gpu_lock, "heavy_job", recording)
+    assert gpu_lock.main(["--", sys.executable, "-c", "raise SystemExit(0)"]) == 0
+    assert seen["pattern"] == HEAVY_JOB_PATTERN
+    assert {"lock_path", "registry", "log_path"}.isdisjoint(seen)
 
 
 @pytest.fixture

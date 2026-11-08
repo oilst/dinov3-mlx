@@ -594,8 +594,11 @@ def mlx_embeddings(
     specs/06-speed/plan.html).
 
     The frame embeddings are fp32. In the four fp16 and bf16 dtype modes the patch embeddings are
-    fp16: half the host bytes for at most 3e-8 of parity (probe fp16-output). NumPy has no bf16,
-    so the bf16 modes cast to fp16 on the GPU; after the final layer norm no value is above 18.
+    fp16: half the host bytes. The extra parity loss against fp32 patch embeddings is at most
+    5.84e-8 for the patch mean and at most 1.27e-6 for the patch 1st percentile (ViT-H+/16
+    bf16-autocast, iss-kibo-lab/224x400; AC15 of specs/06-speed/verify.html, Table 8 of
+    results/parity-mlx.md). NumPy has no bf16, so the bf16 modes cast to fp16 on the GPU; after
+    the final layer norm no value is above 18.
 
     Args:
         tokens: All tokens after the final layer norm, (B, 5 + N, D).

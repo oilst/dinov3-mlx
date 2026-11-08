@@ -28,6 +28,7 @@ Apple M5 Max, 64 GB unified memory, macOS 26.5.2. All benchmark results in this 
 | Python | 3.12.13 (installed by uv) |
 | uv | 0.12.15 |
 | mlx | 0.32.4 |
+| mlx-metal | 0.32.4. An indirect dependency of mlx: it holds `libmlx.dylib` and the Metal kernels. `uv.lock` pins it; `pyproject.toml` does not name it. Since Step 6, `machine.read_versions` records it, so each result line of `mlx` and of `torch-mps` has it (decision D19 of `specs/06-speed/explore.html`). |
 | torch | 2.15.0 |
 | transformers | 5.22.1 |
 | safetensors | 0.8.0 |
@@ -38,6 +39,24 @@ Apple M5 Max, 64 GB unified memory, macOS 26.5.2. All benchmark results in this 
 | coremltools | 9.0 (dependency group `coreml`, Step 6c, 2026-11-07). It is tested with torch 2.7 only; with numpy 2.5 its torch converter needs one patch (`specs/06c-neural-engine/explore.html`). |
 
 Change a version only in its own commit, and record the new version here.
+
+## Neural Accelerators
+
+Step 6 recorded the versions that run the NAX kernels (decision D19, option b, of `specs/06-speed/explore.html`). The versions and the switch come from the probe nax-record (Table 8 of that file). The fingerprint values come from the report line of the fingerprint test in the Verify runs (AC16 of `specs/06-speed/verify.html`). The throughput ratios come from the Learn data of Step 6.
+
+| Part | Value |
+|---|---|
+| Chip | Apple M5 Max |
+| GPU architecture | `applegpu_g17s` (`mx.device_info()["architecture"]`) |
+| macOS | 26.5.2 |
+| mlx and mlx-metal | 0.32.4 and 0.32.4 |
+| `libmlx.dylib` | Built for macOS 26.2 and later (minos 26.2) |
+| Switch to turn the NAX kernels off | `MLX_METAL_GPU_ARCH=applegpu_g16s` (Neural Accelerators off) |
+| Relaxed precision | On in the NAX matmul kernel and the NAX attention kernel (`steel/gemm/nax.h`, `steel/attn/nax.h`). No environment variable turns it off. |
+| SDPA fingerprint (test `test_mlx_sdpa_nax_fingerprint`, report only) | Neural Accelerators on: fp16 54.5 % (head dimension 64) and 54.6 % (head dimension 128), bf16 12.6 % (head dimension 64) and 12.7 % (head dimension 128). The two controls of the test: 0.21 % (fp16) and 0.03 % (bf16). Neural Accelerators off (probe nax-record): 0.21 % (fp16) and 0.023 % (bf16). |
+| Throughput, Neural Accelerators on / off | Compiled forward pass, bf16-cast: 1.87 to 1.88 at P1, 2.79 to 2.82 at P2 (two rounds each; Learn data of Step 6, `docs/learn/06-2-attention-and-batch-size.html`). The probe nax-ab gave 1.81 and 2.69. |
+
+Each bench line of `mlx` in Step 6 records `mlx_architecture` and `versions["mlx-metal"]`. The 2 token-range lines of `results/speed-learn.jsonl` have no `mlx_architecture` (finding V6 of `specs/06-speed/verify.html`). Each default session runs the fingerprint test. A new mlx or mlx-metal version that turns the NAX kernels off or changes the relaxed precision changes the fingerprint. Then measure the parity and the throughput again, and update this table.
 
 ## Weights
 

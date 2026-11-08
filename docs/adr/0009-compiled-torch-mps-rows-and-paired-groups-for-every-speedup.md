@@ -1,0 +1,37 @@
+# Compiled torch-mps rows and paired groups for every speedup
+
+This ADR widens ADR 0004 from P1 and P2 to every configuration of the benchmark matrix. The speedup of each configuration comes from `src/dinov3_apple/speedup.py` and `scripts/bench_speed.py`:
+
+1. Each model size, input resolution and batch size gets one paired group: the `torch-mps` workers and the `mlx` workers, one after the other, in a rotated order, in one session. Outside P1 and P2 the group has one round.
+2. The `torch-mps` arm runs `torch.compile` in every valid dtype mode. ViT-7B/16 runs only fp16-cast and bf16-cast on `torch-mps`, because its autocast modes need fp32 weights there (ADR 0008).
+3. ADR 0004 picks the fastest valid row of each dtype and output, on both sides. The `mlx` side takes only unquantized rows (ADR 0011).
+4. The compile check (`compile_check`) lists each group where the compiled `torch-mps` row is below the Step 3 eager median of the same dtype mode. Each listed group gets a follow-up group with `torch-mps` eager, `torch-mps` compiled and the fastest valid `mlx` mode of that dtype. The baseline takes the faster `torch-mps` row of that group. An eager row in the baseline carries a mark, and section 7 of `results/speedup-table.md` lists it.
+5. The pass rule of D21 (`pass_verdict`, `single_verdict`). At P1 and P2: "above 1" only if the pooled median of all paired ratios of both runs and the median of each run are above 1. Outside P1 and P2: "above 1" if the paired ratio is above 1. A ratio within 1 ± 0.03 (`NOISE`) gets the mark "inside the noise". For an even number of values the median is the lower of the two middle values (ADR 0004).
+
+The ViT-7B/16 fp32 cells stay empty with the reason of ADR 0008.
+
+Why:
+
+- **A fair baseline.** The `mlx` rows are compiled in every configuration (ADR 0010). Outside P1 and P2, `torch.compile` gave 36 to 71 % more throughput than eager `torch-mps` in 4 of 4 configurations (1.36 to 1.71, probe torch-compile-offp of `specs/06-speed/explore.html`). A compiled `mlx` row against an eager `torch-mps` row would overstate the speedup by this factor. ADR 0004 adds compile rows for this reason at P1 and P2.
+- **The same session for both sides.** Absolute values do not compare across sessions. The Step 3 P1 compile rows were 6 to 11 % below the same arm in an AC probe of 2026-11-07, and the Step 5 runs differed by about 20 % (F2 of `specs/05-all-sizes/verify.html`). Inside one paired group on AC power the noise of one arm is 1.6 to 3.0 % (probe paired-noise). The consequence of ADR 0004 asks for paired ratios.
+- **A pass that holds in both runs.** The P2 fp16 estimate of Step 5 (1.02) lay inside a spread between runs of about 20 %. With the pooled median alone, one run can hide the other.
+
+We considered these other options (D9, D20 and D21 of `specs/06-speed/explore.html`):
+
+- No new baseline rows (D9 option a). The ViT-7B/16 cells stay empty, so the speedup table does not cover every configuration.
+- Run B4 only, with compile rows at P1 and P2 only (D9 option b). Outside P1 and P2 a compiled `mlx` row would compare with an eager `torch-mps` row: a bias of 36 to 71 % in favour of `mlx`.
+- A sentinel subset in pairs and the stored Step 3 rows elsewhere (D20 option b), or the stored Step 3 rows for every cell outside P1 and P2 (D20 option c). Less machine time, but most speedups divide by a value of another day. Both change the consequence of ADR 0004.
+- The pooled median alone (D21 option a), or the smallest paired ratio (D21 option c). The first passes when the two runs disagree in sign. In the second, one noisy round decides.
+
+Consequences:
+
+- The matrix has 324 cells: 306 with a paired ratio and a verdict, and 18 ViT-7B/16 fp32 cells empty with the ADR 0008 reason (AC8 of `specs/06-speed/verify.html`). All 306 `torch-mps` sides are `torch.compile` rows. No cell has an eager fallback. The speedup table made again from the committed lines is byte-equal to `results/speedup-table.md`.
+- Verdicts of the matrix: 140 cells "above 1" (36 of them inside the noise) and 166 cells "not above 1" (22 of them inside the noise). Section 7 of `verify.html` gives a reason for each cell "not above 1": a half dtype at ViT-S/16 or ViT-S+/16 (64 cells), batch size 1 (46), both backends near the GPU matmul limit (34), inside the noise (22).
+- Verdicts at P1 and P2 (section 1 of `results/speedup-table.md`, two runs 5.5 h apart, 10 paired ratios each). P1: fp32 above 1 (pooled 1.067 frame, 1.068 patch); fp16 not above 1 (0.867, 0.900); bf16 not above 1 (0.878, 0.881). P2: fp32 above 1 (1.092); fp16 above 1 (1.032, 1.033); bf16 above 1 (1.013). The spread between runs is 0.000 to 0.041. A third paired run of the Verify stage gives the same 12 verdicts. Its spread over three runs is 0.006 to 0.041. With three runs, the `mlx` mode of P2 bf16 changes from bf16-autocast to bf16-cast, and the pooled median rises from 1.013 to 1.049 (Table 6 of `verify.html`).
+- One paired round per matrix cell does not decide the cells near 1 (finding V17). Verify measured 7 groups again: the paired ratio moved by a median of 0.057 and by up to 0.138, and 10 of 62 cells changed the verdict. 127 of 306 cells lie within 1 ± 0.06. The mark "inside the noise" uses ± 0.03, the noise of one arm, which is narrower than the change between two paired rounds. A verdict of one cell within about 1 ± 0.10 needs 2 or 3 paired rounds before a claim rests on it.
+- The absolute throughput of both backends drifts by up to 53 % between jobs, but the paired ratio stays stable: the run medians at P1 differ by at most 0.027 (finding V2). So the compile check, which compares with a Step 3 median of another day, can list a group for the machine state and not for `torch.compile`. All 4 listed groups (ViT-S/16 fp32) are of this kind: in their follow-up groups the compiled row is 13 to 30 % faster than eager (Table 12 of `verify.html`). A paired compile check inside the same group would remove this. It is open (V2).
+- In a cell with a follow-up group, each side takes its fastest row over both groups. If the two sides came from different groups, the ratio would pair rows of two jobs hours apart (finding V10). In the 4 follow-up groups of Step 6, both sides come from the follow-up group.
+- The paired matrix costs machine time: job J12 (ViT-S/16 to ViT-H+/16 with the quantized rows of ViT-H+/16, both backends, 486 workers) took 178 min, and job J14 (ViT-7B/16, 90 workers) took 124 min (Table 13 of `verify.html`). The first compiled call takes 4.0 to 9.4 s outside ViT-7B/16, and 10.6 to 14.3 s for ViT-7B/16 (gate J13).
+- ADR 0004 gets the line "Widened by ADR 0009". Its rules (the fastest valid dtype mode, the median of the runs, compile rows join the baseline) do not change.
+
+Status: accepted on 2026-11-07. The user answered "Take all recommendations" to the questions of `specs/06-speed/explore.html`. Table 41 of that page gives the options that apply: answer 4 (D9 option c, `torch.compile` rows outside P1 and P2 too) and answer 7 (D20 option a, paired `torch-mps` rows for every configuration). Table 2 of `specs/06-speed/plan.html` applies them.
