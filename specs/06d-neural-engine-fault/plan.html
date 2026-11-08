@@ -41,7 +41,7 @@ a { color: var(--accent); }
 <main>
 <header>
   <h1>Step 6d Neural Engine fault: Plan</h1>
-  <p>Roadmap step 6d. Status: draft for approval. Date: 2026-11-08. The user picked option A of <code>explore.html</code> (rewrite version <code>ne3</code>). The two-stream targets of AC11 are for the user's approval. Q2, Q3 and Q4 of <code>explore.html</code> stay open (Section 9).</p>
+  <p>Roadmap step 6d. Status: approved by the user on 2026-11-08 at 23:03 (the user's answer: "Approve plan"). The approval includes the two-stream targets of AC11 (Q1) and the delete of the 25 <code>ne2</code> compiled packages before J1 (Section 3.2). Date: 2026-11-08. The user picked option A of <code>explore.html</code> (rewrite version <code>ne3</code>). Q2, Q3 and Q4 of <code>explore.html</code> stay open (Section 9).</p>
 </header>
 
 <section id="goal">
@@ -78,7 +78,7 @@ a { color: var(--accent); }
   <div class="warn">
     <p><b>Disk.</b> Free disk now: about 18 GB. The 25 <code>ne3</code> packages need about 12 GB. Each new package and process adds bundles to the Core ML bundle cache <code>~/Library/Caches/python/com.apple.e5rt.e5bundlecache</code> (about 6 GB during the 16 probe loads of <code>explore.html</code>).</p>
     <ol>
-      <li>Before J1, the build deletes the 25 <code>ne2</code> compiled packages (about 12 GB): <code>ne3</code> replaces them, and on CPU_AND_NE they give wrong tokens. The <code>ne2</code> result lines stay. The user approves this delete with the plan.</li>
+      <li>Before J1, the build deletes the 25 <code>ne2</code> compiled packages (about 12 GB): <code>ne3</code> replaces them, and on CPU_AND_NE they give wrong tokens. The <code>ne2</code> result lines stay. The user approved this delete with the plan on 2026-11-08.</li>
       <li>Each job starts with a disk check. Below 10 GB free, the job does not start; the build stops and reports. A worker that cannot run writes the status "skipped: disk".</li>
       <li>The build does not touch the bundle cache and <code>~/.cache/dinov3-apple/coreml/probes</code> (Q4 of <code>explore.html</code>, open for the user).</li>
     </ol>
@@ -229,7 +229,7 @@ a { color: var(--accent); }
         <tr><td>AC8</td><td>Load times</td><td>Cached load ≤ 0.5 s for each package and compute unit; the first load in each line</td><td>J2, J3</td></tr>
         <tr><td>AC9</td><td>Matrix</td><td>70 of 70 cells with a throughput or a reason; every coreml-ne cell valid (both batch-size-8 forms); each Core ML cell with its ratio to <code>mlx</code></td><td>J3</td></tr>
         <tr><td>AC10</td><td>Paired runs</td><td>P1 b8, P1 b1, P3 b8, P2 b8: the median paired ratio of coreml-ne and coreml-gpu to <code>mlx</code> over 5 rounds, two runs at batch size 8, with the spread and the verdict rule D21. Report only, no target</td><td>J4, Verify</td></tr>
-        <tr><td>AC11</td><td>Two-stream run <b>(targets for the user's approval)</b></td><td>Median stream ratio over 3 rounds, each run: P1 ≥ 1.20 (Step 6c: 1.26 and 1.31); P3 ≥ 1.10 (upper bound 1.28); P2 report only. Every Neural Engine side valid. A value below the target gets a reason in <code>verify.html</code></td><td>J5, Verify</td></tr>
+        <tr><td>AC11</td><td>Two-stream run (targets approved by the user on 2026-11-08)</td><td>Median stream ratio over 3 rounds, each run: P1 ≥ 1.20 (Step 6c: 1.26 and 1.31); P3 ≥ 1.10 (upper bound 1.28); P2 report only. Every Neural Engine side valid. A value below the target gets a reason in <code>verify.html</code></td><td>J5, Verify</td></tr>
         <tr><td>AC12</td><td>Run rules and disk</td><td>Every job through the GPU lock, one job for each lock call: 0 lines with an entry in <code>other_heavy_jobs_seen</code>; a memory check before each conversion and load; a disk check (≥ 10 GB) before each job, recorded in the job log; no change to the bundle cache</td><td>gpu-lock.log, job logs</td></tr>
         <tr><td>AC13</td><td>Tests, lint and docs</td><td><code>uv run pytest</code> 0 failed, default session ≤ 60 s; slow <code>tests/test_coreml.py</code> 0 failed; ruff clean; ADR 0016; the two terms in <code>GLOSSARY.md</code>; the Learn section covers <code>ne_embeddings</code> and <code>constant_concats</code>; roadmap row 6d set</td><td>J0, J6, Close</td></tr>
       </tbody>
@@ -241,7 +241,7 @@ a { color: var(--accent); }
 <section id="open">
   <h2>9 Open questions</h2>
   <ul>
-    <li>Q1 (the user): approve the two-stream targets of AC11 (P1 ≥ 1.20, P3 = ViT-L/16 224 px b8 ≥ 1.10, P2 report only), or name other values or another P3.</li>
+    <li>Q1 (closed on 2026-11-08): the user approved the two-stream targets of AC11 (P1 ≥ 1.20, P3 = ViT-L/16 224 px b8 ≥ 1.10, P2 report only).</li>
     <li>Q2 (the user, from <code>explore.html</code>): a later step on the Neural Engine speed at 448 and 512 px (for example the ml-ane-transformers layout).</li>
     <li>Q3 (the user, from <code>explore.html</code>): a bug report to Apple with the E6 graph. The agent does not send it.</li>
     <li>Q4 (the user, from <code>explore.html</code>): delete the Core ML bundle cache (about 120 GB) and the Step 6c probe packages (6 GB) before the build? Without it, the build has about 18 GB free plus the 12 GB of the deleted <code>ne2</code> packages, and it stops below 10 GB (Section 3.2).</li>
