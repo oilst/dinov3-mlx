@@ -235,18 +235,20 @@ Table 4. The matrix: patch embeddings, 1 round (job J3). The ratio is Core ML / 
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | P1-b1 | coreml-gpu | 0.886 | 0.886 | 0.000 | not above 1 | 461.1 | 531.3 | 5 |
 | P1-b1 | coreml-ne | 1.016 | 1.016 | 0.000 | above 1 | 539.1 | 531.3 | 5 |
-| P1-b8 | coreml-all | 0.996 | 0.996 | 0.000 | not above 1 | 1,765.0 | 1,773.1 | 5 |
-| P1-b8 | coreml-gpu | 0.975 | 0.975 | 0.000 | not above 1 | 1,708.6 | 1,773.1 | 5 |
-| P1-b8 | coreml-ne | 0.388 | 0.388 | 0.000 | not above 1 | 689.4 | 1,773.1 | 5 |
+| P1-b8 | coreml-all | 0.996, 0.961 | 0.983 | 0.036 | not above 1 | 1,755.0 | 1,773.0 | 10 |
+| P1-b8 | coreml-gpu | 0.975, 0.960 | 0.969 | 0.015 | not above 1 | 1,705.5 | 1,773.0 | 10 |
+| P1-b8 | coreml-ne | 0.388, 0.420 | 0.392 | 0.084 | not above 1 | 687.6 | 1,773.0 | 10 |
 | P2-b1 | coreml-gpu | 0.884 | 0.884 | 0.000 | not above 1 | 15.2 | 16.8 | 5 |
 | P2-b1 | coreml-ne | 0.167 | 0.167 | 0.000 | not above 1 | 2.8 | 16.8 | 5 |
-| P2-b8 | coreml-all | 0.737 | 0.737 | 0.000 | not above 1 | 13.9 | 19.7 | 5 |
-| P2-b8 | coreml-gpu | 0.775 | 0.775 | 0.000 | not above 1 | 15.5 | 19.7 | 5 |
-| P2-b8 | coreml-ne | 0.144 | 0.144 | 0.000 | not above 1 | 2.8 | 19.7 | 5 |
+| P2-b8 | coreml-all | 0.737, 0.740 | 0.739 | 0.004 | not above 1 | 14.1 | 19.9 | 10 |
+| P2-b8 | coreml-gpu | 0.775, 0.822 | 0.790 | 0.061 | not above 1 | 15.5 | 19.9 | 10 |
+| P2-b8 | coreml-ne | 0.144, 0.140 | 0.143 | 0.024 | not above 1 | 2.8 | 19.9 | 10 |
 
 Table 5. The paired ratio Core ML / mlx at P1 (frame) and P2 (patch), median over the rounds of each run (run 1: build, run 2: verify). Report only: Step 6c has no speed target.
 
 F4 evidence (run 1): the ViT-S/16 batch-size-8 package on CPU_AND_NE gives valid False, parity 0.3929 / 0.5538 / 0.3793. The coreml-ne rows at batch size 8 run the batch-size-1 package with the batch API.
+
+F4 evidence (run 2): the ViT-S/16 batch-size-8 package on CPU_AND_NE gives valid False, parity 0.3929 / 0.5538 / 0.3793. The coreml-ne rows at batch size 8 run the batch-size-1 package with the batch API.
 
 ## 6 Two-stream run
 
@@ -254,7 +256,9 @@ F4 evidence (run 1): the ViT-S/16 batch-size-8 package on CPU_AND_NE gives valid
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | P1-b1 | 1 | 8 | 688.1 | 526.1 | 683.0 | 529.5 | 1,213.1 | 2.302 | 3 |
 | P1-b8 | 1 | 8 | 695.1 | 1,984.4 | 648.4 | 1,854.3 | 2,502.7 | 1.257 | 3 |
+| P1-b8 | 2 | 8 | 688.0 | 1,958.4 | 652.8 | 1,914.2 | 2,517.3 | 1.312 | 3 |
 | P2-b1 | 1 | 1 | 2.8 | 15.2 | 2.6 | 12.5 | 15.1 | 0.996 | 3 |
 | P2-b8 | 1 | 1 | 2.8 | 16.7 | 2.5 | 13.7 | 16.2 | 0.934 | 3 |
+| P2-b8 | 2 | 1 | 2.8 | 19.9 | 2.7 | 15.9 | 18.6 | 0.981 | 3 |
 
 Table 6. The two-stream run: Core ML on CPU_AND_NE and compiled mlx on the GPU, alone and at the same time, 10 s per case. Stream ratio = (ne + mlx, both) / (mlx alone), median over the rounds.

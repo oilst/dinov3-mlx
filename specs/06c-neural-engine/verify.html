@@ -1,0 +1,381 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Step 6c Neural Engine: Verify</title>
+<style>
+/* Spec page. White page, black text, no dark mode. */
+:root { --bg: #ffffff; --fg: #111414; --muted: #4a5655; --rule: #d6dedd; --panel: #f5f8f7; --accent: #057379; --pass: #1d7a3a; --fail: #b3261e; --partial: #8a5a00; --pending: #4a5655; color-scheme: light; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif; }
+main { max-width: 64rem; margin: 0 auto; padding: 40px 16px 64px; display: grid; gap: 1.75rem; }
+main > *, section > * { min-width: 0; }
+h1 { font-size: 1.9rem; line-height: 1.15; margin: 0; }
+h2 { font-size: 1.3rem; margin: 0; }
+h3 { font-size: 1.05rem; margin: 0; }
+section { display: grid; gap: 0.8rem; min-width: 0; }
+p, ul, ol { margin: 0; max-width: 48rem; }
+li + li { margin-top: 0.25rem; }
+code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.86em; }
+p code, li code, td code { overflow-wrap: anywhere; }
+pre { margin: 0; background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 0.8rem 1rem; overflow-x: auto; }
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 0.92rem; }
+th, td { text-align: left; vertical-align: top; padding: 0.45rem 0.7rem 0.45rem 0; border-bottom: 1px solid var(--rule); }
+th { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); border-bottom: 1.5px solid var(--fg); }
+td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.caption { font-size: 0.88rem; color: var(--muted); }
+.pass { color: var(--pass); font-weight: 600; }
+.fail { color: var(--fail); font-weight: 600; }
+.partial { color: var(--partial); font-weight: 600; }
+figure { margin: 0; display: grid; gap: 0.5rem; }
+.fig { overflow-x: auto; }
+.fig svg { display: block; width: 100%; height: auto; min-width: 600px; max-width: 760px; border: 1px solid var(--rule); border-radius: 6px; background: #ffffff; }
+a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+<header>
+  <h1>Step 6c Neural Engine: Verify</h1>
+  <p>Roadmap step 6c. Status: Verify done on 2026-11-08 by a separate agent. Build commits: <code>00bb056</code>, <code>3b52d1e</code>, <code>06fac7e</code> (plan amendment), <code>deb5a02</code>, <code>60b8376</code>, <code>1e2f72a</code> (table mark) and <code>2e5ee1d</code> (J4, J5) after the base <code>018e700</code>; the other commits of the range belong to Steps 6 and 6b. During Verify the build session also committed the Learn stage (<code>5ae1be4</code>), ADR 0014 and ADR 0015 (<code>e6c5853</code>) and <code>docs/plan.html</code> (<code>2043840</code>). The Close stage follows.</p>
+</header>
+
+<section id="summary">
+  <h2>1 Summary</h2>
+  <p>This page checks the 12 acceptance criteria of <code>specs/06c-neural-engine/plan.html</code> (Section 8, Table 6, with the amendment of 2026-11-08) against the build. The agent did not build the step. It ran ruff, the default session, the slow session of <code>tests/test_coreml.py</code> and the Verify subset of plan Section 3.7, one job at a time under the GPU lock. It changed no code. Its new result lines (run 2) are in <code>results/coreml.jsonl</code>. On request of the orchestrator (free disk near 6 GB) it stopped the extra compute-plan job v8 after 11 of 26 models; the other 15 rows are &laquo;skipped: disk&raquo;. All jobs of the Verify subset ran.</p>
+  <p><b>Result:</b> 9 rows pass, 2 rows are partial, 1 row fails.</p>
+  <ul>
+    <li><b>The rewrite works on the GPU, not on the Neural Engine.</b> With rewrite version <code>ne2</code> (score scale, residual-stream scale, &epsilon; / r&sup2;) all 90 rows on CPU_AND_GPU and ALL pass the fp16 thresholds (smallest frame cosine 0.99999). On CPU_AND_NE only 2 of 45 rows pass: ViT-S/16 and ViT-S+/16 at 224 px. The other 43 rows give finite but wrong tokens (frame cosine &minus;0.05 to 0.07). AC4 fails (finding V1, high).</li>
+    <li><b>The cause is a second fault, not F1.</b> The block probe (Q3) shows the first wrong tensor at the input of block 1, the output of the embeddings (cosine 0.31 for ViT-L/16 at 224 px, 0.19 for ViT-S/16 at 448 px), with the right largest value. The two passing packages keep the input cast, the patch convolution and the first attention on the CPU (compute plan: 46 ops on the CPU). Every package whose first ops run on the Neural Engine is wrong. A matmul patch embedding and an fp16 input did not change this.</li>
+    <li><b>The Neural Engine adds throughput at P1.</b> The two-stream run at P1, batch size 8, gives a stream ratio of 1.257 (build) and 1.312 (Verify): the Neural Engine adds about 650 img/s to about 1,900 img/s of mlx, and mlx keeps 0.93 to 0.99 of its throughput. The P1 package is valid. At P2 the stream ratio is 0.934 and 0.981, and the Neural Engine output is wrong (Section 7).</li>
+    <li><b>Paired runs.</b> No Core ML side is above mlx at batch size 8 (pooled: coreml-gpu 0.969 at P1, 0.790 at P2; coreml-all 0.983 and 0.739; coreml-ne 0.392 and 0.143). Only coreml-ne at P1, batch size 1 is above mlx (1.016, inside the noise). The two runs agree within 0.084.</li>
+    <li><b>Findings.</b> Section 10 gives 10 findings: 1 high, 3 medium, 6 low. The high finding V1 needs a decision of the user: a follow-up step that splits the package into an embeddings part off the Neural Engine and a blocks part on it.</li>
+  </ul>
+</section>
+
+<section id="method">
+  <h2>2 Method</h2>
+  <p>The agent read <code>CLAUDE.md</code>, <code>GLOSSARY.md</code>, <code>explore.html</code> and <code>plan.html</code> of this folder, the diff <code>git diff 018e700..HEAD</code> of the five Step 6c files (+2,525 lines), the uncommitted change of <code>scripts/bench_coreml.py</code> (<code>_form_mark</code>), ADR 0014 and ADR 0015, the hand-over note of the build and the build logs in <code>~/.cache/dinov3-apple/coreml/build-logs/</code>. It treated each number of the note as a claim to check. It started a GPU job only after the line &laquo;== J5 end&raquo; in <code>J5.log</code> (03:29:38 local time). All times below are UTC. Machine: Apple M5 Max, 64 GB, AC power, Low Power Mode off. Versions: macOS 26.5.2, Python 3.12.13, torch 2.15.0, transformers 5.22.1, mlx 0.32.4, numpy 2.5.4, coremltools 9.0.</p>
+  <p>Each job ran as <code>uv run python -m dinov3_apple.gpu_lock -- &lt;command&gt; &gt; &lt;file&gt; 2&gt;&amp;1</code>, with <code>MLX_ENABLE_TF32=0</code> and the MPS watermarks 0.8 and 0.6. Between two jobs the agent waited 25 s. Before each job it read the free disk space (11 GB at the start, 16 to 17 GB later; the limit is 10 GB). It converted no package.</p>
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>No.</th><th>Job</th><th>Time (UTC)</th><th>Result</th></tr></thead>
+    <tbody>
+      <tr><td>v1</td><td><code>uv run ruff check</code>, <code>uv run ruff format --check</code> (all files and the three 6c files)</td><td>02:02</td><td>all checks passed; 115 files already formatted; the three 6c files clean</td></tr>
+      <tr><td>v2</td><td>Default session: <code>uv run --group coreml pytest -q</code></td><td>02:30:15 to 02:31:09</td><td>946 passed, 15 skipped in 51.94 s; wall time 54.1 s</td></tr>
+      <tr><td>v3</td><td>Slow session: <code>DINOV3_SLOW=1 uv run --group coreml pytest tests/test_coreml.py</code></td><td>02:31:35 to 02:31:42</td><td>18 passed in 4.16 s (T1 to T13, 18 ids)</td></tr>
+      <tr><td>v4</td><td><code>bench_coreml.py pairs --priority P1 --batch-sizes 8 --rounds 5 --run 2</code></td><td>02:31:49 to 02:36:53</td><td>21 workers done (4 sides &times; 5 rounds + the F4 worker)</td></tr>
+      <tr><td>v5</td><td>The same at <code>--priority P2</code></td><td>02:37:25 to 02:48:46</td><td>20 workers done</td></tr>
+      <tr><td>v6</td><td><code>bench_coreml.py streams --priority P1 P2 --batch-sizes 8 --rounds 3 --run 2</code></td><td>02:49:36 to 02:54:39</td><td>18 cases done</td></tr>
+      <tr><td>v7</td><td>Parity on CPU_AND_NE at 224 px: <code>run_coreml(model_size, 224, 1, "coreml-ne", parity_only=True)</code> for ViT-S/16 and ViT-H+/16, one subprocess each after a memory check</td><td>02:55:10 to 02:55:15</td><td>ViT-S/16 valid; ViT-H+/16 not valid (Section 5)</td></tr>
+      <tr><td>v8</td><td>Extra: <code>compute_plan_report</code> on CPU_AND_NE for each compiled model in <code>~/.cache/dinov3-apple/coreml/</code>, one subprocess each</td><td>02:55:50 to about 03:01 (stopped)</td><td>11 of 26 reports; the other 15 skipped: disk (Section 8)</td></tr>
+      <tr><td>v9</td><td><code>bench_coreml.py table</code></td><td>03:01</td><td><code>results/coreml-table.md</code> made again with the run-2 lines</td></tr>
+      <tr><td>v10</td><td>Final default session before the commit</td><td>03:01:54 to 03:02:49</td><td>946 passed, 15 skipped in 53.14 s</td></tr>
+    </tbody>
+  </table>
+</div>
+  <p class="caption"><b>Table 1.</b> The Verify jobs. Each benchmark worker had a memory check in the driver log before it ran (v4: 21, v5: 20, v6: 18 checks; at least 32.4 GB available, largest need 7.1 GB).</p>
+</section>
+
+<section id="criteria">
+  <h2>3 Acceptance criteria</h2>
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>No.</th><th>Criterion</th><th>Target</th><th>Measured</th><th>Evidence</th><th>Result</th></tr></thead>
+    <tbody>
+      <tr><td>AC1</td><td>F1 is reproduced and explained</td><td>T2 green; T10: plain ViT-S/16 frame &lt; 0.5 on CPU_AND_NE, &ge; 0.999 on CPU_AND_GPU; one J2 line of the plain package</td><td>T2 green (v2, v3). T10 green (v3). Plain package at 224 px: CPU_AND_NE frame 0.0345, CPU_AND_GPU 0.99999631, ALL 0.99999631. The plain package and the rewritten package have the same compute plan layout (the first ops on the CPU: 42 and 46 ops), and only the rewritten one passes on CPU_AND_NE. So the difference is the rewrite, which is the F1 explanation.</td><td><code>tests/test_coreml.py</code> T2, T10; <code>results/coreml.jsonl</code> lines 219 to 222 (J3 repair run of the plain package)</td><td><span class="pass">pass</span></td></tr>
+      <tr><td>AC2</td><td>The Neural Engine rewrite is exact</td><td>T1 &le; 1e-6; T3 &le; 1e-5 relative; T4 bit for bit</td><td>T1, T3 (4 ids, r = 1 and r = 8, with the stricter bound 1e-6 of the amendment) and T4 green in v2 and v3. T4 also checks &epsilon; / 64 for r = 8.</td><td><code>test_ne_attention_equals_eager_in_fp32</code>, <code>test_rewrite_is_exact_in_fp32</code>, <code>test_rewrite_keeps_layer_scale</code></td><td><span class="pass">pass</span></td></tr>
+      <tr><td>AC3</td><td>Conversion of every planned package</td><td>26 of 26 convert and compile; each line has trace, conversion, save and compile times, size and peak footprint; ViT-7B/16 has one &laquo;deferred&raquo; line</td><td>26 of 26 current packages (25 of version <code>ne2</code> in job F, the plain package again in J3) have status done with all six fields. Total package size 12.85 GB; largest peak footprint 5.60 GB (ViT-H+/16, 512 px, b8). ViT-7B/16: &laquo;deferred&raquo; with the reason D6. T12 green (v3). The 26 compiled models are on disk (Section 8).</td><td><code>results/coreml.jsonl</code> lines 145 to 169, 171, 218; T12</td><td><span class="pass">pass</span></td></tr>
+      <tr><td>AC4</td><td>Parity on the Neural Engine</td><td>27 rows of ViT-S/16, ViT-S+/16 and ViT-B/16 pass 0.999 / 0.999 / 0.99; a ViT-L/16 or ViT-H+/16 row passes or is an expected failure with a block probe (Q3)</td><td>9 of the 27 planned rows are at batch size 1 in J2 (3 model sizes &times; 3 input resolutions); the 45-row count of the plan counts the 3 compute units. On coreml-ne 2 of 9 pass (ViT-S/16 and ViT-S+/16 at 224 px); 7 fail with frame &minus;0.052 to 0.067. ViT-L/16 and ViT-H+/16: 0 of 6 pass. Q3 probes exist for ViT-L/16 224 px and ViT-S/16 448 px: first wrong tensor at the input of block 1 (cosine 0.31 and 0.19), with the right largest value (1.9 and 16.3). v7 repeats ViT-S/16 (valid, frame 0.99990) and ViT-H+/16 (frame &minus;0.0196) at 224 px with the same values as J2. T11 green. The failing ViT-S/16 to ViT-B/16 rows are not allowed failures in the plan.</td><td><code>results/coreml.jsonl</code> lines 172 to 214; <code>build-logs/q3-probe-*.log</code>, <code>P.log</code>, <code>J3.log</code> (fp16-input probe); Figure 1</td><td><span class="fail">fail</span></td></tr>
+      <tr><td>AC5</td><td>Parity on the GPU and with ALL</td><td>The same rows on coreml-gpu and coreml-all pass, or a ViT-L/16 or ViT-H+/16 row is an expected failure with Q3</td><td>30 of 30 rows of version <code>ne2</code> pass (15 coreml-gpu, 15 coreml-all), ViT-L/16 and ViT-H+/16 included. Smallest values: frame 0.999993, patch mean 0.999964, patch 1st percentile 0.99952 (ViT-H+/16, 224 px). The failed ViT-H+/16 512 px ALL row of job F (disk full) ran again in J3: valid. T7 green on 3 units.</td><td>lines 172 to 215, 223; T7</td><td><span class="pass">pass</span></td></tr>
+      <tr><td>AC6</td><td>Compute plan</td><td>One report for each of the 26 packages on CPU_AND_NE; the table gives the Neural Engine share of each package</td><td>The build has a current plan line only for the plain package (line 222). The 15 plan lines of version <code>ne</code> for ViT-S/16 to ViT-B/16 describe the same graph as <code>ne2</code> (r = 1: no change, 1,325 and 1,361 MIL ops in both). The 10 <code>ne2</code> plan lines of ViT-L/16 and ViT-H+/16 (lines 134 to 143) belong to the packages of job R (2,640 and 3,600 MIL ops), which job F replaced (2,623 and 3,583 ops). Table 3 of <code>coreml-table.md</code> lists the <code>ne</code> package names. The Verify run v8 gives a report for each of the 26 current packages (Section 8).</td><td>lines 75 to 100, 134 to 144, 222; v8; finding V3</td><td><span class="partial">partial</span></td></tr>
+      <tr><td>AC7</td><td>Load times and memory</td><td>First load and cached load for each package and compute unit; cached load &le; 0.5 s for every package; peak footprint in each worker line</td><td>J2 (48 rows of <code>ne2</code> and plain): first load 0.15 to 38.2 s (ViT-H+/16, 512 px, CPU_AND_NE); cached load 0.021 to 0.265 s. Peak footprint in 209 of 209 Core ML worker lines. Two of 222 Core ML lines of J3, J4 and Verify have a cached load above 0.5 s: ViT-B/16 512 px b8 package on CPU_AND_NE 7.19 s (matrix, line 262) and ViT-H+/16 512 px b8 on ALL 1.91 s (pairs run 1, round 0). The same ALL worker in run 2: at most 0.238 s.</td><td>lines 172 to 223, 262, 304; finding V5</td><td><span class="partial">partial</span></td></tr>
+      <tr><td>AC8</td><td>Matrix</td><td>60 of 60 cells with a throughput or a reason; each Core ML cell with its ratio to mlx of the same group</td><td>70 lines, all done: the 60 planned cells plus 10 extra rows of the batch-size-8 package on CPU_AND_NE (deviation 7). Each Core ML line has a throughput and a ratio; each invalid line has the reason &laquo;parity below the threshold&raquo;. 20 of 20 mlx lines valid.</td><td>lines 224 to 293; Table 4 of <code>coreml-table.md</code></td><td><span class="pass">pass</span></td></tr>
+      <tr><td>AC9</td><td>Paired runs at P1 and P2</td><td>Batch size 8 and 1, 5 rounds in J4; batch size 8, 5 rounds in the Verify run; medians, spread, verdict D21 (report only)</td><td>Run 1: 71 lines (P1 and P2 &times; b8 and b1, 5 rounds, the F4 worker). Run 2: 41 lines (b8, 5 rounds, the F4 worker). Section 6 gives the medians: the largest spread between the runs is 0.084 (coreml-ne at P1). The verdicts of both runs agree. The F4 worker gives the same parity in both runs (frame 0.3929).</td><td>lines with phase &laquo;pairs&raquo;; Table 5 of <code>coreml-table.md</code>; Table 4</td><td><span class="pass">pass</span></td></tr>
+      <tr><td>AC10</td><td>Two-stream run</td><td>P1 and P2 at b8 and b1, 3 rounds: median stream ratio and the throughput of each side; P1 b8 &ge; 1.10 expected; a reason for each value below 1.05</td><td>Run 1 (build): P1 b8 1.257, P1 b1 2.302, P2 b8 0.934, P2 b1 0.996. Run 2 (Verify): P1 b8 1.312, P2 b8 0.981. P1 b8 meets 1.10 in both runs. The reasons of the P2 values are in Section 7.</td><td>lines with phase &laquo;streams&raquo;; Table 6 of <code>coreml-table.md</code>; Table 5</td><td><span class="pass">pass</span></td></tr>
+      <tr><td>AC11</td><td>Run rules</td><td>Every job under the GPU lock; 0 lines with an entry in other_heavy_jobs_seen; a memory-check line before each conversion and each load; no ViT-7B/16 load</td><td>0 of 418 lines with an entry in other_heavy_jobs_seen. The lock log has no overlapping holds from 22:30 UTC on (the build jobs chain1, q3, R, P, F, J3, J4, J5 and the Verify jobs). Driver logs: a memory check before each worker (convert 195, parity 158, matrix 90, pairs 25 + 46, streams 18 checks). ViT-7B/16: 3 &laquo;deferred&raquo; lines, no load; T12 green. All lines on AC power, Low Power Mode off.</td><td><code>~/.cache/dinov3-apple/gpu-lock.log</code>; <code>tests/fixtures/generated/bench/coreml/*/driver.log</code></td><td><span class="pass">pass</span></td></tr>
+      <tr><td>AC12</td><td>Tests, lint and docs</td><td>Default session 0 failed and &le; 60 s; loading tests in the slow session; slow <code>test_coreml.py</code> 0 failed; T13 green; ruff clean; the terms of explore Section 7; ADR 0014 and ADR 0015</td><td>Default session: 946 passed, 15 skipped in 51.94 s (v2), 0 failed in <code>tests/test_prior_art.py</code>. T6 to T8 and T10 to T12 carry the mark <code>slow</code>; the fixture <code>small_package</code> is used only by slow tests. Slow session: 18 passed (v3). T13 green. ruff clean. GLOSSARY.md has Core ML package, Compute units, Compute plan, Neural Engine rewrite, Score scale, Residual-stream scale, Two-stream run, and the new terms Batch API and Stream ratio. ADR 0014 and ADR 0015: commit <code>e6c5853</code> (during Verify).</td><td>v1 to v3, v10; <code>GLOSSARY.md</code> commit <code>4457a13</code></td><td><span class="pass">pass</span></td></tr>
+    </tbody>
+  </table>
+</div>
+  <p class="caption"><b>Table 2.</b> The 12 acceptance criteria of plan Table 6 with the measured values. &laquo;Partial&raquo; means that a part of the target is not met. Line numbers are 0-based indices in <code>results/coreml.jsonl</code> (the first line is line 0).</p>
+</section>
+
+<section id="deviations">
+  <h2>4 Deviations of the build</h2>
+  <p>The hand-over note lists the deviations below. The agent checked each against the code, the result lines and the logs.</p>
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>No.</th><th>Deviation (hand-over)</th><th>Check</th><th>Result</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td>J2 parity rows time no batches; the speed at batch size 1 comes from J3</td><td><code>run_coreml(parity_only=True)</code> times no batch. J3 has the b1 rows at 224 and 512 px.</td><td>Justified. AC4, AC5 and AC7 need no batch time.</td></tr>
+      <tr><td>2</td><td>T2 data scaled so that the largest score is exactly 1e7</td><td><code>_qkv</code> scales q by 1e7 / (largest score). The plan says &laquo;scores up to 1e7&raquo;.</td><td>Justified; within the plan text.</td></tr>
+      <tr><td>3</td><td>Chain 1 held the lock for the tests, J1 and J2 together; one lock call per job after that</td><td>The lock log has one hold of <code>chain1.sh</code> and later one hold for each job.</td><td>Correct; the run rule (one heavy job at a time) holds.</td></tr>
+      <tr><td>4</td><td>Amendment of 01:20 applied after J1 and J2</td><td>&epsilon; / r&sup2; in <code>rewrite_for_neural_engine</code>; T3 bound 1e-6; the batch API in <code>run_coreml</code> and <code>stream_worker</code>; the F4 worker in <code>pairs_plan</code>. J1 and J2 ran again with <code>ne2</code>.</td><td>Correct.</td></tr>
+      <tr><td>5</td><td>Q3: every Neural Engine failure shows first at the input of block 1</td><td><code>q3-probe-vitl16-224.log</code>: block input cosine 0.306 on CPU_AND_NE, 0.99999993 on CPU_AND_GPU; the block probe of block 1 starts from the wrong input. Only two model sizes have a probe.</td><td>Consistent with the logs. It changes the meaning of F4: it is not a batch-size fault.</td></tr>
+      <tr><td>5b</td><td>Matmul patch embedding tried and removed</td><td><code>P.log</code>: the same parity as the conv package (ViT-S/16 448 px iss-conference &minus;0.014674 in both). <code>R.log</code> shows that job R (00:26 UTC) already used it (test <code>test_linear_patch_embedding_equals_conv</code>); its plan lines 134 to 143 stay in the results (V3).</td><td>Correct; the left-over plan lines are finding V3.</td></tr>
+      <tr><td>5c</td><td>Rewrite version <code>ne2</code> in the package names; the old lines stay; the table takes the latest line</td><td>True for the conversion. Not true for Tables 2 and 3 of <code>coreml-table.md</code>: <code>_latest</code> keys on <code>ne_batch_form</code>, which the <code>ne</code> lines do not have, so Table 2 shows 45 <code>ne</code> rows next to 45 <code>ne2</code> rows and 6 rows of the plain package, without the package name.</td><td>Partly correct; finding V4.</td></tr>
+      <tr><td>6</td><td>&epsilon; / r&sup2; fixes the GPU</td><td>The <code>ne2</code> GPU and ALL rows of ViT-L/16 and ViT-H+/16 pass (frame &ge; 0.999993); the <code>ne</code> rows failed (frame 0.888 to 0.998).</td><td>Correct.</td></tr>
+      <tr><td>7</td><td>One extra matrix worker at b8: the batch-size-8 package on CPU_AND_NE</td><td>10 extra lines with <code>ne_batch_form</code> &laquo;package&raquo;, all invalid.</td><td>Justified: it shows that the batch-API rule is still needed.</td></tr>
+      <tr><td>8</td><td>Disk full in job F; the <code>.mlpackage</code> is deleted after the compile</td><td><code>convert_backbone</code> removes the package after <code>compile_model</code>; the J3 repair run converted the plain package again and repeated the failed ALL row. Free disk at Verify start: 11 GB.</td><td>Justified. ADR 0015 still says that &laquo;the packages and their compiled models&raquo; live in the cache (V7).</td></tr>
+    </tbody>
+  </table>
+</div>
+  <p class="caption"><b>Table 3.</b> The deviations of the build and their check.</p>
+</section>
+
+<section id="parity">
+  <h2>5 Parity of rewrite version ne2</h2>
+  <figure>
+    <div class="fig">
+<svg viewBox="0 0 760 300" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Frame cosine of the 45 parity rows of rewrite version ne2 on each compute unit">
+<rect x="0" y="0" width="760" height="300" fill="#ffffff"/>
+<text x="219.0" y="30" font-size="13" font-weight="600" text-anchor="middle" fill="#111414">CPU_AND_NE (coreml-ne)</text>
+<text x="153.0" y="56" font-size="12" text-anchor="middle" fill="#4a5655">224 px</text>
+<rect x="122" y="70" width="62" height="34" rx="4" fill="#d8efe0" stroke="#1d7a3a" stroke-width="1"/>
+<text x="153.0" y="91.0" font-size="12" text-anchor="middle" fill="#111414" font-family="ui-monospace, Menlo, monospace">0.9999</text>
+<rect x="122" y="110" width="62" height="34" rx="4" fill="#d8efe0" stroke="#1d7a3a" stroke-width="1"/>
+<text x="153.0" y="131.0" font-size="12" text-anchor="middle" fill="#111414" font-family="ui-monospace, Menlo, monospace">0.9997</text>
+<rect x="122" y="150" width="62" height="34" rx="4" fill="#f7d9d6" stroke="#b3261e" stroke-width="1"/>
+<text x="153.0" y="171.0" font-size="12" text-anchor="middle" fill="#111414" font-family="ui-monospace, Menlo, monospace">0.0503</text>
+<rect x="122" y="190" width="62" height="34" rx="4" fill="#f7d9d6" stroke="#b3261e" stroke-width="1"/>
+<text x="153.0" y="211.0" font-size="12" text-anchor="middle" fill="#111414" font-family="ui-monospace, Menlo, monospace">-0.0100</text>
+<rect x="122" y="230" width="62" height="34" rx="4" fill="#f7d9d6" stroke="#b3261e" stroke-width="1"/>
+<text x="153.0" y="251.0" font-size="12" text-anchor="middle" fill="#111414" font-family="ui-monospace, Menlo, monospace">-0.0196</text>
+<text x="219.0" y="56" font-size="12" text-anchor="middle" fill="#4a5655">448 px</text>
+<rect x="188" y="70" width="62" height="34" rx="4" fill="#f7d9d6" stroke="#b3261e" stroke-width="1"/>
+<text x="219.0" y="91.0" font-size="12" text-anchor="middle" fill="#111414" font-family="ui-monospace, Menlo, monospace">-0.0147</text>
+<rect x="188" y="110" width="62" height="34" rx="4" fill="#f7d9d6" stroke="#b3261e" stroke-width="1"/>
+<text x="219.0" y="131.0" font-size="12" text-anchor="middle" fill="#111414" font-family="ui-monospace, Menlo, monospace">-0.0123</text>
+<rect x="188" y="150" width="62" height="34" rx="4" fill="#f7d9d6" stroke="#b3261e" stroke-width="1"/>
+<text x="219.0" y="171.0" font-size="12" text-anchor="middle" fill="#111414" font-family="ui-monospace, Menlo, monospace">-0.0517</text>
+<rect x="188" y="190" width="62" height="34" rx="4" fill="#f7d9d6" stroke="#b3261e" stroke-width="1"/>
+<text x="219.0" y="211.0" font-size="12" text-anchor="middle" fill="#111414" font-family="ui-monospace, Menlo, monospace">-0.0202</text>
+<rect x="188" y="230" width="62" height="34" rx="4" fill="#f7d9d6" stroke="#b3261e" stroke-width="1"/>
+<text x="219.0" y="251.0" font-size="12" text-anchor="middle" fill="#111414" font-family="ui-monospace, Menlo, monospace">-0.0095</text>
+<text x="285.0" y="56" font-size="12" text-anchor="middle" fill="#4a5655">512 px</text>
+<rect x="254" y="70" width="62" height="34" rx="4" fill="#f7d9d6" stroke="#b3261e" stroke-width="1"/>
+<text x="285.0" y="91.0" font-size="12" text-anchor="middle" fill="#111414" font-family="ui-monospace, Menlo, monospace">0.0669</text>
+<rect x="254" y="110" width="62" height="34" rx="4" fill="#f7d9d6" stroke="#b3261e" stroke-width="1"/>
+<text x="285.0" y="131.0" font-size="12" text-anchor="middle" fill="#111414" font-family="ui-monospace, Menlo, monospace">-0.0035</text>
+<rect x="254" y="150" width="62" height="34" rx="4" fill="#f7d9d6" stroke="#b3261e" stroke-width="1"/>
+<text x="285.0" y="171.0" font-size="12" text-anchor="middle" fill="#111414" font-family="ui-monospace, Menlo, monospace">-0.0350</text>
+<rect x="254" y="190" width="62" height="34" rx="4" fill="#f7d9d6" stroke="#b3261e" stroke-width="1"/>
+<text x="285.0" y="211.0" font-size="12" text-anchor="middle" fill="#111414" font-family="ui-monospace, Menlo, monospace">-0.0469</text>
+<rect x="254" y="230" width="62" height="34" rx="4" fill="#f7d9d6" stroke="#b3261e" stroke-width="1"/>
+<text x="285.0" y="251.0" font-size="12" text-anchor="middle" fill="#111414" font-family="ui-monospace, Menlo, monospace">0.0054</text>
+<text x="431.0" y="30" font-size="13" font-weight="600" text-anchor="middle" fill="#111414">CPU_AND_GPU (coreml-gpu)</text>
+<text x="365.0" y="56" font-size="12" text-anchor="middle" fill="#4a5655">224 px</text>
+<rect x="334" y="70" width="62" height="34" rx="4" fill="#d8efe0" stroke="#1d7a3a" stroke-width="1"/>
+<text x="365.0" y="91.0" font-size="12" text-anchor="middle" fill="#111414" font-family="ui-monospace, Menlo, monospace">1.0000</text>
+<rect x="334" y="110" width="62" height="34" rx="4" fill="#d8efe0" stroke="#1d7a3a" stroke-width="1"/>
+<text x="365.0" y="131.0" font-size="12" text-anchor="middle" fill="#111414" font-family="ui-monospace, Menlo, monospace">1.0000</text>
+<rect x="334" y="150" width="62" height="34" rx="4" fill="#d8efe0" stroke="#1d7a3a" stroke-width="1"/>
+<text x="365.0" y="171.0" font-size="12" text-anchor="middle" fill="#111414" font-family="ui-monospace, Menlo, monospace">1.0000</text>
+<rect x="334" y="190" width="62" height="34" rx="4" fill="#d8efe0" stroke="#1d7a3a" stroke-width="1"/>
+<text x="365.0" y="211.0" font-size="12" text-anchor="middle" fill="#111414" font-family="ui-monospace, Menlo, monospace">1.0000</text>
+<rect x="334" y="230" width="62" height="34" rx="4" fill="#d8efe0" stroke="#1d7a3a" stroke-width="1"/>
+<text x="365.0" y="251.0" font-size="12" text-anchor="middle" fill="#111414" font-family="ui-monospace, Menlo, monospace">1.0000</text>
+<text x="431.0" y="56" font-size="12" text-anchor="middle" fill="#4a5655">448 px</text>
+<rect x="400" y="70" width="62" height="34" rx="4" fill="#d8efe0" stroke="#1d7a3a" stroke-width="1"/>
+<text x="431.0" y="91.0" font-size="12" text-anchor="middle" fill="#111414" font-family="ui-monospace, Menlo, monospace">1.0000</text>
+<rect x="400" y="110" width="62" height="34" rx="4" fill="#d8efe0" stroke="#1d7a3a" stroke-width="1"/>
+<text x="431.0" y="131.0" font-size="12" text-anchor="middle" fill="#111414" font-family="ui-monospace, Menlo, monospace">1.0000</text>
+<rect x="400" y="150" width="62" height="34" rx="4" fill="#d8efe0" stroke="#1d7a3a" stroke-width="1"/>
+<text x="431.0" y="171.0" font-size="12" text-anchor="middle" fill="#111414" font-family="ui-monospace, Menlo, monospace">1.0000</text>
+<rect x="400" y="190" width="62" height="34" rx="4" fill="#d8efe0" stroke="#1d7a3a" stroke-width="1"/>
+<text x="431.0" y="211.0" font-size="12" text-anchor="middle" fill="#111414" font-family="ui-monospace, Menlo, monospace">1.0000</text>
+<rect x="400" y="230" width="62" height="34" rx="4" fill="#d8efe0" stroke="#1d7a3a" stroke-width="1"/>
+<text x="431.0" y="251.0" font-size="12" text-anchor="middle" fill="#111414" font-family="ui-monospace, Menlo, monospace">1.0000</text>
+<text x="497.0" y="56" font-size="12" text-anchor="middle" fill="#4a5655">512 px</text>
+<rect x="466" y="70" width="62" height="34" rx="4" fill="#d8efe0" stroke="#1d7a3a" stroke-width="1"/>
+<text x="497.0" y="91.0" font-size="12" text-anchor="middle" fill="#111414" font-family="ui-monospace, Menlo, monospace">1.0000</text>
+<rect x="466" y="110" width="62" height="34" rx="4" fill="#d8efe0" stroke="#1d7a3a" stroke-width="1"/>
+<text x="497.0" y="131.0" font-size="12" text-anchor="middle" fill="#111414" font-family="ui-monospace, Menlo, monospace">1.0000</text>
+<rect x="466" y="150" width="62" height="34" rx="4" fill="#d8efe0" stroke="#1d7a3a" stroke-width="1"/>
+<text x="497.0" y="171.0" font-size="12" text-anchor="middle" fill="#111414" font-family="ui-monospace, Menlo, monospace">1.0000</text>
+<rect x="466" y="190" width="62" height="34" rx="4" fill="#d8efe0" stroke="#1d7a3a" stroke-width="1"/>
+<text x="497.0" y="211.0" font-size="12" text-anchor="middle" fill="#111414" font-family="ui-monospace, Menlo, monospace">1.0000</text>
+<rect x="466" y="230" width="62" height="34" rx="4" fill="#d8efe0" stroke="#1d7a3a" stroke-width="1"/>
+<text x="497.0" y="251.0" font-size="12" text-anchor="middle" fill="#111414" font-family="ui-monospace, Menlo, monospace">1.0000</text>
+<text x="643.0" y="30" font-size="13" font-weight="600" text-anchor="middle" fill="#111414">ALL (coreml-all)</text>
+<text x="577.0" y="56" font-size="12" text-anchor="middle" fill="#4a5655">224 px</text>
+<rect x="546" y="70" width="62" height="34" rx="4" fill="#d8efe0" stroke="#1d7a3a" stroke-width="1"/>
+<text x="577.0" y="91.0" font-size="12" text-anchor="middle" fill="#111414" font-family="ui-monospace, Menlo, monospace">1.0000</text>
+<rect x="546" y="110" width="62" height="34" rx="4" fill="#d8efe0" stroke="#1d7a3a" stroke-width="1"/>
+<text x="577.0" y="131.0" font-size="12" text-anchor="middle" fill="#111414" font-family="ui-monospace, Menlo, monospace">1.0000</text>
+<rect x="546" y="150" width="62" height="34" rx="4" fill="#d8efe0" stroke="#1d7a3a" stroke-width="1"/>
+<text x="577.0" y="171.0" font-size="12" text-anchor="middle" fill="#111414" font-family="ui-monospace, Menlo, monospace">1.0000</text>
+<rect x="546" y="190" width="62" height="34" rx="4" fill="#d8efe0" stroke="#1d7a3a" stroke-width="1"/>
+<text x="577.0" y="211.0" font-size="12" text-anchor="middle" fill="#111414" font-family="ui-monospace, Menlo, monospace">1.0000</text>
+<rect x="546" y="230" width="62" height="34" rx="4" fill="#d8efe0" stroke="#1d7a3a" stroke-width="1"/>
+<text x="577.0" y="251.0" font-size="12" text-anchor="middle" fill="#111414" font-family="ui-monospace, Menlo, monospace">1.0000</text>
+<text x="643.0" y="56" font-size="12" text-anchor="middle" fill="#4a5655">448 px</text>
+<rect x="612" y="70" width="62" height="34" rx="4" fill="#d8efe0" stroke="#1d7a3a" stroke-width="1"/>
+<text x="643.0" y="91.0" font-size="12" text-anchor="middle" fill="#111414" font-family="ui-monospace, Menlo, monospace">1.0000</text>
+<rect x="612" y="110" width="62" height="34" rx="4" fill="#d8efe0" stroke="#1d7a3a" stroke-width="1"/>
+<text x="643.0" y="131.0" font-size="12" text-anchor="middle" fill="#111414" font-family="ui-monospace, Menlo, monospace">1.0000</text>
+<rect x="612" y="150" width="62" height="34" rx="4" fill="#d8efe0" stroke="#1d7a3a" stroke-width="1"/>
+<text x="643.0" y="171.0" font-size="12" text-anchor="middle" fill="#111414" font-family="ui-monospace, Menlo, monospace">1.0000</text>
+<rect x="612" y="190" width="62" height="34" rx="4" fill="#d8efe0" stroke="#1d7a3a" stroke-width="1"/>
+<text x="643.0" y="211.0" font-size="12" text-anchor="middle" fill="#111414" font-family="ui-monospace, Menlo, monospace">1.0000</text>
+<rect x="612" y="230" width="62" height="34" rx="4" fill="#d8efe0" stroke="#1d7a3a" stroke-width="1"/>
+<text x="643.0" y="251.0" font-size="12" text-anchor="middle" fill="#111414" font-family="ui-monospace, Menlo, monospace">1.0000</text>
+<text x="709.0" y="56" font-size="12" text-anchor="middle" fill="#4a5655">512 px</text>
+<rect x="678" y="70" width="62" height="34" rx="4" fill="#d8efe0" stroke="#1d7a3a" stroke-width="1"/>
+<text x="709.0" y="91.0" font-size="12" text-anchor="middle" fill="#111414" font-family="ui-monospace, Menlo, monospace">1.0000</text>
+<rect x="678" y="110" width="62" height="34" rx="4" fill="#d8efe0" stroke="#1d7a3a" stroke-width="1"/>
+<text x="709.0" y="131.0" font-size="12" text-anchor="middle" fill="#111414" font-family="ui-monospace, Menlo, monospace">1.0000</text>
+<rect x="678" y="150" width="62" height="34" rx="4" fill="#d8efe0" stroke="#1d7a3a" stroke-width="1"/>
+<text x="709.0" y="171.0" font-size="12" text-anchor="middle" fill="#111414" font-family="ui-monospace, Menlo, monospace">1.0000</text>
+<rect x="678" y="190" width="62" height="34" rx="4" fill="#d8efe0" stroke="#1d7a3a" stroke-width="1"/>
+<text x="709.0" y="211.0" font-size="12" text-anchor="middle" fill="#111414" font-family="ui-monospace, Menlo, monospace">1.0000</text>
+<rect x="678" y="230" width="62" height="34" rx="4" fill="#d8efe0" stroke="#1d7a3a" stroke-width="1"/>
+<text x="709.0" y="251.0" font-size="12" text-anchor="middle" fill="#111414" font-family="ui-monospace, Menlo, monospace">1.0000</text>
+<text x="110" y="91.0" font-size="13" text-anchor="end" fill="#111414">ViT-S/16</text>
+<text x="110" y="131.0" font-size="13" text-anchor="end" fill="#111414">ViT-S+/16</text>
+<text x="110" y="171.0" font-size="13" text-anchor="end" fill="#111414">ViT-B/16</text>
+<text x="110" y="211.0" font-size="13" text-anchor="end" fill="#111414">ViT-L/16</text>
+<text x="110" y="251.0" font-size="13" text-anchor="end" fill="#111414">ViT-H+/16</text>
+<text x="20" y="288" font-size="12" fill="#4a5655">Green: frame, patch mean and patch 1st percentile pass 0.999 / 0.999 / 0.99 (ADR 0003). Red: fail. Value: worst frame cosine of the 3 test images.</text>
+</svg>
+    </div>
+    <figcaption class="caption"><b>Figure 1.</b> Frame cosine (worst of the 3 test images) of the 45 parity rows of version <code>ne2</code> at batch size 1. On the GPU and with ALL every row passes. On the Neural Engine only the two packages whose compute plan keeps the first ops on the CPU pass.</figcaption>
+  </figure>
+  <p>The Verify run v7 gives the same values as J2, to all printed digits. ViT-S/16 at 224 px: frame 0.99990, patch mean 0.99990, patch 1st percentile 0.99960; first load 0.07 s, cached load 0.022 s. ViT-H+/16 at 224 px: frame &minus;0.0196 (forest), patch mean &minus;0.0076, patch 1st percentile &minus;0.0693. A wrong Neural Engine output is deterministic: the F4 worker also gives frame 0.39291185 in both paired runs.</p>
+</section>
+
+<section id="pairs">
+  <h2>6 Paired runs</h2>
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>Group</th><th>Side</th><th>Run 1 median</th><th>Run 2 median</th><th>Pooled</th><th>Spread</th><th>Verdict D21</th><th>Core ML img/s</th><th>mlx img/s</th><th>Valid</th></tr></thead>
+    <tbody>
+      <tr><td>P1 b8</td><td>coreml-ne (batch API)</td><td class="num">0.388</td><td class="num">0.420</td><td class="num">0.392</td><td class="num">0.084</td><td>not above 1</td><td class="num">687.6</td><td class="num">1,773.0</td><td>yes</td></tr>
+      <tr><td>P1 b8</td><td>coreml-gpu</td><td class="num">0.975</td><td class="num">0.960</td><td class="num">0.969</td><td class="num">0.015</td><td>not above 1</td><td class="num">1,705.5</td><td class="num">1,773.0</td><td>yes</td></tr>
+      <tr><td>P1 b8</td><td>coreml-all</td><td class="num">0.996</td><td class="num">0.961</td><td class="num">0.983</td><td class="num">0.036</td><td>not above 1</td><td class="num">1,755.0</td><td class="num">1,773.0</td><td>yes</td></tr>
+      <tr><td>P1 b1</td><td>coreml-ne</td><td class="num">1.016</td><td class="num">&ndash;</td><td class="num">1.016</td><td class="num">&ndash;</td><td>above 1 (inside the noise)</td><td class="num">539.1</td><td class="num">531.3</td><td>yes</td></tr>
+      <tr><td>P1 b1</td><td>coreml-gpu</td><td class="num">0.886</td><td class="num">&ndash;</td><td class="num">0.886</td><td class="num">&ndash;</td><td>not above 1</td><td class="num">461.1</td><td class="num">531.3</td><td>yes</td></tr>
+      <tr><td>P2 b8</td><td>coreml-ne (batch API)</td><td class="num">0.144</td><td class="num">0.140</td><td class="num">0.143</td><td class="num">0.024</td><td>not above 1</td><td class="num">2.8</td><td class="num">19.9</td><td>no</td></tr>
+      <tr><td>P2 b8</td><td>coreml-gpu</td><td class="num">0.775</td><td class="num">0.822</td><td class="num">0.790</td><td class="num">0.061</td><td>not above 1</td><td class="num">15.5</td><td class="num">19.9</td><td>yes</td></tr>
+      <tr><td>P2 b8</td><td>coreml-all</td><td class="num">0.737</td><td class="num">0.740</td><td class="num">0.739</td><td class="num">0.004</td><td>not above 1</td><td class="num">14.1</td><td class="num">19.9</td><td>yes</td></tr>
+      <tr><td>P2 b1</td><td>coreml-ne</td><td class="num">0.167</td><td class="num">&ndash;</td><td class="num">0.167</td><td class="num">&ndash;</td><td>not above 1</td><td class="num">2.8</td><td class="num">16.8</td><td>no</td></tr>
+      <tr><td>P2 b1</td><td>coreml-gpu</td><td class="num">0.884</td><td class="num">&ndash;</td><td class="num">0.884</td><td class="num">&ndash;</td><td>not above 1</td><td class="num">15.2</td><td class="num">16.8</td><td>yes</td></tr>
+    </tbody>
+  </table>
+</div>
+  <p class="caption"><b>Table 4.</b> The paired ratio Core ML / mlx, 5 rounds per run. P1: ViT-S/16, 224 px, frame; P2: ViT-H+/16, 512 px, patch. Run 2 is the Verify run (batch size 8 only, as in plan Section 3.7). Verdicts from <code>speedup.pass_verdict</code>; the mark &laquo;inside the noise&raquo; is added here (the table script does not write it, V8). Report only: Step 6c has no speed target.</p>
+  <p>The absolute mlx throughput at P1 b8 is lower in run 2 (1,635 img/s median) than in run 1 (1,773 img/s); the ratios move less (at most 0.035 for coreml-gpu and coreml-all). Core ML on the GPU does not beat compiled mlx at batch size 8. The Neural Engine at P1 b8 gives about 690 img/s with the batch API, 0.39 to 0.42 of mlx; it is above mlx only at batch size 1, where mlx is slow.</p>
+</section>
+
+<section id="streams">
+  <h2>7 Two-stream run</h2>
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>Group</th><th>Run</th><th>ne batch size</th><th>ne alone</th><th>mlx alone</th><th>both: ne</th><th>both: mlx</th><th>Stream ratio (rounds)</th><th>ne output valid</th></tr></thead>
+    <tbody>
+      <tr><td>P1 b8</td><td>1</td><td class="num">8</td><td class="num">695.1</td><td class="num">1,984.4</td><td class="num">648.4</td><td class="num">1,854.3</td><td class="num">1.257 (1.331, 1.240, 1.257)</td><td>yes</td></tr>
+      <tr><td>P1 b8</td><td>2</td><td class="num">8</td><td class="num">688.0</td><td class="num">1,958.4</td><td class="num">652.8</td><td class="num">1,914.2</td><td class="num">1.312 (1.319, 1.285, 1.312)</td><td>yes</td></tr>
+      <tr><td>P1 b1</td><td>1</td><td class="num">8</td><td class="num">688.1</td><td class="num">526.1</td><td class="num">683.0</td><td class="num">529.5</td><td class="num">2.302 (2.302, 2.309, 2.217)</td><td>yes</td></tr>
+      <tr><td>P2 b8</td><td>1</td><td class="num">1</td><td class="num">2.8</td><td class="num">16.7</td><td class="num">2.5</td><td class="num">13.7</td><td class="num">0.934 (0.922, 0.972, 0.934)</td><td>no</td></tr>
+      <tr><td>P2 b8</td><td>2</td><td class="num">1</td><td class="num">2.8</td><td class="num">19.9</td><td class="num">2.7</td><td class="num">15.9</td><td class="num">0.981 (0.993, 0.935, 0.981)</td><td>no</td></tr>
+      <tr><td>P2 b1</td><td>1</td><td class="num">1</td><td class="num">2.8</td><td class="num">15.2</td><td class="num">2.6</td><td class="num">12.5</td><td class="num">0.996 (1.021, 0.993, 0.996)</td><td>no</td></tr>
+    </tbody>
+  </table>
+</div>
+  <p class="caption"><b>Table 5.</b> The two-stream run, img/s, medians over 3 rounds of 10 s. Stream ratio = (ne + mlx, both) / (mlx alone) of the same round. &laquo;ne output valid&raquo; comes from the parity rows of the same package; the stream worker itself checks no output (V2).</p>
+  <p><b>P1.</b> The Neural Engine adds throughput. In &laquo;both&raquo;, mlx keeps 0.93 to 0.99 of its throughput alone, and the Neural Engine adds 574 to 667 img/s. P1 b8 is above the expected 1.10 in all 6 rounds. P1 b1 is high (2.30) because mlx at batch size 1 is slow (about 527 img/s), while the Neural Engine side runs the batch API with 8 inputs.</p>
+  <p><b>Reasons for the values below 1.05 (P2).</b></p>
+  <ol>
+    <li>The Neural Engine adds little: 2.5 to 2.8 img/s against 12 to 21 img/s of mlx. ViT-H+/16 at 512 px runs at 2.8 img/s on the Neural Engine, 0.14 to 0.17 of mlx.</li>
+    <li>mlx slows down when the Neural Engine runs: in &laquo;both&raquo; mlx keeps only 0.77 to 0.86 of its throughput alone. The loss of mlx (2.5 to 4.6 img/s) is as large as the gain of the Neural Engine or larger. Both units share the memory bandwidth, and the Core ML call uses the CPU for the ops off the Neural Engine and for the transfer of the 1,029 &times; 1,280 fp32 output. The agent did not measure which part dominates.</li>
+    <li>The Neural Engine output at P2 is wrong (frame &minus;0.03 to 0.32 for the three images, V1). The streams plan falls back to batch size 1 because no coreml-ne matrix row of ViT-H+/16 at 512 px is valid. So the P2 throughput of the Neural Engine is not useful throughput, also where the ratio were above 1.</li>
+  </ol>
+</section>
+
+<section id="plan">
+  <h2>8 Compute plan of the current packages (v8)</h2>
+  <p>The agent ran <code>compute_plan_report</code> on CPU_AND_NE for the compiled models in the cache, in name order. The orchestrator then reported that the free disk fell to about 6 GB (the Core ML bundle cache grows with each Core ML process) and asked to run no Core ML job that an acceptance criterion does not need. So the agent stopped v8 after 11 of 26 models.</p>
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>Compiled model</th><th>Ops</th><th>Ops per device</th><th>Neural Engine cost share</th><th>Ops off the Neural Engine</th></tr></thead>
+    <tbody>
+      <tr><td><code>vitb16-224-b1-ne2-s256-r1-ct9.0.mlmodelc</code></td><td class="num">571</td><td>CPU 4, NeuralEngine 567</td><td class="num">0.991</td><td>ios18.reshape 3, ios18.add 1</td></tr>
+      <tr><td><code>vitb16-224-b8-ne2-s256-r1-ct9.0.mlmodelc</code></td><td class="num">571</td><td>CPU 4, NeuralEngine 567</td><td class="num">0.991</td><td>ios18.reshape 3, ios18.add 1</td></tr>
+      <tr><td><code>vitb16-448-b1-ne2-s256-r1-ct9.0.mlmodelc</code></td><td class="num">571</td><td>CPU 4, NeuralEngine 567</td><td class="num">0.993</td><td>ios18.reshape 3, ios18.add 1</td></tr>
+      <tr><td><code>vitb16-512-b1-ne2-s256-r1-ct9.0.mlmodelc</code></td><td class="num">571</td><td>CPU 4, NeuralEngine 567</td><td class="num">0.994</td><td>ios18.reshape 3, ios18.add 1</td></tr>
+      <tr><td><code>vitb16-512-b8-ne2-s256-r1-ct9.0.mlmodelc</code></td><td class="num">571</td><td>CPU 4, NeuralEngine 567</td><td class="num">0.994</td><td>ios18.reshape 3, ios18.add 1</td></tr>
+      <tr><td><code>vith16plus-224-b1-ne2-s256-r8-ct9.0.mlmodelc</code></td><td class="num">1,576</td><td>CPU 4, NeuralEngine 1572</td><td class="num">0.998</td><td>ios18.reshape 3, ios18.add 1</td></tr>
+      <tr><td><code>vith16plus-224-b8-ne2-s256-r8-ct9.0.mlmodelc</code></td><td class="num">1,576</td><td>CPU 4, NeuralEngine 1572</td><td class="num">0.998</td><td>ios18.reshape 3, ios18.add 1</td></tr>
+      <tr><td><code>vith16plus-448-b1-ne2-s256-r8-ct9.0.mlmodelc</code></td><td class="num">1,576</td><td>CPU 4, NeuralEngine 1572</td><td class="num">0.998</td><td>ios18.reshape 3, ios18.add 1</td></tr>
+      <tr><td><code>vith16plus-512-b1-ne2-s256-r8-ct9.0.mlmodelc</code></td><td class="num">1,576</td><td>CPU 4, NeuralEngine 1572</td><td class="num">0.998</td><td>ios18.reshape 3, ios18.add 1</td></tr>
+      <tr><td><code>vith16plus-512-b8-ne2-s256-r8-ct9.0.mlmodelc</code></td><td class="num">1,576</td><td>CPU 4, NeuralEngine 1572</td><td class="num">0.998</td><td>ios18.reshape 3, ios18.add 1</td></tr>
+      <tr><td><code>vitl16-224-b1-ne2-s256-r8-ct9.0.mlmodelc</code></td><td class="num">1,136</td><td>CPU 4, NeuralEngine 1132</td><td class="num">0.996</td><td>ios18.reshape 3, ios18.add 1</td></tr>
+      <tr><td>The other 15 models (ViT-L/16 except 224 px b1, ViT-S/16, ViT-S+/16, the plain package)</td><td colspan="4">skipped: disk</td></tr>
+    </tbody>
+  </table>
+</div>
+  <p class="caption"><b>Table 7.</b> The compute plan of 11 of the 26 current compiled models (v8). The plain package has a current build line (line 222: 523 ops, CPU 42, share 0.754).</p>
+  <p>The 11 reports equal the <code>ne</code> plan lines of the build in ops, devices and share (ViT-L/16 1,136 ops, ViT-H+/16 1,576 ops), and differ from the <code>ne2</code> plan lines of job R (1,147 and 1,587 ops). This confirms V3: the build lines 134 to 143 do not describe the current packages, but the <code>ne</code> lines give the right compute plan for them. Each package except the two valid 224 px b1 packages of ViT-S/16 and ViT-S+/16 runs all ops on the Neural Engine except 3 reshapes and 1 add.</p>
+</section>
+
+<section id="runrules">
+  <h2>9 Logs and run rules</h2>
+  <ul>
+    <li>Lock log: the build jobs held the lock one at a time (chain1 23:51 to 00:10, q3 00:23 to 00:24, R 00:26 to 00:39, P 01:09 to 01:11, F 01:12 to 01:24, J3 01:26 to 01:52, J4 01:53 to 02:17, J5 02:18 to 02:29), between the jobs of the Step 6b sessions. No two holds overlap.</li>
+    <li>Job times against the estimates of plan Table 4: J3 26 min (estimate 28 min), J4 24 min for 71 workers (32 min), J5 11 min for 36 cases (20 min). The Verify subset took 23 min (estimate 27 min).</li>
+    <li>Every result line has the machine state: AC power, Low Power Mode off, no thermal warning.</li>
+    <li>Build logs: <code>J3.log</code> starts with NUL bytes before the test output (the file was written again); the driver logs in <code>tests/fixtures/generated/bench/coreml/</code> are complete.</li>
+    <li>Disk: 11 GB free at the start of Verify, near the limit of 10 GB. <code>~/.cache/dinov3-apple/coreml/probes</code> (6 GB, explore probes) is still there (V9).</li>
+  </ul>
+</section>
+
+<section id="findings">
+  <h2>10 Findings</h2>
+  <p>The agent did not change code. Each finding gives the severity, the criterion, the evidence and a proposed fix. The user decides.</p>
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>No.</th><th>Severity</th><th>Criterion</th><th>Evidence</th><th>Proposed fix</th></tr></thead>
+    <tbody>
+      <tr><td>V1</td><td>high</td><td>AC4, AC10</td><td>43 of 45 Neural Engine rows give finite but wrong tokens with rewrite <code>ne2</code>, also ViT-S/16 at 448 and 512 px and every ViT-B/16 row. The first wrong tensor is the input of block 1 (embeddings output: cosine 0.31 and 0.19 in two probes). On the GPU the same probe gives cosine &ge; 0.9999998 for every block input. The two valid packages keep the first 46 ops (input cast, patch convolution, first attention) on the CPU. A matmul patch embedding (probe P) and an fp16 input (J3 probe) do not help. So the Neural Engine path is usable only for ViT-S/16 and ViT-S+/16 at 224 px today.</td><td>A follow-up step (plan Q3 forbids a new rewrite in this step): (1) convert the embeddings alone (patch convolution, class and register tokens, the concatenation) and compare them on CPU_AND_NE and CPU_ONLY, to find the op; (2) convert the 24 blocks and the final norm alone, with the reference embeddings as input, and check them on CPU_AND_NE; (3) if (2) passes, run the embeddings on the CPU or the GPU and the blocks on the Neural Engine, two models in one pipeline (rewrite version <code>ne3</code>), and repeat J2 and J5.</td></tr>
+      <tr><td>V2</td><td>medium</td><td>AC9, AC10</td><td>The speed rows of a wrong output look like valid rows. <code>streams_plan</code> falls back to batch size 1 when no coreml-ne matrix row is valid (P2), and <code>stream_worker</code> checks no output; Table 6 of <code>coreml-table.md</code> has no validity column. The P2 stream ratio thus counts the throughput of wrong tokens.</td><td>In <code>stream_worker</code>, check image 0 of the first output with <code>output_validity</code> and write <code>valid</code> into the line; show it in Table 6. In <code>streams_plan</code>, mark a group without a valid coreml-ne row as &laquo;no valid Neural Engine package&raquo;.</td></tr>
+      <tr><td>V3</td><td>medium</td><td>AC6</td><td>No build plan line describes the 10 current packages of ViT-L/16 and ViT-H+/16: lines 134 to 143 belong to the packages of job R (2,640 and 3,600 MIL ops), which job F replaced (2,623 and 3,583 ops). Table 3 of <code>coreml-table.md</code> shows <code>ne</code> package names. Section 8 gives the Verify reports.</td><td>Add a <code>--plan-only</code> option to <code>bench_coreml.py parity</code> and run it once for the 26 current packages; let Table 3 take only lines whose package name holds <code>REWRITE_VERSION</code>.</td></tr>
+      <tr><td>V4</td><td>medium</td><td>AC4, AC5</td><td>Table 2 of <code>coreml-table.md</code> has 96 rows: 45 rows of version <code>ne</code>, 45 rows of <code>ne2</code> and 6 rows of the plain package (two runs), with the same labels and no package name. A reader sees ViT-L/16 on coreml-gpu once as fail (frame 0.974) and once as pass. Cause: <code>_latest</code> keys on <code>ne_batch_form</code>, which only the <code>ne2</code> lines have.</td><td>Key <code>_latest</code> on the package name, and leave out lines whose package name has an old rewrite version (or show them in a separate &laquo;superseded&raquo; table).</td></tr>
+      <tr><td>V5</td><td>low</td><td>AC7</td><td>Two cached loads above 0.5 s: ViT-B/16 512 px b8 package on CPU_AND_NE 7.19 s (first load 7.24 s: the second load compiled again) and ViT-H+/16 512 px b8 on ALL 1.91 s in round 0 of run 1; 0.238 s in run 2.</td><td>Record the cached load of a third load as well, or state in the plan that AC7 takes the J2 rows; look at the Core ML cache for the b8 package.</td></tr>
+      <tr><td>V6</td><td>low</td><td>AC12</td><td>At the start of Verify, the build had not committed <code>scripts/bench_coreml.py</code> (<code>_form_mark</code>), ADR 0014, ADR 0015, <code>docs/learn/06c-neural-engine.html</code> and the J4 and J5 lines. The build committed them during Verify (<code>1e2f72a</code>, <code>2e5ee1d</code>, <code>5ae1be4</code>, <code>e6c5853</code>). The Verify run 2 lines and the Verify table come after <code>2e5ee1d</code>.</td><td>None; resolved during Verify.</td></tr>
+      <tr><td>V7</td><td>low</td><td>AC3</td><td>Only the <code>.mlmodelc</code> stays on disk (deviation 8), but <code>package_path</code> returns a <code>.mlpackage</code> path, and ADR 0015 says that the packages and their compiled models live in the cache.</td><td>Correct the text of ADR 0015 and the docstring of <code>package_path</code> at the Close stage.</td></tr>
+      <tr><td>V8</td><td>low</td><td>AC9</td><td>Table 5 of <code>coreml-table.md</code> gives &laquo;spread between runs 0.000&raquo; for the b1 groups with one run, and no mark &laquo;inside the noise&raquo; for P1 b1 coreml-ne (1.016), as V5 of Step 6.</td><td>Print &laquo;&ndash;&raquo; for one run; add the mark within 1 &#177; 0.03.</td></tr>
+      <tr><td>V9</td><td>low</td><td>AC11</td><td>11 GB free disk at the start of Verify; the explore probes (6 GB) are still in the cache.</td><td>The user deletes <code>~/.cache/dinov3-apple/coreml/probes</code> after the step closes.</td></tr>
+      <tr><td>V10</td><td>low</td><td>AC10</td><td><code>stream_worker</code> writes <code>ne_batch_form</code> &laquo;batch-api&raquo; also at batch size 1 (all P2 stream lines).</td><td>Write &laquo;package&raquo; at batch size 1.</td></tr>
+    </tbody>
+  </table>
+</div>
+  <p class="caption"><b>Table 6.</b> Findings: 1 high, 3 medium, 6 low (V6 resolved during Verify).</p>
+</section>
+
+<section id="open">
+  <h2>11 Open items for the user</h2>
+  <ol>
+    <li>Decide on V1: a follow-up step for the Neural Engine fault (the split of embeddings and blocks), or close Step 6c with the Neural Engine path limited to ViT-S/16 and ViT-S+/16 at 224 px. The two-stream result at P1 (stream ratio 1.26 to 1.31 with valid outputs) shows that the work can pay off.</li>
+    <li>Decide on the code fixes V2 to V4 and V8, V10 before the Close stage regenerates the table.</li>
+    <li>The Close stage corrects ADR 0015 (V7).</li>
+  </ol>
+</section>
+
+<section id="commands">
+  <h2>12 Commands to reproduce</h2>
+<pre>uv run ruff check
+uv run ruff format --check
+uv run python -m dinov3_apple.gpu_lock -- uv run --group coreml pytest -q
+DINOV3_SLOW=1 uv run python -m dinov3_apple.gpu_lock -- uv run --group coreml pytest tests/test_coreml.py -q
+uv run python -m dinov3_apple.gpu_lock -- uv run --group coreml python scripts/bench_coreml.py pairs --priority P1 --batch-sizes 8 --rounds 5 --run 2
+uv run python -m dinov3_apple.gpu_lock -- uv run --group coreml python scripts/bench_coreml.py pairs --priority P2 --batch-sizes 8 --rounds 5 --run 2
+uv run python -m dinov3_apple.gpu_lock -- uv run --group coreml python scripts/bench_coreml.py streams --priority P1 P2 --batch-sizes 8 --rounds 3 --run 2
+uv run --group coreml python scripts/bench_coreml.py table</pre>
+  <p>v7 called <code>dinov3_apple.coreml.run_coreml(model_size, 224, 1, "coreml-ne", parity_only=True)</code> for ViT-S/16 and ViT-H+/16; v8 called <code>compute_plan_report(path, "CPU_AND_NE")</code> for each <code>.mlmodelc</code> in <code>~/.cache/dinov3-apple/coreml/</code>. Each call ran in its own subprocess under one lock hold. The scripts are not in the repo; their output is in Sections 5 and 8.</p>
+</section>
+</main>
+</body>
+</html>
