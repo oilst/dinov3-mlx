@@ -561,3 +561,39 @@ def test_benchmark_worker_memory_check_reaches_the_driver_log(
     assert result["status"] == "error"
     records = [record for record in caplog.records if record.name == "dinov3_apple.memory"]
     assert [r.getMessage().split(":")[1].strip() for r in records] == ["ViT-S/16 torch-mps fp32"]
+
+
+def test_public_path_and_public_text_remove_local_folders(tmp_path: Path) -> None:
+    """A path in a committed results file is repo-relative; the home folder becomes ~."""
+    home = tmp_path / "home"
+    root = home / "code" / "dinov3-apple"
+    output = root / "tests" / "fixtures" / "generated" / "x.safetensors"
+    assert bench.public_path(output, root, home) == "tests/fixtures/generated/x.safetensors"
+    assert bench.public_path(str(output), root, home) == "tests/fixtures/generated/x.safetensors"
+    assert bench.public_path(home / ".cache" / "a", root, home) == "~/.cache/a"
+    assert bench.public_path("/opt/a", root, home) == "/opt/a"
+    assert bench.public_path("tests/x", root, home) == "tests/x"
+    text = (
+        f"exit code 1: {root}/.venv/lib/x.py:82: warning\n"
+        f"Error: Destination path '{home}/.cache/c.mlmodelc' already exists; {home}"
+    )
+    assert bench.public_text(text, root, home) == (
+        "exit code 1: .venv/lib/x.py:82: warning\n"
+        "Error: Destination path '~/.cache/c.mlmodelc' already exists; ~"
+    )
+    # A sibling folder with the same start is not the repo root and not the home folder.
+    assert bench.public_text(f"{home}-other/a {root}-old/b", root, home) == (
+        f"{home}-other/a ~/code/dinov3-apple-old/b"
+    )
+    assert bench.public_text("", root, home) == ""
+
+
+def test_repo_path_resolves_against_the_repo_root(tmp_path: Path) -> None:
+    """A reader of a results file resolves a repo-relative path against the repo root."""
+    from dinov3_apple.stored import REPO_ROOT
+
+    assert bench.repo_path("tests/x.safetensors") == REPO_ROOT / "tests" / "x.safetensors"
+    assert bench.repo_path(tmp_path / "a") == tmp_path / "a"
+    assert bench.repo_path("~/.cache/a") == Path.home() / ".cache" / "a"
+    assert bench.public_path(REPO_ROOT / "results" / "a.jsonl") == "results/a.jsonl"
+    assert bench.repo_path(bench.public_path(REPO_ROOT / "results")) == REPO_ROOT / "results"

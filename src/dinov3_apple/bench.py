@@ -7,11 +7,13 @@ its footprint.
 """
 
 import json
+import re
 import subprocess
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from functools import cache
+from pathlib import Path
 
 import numpy as np
 from safetensors import safe_open
@@ -21,7 +23,7 @@ from dinov3_apple.hub import MODEL_IDS, parameter_count
 from dinov3_apple.machine import MachineState
 from dinov3_apple.memory import load_bytes, replay_checks
 from dinov3_apple.parity import TEST_IMAGES, THRESHOLDS, Parity, measure_parity
-from dinov3_apple.stored import reference_path
+from dinov3_apple.stored import REPO_ROOT, reference_path
 
 MAIN_MODEL_SIZES = [size for size in MODEL_IDS if size != "ViT-7B/16"]
 GIANT_MODEL_SIZE = "ViT-7B/16"
@@ -545,6 +547,60 @@ def run_worker_subprocess(
                 return json.loads(text)
     tail = "\n".join(done.stderr.splitlines()[-stderr_lines:])
     return {"status": "error", "reason": f"exit code {done.returncode}: {tail}"}
+
+
+def _folder_pattern(folder: Path) -> str:
+    """Return a regex for a folder path that the end of the folder name follows: a "/", the end
+    of the text, or a character that is not a word character, ".", "/" or "-"."""
+    return re.escape(str(folder)) + r"(?=/|$|[^\w./-])"
+
+
+def public_text(text: str, root: Path = REPO_ROOT, home: Path | None = None) -> str:
+    """Return a text for a committed results file: no local folder names (a public repo).
+
+    A path inside the repo becomes repo-relative; the home folder becomes ~.
+
+    Args:
+        text: A reason or another text of a worker, for example the last stderr lines.
+        root: The repo root.
+        home: The home folder. None: Path.home().
+
+    Returns:
+        The text without the repo root and with ~ for the home folder.
+    """
+    home = Path.home() if home is None else home
+    text = re.sub(_folder_pattern(root) + "/", "", text)
+    text = re.sub(_folder_pattern(root), ".", text)
+    return re.sub(_folder_pattern(home), "~", text)
+
+
+def public_path(path: str | Path, root: Path = REPO_ROOT, home: Path | None = None) -> str:
+    """Return a path for a committed results file: repo-relative inside the repo, ~ for the
+    home folder, else unchanged. repo_path reverses it.
+
+    Args:
+        path: An absolute or a repo-relative path.
+        root: The repo root.
+        home: The home folder. None: Path.home().
+
+    Returns:
+        The path as text.
+    """
+    return public_text(str(path), root, home)
+
+
+def repo_path(path: str | Path) -> Path:
+    """Return the absolute path of a path from a results file: ~ is the home folder, and a
+    relative path is relative to the repo root.
+
+    Args:
+        path: A path from a results file, for example the outputs_file of a line.
+
+    Returns:
+        The absolute path.
+    """
+    found = Path(path).expanduser()
+    return found if found.is_absolute() else REPO_ROOT / found
 
 
 def result_line(

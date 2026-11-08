@@ -704,10 +704,10 @@ figcaption { font-size: 0.88rem; color: var(--muted); max-width: 52rem; }
           <tr><td>3 Baseline</td><td>Benchmark harness and the baseline on <code>torch-mps</code></td><td>Where the compute goes</td><td>Done</td></tr>
           <tr><td>4 MLX port</td><td>ViT-S/16 in MLX and the weight converter</td><td>Patch embedding, RoPE, attention, LayerScale, MLP</td><td>Done</td></tr>
           <tr><td>5 All sizes</td><td>All model sizes in fp32, fp16 and bf16</td><td>SwiGLU, model scaling, numeric range</td><td>Done</td></tr>
-          <tr class="sel"><td>6 Speed</td><td>Compiled graphs, batch sizes, quantized weights</td><td>Attention cost at high input resolution</td><td>Next</td></tr>
+          <tr><td>6 Speed</td><td>Compiled graphs, batch sizes, quantized weights</td><td>Attention cost at high input resolution</td><td>Done (deviations 1 and 2 wait for the user)</td></tr>
           <tr><td>6b Prior-art comparison</td><td>The related public repos measured with our harness: frame throughput and parity at the same model size, input resolution and batch size</td><td>Which parts of the backbone each port changes, and the parity cost</td><td>Done (the Python ports wait for the user)</td></tr>
-          <tr><td>6c Neural Engine</td><td>Core ML on the Apple Neural Engine, alone and in parallel with the GPU, against <code>mlx</code></td><td>Attention and the feed-forward network on the Apple Neural Engine, numeric range in fp16</td><td>Open</td></tr>
-          <tr><td>7 Release</td><td>Public API, README with results, CI, first public push</td><td>None</td><td>Open</td></tr>
+          <tr><td>6c Neural Engine</td><td>Core ML on the Apple Neural Engine, alone and in parallel with the GPU, against <code>mlx</code></td><td>Attention and the feed-forward network on the Apple Neural Engine, numeric range in fp16</td><td>Done, except AC4 (Neural Engine parity): the user decides the follow-up</td></tr>
+          <tr class="sel"><td>7 Release</td><td>Public API, README with results, CI, first public push</td><td>None</td><td>Next</td></tr>
           <tr><td>8 Fine-tuning</td><td>8a: reference fine-tuning setup in MLX. 8b: DoRA and other adapters</td><td>DINO loss, iBOT loss, KoLeo regularizer, Gram anchoring</td><td>Open</td></tr>
         </tbody>
       </table>
@@ -819,7 +819,7 @@ figcaption { font-size: 0.88rem; color: var(--muted); max-width: 52rem; }
 
     <div class="sub" id="step-6b">
       <h3>Step 6b. Prior-art comparison</h3>
-      <p>Step 6b measures the related public repos with our harness: the MLX ports of DINOv2 and DINOv3, the Core ML exports and mlx-image. Step 6 showed that the speed of <code>mlx</code> is near the matmul limit of the GPU, at about the speed of <code>torch.compile</code>. Step 6b shows how the other repos compare at the same model size, input resolution and batch size. The spec folder is <code>specs/06b-prior-art/</code>.</p>
+      <p>Step 6b measures the related public repos with our harness: the MLX ports of DINOv2 and DINOv3, the Core ML exports and mlx-image. Step 6 showed that in a half dtype <code>mlx</code> and <code>torch.compile</code> reach about the same largest matmul rate (28.0 and 29.9 TFLOPS at ViT-L/16), so <code>mlx</code> runs at about the speed of <code>torch.compile</code>. Step 6b shows how the other repos compare at the same model size, input resolution and batch size. The spec folder is <code>specs/06b-prior-art/</code>.</p>
       <ol class="steps">
         <li>List each candidate repo with its license, its commit and a verdict (measure or skip), with the reason.</li>
         <li>Measure the parity of each DINOv3 Core ML export against the reference output.</li>
@@ -829,7 +829,7 @@ figcaption { font-size: 0.88rem; color: var(--muted); max-width: 52rem; }
         <li>Write the result lines and the table <code>results/prior-art-table.md</code>.</li>
       </ol>
       <p>Third-party code runs in its own virtual environment outside the repo, and no candidate package enters <code>pyproject.toml</code>. The step ends when each candidate has a result row or a recorded reason. The explainer <code>docs/learn/06b-prior-ports-measured.html</code> covers which parts of the backbone each port changes and what each change costs in parity and speed.</p>
-      <p>Result (2026-11-08): our compiled forward pass is faster than each FP32 Core ML export (prior-art ratio 1.05 to 1.09, and 1.53 at P1 with batch size 8). The FP16 exports are equal or faster (0.85 to 0.99). Every DINOv3 export reproduces the reference output with float input. In our own code, the bf16 RoPE of the Meta-based MLX ports fails the fp32 thresholds, and the unfused attention costs 10 to 24 % of the throughput. The Python ports C1 and C2 wait for the user's answer to Q1 (ADR 0012, ADR 0013, <code>results/prior-art-table.md</code>).</p>
+      <p>Result (2026-11-08): our compiled forward pass is faster than each FP32 Core ML export (prior-art ratio 1.05 to 1.09, and 1.53 at P1 with batch size 8). The FP16 exports are equal or faster (0.85 to 0.99). With float input the FP32 and FP16 DINOv3 exports reproduce the reference output; the INT8 export E2 does not (patch 1st percentile 0.998562: fail, report only). In our own code, the bf16 RoPE of the Meta-based MLX ports fails the fp32 thresholds, and the unfused attention costs 10 to 24 % of the throughput. The Python ports C1 and C2 wait for the user's answer to Q1 (ADR 0012, ADR 0013, <code>results/prior-art-table.md</code>).</p>
     </div>
 
     <div class="sub" id="step-6c">
@@ -841,7 +841,7 @@ figcaption { font-size: 0.88rem; color: var(--muted); max-width: 52rem; }
         <li>Measure the parity and the compute plan of each package on CPU_AND_NE, CPU_AND_GPU and ALL.</li>
         <li>Measure Core ML against compiled <code>mlx</code> in paired runs, and the two-stream run: Core ML on the Neural Engine and <code>mlx</code> on the GPU at the same time.</li>
       </ol>
-      <p>Result (2026-11-08): with the rewrite, every model size from ViT-S/16 to ViT-H+/16 passes the fp16 thresholds on CPU_AND_GPU and ALL. On CPU_AND_NE only ViT-S/16 and ViT-S+/16 at 224 px pass: there Core ML runs the first ops on the CPU. Every other Neural Engine package gives wrong tokens; the fault shows first in the output of the embeddings, and its cause is open. Where the output is right, the two streams add up: 2,503 img/s at P1 against 1,984 img/s for <code>mlx</code> alone (stream ratio 1.26). At 512 px the Neural Engine is 7 times slower than the GPU. Core ML on the GPU runs at 0.62 to 1.15 times compiled <code>mlx</code>. Tables: <code>results/coreml-table.md</code>. The explainer <code>docs/learn/06c-neural-engine.html</code> covers how the Neural Engine runs the attention and the feed-forward network, and the numeric range of DINOv3 in fp16.</p>
+      <p>Result (2026-11-08): with the rewrite, every model size from ViT-S/16 to ViT-H+/16 passes the fp16 thresholds on CPU_AND_GPU and ALL. On CPU_AND_NE only ViT-S/16 and ViT-S+/16 at 224 px pass: there Core ML runs the first ops on the CPU. Every other Neural Engine package gives wrong tokens; the fault shows first in the output of the embeddings, and its cause is open. So AC4 fails: 13 of the 15 Neural Engine parity rows at batch size 1 fail, 7 of them in ViT-S/16 to ViT-B/16, where AC4 requires a pass (finding V1, high). The user decides the follow-up. Where the output is right, the two streams add up: 2,503 img/s at P1 against 1,984 img/s for <code>mlx</code> alone (stream ratio 1.26). At 512 px the Neural Engine is 7 times slower than the GPU. Core ML on the GPU runs at 0.62 to 1.15 times compiled <code>mlx</code>. Tables: <code>results/coreml-table.md</code>. The explainer <code>docs/learn/06c-neural-engine.html</code> covers how the Neural Engine runs the attention and the feed-forward network, and the numeric range of DINOv3 in fp16.</p>
     </div>
 
     <div class="sub" id="step-7">

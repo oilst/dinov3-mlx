@@ -39,6 +39,7 @@ from dinov3_apple.bench import (
     MAIN_MODEL_SIZES,
     PRIORITY,
     BenchConfig,
+    public_text,
     required_bench_bytes,
     result_line,
     run_worker_subprocess,
@@ -352,8 +353,10 @@ SPEC_KEYS = [
 
 def spec_line(spec: Spec, worker: dict, need: int, available: int, machine: MachineState) -> dict:
     """Return the JSON line of one worker: the fields of LINE_FIELDS, the fields of Table 3 and
-    the pairing fields of the spec."""
+    the pairing fields of the spec. The reason names no local folder (public_text)."""
     line = result_line(spec_config(spec), worker, need, available, machine, spec["backend"])
+    if line.get("reason"):
+        line["reason"] = public_text(line["reason"])
     for key in SPEC_KEYS:
         if key in spec:
             line[key] = spec[key]
@@ -956,6 +959,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         p.add_argument("--skip-done", action="store_true")
         p.add_argument("--plain", action="store_true", help="parity: only the plain graph")
         p.add_argument("--dry-run", action="store_true")
+        p.add_argument("--table", type=Path, default=TABLE, help="table: the output file")
     args = parser.parse_args(argv)
     if args.worker is None and args.subcommand is None:
         parser.error("give a subcommand")
@@ -969,8 +973,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         worker_main(args.worker)
         return
     if args.subcommand == "table":
-        TABLE.write_text(table_text(read_lines(args.results)))
-        print(f"wrote {TABLE}")
+        args.table.write_text(table_text(read_lines(args.results)))
+        print(f"wrote {args.table}")
         return
     specs = plan_of(args)
     if args.dry_run:

@@ -476,6 +476,52 @@ def test_variant_parity_line_names_twelve_configurations() -> None:
     assert "12 configurations" in bench_prior_art.spec_label(spec)
 
 
+def test_lines_have_no_local_folders() -> None:
+    """A line of results/prior-art.jsonl has a repo-relative outputs_file and ~ for the home
+    folder in its reason (a public repo)."""
+    import bench_prior_art
+
+    from dinov3_apple.stored import REPO_ROOT
+
+    spec = prior_art.export_spec("E1", batch_size=1, units="CPU_AND_GPU")
+    outputs = REPO_ROOT / "tests" / "fixtures" / "generated" / "bench" / "o.safetensors"
+    worker = {
+        "status": "error",
+        "reason": f"exit code 1: {Path.home()}/.cache/x.py and {REPO_ROOT}/.venv/y.py",
+        "outputs_file": str(outputs),
+    }
+    line = bench_prior_art.spec_line(spec, worker, 1, 2, None)
+    assert line["outputs_file"] == "tests/fixtures/generated/bench/o.safetensors"
+    assert line["reason"] == "exit code 1: ~/.cache/x.py and .venv/y.py"
+    port = {"kind": "port", "job": "J5", "candidate": "C1", "model": "ViT-S/16", "dtype": "fp32"}
+    line = bench_prior_art.spec_line(port, worker | {"status": "done"}, 1, 2, None)
+    assert line["outputs_file"] == "tests/fixtures/generated/bench/o.safetensors"
+    assert str(Path.home()) not in json.dumps(line)
+
+
+def test_parity_error_note_has_no_local_folders() -> None:
+    """A parity read that fails names the outputs file in the validity note: the note names it
+    repo-relative (a public repo)."""
+    import bench_prior_art
+
+    from dinov3_apple.stored import REPO_ROOT
+
+    spec = prior_art.export_spec("E1", batch_size=1, units="CPU_AND_GPU")
+    missing = REPO_ROOT / "tests" / "fixtures" / "generated" / "bench" / "missing.safetensors"
+    worker = {
+        "status": "done",
+        "finite": True,
+        "outputs_file": str(missing),
+        "output_names": ["patch"],
+    }
+    line = bench_prior_art.spec_line(spec, worker, 1, 2, None)
+    assert line["valid"] is False
+    assert line["validity_note"].startswith("parity error: FileNotFoundError")
+    assert "tests/fixtures/generated/bench/missing.safetensors" in line["validity_note"]
+    assert str(REPO_ROOT) not in json.dumps(line)
+    assert str(Path.home()) not in json.dumps(line)
+
+
 def test_port_weights_fill_only_known_keys() -> None:
     """Finding V8 of verify.html: the port worker fills only the RoPE periods and the k-bias
     masks with the values of the port; any other missing key stops it."""

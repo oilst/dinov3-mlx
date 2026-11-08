@@ -192,6 +192,26 @@ def test_package_path_and_line_fields() -> None:
     assert len({cases[0] for cases in schedule}) == 3
 
 
+def test_line_reason_has_no_local_folders() -> None:
+    """The reason of a line of results/coreml.jsonl names the repo folders repo-relative and the
+    home folder as ~ (a public repo)."""
+    import bench_coreml
+
+    from dinov3_apple.stored import REPO_ROOT
+
+    spec = bench_coreml.coreml_spec("convert", "convert", "ViT-S/16", 224, 1, rewrite=False)
+    reason = (
+        f"exit code 1: {REPO_ROOT}/.venv/lib/a.py:82: SyntaxWarning\n"
+        f"Error: Destination path '{Path.home()}/.cache/dinov3-apple/coreml/b.mlmodelc' exists"
+    )
+    machine = MachineState("AC Power", "off", "", 0, "Apple M5 Max", 0)
+    line = bench_coreml.spec_line(spec, {"status": "error", "reason": reason}, 1, 2, machine)
+    assert line["reason"] == (
+        "exit code 1: .venv/lib/a.py:82: SyntaxWarning\n"
+        "Error: Destination path '~/.cache/dinov3-apple/coreml/b.mlmodelc' exists"
+    )
+
+
 # T13: the _cast patch of coremltools 9.0.
 
 

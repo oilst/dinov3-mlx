@@ -41,7 +41,15 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from dinov3_apple import prior_art
-from dinov3_apple.bench import BenchConfig, TimeBudget, required_bench_bytes, run_worker_subprocess
+from dinov3_apple.bench import (
+    BenchConfig,
+    TimeBudget,
+    public_path,
+    public_text,
+    repo_path,
+    required_bench_bytes,
+    run_worker_subprocess,
+)
 from dinov3_apple.gpu_lock import HEAVY_JOB_PATTERN, LOCK_REGISTRY, heavy_job, other_heavy_jobs
 from dinov3_apple.hub import WeightsNotFoundError
 from dinov3_apple.machine import MachineStateError, check_machine_state, read_machine_state
@@ -152,7 +160,7 @@ def worker_spec(spec: Spec, bench_dir: Path) -> dict:
     name = f"{spec['job']}-r{spec.get('round', 1)}-p{spec.get('position', 0)}"
     fields = {
         "inputs_file": str(INPUTS_FILE),
-        "outputs_file": str(bench_dir / "outputs" / f"{name}.safetensors"),
+        "outputs_file": str((bench_dir / "outputs" / f"{name}.safetensors").resolve()),
         "warm_up": _budget_dict(warm_up),
         "timed": _budget_dict(timed),
     }
@@ -303,7 +311,7 @@ def export_line_fields(spec: Spec, worker: dict) -> dict:
         return fields
     images = []
     try:
-        with safe_open(worker["outputs_file"], "np") as tensors:
+        with safe_open(repo_path(worker["outputs_file"]), "np") as tensors:
             for image in TEST_IMAGES:
                 names = worker["output_names"]
                 outputs = {name: tensors.get_tensor(f"{image}/{name}") for name in names}
@@ -324,7 +332,11 @@ def export_line_fields(spec: Spec, worker: dict) -> dict:
 
 
 def spec_line(spec: Spec, worker: dict, need: int, available: int, machine: object) -> dict:
-    """Return the line of one worker (Section 3.5 of the plan)."""
+    """Return the line of one worker (Section 3.5 of the plan).
+
+    The line names no local folder (a public repo): outputs_file is repo-relative, and the reason
+    and the validity note have ~ for the home folder (public_path, public_text).
+    """
     config = spec_config(spec)
     export = EXPORTS.get(spec.get("export", ""))
     line = {
@@ -373,6 +385,11 @@ def spec_line(spec: Spec, worker: dict, need: int, available: int, machine: obje
         "machine": asdict(machine) if machine is not None else None,
         "time": worker.get("time") or datetime.now(UTC).isoformat(timespec="seconds"),
     }
+    for key in ("reason", "validity_note"):
+        if line.get(key):
+            line[key] = public_text(line[key])
+    if line.get("outputs_file"):
+        line["outputs_file"] = public_path(line["outputs_file"])
     return line
 
 
