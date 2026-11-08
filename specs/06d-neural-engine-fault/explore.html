@@ -1,0 +1,279 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Step 6d Neural Engine fault: Explore</title>
+<style>
+/* Spec page. White page, black text, no dark mode. */
+:root { --bg: #ffffff; --fg: #111414; --muted: #4a5655; --rule: #d6dedd; --panel: #f5f8f7; --accent: #057379; --pass: #1d7a3a; --fail: #b3261e; color-scheme: light; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif; }
+main { max-width: 64rem; margin: 0 auto; padding: 40px 20px 64px; display: grid; gap: 1.75rem; }
+main > *, section > * { min-width: 0; }
+h1 { font-size: 1.9rem; line-height: 1.15; margin: 0; }
+h2 { font-size: 1.3rem; margin: 0; }
+h3 { font-size: 1.05rem; margin: 0; }
+section { display: grid; gap: 0.8rem; }
+p, ul, ol { margin: 0; max-width: 46rem; }
+li + li { margin-top: 0.25rem; }
+code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.86em; }
+p code, li code, td code { overflow-wrap: anywhere; }
+pre { margin: 0; background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 0.8rem 1rem; overflow-x: auto; }
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+th, td { text-align: left; vertical-align: top; padding: 0.45rem 0.7rem 0.45rem 0; border-bottom: 1px solid var(--rule); }
+th { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); border-bottom: 1.5px solid var(--fg); }
+td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.caption { font-size: 0.88rem; color: var(--muted); }
+.fail { color: var(--fail); font-weight: 600; }
+.pass { color: var(--pass); font-weight: 600; }
+.rec { color: var(--accent); font-weight: 600; }
+.box { border: 1.5px solid var(--accent); border-radius: 6px; padding: 0.8rem 1rem; display: grid; gap: 0.5rem; }
+.warn { border: 1.5px solid var(--fail); border-radius: 6px; padding: 0.8rem 1rem; display: grid; gap: 0.5rem; }
+figure { margin: 0; display: grid; gap: 0.4rem; }
+.fig { border: 1px solid var(--rule); border-radius: 6px; padding: 0.5rem; overflow-x: auto; }
+.fig svg { display: block; width: 100%; height: auto; min-width: 640px; }
+figcaption { font-size: 0.88rem; color: var(--muted); }
+a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+<header>
+  <h1>Step 6d Neural Engine fault: Explore</h1>
+  <p>Roadmap step 6d. Status: waiting for the user to pick an option (Section 4). Date: 2026-11-08.</p>
+</header>
+
+<section id="task">
+  <h2>1 What Step 6d must do and the starting point</h2>
+  <p>Step 6c (finding V1 of <code>specs/06c-neural-engine/verify.html</code>) found that 13 of 15 Core ML packages of the Neural Engine rewrite <code>ne2</code> give finite but wrong tokens on CPU_AND_NE. The same packages pass on CPU_AND_GPU and ALL (30 of 30). Only ViT-S/16 and ViT-S+/16 at 224 px and batch size 1 pass on CPU_AND_NE. In these two packages the compute plan keeps the first 46 ops on the CPU. The Step 6c Q3 probe found the first wrong tensor: the output of the embeddings (cosine 0.19 and 0.31). A matmul patch embedding (probe P) and an fp16 input (J3 probe) did not help.</p>
+  <p>Step 6d must find the cause, then fix it or bound it. Target of the roadmap row: Neural Engine parity for ViT-S/16 to ViT-H+/16 at 224 to 512 px, and the two-stream throughput again.</p>
+  <p>These points are fixed. They are not options: the fp16 thresholds of ADR 0003 (frame ≥ 0.999, patch mean ≥ 0.999, patch 1st percentile ≥ 0.99), the rewrite <code>ne2</code> of ADR 0014, the fixed shapes and coremltools 9.0 of ADR 0015, the run rules of <code>CLAUDE.md</code>.</p>
+</section>
+
+<section id="facts">
+  <h2>2 Probe results</h2>
+  <h3>2.1 The probes</h3>
+  <p>Each probe ran in its own process through the GPU lock, on the M5 Max, macOS 26, coremltools 9.0. The input is the stored pixels of <code>iss-kibo-lab</code> (and of all 3 test images at batch size 8). The comparison is against the rewritten graph on torch-cpu fp32 (E1 to E3) or against the reference output (E3 full). The probe scripts and logs are in the scratchpad of this session; the probe packages are deleted.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Probe</th><th>Graph</th><th>Question</th><th>Answer</th></tr></thead>
+      <tbody>
+        <tr><td>E1</td><td>ViT-S/16, 448 px: five small graphs that end after the conv, the transpose, the concat, the first layer norm</td><td>Which op of the embeddings part gives the first wrong value?</td><td>The <code>concat</code> of the CLS token, the register tokens and the patch tokens (Table 2)</td></tr>
+        <tr><td>E2</td><td>The concat graph of E1</td><td>Which reference token is in each output row?</td><td>Rows 0 and 1 hold the CLS token. Row 2 + k holds patch token k. The register tokens are missing. The last rows are zero (Figure 1)</td></tr>
+        <tr><td>E3 emb</td><td>ViT-S/16, 448 px: the embeddings with four exact replacements of the concat</td><td>Does a different form of the same concat give the right tokens?</td><td>Yes. All four forms give cosine 1.0 and 0 wrong tokens (Table 4)</td></tr>
+        <tr><td>E3 full</td><td>The whole rewritten backbone with the replacement <code>cat2</code></td><td>Is the rest of the graph right on the Neural Engine?</td><td>Yes, for ViT-S/16, ViT-L/16 (r = 8) and ViT-H+/16 (r = 8), 224 to 512 px, batch size 1 and 8 (Table 5)</td></tr>
+        <tr><td>E4, E5</td><td>A minimal concat of constants and an input, without DINOv3</td><td>Can a minimal graph show the fault?</td><td>No. Core ML puts each of these graphs on the CPU (no compute op), and the CPU is right</td></tr>
+        <tr><td>E6</td><td>Random 16 × 16 conv, reshape, transpose, concat with constants</td><td>Which concat forms are wrong on the Neural Engine?</td><td>Two or more constant inputs in front of the patch tokens break the concat in 3 of 5 forms (Table 3)</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 1.</b> The probes of Step 6d.</p>
+
+  <h3>2.2 The first wrong op is the token concat</h3>
+  <p>The Hugging Face embeddings run four ops: the patch conv, a reshape, a transpose and a concat <code>torch.cat([cls_token, register_tokens, patch_embeddings], dim=1)</code>. At batch size 1 the CLS token (1 row) and the register tokens (4 rows) become two separate constants in the Core ML program. E1 converted the graph up to each op. The compute plan puts every op on the Neural Engine.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Graph ends after</th><th>Ops on the Neural Engine</th><th>Cosine, CPU_AND_NE</th><th>Wrong tokens (of 789)</th><th>Cosine, CPU_AND_GPU</th></tr></thead>
+      <tbody>
+        <tr><td>conv</td><td>3 of 3</td><td class="num pass">1.000000</td><td class="num">–</td><td class="num">0.999989</td></tr>
+        <tr><td>reshape, transpose</td><td>5 of 5</td><td class="num pass">1.000000</td><td class="num">0 of 784</td><td class="num">0.999989</td></tr>
+        <tr><td>concat</td><td>6 of 6</td><td class="num fail">0.192437</td><td class="num fail">788</td><td class="num">0.999989</td></tr>
+        <tr><td>concat, first layer norm</td><td>8 of 8</td><td class="num fail">0.87385 (layer norm)</td><td class="num fail">784</td><td class="num">0.999998</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 2.</b> Probe E1, ViT-S/16 at 448 px, batch size 1. Wrong token: cosine below 0.99 against torch-cpu fp32. The value 0.192437 is the same value as the input of block 1 in the Step 6c Q3 probe.</p>
+
+  <figure>
+    <div class="fig">
+      <svg viewBox="0 0 900 250" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system, Helvetica, Arial, sans-serif" font-size="13">
+        <rect width="900" height="250" fill="#ffffff"/>
+        <text x="10" y="40" fill="#111414" font-weight="600">Expected</text>
+        <text x="10" y="110" fill="#111414" font-weight="600">Neural Engine</text>
+        <text x="10" y="126" fill="#4a5655">(concat 3 inputs)</text>
+        <text x="10" y="190" fill="#111414" font-weight="600">Fix cat2</text>
+        <text x="10" y="206" fill="#4a5655">(1 constant input)</text>
+        <g stroke="#111414" stroke-width="1">
+          <!-- expected -->
+          <rect x="150" y="22" width="50" height="28" fill="#d9eef0"/><rect x="200" y="22" width="50" height="28" fill="#f3e3c3"/><rect x="250" y="22" width="50" height="28" fill="#f3e3c3"/><rect x="300" y="22" width="50" height="28" fill="#f3e3c3"/><rect x="350" y="22" width="50" height="28" fill="#f3e3c3"/>
+          <rect x="400" y="22" width="50" height="28" fill="#ffffff"/><rect x="450" y="22" width="50" height="28" fill="#ffffff"/><rect x="500" y="22" width="50" height="28" fill="#ffffff"/><rect x="550" y="22" width="150" height="28" fill="#ffffff"/><rect x="700" y="22" width="50" height="28" fill="#ffffff"/><rect x="750" y="22" width="50" height="28" fill="#ffffff"/><rect x="800" y="22" width="50" height="28" fill="#ffffff"/>
+          <!-- NE -->
+          <rect x="150" y="92" width="50" height="28" fill="#d9eef0"/><rect x="200" y="92" width="50" height="28" fill="#d9eef0" stroke="#b3261e" stroke-width="2"/><rect x="250" y="92" width="50" height="28" fill="#ffffff" stroke="#b3261e" stroke-width="2"/><rect x="300" y="92" width="50" height="28" fill="#ffffff" stroke="#b3261e" stroke-width="2"/><rect x="350" y="92" width="50" height="28" fill="#ffffff" stroke="#b3261e" stroke-width="2"/>
+          <rect x="400" y="92" width="50" height="28" fill="#ffffff" stroke="#b3261e" stroke-width="2"/><rect x="450" y="92" width="50" height="28" fill="#ffffff" stroke="#b3261e" stroke-width="2"/><rect x="500" y="92" width="50" height="28" fill="#ffffff" stroke="#b3261e" stroke-width="2"/><rect x="550" y="92" width="150" height="28" fill="#ffffff" stroke="#b3261e" stroke-width="2"/><rect x="700" y="92" width="50" height="28" fill="#ffffff" stroke="#b3261e" stroke-width="2"/><rect x="750" y="92" width="50" height="28" fill="#e6e6e6" stroke="#b3261e" stroke-width="2"/><rect x="800" y="92" width="50" height="28" fill="#e6e6e6" stroke="#b3261e" stroke-width="2"/>
+          <!-- fix -->
+          <rect x="150" y="172" width="50" height="28" fill="#d9eef0"/><rect x="200" y="172" width="50" height="28" fill="#f3e3c3"/><rect x="250" y="172" width="50" height="28" fill="#f3e3c3"/><rect x="300" y="172" width="50" height="28" fill="#f3e3c3"/><rect x="350" y="172" width="50" height="28" fill="#f3e3c3"/>
+          <rect x="400" y="172" width="50" height="28" fill="#ffffff"/><rect x="450" y="172" width="50" height="28" fill="#ffffff"/><rect x="500" y="172" width="50" height="28" fill="#ffffff"/><rect x="550" y="172" width="150" height="28" fill="#ffffff"/><rect x="700" y="172" width="50" height="28" fill="#ffffff"/><rect x="750" y="172" width="50" height="28" fill="#ffffff"/><rect x="800" y="172" width="50" height="28" fill="#ffffff"/>
+        </g>
+        <g fill="#111414" text-anchor="middle">
+          <text x="175" y="41">CLS</text><text x="225" y="41">R1</text><text x="275" y="41">R2</text><text x="325" y="41">R3</text><text x="375" y="41">R4</text><text x="425" y="41">P0</text><text x="475" y="41">P1</text><text x="525" y="41">P2</text><text x="625" y="41">…</text><text x="725" y="41">P781</text><text x="775" y="41">P782</text><text x="825" y="41">P783</text>
+          <text x="175" y="111">CLS</text><text x="225" y="111">CLS</text><text x="275" y="111">P0</text><text x="325" y="111">P1</text><text x="375" y="111">P2</text><text x="425" y="111">P3</text><text x="475" y="111">P4</text><text x="525" y="111">P5</text><text x="625" y="111">…</text><text x="725" y="111">P783</text><text x="775" y="111">0</text><text x="825" y="111">0</text>
+          <text x="175" y="191">CLS</text><text x="225" y="191">R1</text><text x="275" y="191">R2</text><text x="325" y="191">R3</text><text x="375" y="191">R4</text><text x="425" y="191">P0</text><text x="475" y="191">P1</text><text x="525" y="191">P2</text><text x="625" y="191">…</text><text x="725" y="191">P781</text><text x="775" y="191">P782</text><text x="825" y="191">P783</text>
+        </g>
+        <g fill="#4a5655" font-size="12" text-anchor="middle">
+          <text x="175" y="14">row 0</text><text x="425" y="14">row 5</text><text x="825" y="14">row 788</text>
+        </g>
+        <text x="150" y="146" fill="#b3261e" font-size="12">Red: a wrong row. The register tokens are missing, each patch token is 3 rows too early, the last rows are zero.</text>
+        <text x="150" y="228" fill="#4a5655" font-size="12">cat2: torch.cat([prefix, patches]) with prefix = cat(cls_token, register_tokens), one constant of 5 rows.</text>
+      </svg>
+    </div>
+    <figcaption><b>Figure 1.</b> The token map of probe E2: ViT-S/16 at 448 px, 789 rows of 384 values. Each output row of the Neural Engine is an exact copy (cosine 1.0) of the reference row in the same box. Rows 787 and 788 are zero.</figcaption>
+  </figure>
+
+  <h3>2.3 The fault needs two or more constant inputs</h3>
+  <p>Probes E4 and E5 tried a minimal concat without a compute op. Core ML put these graphs on the CPU, and the CPU was right. Probe E6 added a random 16 × 16 conv in front, as in the patch embedding. Then the Neural Engine runs all ops. With 196 patch tokens (224 px) the compute plan put every E6 graph on the CPU, and all forms were right.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Concat inputs (rows)</th><th>Constant inputs</th><th>Wrong rows, CPU_AND_NE</th><th>Wrong rows, CPU_ONLY</th></tr></thead>
+      <tbody>
+        <tr><td>c1, c4, patches (Hugging Face)</td><td class="num">2</td><td class="num fail">788 (from row 1)</td><td class="num">0</td></tr>
+        <tr><td>c2, c3, patches</td><td class="num">2</td><td class="num fail">787 (from row 2)</td><td class="num">0</td></tr>
+        <tr><td>c1, c1, c1, c1, c1, patches</td><td class="num">5</td><td class="num fail">4 (rows 1 to 4)</td><td class="num">0</td></tr>
+        <tr><td>patches, c1, c4</td><td class="num">2</td><td class="num fail">4 (rows 785 to 788)</td><td class="num">0</td></tr>
+        <tr><td>c4, c1, patches</td><td class="num">2</td><td class="num pass">0</td><td class="num">0</td></tr>
+        <tr><td>c3, c2, patches</td><td class="num">2</td><td class="num pass">0</td><td class="num">0</td></tr>
+        <tr><td>c5, patches</td><td class="num">1</td><td class="num pass">0</td><td class="num">0</td></tr>
+        <tr><td>c1, patches</td><td class="num">1</td><td class="num pass">0</td><td class="num">0</td></tr>
+        <tr><td>c4, patches</td><td class="num">1</td><td class="num pass">0</td><td class="num">0</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 3.</b> Probe E6: 784 patch tokens of 384 values (448 px), batch size 1, fp16 compute precision. cN: a constant of N rows. Wrong row: largest absolute error above 0.05. The two passing forms with two constants (c4, c1 and c3, c2) have no input and output cast in the compute plan, so the converter changed these programs in a different way. We did not find the exact rule for two or more constants.</p>
+  <div class="box">
+    <p><b>Cause.</b> The Neural Engine (macOS 26, coremltools 9.0, ML Program for macOS 15) writes a wrong result for a concat along the token axis when the concat has two or more constant inputs and its other input comes from the patch conv. Every concat with one constant input was right. The values are exact copies of other rows, so this is not an fp16 range fault: it is a fault of the row offsets in the concat. The Hugging Face embeddings have this form (CLS token and register tokens as two constants).</p>
+    <p><b>Why 2 of 15 packages passed.</b> At 224 px and batch size 1 the compute plan of ViT-S/16 and ViT-S+/16 puts the input cast, the conv, the concat and the first attention branch on the CPU (46 ops). The CPU concat is right. Every other package runs the concat on the Neural Engine.</p>
+    <p><b>Why probe P and the J3 probe did not help.</b> The matmul patch embedding and the fp16 input change the ops before the concat. The concat with two constants stays.</p>
+  </div>
+
+  <h3>2.4 Exact replacements of the concat</h3>
+  <p>Each replacement gives the same real numbers as the Hugging Face concat. The constants are the parameters of the backbone, so each form is bit-exact in fp32.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Name</th><th>Form</th><th>Cosine, CPU_AND_NE</th><th>Wrong tokens</th></tr></thead>
+      <tbody>
+        <tr><td><code>cat3</code></td><td>Hugging Face: <code>cat([cls, registers, patches])</code></td><td class="num fail">0.192437</td><td class="num fail">788</td></tr>
+        <tr><td><code>cat2</code></td><td><code>cat([prefix, patches])</code>, prefix = one constant of 5 rows</td><td class="num pass">1.000000</td><td class="num">0</td></tr>
+        <tr><td><code>pad_add</code></td><td><code>pad(patches, 5 rows in front) + constant</code> (prefix rows, then zeros)</td><td class="num pass">1.000000</td><td class="num">0</td></tr>
+        <tr><td><code>cat_cf</code></td><td>concat in the channel-first layout before the transpose</td><td class="num pass">1.000000</td><td class="num">0</td></tr>
+        <tr><td><code>shift_mm</code></td><td><code>S @ patches + constant</code>, S a (5 + N) × N shift matrix</td><td class="num pass">1.000000</td><td class="num">0</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 4.</b> Probe E3 emb: ViT-S/16 at 448 px, batch size 1, embeddings only. Every op on the Neural Engine in all five forms.</p>
+
+  <h3>2.5 The whole backbone with <code>cat2</code></h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Model size, input, batch size</th><th>Concat</th><th>Neural Engine cost share</th><th>Parity (frame / patch mean / patch 1st percentile)</th><th>Batch time, ms</th><th>img/s</th><th>Load s</th></tr></thead>
+      <tbody>
+        <tr><td>ViT-S/16, 224 px, b1</td><td>cat3</td><td class="num">0.754 (46 ops on the CPU)</td><td class="num pass">0.99986 / 0.99991 / 0.99969</td><td class="num">1.83</td><td class="num">546</td><td class="num">1.39</td></tr>
+        <tr><td>ViT-S/16, 224 px, b1</td><td>cat2</td><td class="num">1.000</td><td class="num pass">0.99991 / 0.99995 / 0.99988</td><td class="num">1.58</td><td class="num">633</td><td class="num">1.54</td></tr>
+        <tr><td>ViT-S/16, 224 px, b8</td><td>cat2</td><td class="num">1.000</td><td class="num pass">≥ 0.99991 / ≥ 0.99995 / ≥ 0.99988</td><td class="num">15.97</td><td class="num">501</td><td class="num">3.55</td></tr>
+        <tr><td>ViT-S/16, 448 px, b1</td><td>cat3</td><td class="num">0.991</td><td class="num fail">0.70722 / 0.63819 / 0.41237</td><td class="num">17.79</td><td class="num">56</td><td class="num">2.37</td></tr>
+        <tr><td>ViT-S/16, 448 px, b1</td><td>cat2</td><td class="num">1.000</td><td class="num pass">0.99993 / 0.99997 / 0.99990</td><td class="num">16.96</td><td class="num">59</td><td class="num">2.38</td></tr>
+        <tr><td>ViT-L/16, 224 px, b1 (r = 8)</td><td>cat2</td><td class="num">1.000</td><td class="num pass">0.99990 / 0.99987 / 0.99927</td><td class="num">15.39</td><td class="num">65</td><td class="num">5.53</td></tr>
+        <tr><td>ViT-H+/16, 512 px, b1 (r = 8)</td><td>cat2</td><td class="num">1.000</td><td class="num pass">0.99999 / 0.99998 / 0.99990</td><td class="num">355.6</td><td class="num">2.8</td><td class="num">15.35</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 5.</b> Probe E3 full on CPU_AND_NE against the reference output. Batch size 1: image <code>iss-kibo-lab</code> only. Batch size 8: the 3 test images in turn (worst value shown). Batch time: median of 10 calls after 2 warm-up calls, one process, no pairing. Load s: the first load of a new package (Neural Engine compile). Single runs, not a benchmark.</p>
+  <p>Result: with one constant input in the concat, the whole rewritten graph is right on the Neural Engine, also for r = 8, at 512 px and at batch size 8. The rest of the graph (RoPE tables, the attention with score scaling, the layer norms with ε / r²) has no second fault. At 224 px <code>cat2</code> also moves the 46 CPU ops to the Neural Engine: 1.58 ms against 1.83 ms.</p>
+
+  <h3>2.6 The speed of the Neural Engine does not change</h3>
+  <p>The fix changes one op, so the Neural Engine speed stays as in the Step 6c matrix (Table 4 of <code>results/coreml-table.md</code>). That matrix measured the wrong graph, but the probe times of Table 5 match it (ViT-H+/16 at 512 px: 2.8 img/s in both). The Neural Engine is fast only at small token counts.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Configuration</th><th>Neural Engine img/s (best of b1, batch API, b8 package)</th><th>mlx img/s (b8)</th><th>Upper bound of the stream ratio</th></tr></thead>
+      <tbody>
+        <tr><td>ViT-S/16, 224 px</td><td class="num">633 (b1 with cat2), 673 to 688 (batch API)</td><td class="num">1,796 to 1,984</td><td class="num">1.35 (measured 1.26 to 1.31)</td></tr>
+        <tr><td>ViT-S+/16, 224 px</td><td class="num">591</td><td class="num">1,191</td><td class="num">1.50</td></tr>
+        <tr><td>ViT-B/16, 224 px</td><td class="num">236</td><td class="num">668</td><td class="num">1.35</td></tr>
+        <tr><td>ViT-L/16, 224 px</td><td class="num">64 to 65</td><td class="num">228</td><td class="num">1.28</td></tr>
+        <tr><td>ViT-H+/16, 224 px</td><td class="num">24</td><td class="num">103</td><td class="num">1.23</td></tr>
+        <tr><td>ViT-S/16, 512 px</td><td class="num">36</td><td class="num">251</td><td class="num">1.14</td></tr>
+        <tr><td>ViT-L/16, 512 px</td><td class="num">5.6</td><td class="num">46</td><td class="num">1.12</td></tr>
+        <tr><td>ViT-H+/16, 512 px (P2)</td><td class="num">2.8</td><td class="num">17 to 20</td><td class="num">1.14 (measured 0.93 to 1.00)</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 6.</b> Upper bound of the stream ratio = (Neural Engine img/s + mlx img/s) / mlx img/s, without interference. The two-stream run of Step 6c measured the interference: at P1 the ratio was 1.26 to 1.31 against the bound 1.35; at P2 <code>mlx</code> lost 14 to 23 % and the ratio was 0.93 to 1.00. So a gain is probable at 224 px and improbable at 512 px. At 448 and 512 px the Neural Engine runs at 5 to 15 % of the <code>mlx</code> speed. We did not find out why (Section 5, Q2).</p>
+</section>
+
+<section id="options">
+  <h2>3 Options for the fix</h2>
+  <p>Core ML has no setting for the device of one op. So "the embeddings off the Neural Engine" needs two packages in a chain (option B). All options keep the rewrite <code>ne2</code> of ADR 0014 for the blocks.</p>
+  <h3>3.1 Option A: one constant prefix in the concat (rewrite version <code>ne3</code>)</h3>
+  <p><code>NeuralEngineBackbone.forward</code> builds the embeddings itself and concats one constant of 5 rows with the patch tokens. The prefix holds the CLS token and the register tokens of the backbone. In fp32 the output is bit-equal to the Hugging Face embeddings.</p>
+  <pre>def embed(emb: DINOv3ViTEmbeddings, pixels: torch.Tensor) -&gt; torch.Tensor:
+    patches = emb.patch_embeddings(pixels).flatten(2).transpose(1, 2)  # (B, N, D)
+    prefix = torch.cat([emb.cls_token, emb.register_tokens], dim=1)    # (1, 5, D): one constant
+    return torch.cat([prefix.expand(pixels.shape[0], -1, -1), patches], dim=1)</pre>
+  <p>A guard test reads the converted MIL program and fails on a concat with two or more constant inputs. A part test converts the embeddings of ViT-S/16 at 448 px (a package of about 1 MB) and checks it on CPU_AND_NE, so a new macOS that changes the fault shows at once. The variants <code>pad_add</code> and <code>cat_cf</code> of Table 4 are also right; <code>cat2</code> is the smallest change.</p>
+  <h3>3.2 Option B: two packages in a chain</h3>
+  <p>Package 1 (pixels to embeddings, divided by r) runs on CPU_ONLY. Package 2 (embeddings to tokens, the blocks and the final norm) runs on CPU_AND_NE. The worker calls both for each batch. CPU_ONLY keeps the GPU free for <code>mlx</code> in the two-stream run.</p>
+  <h3>3.3 Option C: bound the fault, no fix</h3>
+  <p>The Neural Engine path stays limited to ViT-S/16 and ViT-S+/16 at 224 px and batch size 1. The other 13 packages stay expected failures on CPU_AND_NE. Step 6d records the cause (Section 2.3) in an ADR and closes.</p>
+  <h3>3.4 Not an option for Step 6d: the ml-ane-transformers layout</h3>
+  <p>The layout of option D of Step 6c D2 ((B, C, 1, S) tensors, 1 × 1 convolutions, one attention for each head) is not needed for the parity: Table 5 shows parity without it. It can help the Neural Engine speed at 448 and 512 px (Table 6), but that is a second rewrite of every block. It is a candidate for a later step (Section 5, Q2).</p>
+
+  <h3>3.5 Trade-offs</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th></th><th>A: one constant prefix (<code>ne3</code>)</th><th>B: two packages in a chain</th><th>C: bound, no fix</th></tr></thead>
+      <tbody>
+        <tr><td>Parity on CPU_AND_NE</td><td class="pass">Measured: 5 of 5 probe configurations pass (Table 5): ViT-S/16, ViT-L/16 and ViT-H+/16, 224 to 512 px, b1 and b8</td><td>Expected to pass: the blocks are right on a right input (Table 5). Not measured</td><td class="fail">2 of 15 configurations</td></tr>
+        <tr><td>Parity on CPU_AND_GPU and ALL</td><td>Expected unchanged (same values; must be measured again)</td><td>Unchanged</td><td>Unchanged (30 of 30)</td></tr>
+        <tr><td>Neural Engine throughput</td><td>As in Table 6. ViT-S/16 224 px b1: 1.58 ms against 1.83 ms (all ops on the Neural Engine)</td><td>Table 6 plus one more call and a token copy for each batch. Not measured. At ViT-S/16 224 px (1.6 ms a batch) a cost of 0.1 to 0.3 ms is 6 to 20 %</td><td>As now: only ViT-S/16 and ViT-S+/16 at 224 px</td></tr>
+        <tr><td>Two-stream throughput</td><td>A gain is probable at 224 px for every model size (bound 1.23 to 1.50), improbable at 448 and 512 px (bound 1.12 to 1.14, P2 measured ≤ 1)</td><td>As A, minus the chain cost; the CPU of package 1 can slow the <code>mlx</code> process</td><td>Only P1 (1.26 to 1.31)</td></tr>
+        <tr><td>Load time</td><td>As now (1.5 to 15 s for the first load, then 0.02 to 0.08 s)</td><td>Two loads; package 1 is small (below 1 s)</td><td>As now</td></tr>
+        <tr><td>Disk</td><td>As now: 26 compiled packages, about 12 GB, converted again; the <code>ne2</code> packages are deleted first. The bundle cache grows by one entry for each new package and process</td><td>As A plus 26 small packages (1 to 3 MB each)</td><td>No change</td></tr>
+        <tr><td>Work</td><td>Small: one function, a guard test, a part test, the version name <code>ne3</code>; then the Step 6c jobs again (J1 conversion, J2 parity, J3 matrix, paired runs, two-stream run)</td><td>Medium: a chain class, two package names, changes in the worker, the matrix and the two-stream code, more tests; then the same jobs</td><td>Very small: an ADR, the roadmap row</td></tr>
+        <tr><td>Risk</td><td>A Core ML or macOS release can change the fault. The part test finds it</td><td>Two packages can get out of step (different r or version). The package name must hold both</td><td>The Neural Engine stays unused for most configurations</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 7.</b> The options and their trade-offs.</p>
+</section>
+
+<section id="recommendation">
+  <h2>4 Recommendation</h2>
+  <div class="box">
+    <p class="rec">Option A: one constant prefix in the concat, rewrite version <code>ne3</code>.</p>
+    <p>A is exact, it is one function, and the probes already show the parity for the smallest and the largest model sizes, for r = 1 and r = 8, at 224, 448 and 512 px and at batch size 8. B gives the same parity with more code, two loads and a cost for each call. C leaves 13 of 15 configurations wrong, and the fix is cheap.</p>
+    <p>For the plan: change the speed target of roadmap row 6d. Parity on CPU_AND_NE is reachable for every configuration. A two-stream gain is reachable at 224 px only (Table 6). The plan should set a two-stream target at P1 and one 224 px point of a larger model size (for example ViT-B/16 or ViT-L/16), and report P2 without a target.</p>
+  </div>
+  <p>The user picks the option. The agent does not decide.</p>
+</section>
+
+<section id="questions">
+  <h2>5 Questions for the user</h2>
+  <ul>
+    <li>Q1: Which option: A, B or C?</li>
+    <li>Q2: The Neural Engine runs at 5 to 15 % of the <code>mlx</code> speed at 448 and 512 px. Is a later step on the speed of the Neural Engine at high input resolutions worth it (for example the ml-ane-transformers layout)?</li>
+    <li>Q3: Do you want a bug report to Apple (Feedback Assistant) with the E6 graph? It is an external action, so the agent does not send it. The E6 script can serve as the minimal sample.</li>
+    <li>Q4: Disk: 18 GB free now. The bundle cache <code>~/Library/Caches/python/com.apple.e5rt.e5bundlecache</code> (about 120 GB after Step 6c) grew during these probes. Option A converts 26 packages again and fills the cache further. Do you delete the cache before the build?</li>
+  </ul>
+</section>
+
+<section id="terms">
+  <h2>6 New terms</h2>
+  <p>Terms for <code>GLOSSARY.md</code>. The build adds them when the code uses them.</p>
+  <ul>
+    <li><b>Concat fault</b>: the wrong token concat of the Neural Engine when the concat has two or more constant inputs (Section 2.3).</li>
+    <li><b>Constant prefix</b>: the CLS token and the register tokens as one constant of 5 rows, in front of the patch tokens (option A).</li>
+  </ul>
+</section>
+
+<section id="sources">
+  <h2>7 Sources</h2>
+  <ul>
+    <li><code>roadmap.md</code> (row 6d); <code>specs/06c-neural-engine/</code> (explore, plan, verify finding V1); <code>results/coreml-table.md</code>; <code>docs/learn/06c-neural-engine.html</code>; ADR 0014 and ADR 0015.</li>
+    <li>Shared notes of Step 6c: <code>step6c-handover.md</code>, <code>step6c-explore-handover.md</code>, <code>step6b-coreml-probe-findings.md</code>; build logs <code>~/.cache/dinov3-apple/coreml/build-logs/q3-*.log</code>.</li>
+    <li>Hugging Face transformers: <code>models/dinov3_vit/modeling_dinov3_vit.py</code> (<code>DINOv3ViTEmbeddings.forward</code>).</li>
+    <li>Probes E1 to E6 of 2026-11-08 (Table 1), with <code>src/dinov3_apple/coreml.py</code> (<code>rewrite_for_neural_engine</code>, <code>compute_plan_report</code>).</li>
+  </ul>
+</section>
+</main>
+</body>
+</html>
