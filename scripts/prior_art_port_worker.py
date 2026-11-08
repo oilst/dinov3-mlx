@@ -32,10 +32,15 @@ from safetensors.numpy import save_file
 TEST_IMAGES = ["iss-kibo-lab", "forest", "iss-conference"]  # the order of parity.TEST_IMAGES
 RANDOM_SEED = 0
 NUM_PREFIX_TOKENS = 5  # 1 CLS token and 4 register tokens
+DINOV2_PREFIX_TOKENS = 1  # the dinov2 model of mlx-image has no register tokens
 # The model names of mlx-image (C1).
 MLXIM_NAMES = {"ViT-S/16": "vit_small_patch16_224.dinov3", "dinov2": "vit_small_patch14_518.dinov2"}
 # The parameters of C2 that our weights file does not have: the port keeps its own values for them.
 PORT_OWN_KEYS = re.compile(r"^rope_embed\.periods$|\.bias_mask$")
+# The parameters of the dinov2 model of C1 that the mlx-vision file does not have: the layer
+# scales. The port keeps its init value 1e-5 for them; the dinov2 cells run on random pixels and
+# measure the speed only.
+DINOV2_OWN_KEYS = re.compile(r"\.ls[12]\.gamma$")
 
 
 def keep_going(budget: dict, batches: int, elapsed_s: float) -> bool:
@@ -69,30 +74,49 @@ def summarize(times: list[float], batch_size: int) -> dict[str, float]:
     }
 
 
-def port_weights(params: dict, loaded: dict) -> tuple[list[tuple[str, object]], list[str]]:
+def port_weights(
+    params: dict, loaded: dict, own_keys: re.Pattern = PORT_OWN_KEYS
+) -> tuple[list[tuple[str, object]], list[str]]:
     """Return the weight pairs of a strict load and the keys that keep the values of the port.
 
-    Only the RoPE periods and the k-bias masks (PORT_OWN_KEYS) keep the values of the port; any
-    other key that our weights file does not have stops the worker, so a wrong key map cannot
-    give random weights (finding V8 of specs/06b-prior-art/verify.html).
+    Only the keys of own_keys keep the values of the port: the RoPE periods and the k-bias masks
+    of C2 (PORT_OWN_KEYS), or the layer scales of dinov2 (DINOV2_OWN_KEYS). Any other key that
+    the weights file does not have stops the worker, so a wrong key map cannot give random
+    weights (finding V8 of specs/06b-prior-art/verify.html).
 
     Raises:
-        KeyError: For a missing key outside PORT_OWN_KEYS.
+        KeyError: For a missing key outside own_keys.
     """
     missing = sorted(set(params) - set(loaded))
-    unknown = [key for key in missing if not PORT_OWN_KEYS.search(key)]
+    unknown = [key for key in missing if not own_keys.search(key)]
     if unknown:
         raise KeyError(f"not in our weights file: {unknown[:5]}")
     return list(loaded.items()) + [(key, params[key]) for key in missing], missing
 
 
 def build_c1(spec: dict) -> object:
-    """Return the model of mlx-image (C1) with the safetensors weights of the mlx-vision org."""
+    """Return the model of mlx-image (C1) with the safetensors weights of the mlx-vision org.
+
+    The dinov2 file has separate q, k and v projections and no layer scales. The loader of
+    mlx-image does not join q, k and v, so the worker joins them with Attention.sanitize of the
+    port and loads the weights itself (J5 run 1).
+    """
     sys.path.insert(0, spec["clone"])
     from mlxim.model import create_model
 
     name = MLXIM_NAMES[spec["model"]]
-    return create_model(name, weights=spec["weights"], num_classes=0, strict=True), []
+    if spec["model"] != "dinov2":
+        return create_model(name, weights=spec["weights"], num_classes=0, strict=True), []
+    import mlx.core as mx
+    from mlx.utils import tree_flatten
+    from mlxim.model.vit.vit import Attention
+
+    model = create_model(name, weights=False, num_classes=0)
+    params = dict(tree_flatten(model.parameters()))
+    loaded = Attention.sanitize(mx.load(spec["weights"]))
+    weights, own = port_weights(params, loaded, DINOV2_OWN_KEYS)
+    model.load_weights(weights, strict=True)  # strict: an extra key of the file stops the load
+    return model, own
 
 
 def build_c2(spec: dict) -> object:
@@ -129,7 +153,7 @@ def forward_function(model: object, spec: dict) -> object:
 
         def forward(x: mx.array) -> tuple[mx.array, mx.array]:
             tokens = model.encoder(model._prepare_tokens(x.transpose(0, 2, 3, 1)))[0]
-            return tokens[:, 0], tokens[:, NUM_PREFIX_TOKENS:]
+            return tokens[:, 0], tokens[:, DINOV2_PREFIX_TOKENS:]
 
         return forward
 

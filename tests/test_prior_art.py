@@ -539,6 +539,167 @@ def test_port_weights_fill_only_known_keys() -> None:
         worker.port_weights(params | {"norm.weight": 4}, {"blocks.0.attn.qkv.weight": 5})
 
 
+def test_port_weights_of_dinov2_fill_only_the_layer_scales() -> None:
+    """J5 run 1: the dinov2 file of the mlx-vision org has no layer-scale keys. The worker fills
+    only the layer scales with the values of the port; the RoPE keys of C2 do not apply."""
+    import prior_art_port_worker as worker
+
+    qkv = "encoder.layers.0.self_attention.qkv_proj.weight"
+    params = {"encoder.layers.0.ls1.gamma": 1, "encoder.layers.0.ls2.gamma": 2, qkv: 3}
+    pairs, filled = worker.port_weights(params, {qkv: 5}, worker.DINOV2_OWN_KEYS)
+    assert sorted(filled) == ["encoder.layers.0.ls1.gamma", "encoder.layers.0.ls2.gamma"]
+    assert dict(pairs)[qkv] == 5
+    with pytest.raises(KeyError):
+        worker.port_weights(params, {qkv: 5})  # the default keys of C2
+    with pytest.raises(KeyError):
+        worker.port_weights(params, {}, worker.DINOV2_OWN_KEYS)
+
+
+class _FakeDinov2:
+    """The two calls of the dinov2 model of mlx-image that the port worker uses."""
+
+    def _prepare_tokens(self, x: mx.array) -> mx.array:
+        return mx.ones((x.shape[0], 1 + 9, 2))  # the CLS token and 3 × 3 patch tokens
+
+    def encoder(self, tokens: mx.array) -> tuple[mx.array, list]:
+        return tokens, []
+
+
+def test_port_forward_of_dinov2_drops_only_the_cls_token() -> None:
+    """J5 run 1: the dinov2 model of mlx-image has no register tokens, so the patch embeddings
+    start after 1 prefix token."""
+    import prior_art_port_worker as worker
+
+    forward = worker.forward_function(_FakeDinov2(), {"model": "dinov2"})
+    frame, patches = forward(mx.zeros((2, 3, 6, 6)))
+    assert frame.shape == (2, 2)
+    assert patches.shape == (2, 9, 2)
+
+
+def _port_spec(model: str = "ViT-S/16", dtype: str = "fp32", pixels: str = "stored") -> dict:
+    return {
+        "kind": "port",
+        "job": "J5",
+        "candidate": "C1",
+        "model": model,
+        "dtype": dtype,
+        "side": 224,
+        "batch_size": 8,
+        "pixels": pixels,
+        "group": "port-1",
+        "round": 1,
+    }
+
+
+def _port_outputs(path: Path, reference: np.ndarray, noise: float = 0.0) -> None:
+    from safetensors.numpy import save_file
+
+    rng = np.random.default_rng(1)
+    patches = reference[NUM_PREFIX_TOKENS:] + noise * rng.standard_normal(
+        reference[NUM_PREFIX_TOKENS:].shape
+    )
+    outputs = {}
+    for image in TEST_IMAGES:
+        outputs[f"{image}/embedding"] = reference[:1].astype(np.float32)
+        outputs[f"{image}/patch_embeddings"] = patches[None].astype(np.float32)
+    save_file(outputs, str(path))
+
+
+@pytest.mark.parametrize(
+    ("dtype", "noise", "valid", "note"),
+    [("fp32", 0.0, True, "thresholds fp32"), ("bf16", 0.0, True, "thresholds bf16-cast")]
+    + [("fp32", 0.5, False, "thresholds fp32")],
+)
+def test_port_line_has_the_parity_of_its_outputs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    dtype: str,
+    noise: float,
+    valid: bool,
+    note: str,
+) -> None:
+    """J5 run 1: a done port line gets the parity of its outputs against the reference output
+    and a verdict with the thresholds of its dtype mode."""
+    import bench_prior_art
+
+    reference = np.random.default_rng(0).standard_normal((NUM_PREFIX_TOKENS + 16, 32))
+    reference = reference.astype(np.float32)
+    monkeypatch.setattr(bench_prior_art, "_reference_tokens", lambda *args: reference)
+    outputs = tmp_path / "o.safetensors"
+    _port_outputs(outputs, reference, noise)
+    worker = {
+        "status": "done",
+        "finite": True,
+        "outputs_file": str(outputs),
+        "output_names": ["embedding", "patch_embeddings"],
+        "patch": {"throughput_ips": 100.0},
+    }
+    line = bench_prior_art.spec_line(_port_spec(dtype=dtype), worker, 1, 2, None)
+    assert len(line["parity"]["images"]) == len(TEST_IMAGES)
+    if noise == 0.0:
+        assert line["parity"]["worst"]["patch_p01"] == pytest.approx(1.0, abs=1e-6)
+    assert line["valid"] is valid
+    assert line["validity_note"] == note
+
+
+def test_port_line_with_random_pixels_is_finite_only(tmp_path: Path) -> None:
+    """The dinov2 cells run on random pixels: no reference output, so the verdict is finite only."""
+    import bench_prior_art
+
+    worker = {"status": "done", "finite": True, "outputs_file": str(tmp_path / "o.safetensors")}
+    spec = _port_spec(model="dinov2", pixels="random")
+    line = bench_prior_art.spec_line(spec, worker, 1, 2, None)
+    assert line["parity"] is None
+    assert line["valid"] is True
+    assert line["validity_note"] == "finite only: no reference output"
+
+
+def _port_line(kind: str, r: int, ips: float, group: str, status: str = "done") -> dict:
+    line = {"job": "J5", "side_kind": kind, "round": r, "group": group, "status": status}
+    if status != "done":
+        return line | {"reason": f"RuntimeError: {group} failed"}
+    line["patch"] = {"throughput_ips": ips}
+    if kind == "port":
+        worst = {"frame": 0.9999, "patch_mean": 0.9999, "patch_p01": 0.999 - r / 1e4}
+        line |= {"parity": {"worst": worst}, "valid": r != 2, "own_values": ["a", "b"]}
+    return line
+
+
+def test_port_rows(tmp_path: Path) -> None:
+    """Section 6 of the table: the last line of each round and side counts; a cell without run
+    lines keeps its "blocked" line; a cell without a done pair gives its reasons."""
+    import bench_prior_art
+
+    blocked = tmp_path / "blocked.jsonl"
+    bench_prior_art.run_ports(5, False, blocked, tmp_path / "ports")
+    lines = bench_prior_art.read_lines(blocked)
+    lines.append(_port_line("port", 1, 50.0, "port-1"))  # an earlier run: the line below wins
+    for r in range(1, 6):
+        lines += [_port_line("ours", r, 120.0, "port-1"), _port_line("port", r, 100.0, "port-1")]
+        lines += [
+            _port_line("ours", r, 10.0, "port-5"),
+            _port_line("port", r, 0.0, "port-5", status="error"),
+        ]
+    rows = prior_art.port_rows(lines)
+    assert len(rows) == len(prior_art.PORT_CELLS)
+    first = rows[0]
+    assert isinstance(first, prior_art.PriorArtRow)
+    assert first.ratios == pytest.approx([1.2] * 5)
+    assert first.fields["parity"]["patch_p01"] == pytest.approx(0.999 - 5 / 1e4)
+    assert (first.fields["valid_lines"], first.fields["done_lines"]) == (4, 5)
+    assert first.fields["own_values"] == 2
+    assert rows[1]["status"] == "blocked"
+    assert "no permission" in rows[1]["reason"]
+    assert rows[4]["status"] == "error"
+    assert rows[4]["reason"] == "RuntimeError: port-5 failed"
+    table = bench_prior_art.write_table(lines)
+    section = table.split("## 6 ")[1]
+    assert section.count("| port-1 |") == 1
+    assert "| 1.200 |" in section
+    assert "| port-2 |" in section and "blocked" in section
+    assert "RuntimeError: port-5 failed" in section
+
+
 # T15 and T16: the slow session.
 
 

@@ -69,7 +69,8 @@ CANDIDATES: dict[str, Candidate] = {
         "MIT",
         "da92532",
         "gated",
-        "third-party Python code: the user decides (Q1); the port changes run as variants V1 to V5",
+        "third-party Python code: gated by Q1; the user said yes on 2026-11-08, so J5 ran "
+        "(Section 6); the port changes run as variants V1 to V5",
     ),
     "C2": Candidate(
         "mlx_dinov3 (etornam45)",
@@ -77,8 +78,8 @@ CANDIDATES: dict[str, Candidate] = {
         "DINOv3 License",
         "43d139b",
         "gated",
-        "third-party Python code: the user decides (Q1); its converter reads a pickle, so J5 "
-        "uses our own converted weights",
+        "third-party Python code: gated by Q1; the user said yes on 2026-11-08, so J5 ran "
+        "(Section 6); its converter reads a pickle, so J5 uses our own converted weights",
     ),
     "C3": Candidate(
         "MLXDINOv3 (vincentamato)",
@@ -788,6 +789,63 @@ def variant_speed_rows(lines: list[dict]) -> list[PriorArtRow]:
                 row = cell_row(changed, base, fields)
                 if row is not None:
                     rows.append(row)
+    return rows
+
+
+def port_rows(lines: list[dict]) -> list[PriorArtRow | dict]:
+    """Return one row for each port cell of J5, in the order of PORT_CELLS.
+
+    The last line of each round and side counts, so a later run of J5 replaces an earlier run in
+    the same file. A cell without run lines gives a dict with the status "blocked" and the reason
+    and the command of its "blocked" line; a cell without a done pair gives a dict with the
+    status "error" and the reasons.
+    """
+    j5 = [line for line in lines if line.get("job") == "J5"]
+    rows: list[PriorArtRow | dict] = []
+    for number, cell in enumerate(PORT_CELLS, start=1):
+        candidate, model, _, side, ours_side, dtype, mode, batch_size = cell
+        group = f"port-{number}"
+        fields = {
+            "group": group,
+            "candidate": candidate,
+            "model_size": model,
+            "side": side,
+            "ours_side": ours_side,
+            "precision": dtype,
+            "dtype_mode": mode,
+            "batch_size": batch_size,
+        }
+        latest: dict[tuple[int, str], dict] = {}
+        blocked = None
+        for line in j5:
+            if line.get("group") != group:
+                continue
+            if line["status"] == "blocked":
+                blocked = line
+            else:
+                latest[(line["round"], line["side_kind"])] = line
+        if not latest:
+            reason = blocked["reason"] if blocked else "no line"
+            command = blocked.get("command") if blocked else None
+            rows.append(fields | {"status": "blocked", "reason": reason, "command": command})
+            continue
+        ours = [line for (_, kind), line in latest.items() if kind == "ours"]
+        port = [line for (_, kind), line in latest.items() if kind == "port"]
+        done = [line for line in port if _done(line)]
+        parities = [line["parity"]["worst"] for line in done if line.get("parity")]
+        fields |= {
+            "parity": worst_parity(parities) if parities else None,
+            "valid_lines": sum(bool(line.get("valid")) for line in done),
+            "done_lines": len(done),
+            "own_values": max((len(line.get("own_values") or []) for line in done), default=0),
+        }
+        row = cell_row(ours, port, fields)
+        if row is None:
+            failed = [line for line in latest.values() if line["status"] != "done"]
+            reasons = sorted({line.get("reason") or line["status"] for line in failed})
+            rows.append(fields | {"status": "error", "reason": "; ".join(reasons) or "no pair"})
+        else:
+            rows.append(row)
     return rows
 
 

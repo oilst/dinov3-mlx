@@ -284,8 +284,6 @@ def export_line_fields(spec: Spec, worker: dict) -> dict:
     The frame throughput equals the patch throughput: one predict call gives every output. An
     export without a frame embedding gets frame: null.
     """
-    from safetensors import safe_open
-
     export = EXPORTS[spec["export"]]
     fields = {
         "status": worker["status"],
@@ -305,10 +303,35 @@ def export_line_fields(spec: Spec, worker: dict) -> dict:
     }
     if worker["status"] != "done":
         return fields
-    if not export.reference_model_size or spec["pixels"] != "stored":
-        fields["valid"] = worker["finite"]
-        fields["validity_note"] = "finite only: no reference output"
-        return fields
+    reference_model_size = export.reference_model_size if spec["pixels"] == "stored" else None
+    fields |= parity_fields(worker, reference_model_size, export.side, export.threshold_mode)
+    if export.report_only and fields["parity"] is not None:
+        fields["validity_note"] += ", report only"
+    return fields
+
+
+def parity_fields(
+    worker: dict, reference_model_size: str | None, side: int | None, threshold_mode: str
+) -> dict:
+    """Return the parity, the verdict and the validity note of a done third-party worker: its
+    outputs of the test images against the reference output (one code path for the exports and
+    the ports).
+
+    Args:
+        worker: The result of the worker, with outputs_file, output_names and finite.
+        reference_model_size: The model size of the reference output, or None for a worker
+            without one (random pixels, DINOv2): then the verdict is finite only.
+        side: The input resolution of the reference output.
+        threshold_mode: The key of THRESHOLDS of the verdict.
+    """
+    from safetensors import safe_open
+
+    if not reference_model_size:
+        return {
+            "parity": None,
+            "valid": worker.get("finite"),
+            "validity_note": "finite only: no reference output",
+        }
     images = []
     try:
         with safe_open(repo_path(worker["outputs_file"]), "np") as tensors:
@@ -316,19 +339,20 @@ def export_line_fields(spec: Spec, worker: dict) -> dict:
                 names = worker["output_names"]
                 outputs = {name: tensors.get_tensor(f"{image}/{name}") for name in names}
                 frame, patches = export_outputs(outputs)
-                reference = _reference_tokens(export.reference_model_size, export.side, image)
+                reference = _reference_tokens(reference_model_size, side, image)
                 images.append({"image": image} | export_parity(reference, frame, patches))
     except (KeyError, ValueError, OSError) as error:  # the line keeps the reason; the run goes on
-        fields["valid"] = False
-        fields["validity_note"] = f"parity error: {type(error).__name__}: {error}"
-        return fields
+        return {
+            "parity": None,
+            "valid": False,
+            "validity_note": f"parity error: {type(error).__name__}: {error}",
+        }
     worst = worst_parity([{k: v for k, v in p.items() if k != "image"} for p in images])
-    fields["parity"] = {"images": images, "worst": worst}
-    fields["valid"] = bool(worker["finite"]) and parity_passes(worst, export.threshold_mode)
-    fields["validity_note"] = f"thresholds {export.threshold_mode}" + (
-        ", report only" if export.report_only else ""
-    )
-    return fields
+    return {
+        "parity": {"images": images, "worst": worst},
+        "valid": bool(worker["finite"]) and parity_passes(worst, threshold_mode),
+        "validity_note": f"thresholds {threshold_mode}",
+    }
 
 
 def spec_line(spec: Spec, worker: dict, need: int, available: int, machine: object) -> dict:
@@ -377,6 +401,10 @@ def spec_line(spec: Spec, worker: dict, need: int, available: int, machine: obje
         line["side"], line["batch_size"] = None, 1  # the 12 configurations, 224 to 512 px
     else:
         line |= {k: v for k, v in worker.items() if k not in ("status", "reason")}
+    if spec["kind"] == "port" and worker.get("status") == "done":
+        stored = spec.get("pixels") == "stored"
+        mode = port_config(spec).dtype_mode if stored else ""
+        line |= parity_fields(worker, spec["model"] if stored else None, spec.get("side"), mode)
     line |= {
         "need_bytes": need,
         "available_bytes": available,
@@ -722,18 +750,50 @@ def write_table(lines: list[dict], run2: list[dict] | None = None) -> str:
         )
     out += [
         "",
-        "## 6 Python ports (J5, gated by Q1)",
+        "## 6 Python ports (J5): ratio ours ÷ port",
         "",
-        "| Cell | Candidate | Model | px (ours) | Dtype | Batch size | Status | Reason or result |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- |",
+        (
+            "Ours runs the same model size at the same token count (dinov2 518 px: ours ViT-S/16 "
+            "at 592 px), compiled, in the dtype mode of the row. The last line of each round and "
+            "side counts. Valid: the done port lines that pass the thresholds of the dtype mode "
+            "(finite only for random pixels)."
+        ),
+        "",
+        (
+            "| Cell | Candidate | Model, px (ours px) | Dtype | Batch size | Status | Ours img/s | "
+            "Port img/s | Ratios | Median | Spread | Verdict | Worst frame | Worst patch mean | "
+            "Worst patch p01 | Valid | Note |"
+        ),
+        (
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | "
+            "--- | --- | --- |"
+        ),
     ]
-    for line in lines:
-        if line.get("job") == "J5" and line.get("status") == "blocked":
-            out.append(
-                f"| {line['group']} | {line['candidate']} | {line['model_size']} | {line['side']} "
-                f"({line['ours_side']}) | {line['precision']} | {line['batch_size']} | blocked | "
-                f"{line['reason']}. Command: `{line['command']}` |"
-            )
+    for row in prior_art.port_rows(lines):
+        fields = row.fields if isinstance(row, prior_art.PriorArtRow) else row
+        head = (
+            f"| {fields['group']} | {fields['candidate']} | {fields['model_size']}, "
+            f"{fields['side']} ({fields['ours_side']}) | {fields['precision']} | "
+            f"{fields['batch_size']} |"
+        )
+        if not isinstance(row, prior_art.PriorArtRow):
+            note = fields["reason"]
+            if fields.get("command"):
+                note += f". Command: `{fields['command']}`"
+            out.append(f"{head} {fields['status']} |{' – |' * 10} {note} |")
+            continue
+        ratios = ", ".join(f"{r:.3f}" for r in row.ratios)
+        notes = []
+        if fields["parity"] is None:
+            notes.append("random pixels: finite only")
+        if fields["own_values"]:
+            notes.append(f"{fields['own_values']} parameters keep the values of the port")
+        out.append(
+            f"{head} done | {row.ours_ips:.1f} | {row.other_ips:.1f} | {ratios} | "
+            f"{row.median:.3f} | {row.spread:.3f} | {row.verdict} | "
+            f"{_parity_cells(fields['parity'])} | "
+            f"{fields['valid_lines']} of {fields['done_lines']} | {'; '.join(notes) or '–'} |"
+        )
     out.append("")
     return "\n".join(out)
 
