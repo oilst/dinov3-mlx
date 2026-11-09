@@ -76,7 +76,7 @@ Source: throughput from Table 5 of [results/speedup-table.md](results/speedup-ta
 
 ## Results
 
-All numbers come from one Mac: an M5 Max with 128 GB, on the power adapter. The reference output is the Hugging Face model on torch-cpu in fp32.
+All numbers come from one Mac: an Apple M5 Max with 64 GB unified memory, macOS 26.5.2, on the power adapter. The reference output is the Hugging Face model on torch-cpu in fp32.
 
 Parity: mlx passes the parity thresholds in every configuration of every model size and dtype mode, except the expected fp16 overflow of ViT-L/16 and ViT-H+/16 in fp16-cast (as on torch-mps).
 
@@ -103,6 +103,16 @@ Speed against PyTorch on MPS: the paired ratio mlx ÷ torch-mps (above 1: mlx is
 | P2 | bf16 | bf16-autocast | bf16-cast (compile) | 1.013 | 1.013 | above 1, inside the noise |
 
 Source: Table 1 of [results/speedup-table.md](results/speedup-table.md), pooled median of two runs of 5 paired rounds. The matrix of 324 cells is Table 2 of the same file.
+
+API overhead: the `Embedder` against the direct path (preprocessing, compiled forward pass and output cast, without the API) on the same uint8 frames, fp16-autocast, batch size 8.
+
+| Configuration | Model size, px | Output | Frames per call | Ratio api ÷ direct |
+| --- | --- | --- | --- | --- |
+| P1 | ViT-S/16, 224 | frame | 8 | 0.996 |
+| P2 | ViT-H+/16, 512 | patch | 8 | 1.009 |
+| P1-pad | ViT-S/16, 224 | frame | 13 | 0.819 |
+
+Source: Table 1 of [results/api-table.md](results/api-table.md), lower median of 5 rounds. P1-pad has one padded batch: 3 of its 16 rows are zero frames. Call the API with a multiple of `batch_size` frames, or set `batch_size` to the number of frames.
 
 Prior art: against the two public Python MLX ports of DINOv3, this package is faster in all 8 measured cells.
 
@@ -138,7 +148,7 @@ V2, V4 and V17 are findings of the Step 6 verification ([specs/06-speed/verify.h
 
 ## Tested versions
 
-macOS 26.5, Python 3.12.13, mlx 0.32.4, numpy 2.5.4, safetensors 0.8.0, huggingface-hub 2.4.0, pillow 13.0.0. Reference and baseline: torch 2.15.0, transformers 5.22.1. `uv.lock` holds the exact versions of all packages.
+macOS 26.5.2, Python 3.12.13, mlx 0.32.4, numpy 2.5.4, safetensors 0.8.0, huggingface-hub 2.4.0, pillow 13.0.0. Reference and baseline: torch 2.15.0, transformers 5.22.1. `uv.lock` holds the exact versions of all packages.
 
 ## Tests and benchmarks
 

@@ -1,6 +1,7 @@
 """Tests T10 to T13 of specs/07-release/plan.html: the rename, the core dependencies, the site
 and the README."""
 
+import json
 import re
 import subprocess
 import tomllib
@@ -191,3 +192,25 @@ def test_readme_tables_name_their_source() -> None:
         sources = re.findall(r"Source: .*?\(?(results/[\w./-]+)", after)
         assert sources, f"the table that ends on line {end + 1} names no source"
         assert all((ROOT / source).is_file() for source in sources), sources
+
+
+def test_bench_api_table(tmp_path: Path) -> None:
+    """B1: the table gives the lower median of each configuration against the target 0.97."""
+    import bench_api
+
+    results = tmp_path / "api-overhead.jsonl"
+    lines = []
+    for name, ratios in (
+        ("P1", [0.99, 0.98, 1.0, 0.97, 0.99]),
+        ("P2", [0.95, 0.96, 0.9, 1.0, 0.9]),
+    ):
+        rounds = [{"api": 100 * r, "direct": 100.0, "ratio": r} for r in ratios]
+        lines.append({"name": name, "status": "done", "rounds": rounds, "ratio": sorted(ratios)[2]})
+    lines.append({"name": "P1-pad", "status": "skipped", "reason": "needs 99 GB"})
+    results.write_text("".join(json.dumps(line) + "\n" for line in lines))
+    table = tmp_path / "api-table.md"
+    bench_api.write_table(results, table)
+    rows = {row.split(" | ")[0].strip("| "): row for row in table.read_text().splitlines()}
+    assert rows["P1"].endswith("| 0.990 | ≥ 0.97 | pass |")
+    assert rows["P2"].endswith("| 0.950 | ≥ 0.97 | fail |")
+    assert "skipped: needs 99 GB" in rows["P1-pad"]
