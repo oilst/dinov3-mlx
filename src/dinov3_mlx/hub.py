@@ -6,6 +6,7 @@ from pathlib import Path
 
 import numpy as np
 from huggingface_hub import snapshot_download, try_to_load_from_cache
+from huggingface_hub.errors import LocalTokenNotFoundError, RepositoryNotFoundError
 from safetensors import safe_open
 
 MODEL_IDS: dict[str, str] = {
@@ -26,6 +27,10 @@ WEIGHT_PATTERNS: list[str] = ["config.json", "*.safetensors", "model.safetensors
 
 class WeightsNotFoundError(FileNotFoundError):
     """Neither the Hugging Face cache nor the converted folder has all weight files."""
+
+
+class WeightsAccessError(PermissionError):
+    """The Hugging Face Hub refused the download of a gated DINOv3 repo."""
 
 
 class InsufficientDiskError(RuntimeError):
@@ -105,6 +110,35 @@ def weights_dir(
     if (converted / "config.json").exists() and any(converted.glob("*.safetensors")):
         return converted
     raise WeightsNotFoundError(f"{model_size}: not in the Hugging Face cache or in {converted}")
+
+
+def ensure_weights(model_size: str) -> Path:
+    """Return the weight folder of one model size; download the weights if they are missing.
+
+    Args:
+        model_size: A key of MODEL_IDS.
+
+    Returns:
+        The folder from weights_dir.
+
+    Raises:
+        WeightsAccessError: If the Hub refuses the download: the DINOv3 License is not accepted
+            for the repo, or no Hugging Face token is set.
+    """
+    try:
+        return weights_dir(model_size)
+    except WeightsNotFoundError:
+        pass
+    model_id = MODEL_IDS[model_size]
+    try:
+        download(model_id)
+    except (RepositoryNotFoundError, LocalTokenNotFoundError) as error:  # GatedRepoError too
+        raise WeightsAccessError(
+            f"{model_size}: the Hugging Face Hub refused the download of {model_id}. Accept the "
+            f"DINOv3 License on https://huggingface.co/{model_id}, then log in with "
+            "`hf auth login`."
+        ) from error
+    return weights_dir(model_size)
 
 
 def parameter_count(model_size: str) -> int:

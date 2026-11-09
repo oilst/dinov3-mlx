@@ -81,6 +81,24 @@ def tf32_enabled(environ: Mapping[str, str] | None = None) -> bool:
     return bool(match and int(match.group(1)))
 
 
+def tf32_active() -> bool:
+    """Return True if MLX runs fp32 matmuls on the GPU with TF32: the TF32 probe (Section 3.2 of
+    specs/07-release/plan.html).
+
+    tf32_enabled reads the environment, but MLX reads MLX_ENABLE_TF32 once, at its first use. A
+    process that used mlx before it set the variable can run TF32 while the variable says 0. The
+    probe multiplies the 64 x 64 identity by values of 1 + k * 2**-20. In fp32 the product equals
+    the values exactly; TF32 keeps 10 mantissa bits and rounds them to 1.
+
+    Returns:
+        True if the product differs from the values.
+    """
+    steps = np.arange(64 * 64, dtype=np.float32).reshape(64, 64) % 1000
+    values = (1.0 + steps * 2.0**-20).astype(np.float32)
+    product = mx.matmul(mx.eye(64, dtype=mx.float32), mx.array(values), stream=mx.gpu)
+    return not np.array_equal(np.array(product), values)
+
+
 @dataclass(frozen=True)
 class MlxConfig:
     """The shape of one model size, from config.json of its Hugging Face folder.

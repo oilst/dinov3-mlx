@@ -204,7 +204,7 @@ _Avoid_: engine, runtime, framework (in this sense)
 A matmul mode that rounds the fp32 inputs to a 10-bit mantissa. MLX turns it on by default; the fp32 dtype mode of `mlx` turns it off (`MLX_ENABLE_TF32=0`).
 
 **TF32 probe**:
-The test of one fp32 matmul with `MLX_ENABLE_TF32=0` and `=1` against NumPy float64.
+A check of the real TF32 state: one fp32 matmul on the GPU whose exact result needs more than a 10-bit mantissa. The API runs `tf32_active` (the 64 × 64 identity times values 1 + k · 2⁻²⁰) once in the constructor of `Embedder`. The test `test_mlx_tf32_probe` runs one matmul with `MLX_ENABLE_TF32=0` and `=1` against NumPy float64.
 
 **Reference output**:
 The output of the Hugging Face backbone on `torch-cpu` in fp32. All parity tests compare with it.
@@ -473,6 +473,17 @@ The highest compute rate that the matmuls of one shape and dtype reach on the GP
 **Relaxed precision**:
 The option of the NAX matrix operation that lets the hardware compute with less precision. MLX 0.32.4 turns it on in the NAX matmul and attention kernels.
 
+## Public API
+
+**Public API**:
+The functions and classes that the README documents: `Embedder` and its errors. A change to them needs a new version.
+
+**Embedder**:
+The object of the public API. Its constructor loads and compiles one backbone; `embed_frames`, `embed_patches` and `embed` give the outputs from uint8 RGB frames.
+
+**Padded batch**:
+The last batch of an `Embedder` call, filled with zero frames to the batch size, so each input resolution needs one trace only. The outputs drop the padded rows.
+
 ## Fine-tuning
 
 **Adapter**:
@@ -532,6 +543,12 @@ A pytest session without `DINOV3_SLOW`.
 
 **Slow session**:
 A pytest session with `DINOV3_SLOW=1`.
+
+**Release check**:
+The full default session with the weights, the slow session for the API parity and the fingerprint test on this Mac, before each tag.
+
+**Gate**:
+A step of the release that only the user can do or approve: G1 the legal check, G2 the push to the private repo, G3 the repo goes public.
 
 **CPU stream**:
 The CPU device of MLX (`mx.cpu`). Some tests run the MLX backbone there as a second device; it rounds differently from the GPU.
