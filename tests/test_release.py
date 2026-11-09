@@ -4,7 +4,9 @@ and the README."""
 import re
 import subprocess
 import tomllib
+from html.parser import HTMLParser
 from pathlib import Path
+from urllib.parse import unquote, urlsplit
 
 ROOT = Path(__file__).parent.parent
 
@@ -59,3 +61,121 @@ def test_core_dependencies() -> None:
         ["uv", "lock", "--check"], cwd=ROOT, capture_output=True, text=True, check=False
     )
     assert result.returncode == 0, result.stderr
+
+
+class Links(HTMLParser):
+    """The href values and the ids of one HTML page."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.hrefs: list[str] = []
+        self.ids: set[str] = set()
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        values = dict(attrs)
+        if values.get("id"):
+            self.ids.add(values["id"])
+        if tag == "a" and values.get("name"):
+            self.ids.add(values["name"])
+        if tag == "a" and values.get("href"):
+            self.hrefs.append(values["href"])
+
+
+def page_links(path: Path) -> Links:
+    """Parse one HTML page."""
+    parser = Links()
+    parser.feed(path.read_text())
+    return parser
+
+
+def broken_links(site: Path) -> list[str]:
+    """Return each relative link of the HTML pages in site whose file or anchor is missing."""
+    pages = {path: page_links(path) for path in site.rglob("*.html")}
+    broken = []
+    for path, links in pages.items():
+        for href in links.hrefs:
+            parts = urlsplit(href)
+            if parts.scheme or parts.netloc or href.startswith("mailto:"):
+                continue
+            target = (path.parent / unquote(parts.path)).resolve() if parts.path else path
+            if target.is_dir():
+                target = target / "index.html"
+            if not target.is_file() or not target.is_relative_to(site.resolve()):
+                broken.append(f"{path.relative_to(site)}: {href}")
+            elif parts.fragment and target.suffix == ".html":
+                ids = pages[target].ids if target in pages else page_links(target).ids
+                if unquote(parts.fragment) not in ids:
+                    broken.append(f"{path.relative_to(site)}: {href}")
+    return broken
+
+
+def test_site_links_resolve(tmp_path: Path) -> None:
+    """T12: make_site.py builds the site; its index links each explainer, each spec page and the
+    plan; each relative link and anchor resolves."""
+    import make_site
+
+    site = tmp_path / "_site"
+    make_site.build(site)
+    index = page_links(site / "index.html")
+    pages = [p.relative_to(ROOT).as_posix() for p in ROOT.glob("docs/learn/*.html")]
+    pages += [p.relative_to(ROOT).as_posix() for p in ROOT.glob("specs/*/*.html")]
+    pages.append("docs/plan.html")
+    assert sorted(set(pages) - set(index.hrefs)) == []
+    assert broken_links(site) == []
+
+
+# The sections of Section 3.4 of the plan, as level-2 headings of the README.
+README_SECTIONS = [
+    "What it does",
+    "Installation",
+    "Access to the weights",
+    "Usage",
+    "Dtype modes",
+    "Results",
+    "Limits",
+    "Tested versions",
+    "Tests and benchmarks",
+    "License",
+    "Pages",
+]
+
+
+def readme() -> str:
+    return (ROOT / "README.md").read_text()
+
+
+def test_readme_sections() -> None:
+    """T13: the README has the sections of Section 3.4 in order and names V2, V4 and V17."""
+    headings = re.findall(r"^## (.+)$", readme(), flags=re.MULTILINE)
+    assert headings == README_SECTIONS
+    for limit in ("V2", "V4", "V17"):
+        assert re.search(rf"\b{limit}\b", readme()), limit
+
+
+def test_readme_links_resolve() -> None:
+    """T13: each relative link of the README resolves to a tracked file."""
+    tracked = {path.relative_to(ROOT).as_posix() for path in tracked_files()}
+    broken = []
+    for target in re.findall(r"\]\(([^)\s]+)\)", readme()):
+        parts = urlsplit(target)
+        if parts.scheme or not parts.path:
+            continue
+        if unquote(parts.path).rstrip("/") not in tracked and not (ROOT / parts.path).is_dir():
+            broken.append(target)
+    assert broken == []
+
+
+def test_readme_tables_name_their_source() -> None:
+    """T13: each table of the README is followed by a line "Source: ..." with a results file."""
+    lines = readme().splitlines()
+    ends = [
+        i
+        for i, line in enumerate(lines)
+        if line.startswith("|") and (i + 1 == len(lines) or not lines[i + 1].startswith("|"))
+    ]
+    assert ends, "the README has no table"
+    for end in ends:
+        after = "\n".join(lines[end + 1 : end + 3])
+        sources = re.findall(r"Source: .*?\(?(results/[\w./-]+)", after)
+        assert sources, f"the table that ends on line {end + 1} names no source"
+        assert all((ROOT / source).is_file() for source in sources), sources

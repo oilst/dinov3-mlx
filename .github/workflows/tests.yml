@@ -1,0 +1,35 @@
+# The tests that need no weights, on each push and pull request (D6 A of
+# specs/07-release/explore.html). The release check with the weights runs on the Mac of the
+# author before each tag.
+name: tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: macos-26
+    timeout-minutes: 30
+    env:
+      HF_HUB_OFFLINE: "1"  # no weight download in CI
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Install
+        run: uv sync --frozen
+      - name: ruff format
+        run: uv run ruff format --check
+      - name: ruff check
+        run: uv run ruff check
+      - name: Write the stored pixels
+        run: uv run python -c "import sys; sys.path.insert(0, 'scripts'); import make_reference; make_reference.write_inputs()"
+      - name: pytest
+        run: uv run pytest -q -ra
+      - name: Build the site
+        run: uv run python scripts/make_site.py
