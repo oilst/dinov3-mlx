@@ -14,6 +14,7 @@ import pytest
 
 from dinov3_mlx import bench
 from dinov3_mlx.bench import DTYPE_MODE_NAMES
+from dinov3_mlx.machine import MachineState
 
 REPO_ROOT = Path(__file__).parents[1]
 # The parameter counts of the safetensors headers, with the mask token.
@@ -254,17 +255,20 @@ def test_driver_records_other_heavy_jobs(
             time.sleep(0.3)
         return {"status": "done", "reason": ""}
 
-    read_state = bench_speed.read_machine_state
+    # A fake machine state and free memory: the test must not depend on the power source and the
+    # memory of the Mac or the CI runner (W4 of specs/07-release/plan.html).
+    machine = MachineState("AC Power", "off", "", 64 * 10**9, "Apple M5 Max", 128 * 10**9)
     calls: list[int] = []
 
-    def read_machine_state() -> object:
+    def read_machine_state() -> MachineState:
         calls.append(1)
         if len(calls) == 2:  # before worker 2: the other job has ended
             other[0].kill()
             other[0].wait()
-        return read_state()
+        return machine
 
     monkeypatch.setattr(bench_speed, "read_machine_state", read_machine_state)
+    monkeypatch.setattr(bench_speed, "available_memory_bytes", lambda: machine.available_bytes)
     specs = bench_speed.sweep_plan()[:2]
     results = tmp_path / "lines.jsonl"
     try:

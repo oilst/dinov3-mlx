@@ -31,7 +31,7 @@ from dinov3_mlx.bench import (
     run_worker_subprocess,
     summarize,
 )
-from dinov3_mlx.hub import WeightsNotFoundError
+from dinov3_mlx.hub import WeightsNotFoundError, weights_dir
 from dinov3_mlx.parity import TEST_IMAGES
 
 
@@ -104,6 +104,10 @@ def _need(model_size: str, dtype_mode: str, side: int, batch_size: int) -> int:
 def test_required_bench_bytes_grows_with_batch_and_side() -> None:
     from dinov3_mlx.reference import DTYPE_MODES, required_load_bytes
 
+    try:
+        weights_dir("ViT-S/16")  # required_load_bytes counts the weights in their files
+    except WeightsNotFoundError as error:
+        pytest.skip(str(error))
     load = required_load_bytes("ViT-S/16", DTYPE_MODES["fp32"].weights)
     small = _need("ViT-S/16", "fp32", 224, 1)
     assert small >= load
