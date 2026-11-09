@@ -700,6 +700,104 @@ def test_port_rows(tmp_path: Path) -> None:
     assert "RuntimeError: port-5 failed" in section
 
 
+def test_worst_parity_keeps_a_nan() -> None:
+    """Finding V11 of verify.html: a NaN in any image or line gives NaN, in each order."""
+    finite = {"frame": 0.9999, "patch_mean": 0.9998, "patch_p01": 0.9997}
+    nan = {"frame": 0.9999, "patch_mean": math.nan, "patch_p01": math.nan}
+    for parities in ([finite, nan], [nan, finite]):
+        worst = prior_art.worst_parity(parities)
+        assert worst["frame"] == pytest.approx(0.9999)
+        assert math.isnan(worst["patch_mean"]) and math.isnan(worst["patch_p01"])
+    assert prior_art.worst_parity([finite, finite | {"patch_p01": 0.5}])["patch_p01"] == 0.5
+    assert prior_art.worst_parity([finite, finite | {"frame": None}])["frame"] is None
+
+
+def test_port_rows_use_the_newest_run() -> None:
+    """Finding V12 of verify.html: each line has the run id of its driver, and a cell uses only
+    the lines of its newest run id, also when that run stopped early. Lines without a run id
+    (before V12) count as the oldest run."""
+    import bench_prior_art
+
+    line = bench_prior_art.spec_line(_port_spec(), {"status": "error"}, 1, 2, None)
+    assert line["run_id"] == bench_prior_art.RUN_ID
+    legacy = [_port_line("ours", 1, 300.0, "port-1"), _port_line("port", 1, 100.0, "port-1")]
+    old, new = "2026-11-09T08:00:00+00:00", "2026-11-09T09:00:00+00:00"
+    lines = []
+    for r in range(1, 6):
+        lines += [_port_line("ours", r, 120.0, "port-1"), _port_line("port", r, 100.0, "port-1")]
+    lines = legacy + [line | {"run_id": old} for line in lines]
+    for r in range(1, 4):  # a later run that stopped after round 3
+        pair = [_port_line("ours", r, 150.0, "port-1"), _port_line("port", r, 100.0, "port-1")]
+        lines += [line | {"run_id": new} for line in pair]
+    row = prior_art.port_rows(lines)[0]
+    assert row.ratios == pytest.approx([1.5] * 3)
+    assert row.fields["run_id"] == new
+    assert (row.fields["valid_lines"], row.fields["done_lines"]) == (2, 3)
+    assert new in bench_prior_art.write_table(lines).split("## 6 ")[1]
+    assert prior_art.port_rows(legacy)[0].fields["run_id"] == ""
+
+
+def test_port_note_names_a_parity_error() -> None:
+    """Finding V13 of verify.html: a cell with stored pixels and no parity gets the validity note
+    of its lines; only a cell with random pixels gets the note "finite only"."""
+    import bench_prior_art
+
+    lines = []
+    for group, pixels, note in [
+        ("port-1", "stored", "parity error: KeyError: 'a/embedding'"),
+        ("port-7", "random", "finite only: no reference output"),
+    ]:
+        for r in range(1, 3):
+            port = _port_line("port", r, 100.0, group)
+            port |= {"parity": None, "valid": False, "validity_note": note, "input": pixels}
+            lines += [_port_line("ours", r, 120.0, group), port]
+    rows = {row.fields["group"]: row for row in prior_art.port_rows(lines)[::6]}
+    assert rows["port-1"].fields["input"] == "stored"
+    section = bench_prior_art.write_table(lines).split("## 6 ")[1]
+    first = next(text for text in section.splitlines() if text.startswith("| port-1 |"))
+    seventh = next(text for text in section.splitlines() if text.startswith("| port-7 |"))
+    assert "parity error: KeyError" in first and "random pixels" not in first
+    assert "random pixels: finite only" in seventh
+
+
+def test_bench_dir_stays_below_the_bench_root() -> None:
+    """Finding V14 of verify.html: another results file than results/prior-art.jsonl keeps its
+    driver log and batch files below BENCH_ROOT, which git ignores, not next to the file."""
+    import bench_prior_art
+
+    root = bench_prior_art.BENCH_ROOT
+    assert bench_prior_art.bench_dir_of(bench_prior_art.RESULTS, "ports") == root / "ports"
+    other = REPO_ROOT / "results" / "prior-art-run2.jsonl"
+    assert bench_prior_art.bench_dir_of(other, "ports") == root / "prior-art-run2-batches" / "ports"
+    assert root.relative_to(REPO_ROOT).as_posix().startswith("tests/fixtures/generated/")
+    assert "tests/fixtures/generated/" in (REPO_ROOT / ".gitignore").read_text().splitlines()
+
+
+def test_port_between_runs() -> None:
+    """Finding V15 of verify.html: two runs of J5 give, for each cell, the run medians, the pooled
+    lower median, the spread between the run medians, the verdict and the valid count of each
+    run; Section 6 of the table shows them."""
+    import bench_prior_art
+
+    run1, run2 = [], []
+    for r, ips in enumerate([95.0, 96.0, 97.0], start=1):
+        run1 += [_port_line("ours", r, 120.0, "port-2"), _port_line("port", r, ips, "port-2")]
+    for r, ips in enumerate([80.0, 81.0, 79.0], start=1):
+        run2 += [_port_line("ours", r, 120.0, "port-2"), _port_line("port", r, ips, "port-2")]
+    cells = prior_art.port_between_runs(run1, run2)
+    assert [cell["group"] for cell in cells] == ["port-2"]
+    cell = cells[0]
+    assert cell["run_medians"] == pytest.approx([120 / 96, 120 / 80])
+    assert cell["pooled"] == pytest.approx(120 / 95)
+    assert cell["spread"] == pytest.approx((120 / 80 - 120 / 96) / (120 / 96))
+    assert cell["verdict"] == "above 1"
+    assert cell["n"] == 6
+    assert cell["valid"] == ["2 of 3", "2 of 3"]
+    section = bench_prior_art.write_table(run1, run2).split("## 6 ")[1]
+    assert "Two runs of J5" in section
+    assert f"| {120 / 96:.3f} | {120 / 80:.3f} | {120 / 95:.3f} |" in section
+
+
 # T15 and T16: the slow session.
 
 

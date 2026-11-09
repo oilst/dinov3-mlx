@@ -16,7 +16,8 @@ venv of a job is missing.
 
 Results: results/prior-art.jsonl and results/prior-art-table.md. The per-worker files and
 driver.log: tests/fixtures/generated/bench/prior-art/<subcommand>/. With another --results file,
-they go to the folder <stem>-batches/<subcommand>/ next to that file.
+they go to the folder <stem>-batches/<subcommand>/ there (bench_dir_of), which git ignores. Each
+line has the run id of its driver (RUN_ID).
 
 Usage:
     uv run python scripts/bench_prior_art.py coreml --rounds 5 --dry-run
@@ -74,8 +75,9 @@ REPO_ROOT = Path(__file__).parents[1]
 SCRIPTS = Path(__file__).parent
 RESULTS = REPO_ROOT / "results" / "prior-art.jsonl"
 TABLE = REPO_ROOT / "results" / "prior-art-table.md"
-RESULTS_RUN2 = REPO_ROOT / "results" / "prior-art-run2.jsonl"  # run 2 of J1 (finding V1)
+RESULTS_RUN2 = REPO_ROOT / "results" / "prior-art-run2.jsonl"  # run 2 of J1 and J5 (V1, V15)
 BENCH_ROOT = REPO_ROOT / "tests" / "fixtures" / "generated" / "bench" / "prior-art"
+RUN_ID = datetime.now(UTC).isoformat(timespec="seconds")  # the start time of the driver (V12)
 COREML_WORKER = SCRIPTS / "prior_art_coreml_worker.py"
 PORT_WORKER = SCRIPTS / "prior_art_port_worker.py"
 VENVS = {"export": "venv-coreml", "port": "venv-mlx"}
@@ -365,6 +367,7 @@ def spec_line(spec: Spec, worker: dict, need: int, available: int, machine: obje
     export = EXPORTS.get(spec.get("export", ""))
     line = {
         "run": RUN,
+        "run_id": RUN_ID,
         "job": spec["job"],
         "round": spec.get("round"),
         "position": spec.get("position"),
@@ -489,6 +492,7 @@ def run_ports(
             candidate, model, ours_size, side, ours_side, dtype, mode, batch_size = cell
             line = {
                 "run": RUN,
+                "run_id": RUN_ID,
                 "job": "J5",
                 "side_kind": "port",
                 "group": f"port-{number}",
@@ -754,19 +758,21 @@ def write_table(lines: list[dict], run2: list[dict] | None = None) -> str:
         "",
         (
             "Ours runs the same model size at the same token count (dinov2 518 px: ours ViT-S/16 "
-            "at 592 px), compiled, in the dtype mode of the row. The last line of each round and "
-            "side counts. Valid: the done port lines that pass the thresholds of the dtype mode "
-            "(finite only for random pixels)."
+            "at 592 px), compiled, in the dtype mode of the row. Run: the run id of the lines of "
+            "the cell (the start time of the driver, UTC); a cell uses only the lines of its "
+            "newest run id. «–»: lines from before the run ids, which count as one run. In a "
+            "run, the last line of each round and side counts. Valid: the done port lines that "
+            "pass the thresholds of the dtype mode (finite only for random pixels)."
         ),
         "",
         (
-            "| Cell | Candidate | Model, px (ours px) | Dtype | Batch size | Status | Ours img/s | "
-            "Port img/s | Ratios | Median | Spread | Verdict | Worst frame | Worst patch mean | "
-            "Worst patch p01 | Valid | Note |"
+            "| Cell | Candidate | Model, px (ours px) | Dtype | Batch size | Status | Run | "
+            "Ours img/s | Port img/s | Ratios | Median | Spread | Verdict | Worst frame | "
+            "Worst patch mean | Worst patch p01 | Valid | Note |"
         ),
         (
             "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | "
-            "--- | --- | --- |"
+            "--- | --- | --- | --- |"
         ),
     ]
     for row in prior_art.port_rows(lines):
@@ -776,29 +782,69 @@ def write_table(lines: list[dict], run2: list[dict] | None = None) -> str:
             f"{fields['side']} ({fields['ours_side']}) | {fields['precision']} | "
             f"{fields['batch_size']} |"
         )
+        run = fields.get("run_id") or "–"
         if not isinstance(row, prior_art.PriorArtRow):
             note = fields["reason"]
             if fields.get("command"):
                 note += f". Command: `{fields['command']}`"
-            out.append(f"{head} {fields['status']} |{' – |' * 10} {note} |")
+            out.append(f"{head} {fields['status']} | {run} |{' – |' * 10} {note} |")
             continue
         ratios = ", ".join(f"{r:.3f}" for r in row.ratios)
         notes = []
-        if fields["parity"] is None:
-            notes.append("random pixels: finite only")
+        if fields["parity"] is None:  # finding V13: only random pixels are "finite only"
+            if fields["input"] == "random":
+                notes.append("random pixels: finite only")
+            else:
+                notes += fields["notes"]
         if fields["own_values"]:
             notes.append(f"{fields['own_values']} parameters keep the values of the port")
         out.append(
-            f"{head} done | {row.ours_ips:.1f} | {row.other_ips:.1f} | {ratios} | "
+            f"{head} done | {run} | {row.ours_ips:.1f} | {row.other_ips:.1f} | {ratios} | "
             f"{row.median:.3f} | {row.spread:.3f} | {row.verdict} | "
             f"{_parity_cells(fields['parity'])} | "
             f"{fields['valid_lines']} of {fields['done_lines']} | {'; '.join(notes) or '–'} |"
         )
+    cells = prior_art.port_between_runs(lines, run2 or [])
+    if cells:
+        out += [
+            "",
+            (
+                "Two runs of J5 (finding V15 of verify.html): run 1 is the table above; run 2 ran "
+                "later with the same plan. Pooled, spread between runs and verdict as for the two "
+                "runs of J1 (Section 2)."
+            ),
+            "",
+            (
+                "| Cell | Candidate | Model, px | Dtype | Batch size | Run 1 | Run 2 | Pooled | "
+                "Spread between runs | n | Verdict | Valid run 1 | Valid run 2 | Run id of run 2 |"
+            ),
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        ]
+        for cell in cells:
+            run1_median, run2_median = cell["run_medians"]
+            out.append(
+                f"| {cell['group']} | {cell['candidate']} | {cell['model_size']}, {cell['side']} | "
+                f"{cell['precision']} | {cell['batch_size']} | {run1_median:.3f} | "
+                f"{run2_median:.3f} | {cell['pooled']:.3f} | {cell['spread']:.3f} | {cell['n']} | "
+                f"{cell['verdict']} | {cell['valid'][0]} | {cell['valid'][1]} | "
+                f"{cell['run_ids'][1] or '–'} |"
+            )
     out.append("")
     return "\n".join(out)
 
 
 # The command line.
+
+
+def bench_dir_of(results: Path, subcommand: str) -> Path:
+    """Return the folder of the per-worker files and driver.log of a run (finding V14).
+
+    The folder is below BENCH_ROOT, which git ignores: the driver log has local folders. Another
+    results file than RESULTS (a Verify run, run 2) keeps its files apart, in <stem>-batches/.
+    """
+    if results.resolve() == RESULTS.resolve():
+        return BENCH_ROOT / subcommand
+    return BENCH_ROOT / f"{results.stem}-batches" / subcommand
 
 
 def plan_of(args: argparse.Namespace) -> list[Spec]:
@@ -901,9 +947,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     if args.dry_run:
         dry_run(specs)
         return
-    bench_dir = BENCH_ROOT / args.subcommand
-    if args.results.resolve() != RESULTS.resolve():  # a Verify run keeps its files apart
-        bench_dir = args.results.with_name(f"{args.results.stem}-batches") / args.subcommand
+    bench_dir = bench_dir_of(args.results, args.subcommand)
     bench_dir.mkdir(parents=True, exist_ok=True)
     logging.basicConfig(
         level=logging.INFO,

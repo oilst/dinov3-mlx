@@ -7,6 +7,7 @@ candidate and imports no backend: the driver scripts/bench_prior_art.py imports 
 The port-change variants, which need mlx, live in port_variants.py.
 """
 
+import math
 import os
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -440,11 +441,19 @@ def parity_passes(parity: dict[str, float | None], threshold_mode: str) -> bool:
 
 
 def worst_parity(parities: list[dict[str, float | None]]) -> dict[str, float | None]:
-    """Return the smallest value of each field over the test images."""
-    return {
-        name: (None if any(p[name] is None for p in parities) else min(p[name] for p in parities))
-        for name in parities[0]
-    }
+    """Return the smallest value of each field over the test images: None if a value is None,
+    NaN if a value is NaN (finding V11 of specs/06b-prior-art/verify.html: min() keeps a NaN only
+    in the first place)."""
+    worst: dict[str, float | None] = {}
+    for name in parities[0]:
+        values = [p[name] for p in parities]
+        if any(value is None for value in values):
+            worst[name] = None
+        elif any(math.isnan(value) for value in values):
+            worst[name] = math.nan
+        else:
+            worst[name] = min(values)
+    return worst
 
 
 def eight_bit_pixels(pixels: np.ndarray) -> np.ndarray:
@@ -795,10 +804,13 @@ def variant_speed_rows(lines: list[dict]) -> list[PriorArtRow]:
 def port_rows(lines: list[dict]) -> list[PriorArtRow | dict]:
     """Return one row for each port cell of J5, in the order of PORT_CELLS.
 
-    The last line of each round and side counts, so a later run of J5 replaces an earlier run in
-    the same file. A cell without run lines gives a dict with the status "blocked" and the reason
-    and the command of its "blocked" line; a cell without a done pair gives a dict with the
-    status "error" and the reasons.
+    A cell uses only the lines of its newest run id (run_id, the start time of the driver;
+    finding V12 of specs/06b-prior-art/verify.html), so a run that stopped early does not mix
+    with an earlier run. The lines without a run id (before V12) count as the oldest run, with
+    the run id "". In a run, the last line of each round and side counts. A cell without run
+    lines gives a dict with the status "blocked" and the reason and the command of its last
+    "blocked" line; a cell without a done pair gives a dict with the status "error" and the
+    reasons.
     """
     j5 = [line for line in lines if line.get("job") == "J5"]
     rows: list[PriorArtRow | dict] = []
@@ -815,26 +827,37 @@ def port_rows(lines: list[dict]) -> list[PriorArtRow | dict]:
             "dtype_mode": mode,
             "batch_size": batch_size,
         }
-        latest: dict[tuple[int, str], dict] = {}
-        blocked = None
-        for line in j5:
-            if line.get("group") != group:
-                continue
-            if line["status"] == "blocked":
-                blocked = line
-            else:
-                latest[(line["round"], line["side_kind"])] = line
-        if not latest:
+        cell = [line for line in j5 if line.get("group") == group]
+        runs = [line for line in cell if line["status"] != "blocked"]
+        if not runs:
+            blocked = next((line for line in reversed(cell) if line["status"] == "blocked"), None)
             reason = blocked["reason"] if blocked else "no line"
             command = blocked.get("command") if blocked else None
-            rows.append(fields | {"status": "blocked", "reason": reason, "command": command})
+            run_id = blocked.get("run_id", "") if blocked else ""
+            rows.append(
+                fields
+                | {"status": "blocked", "reason": reason, "command": command, "run_id": run_id}
+            )
             continue
+        run_id = max(line.get("run_id", "") for line in runs)
+        latest = {
+            (line["round"], line["side_kind"]): line
+            for line in runs
+            if line.get("run_id", "") == run_id
+        }
         ours = [line for (_, kind), line in latest.items() if kind == "ours"]
         port = [line for (_, kind), line in latest.items() if kind == "port"]
         done = [line for line in port if _done(line)]
         parities = [line["parity"]["worst"] for line in done if line.get("parity")]
         fields |= {
+            "run_id": run_id,
+            "input": next((line.get("input") for line in port), None),
             "parity": worst_parity(parities) if parities else None,
+            "notes": sorted(
+                {line["validity_note"] for line in done if line.get("validity_note")}
+                if not parities
+                else set()
+            ),
             "valid_lines": sum(bool(line.get("valid")) for line in done),
             "done_lines": len(done),
             "own_values": max((len(line.get("own_values") or []) for line in done), default=0),
@@ -917,22 +940,42 @@ def between_runs(run1: list[dict], run2: list[dict]) -> list[dict]:
         if not isinstance(row, PriorArtRow):
             continue
         key = (row.fields["export"], row.fields["batch_size"])
-        if key not in second:
-            continue
-        medians = [row.median, second[key].median]
-        pooled = _lower_median(row.ratios + second[key].ratios)
-        verdict = pass_verdict(medians, pooled)
-        if abs(pooled - 1) <= NOISE:
-            verdict += ", inside the noise"
-        cells.append(
-            {
-                "export": key[0],
-                "batch_size": key[1],
-                "run_medians": medians,
-                "pooled": pooled,
-                "spread": (max(medians) - min(medians)) / min(medians),
-                "verdict": verdict,
-                "n": len(row.ratios) + len(second[key].ratios),
-            }
-        )
+        if key in second:
+            cells.append({"export": key[0], "batch_size": key[1]} | _two_runs(row, second[key]))
     return cells
+
+
+def port_between_runs(run1: list[dict], run2: list[dict]) -> list[dict]:
+    """Return the port cells of two runs of J5 (finding V15 of specs/06b-prior-art/verify.html).
+
+    For each cell with a row in both runs: the fields of the cell in run 1, the values of
+    between_runs, the valid count of each run ("k of n") and the run id of each run.
+    """
+    second = {row.fields["group"]: row for row in port_rows(run2) if isinstance(row, PriorArtRow)}
+    cells = []
+    for row in port_rows(run1):
+        if not isinstance(row, PriorArtRow) or row.fields["group"] not in second:
+            continue
+        other = second[row.fields["group"]]
+        valid = [f"{r.fields['valid_lines']} of {r.fields['done_lines']}" for r in (row, other)]
+        run_ids = [row.fields["run_id"], other.fields["run_id"]]
+        cells.append(row.fields | _two_runs(row, other) | {"valid": valid, "run_ids": run_ids})
+    return cells
+
+
+def _two_runs(first: PriorArtRow, second: PriorArtRow) -> dict:
+    """Return the run medians, the pooled lower median of all paired ratios, the spread between
+    the run medians ((largest − smallest) ÷ smallest), pass_verdict with the mark "inside the
+    noise" within 1 ± NOISE, and the ratio count of one cell in two runs."""
+    medians = [first.median, second.median]
+    pooled = _lower_median(first.ratios + second.ratios)
+    verdict = pass_verdict(medians, pooled)
+    if abs(pooled - 1) <= NOISE:
+        verdict += ", inside the noise"
+    return {
+        "run_medians": medians,
+        "pooled": pooled,
+        "spread": (max(medians) - min(medians)) / min(medians),
+        "verdict": verdict,
+        "n": len(first.ratios) + len(second.ratios),
+    }

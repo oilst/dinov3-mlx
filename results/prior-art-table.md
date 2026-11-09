@@ -136,15 +136,15 @@ Compute units ALL (one round, not paired), against the median export throughput 
 
 ## 6 Python ports (J5): ratio ours ÷ port
 
-Ours runs the same model size at the same token count (dinov2 518 px: ours ViT-S/16 at 592 px), compiled, in the dtype mode of the row. The last line of each round and side counts. Valid: the done port lines that pass the thresholds of the dtype mode (finite only for random pixels).
+Ours runs the same model size at the same token count (dinov2 518 px: ours ViT-S/16 at 592 px), compiled, in the dtype mode of the row. Run: the run id of the lines of the cell (the start time of the driver, UTC); a cell uses only the lines of its newest run id. «–»: lines from before the run ids, which count as one run. In a run, the last line of each round and side counts. Valid: the done port lines that pass the thresholds of the dtype mode (finite only for random pixels).
 
-| Cell | Candidate | Model, px (ours px) | Dtype | Batch size | Status | Ours img/s | Port img/s | Ratios | Median | Spread | Verdict | Worst frame | Worst patch mean | Worst patch p01 | Valid | Note |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| port-1 | C1 | ViT-S/16, 224 (224) | fp32 | 8 | done | 720.4 | 619.9 | 1.344, 1.136, 1.162, 1.156, 1.168 | 1.162 | 0.183 | above 1 | 0.999953 | 0.999967 | 0.999850 | 0 of 5 | – |
-| port-2 | C1 | ViT-S/16, 224 (224) | bf16 | 8 | done | 1520.8 | 1183.9 | 1.250, 1.260, 1.276, 1.285, 1.277 | 1.276 | 0.028 | above 1 | 0.999625 | 0.999805 | 0.999509 | 5 of 5 | – |
-| port-3 | C1 | ViT-S/16, 224 (224) | fp16 | 8 | done | 1557.0 | 1167.6 | 1.342, 1.382, 1.281, 1.334, 1.333 | 1.334 | 0.079 | above 1 | nan | nan | nan | 0 of 5 | – |
-| port-4 | C1 | ViT-S/16, 224 (224) | fp32 | 1 | done | 321.6 | 267.1 | 1.273, 1.214, 1.204, 1.193, 1.199 | 1.204 | 0.067 | above 1 | 0.999953 | 0.999967 | 0.999850 | 0 of 5 | – |
-| port-5 | C2 | ViT-H+/16, 512 (512) | fp32 | 8 | done | 4.1 | 4.0 | 1.228, 1.162, 1.025, 1.168, 1.187 | 1.168 | 0.198 | above 1 | 0.999994 | 0.999967 | 0.999882 | 0 of 5 | 33 parameters keep the values of the port |
-| port-6 | C2 | ViT-H+/16, 512 (512) | bf16 | 8 | done | 15.2 | 11.1 | 1.265, 1.324, 1.371, 1.366, 1.369 | 1.366 | 0.084 | above 1 | 0.999924 | 0.999859 | 0.999616 | 5 of 5 | 33 parameters keep the values of the port |
-| port-7 | C1 | dinov2, 518 (592) | fp32 | 8 | done | 80.5 | 62.8 | 1.277, 1.280, 1.281, 1.288, 1.283 | 1.281 | 0.009 | above 1 | – | – | – | 5 of 5 | random pixels: finite only; 24 parameters keep the values of the port |
-| port-8 | C1 | dinov2, 518 (592) | bf16 | 8 | done | 215.7 | 139.9 | 1.476, 1.510, 1.533, 1.561, 1.533 | 1.533 | 0.058 | above 1 | – | – | – | 5 of 5 | random pixels: finite only; 24 parameters keep the values of the port |
+| Cell | Candidate | Model, px (ours px) | Dtype | Batch size | Status | Run | Ours img/s | Port img/s | Ratios | Median | Spread | Verdict | Worst frame | Worst patch mean | Worst patch p01 | Valid | Note |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| port-1 | C1 | ViT-S/16, 224 (224) | fp32 | 8 | done | – | 720.4 | 619.9 | 1.344, 1.136, 1.162, 1.156, 1.168 | 1.162 | 0.183 | above 1 | 0.999953 | 0.999967 | 0.999850 | 0 of 5 | – |
+| port-2 | C1 | ViT-S/16, 224 (224) | bf16 | 8 | done | – | 1520.8 | 1183.9 | 1.250, 1.260, 1.276, 1.285, 1.277 | 1.276 | 0.028 | above 1 | 0.999625 | 0.999805 | 0.999509 | 5 of 5 | – |
+| port-3 | C1 | ViT-S/16, 224 (224) | fp16 | 8 | done | – | 1557.0 | 1167.6 | 1.342, 1.382, 1.281, 1.334, 1.333 | 1.334 | 0.079 | above 1 | nan | nan | nan | 0 of 5 | – |
+| port-4 | C1 | ViT-S/16, 224 (224) | fp32 | 1 | done | – | 321.6 | 267.1 | 1.273, 1.214, 1.204, 1.193, 1.199 | 1.204 | 0.067 | above 1 | 0.999953 | 0.999967 | 0.999850 | 0 of 5 | – |
+| port-5 | C2 | ViT-H+/16, 512 (512) | fp32 | 8 | done | – | 4.1 | 4.0 | 1.228, 1.162, 1.025, 1.168, 1.187 | 1.168 | 0.198 | above 1 | 0.999994 | 0.999967 | 0.999882 | 0 of 5 | 33 parameters keep the values of the port |
+| port-6 | C2 | ViT-H+/16, 512 (512) | bf16 | 8 | done | – | 15.2 | 11.1 | 1.265, 1.324, 1.371, 1.366, 1.369 | 1.366 | 0.084 | above 1 | 0.999924 | 0.999859 | 0.999616 | 5 of 5 | 33 parameters keep the values of the port |
+| port-7 | C1 | dinov2, 518 (592) | fp32 | 8 | done | – | 80.5 | 62.8 | 1.277, 1.280, 1.281, 1.288, 1.283 | 1.281 | 0.009 | above 1 | – | – | – | 5 of 5 | random pixels: finite only; 24 parameters keep the values of the port |
+| port-8 | C1 | dinov2, 518 (592) | bf16 | 8 | done | – | 215.7 | 139.9 | 1.476, 1.510, 1.533, 1.561, 1.533 | 1.533 | 0.058 | above 1 | – | – | – | 5 of 5 | random pixels: finite only; 24 parameters keep the values of the port |
