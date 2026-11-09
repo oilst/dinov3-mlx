@@ -1,6 +1,6 @@
 # Core ML on the Neural Engine: rewrite ne3
 
-Made by `scripts/bench_coreml.py table` from `results/coreml-6d.jsonl` on 2026-11-08. Step 6d (specs/06d-neural-engine-fault/plan.html). Core ML packages run with fp16 compute precision; the mlx side runs the compiled forward pass in the fastest valid fp16 dtype mode of Step 6. Parity: frame / patch mean / patch 1st percentile, the worst of the 3 test images (parity) or image 0 (speed).
+Made by `scripts/bench_coreml.py table` from `results/coreml-6d.jsonl` on 2026-11-09. Step 6d (specs/06d-neural-engine-fault/plan.html). Core ML packages run with fp16 compute precision; the mlx side runs the compiled forward pass in the fastest valid fp16 dtype mode of Step 6. Parity: frame / patch mean / patch 1st percentile, the worst of the 3 test images (parity) or image 0 (speed).
 
 ## 1 Conversion
 
@@ -181,12 +181,12 @@ Table 4. The matrix: patch embeddings, 1 round (job J3). The ratio is Core ML / 
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | P1-b1 | coreml-gpu | 0.864 | 0.864 | – | not above 1 | 468.2 | 541.3 | 5 |
 | P1-b1 | coreml-ne | 1.168 | 1.168 | – | above 1 | 633.2 | 541.3 | 5 |
-| P1-b8 | coreml-gpu | 1.009 | 1.009 | – | above 1, inside the noise | 1,872.9 | 1,835.3 | 5 |
-| P1-b8 | coreml-ne (batch API) | 0.370 | 0.370 | – | not above 1 | 678.3 | 1,835.3 | 5 |
-| P2-b8 | coreml-gpu | 0.802 | 0.802 | – | not above 1 | 16.7 | 20.8 | 5 |
-| P2-b8 | coreml-ne (batch API) | 0.135 | 0.135 | – | not above 1 | 2.8 | 20.8 | 5 |
-| P3-b8 | coreml-gpu | 1.031 | 1.031 | – | above 1 | 261.3 | 251.2 | 5 |
-| P3-b8 | coreml-ne (batch API) | 0.262 | 0.262 | – | not above 1 | 65.8 | 251.2 | 5 |
+| P1-b8 | coreml-gpu | 1.009, 1.024 | 1.011 | 0.015 | above 1, inside the noise | 1,872.8 | 1,827.7 | 10 |
+| P1-b8 | coreml-ne (batch API) | 0.370, 0.373 | 0.372 | 0.009 | not above 1 | 678.0 | 1,827.7 | 10 |
+| P2-b8 | coreml-gpu | 0.802, 0.800 | 0.801 | 0.002 | not above 1 | 16.6 | 19.5 | 10 |
+| P2-b8 | coreml-ne (batch API) | 0.135, 0.150 | 0.145 | 0.108 | not above 1 | 2.8 | 19.5 | 10 |
+| P3-b8 | coreml-gpu | 1.031, 1.048 | 1.044 | 0.017 | above 1 | 260.6 | 244.8 | 10 |
+| P3-b8 | coreml-ne (batch API) | 0.262, 0.272 | 0.267 | 0.037 | not above 1 | 65.6 | 244.8 | 10 |
 
 Table 5. The paired ratio Core ML / mlx at P1 (ViT-S/16 224 px, frame), P3 (ViT-L/16 224 px, patch) and P2 (ViT-H+/16 512 px, patch), median over the rounds of each run (run 1: build, run 2: verify). Above batch size 1 coreml-ne runs the faster valid form of the matrix. Report only: no speed target (AC10).
 
@@ -196,7 +196,9 @@ Table 5. The paired ratio Core ML / mlx at P1 (ViT-S/16 224 px, frame), P3 (ViT-
 | Group | Run | Neural Engine batch size | Neural Engine form | Neural Engine output valid | ne alone img/s | mlx alone img/s | both: ne img/s | both: mlx img/s | both: total img/s | Stream ratio | Rounds |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | P1-b8 | 1 | 8 | batch-api | yes | 677.3 | 1,543.4 | 670.0 | 1,374.1 | 2,044.0 | 1.324 | 3 |
+| P1-b8 | 2 | 8 | batch-api | yes | 676.4 | 1,939.9 | 655.8 | 1,938.5 | 2,583.1 | 1.318 | 3 |
 | P2-b8 | 1 | 8 | batch-api | yes | 2.8 | 19.7 | 2.8 | 18.7 | 21.5 | 1.081 | 3 |
 | P3-b8 | 1 | 8 | batch-api | yes | 65.7 | 233.6 | 64.6 | 198.0 | 263.2 | 1.122 | 3 |
+| P3-b8 | 2 | 8 | batch-api | yes | 65.4 | 246.9 | 55.3 | 238.5 | 292.2 | 1.184 | 3 |
 
 Table 6. The two-stream run: Core ML on CPU_AND_NE and compiled mlx on the GPU, alone and at the same time, 10 s per case. Stream ratio = (ne + mlx, both) / (mlx alone), median over the rounds. The stream worker checks no output; the column «Neural Engine output valid» comes from the coreml-ne lines of the matrix and the paired runs of the same batch size and form (finding V2 of the Step 6c verify.html).

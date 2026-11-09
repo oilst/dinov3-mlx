@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Step 6d Neural Engine fault: Verify</title>
+<style>
+/* Spec page. White page, black text, no dark mode. */
+:root { --bg: #ffffff; --fg: #111414; --muted: #4a5655; --rule: #d6dedd; --panel: #f5f8f7; --accent: #057379; --pass: #1d7a3a; --fail: #b3261e; --partial: #8a5a00; color-scheme: light; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif; }
+main { max-width: 64rem; margin: 0 auto; padding: 40px 16px 64px; display: grid; gap: 1.75rem; }
+main > *, section > * { min-width: 0; }
+h1 { font-size: 1.9rem; line-height: 1.15; margin: 0; }
+h2 { font-size: 1.3rem; margin: 0; }
+section { display: grid; gap: 0.8rem; min-width: 0; }
+p, ul, ol { margin: 0; max-width: 48rem; }
+li + li { margin-top: 0.25rem; }
+code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.86em; }
+p code, li code, td code { overflow-wrap: anywhere; }
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 0.92rem; }
+th, td { text-align: left; vertical-align: top; padding: 0.45rem 0.7rem 0.45rem 0; border-bottom: 1px solid var(--rule); }
+th { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); border-bottom: 1.5px solid var(--fg); }
+td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.caption { font-size: 0.88rem; color: var(--muted); }
+.pass { color: var(--pass); font-weight: 600; }
+.fail { color: var(--fail); font-weight: 600; }
+.partial { color: var(--partial); font-weight: 600; }
+figure { margin: 0; display: grid; gap: 0.5rem; }
+.fig { overflow-x: auto; }
+.fig svg { display: block; width: 100%; height: auto; min-width: 560px; max-width: 760px; border: 1px solid var(--rule); border-radius: 6px; background: #ffffff; }
+a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+<header>
+  <h1>Step 6d Neural Engine fault: Verify</h1>
+  <p>Roadmap step 6d. Status: Verify done on 2026-11-09 by a separate agent. Build commits: <code>e643520</code> and <code>55f4acd</code> after the plan approval <code>fa4803b</code>. The commits <code>d3b2532</code>, <code>4244db1</code>, <code>9dcd4fb</code> and <code>343aa7b</code> of the same range belong to Step 6b. The Learn and Close stages follow.</p>
+</header>
+
+<section id="summary">
+  <h2>1 Summary</h2>
+  <p>This page checks the 13 acceptance criteria of <code>plan.html</code> (Section 8, Table 5) against the code, the result lines and the logs. The agent did not build the step. It changed no code. It ran ruff, the default session, the slow session of <code>tests/test_coreml.py</code>, run 2 of the paired runs and of the two-stream run, and a parity check of 3 Neural Engine packages, one job at a time under the GPU lock. It recomputed the key numbers from <code>results/coreml-6d.jsonl</code> with its own script.</p>
+  <p><b>Result:</b> 11 rows pass, 2 rows are partial, 0 rows fail.</p>
+  <ul>
+    <li><b>The fix works.</b> With rewrite version <code>ne3</code> all 15 parity rows on CPU_AND_NE pass the fp16 thresholds (Step 6c: 2 of 15). The smallest values are frame 0.99983 (ViT-S+/16, 224 px), patch mean 0.99959 and patch 1st percentile 0.99377 (both ViT-H+/16, 224 px). The Verify parity check of 3 packages gives the same values as J2.</li>
+    <li><b>The guard works.</b> All 25 packages have 0 constant concats. T15 shows that <code>constant_concats</code> finds the concat of the Hugging Face embeddings. T16 shows 0 of 789 wrong tokens for the <code>ne3</code> embeddings on the Neural Engine, and 788 of 789 wrong tokens for the Hugging Face form.</li>
+    <li><b>The two-stream targets hold in both runs.</b> P1: 1.324 (run 1) and 1.318 (run 2), target 1.20. P3: 1.122 (run 1) and 1.184 (run 2), target 1.10. Run 2 does not miss.</li>
+    <li><b>Partial rows.</b> AC12: the bundle cache changed (the delete that the user approved, deviation 1 and 2). AC13: ADR 0016, the Learn section and the roadmap row are not written yet (Learn and Close stages).</li>
+    <li><b>Findings.</b> Section 7 gives 8 findings: 0 high, 2 medium, 6 low.</li>
+  </ul>
+</section>
+
+<section id="method">
+  <h2>2 Method</h2>
+  <p>The agent read <code>CLAUDE.md</code>, <code>GLOSSARY.md</code>, <code>explore.html</code> and <code>plan.html</code> of this folder, the build diff of <code>src/dinov3_apple/coreml.py</code>, <code>scripts/bench_coreml.py</code>, <code>tests/test_coreml.py</code>, <code>GLOSSARY.md</code> and the two result files, and the hand-over note of the build. It treated each number of the note as a claim to check. It read <code>~/.cache/dinov3-apple/gpu-lock.log</code> and the driver logs in <code>tests/fixtures/generated/bench/coreml/&lt;subcommand&gt;/driver.log</code>.</p>
+  <p>Machine: Apple M5 Max, 64 GB, AC power. Versions: macOS 26.5.2, Python 3.12.13, torch 2.15.0, transformers 5.22.1, mlx 0.32.4, numpy 2.5.4, coremltools 9.0. Times on this page are local time (CET) on 2026-11-09, except where the text says UTC.</p>
+  <p>Before the first job: 103 GB free disk, a bundle cache of 19 GB, 10.6 to 18.8 GB available memory (by <code>available_memory_bytes</code>; other apps were open). After the last job: 102 GB free disk, a bundle cache of 19 GB. The largest memory need of a Verify worker was 9.7 GB (streams, P3); the smallest available memory before a worker was 14.9 GB. Every worker passed its memory check. The Verify commands used <code>uv run --group coreml</code> at both levels, as the script usage says (finding V8).</p>
+  <p>Run 2 does not overwrite run 1. <code>pairs_plan</code> and <code>streams_plan</code> write <code>run_id</code> «2»; the driver appends the lines. The 63 new lines are lines 260 to 322 (1-based) of <code>results/coreml-6d.jsonl</code>. The agent then made <code>results/coreml-6d-table.md</code> again with <code>bench_coreml.py table</code>. Before that, it made the table from the build lines into a scratch file: the only difference to the committed table was the date.</p>
+</section>
+
+<section id="criteria">
+  <h2>3 Acceptance criteria</h2>
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>No.</th><th>Criterion</th><th>Target</th><th>Measured</th><th>Evidence</th><th>Result</th></tr></thead>
+    <tbody>
+      <tr><td>AC1</td><td>The <code>ne3</code> embeddings are exact</td><td>T14 bit for bit; T3 &le; 1e-6 relative with <code>ne3</code></td><td>T14: 8 of 8 cases green (<code>torch.equal</code>; vits16 and vits16plus, batch size 1 and 2, 32 and 64 px). T3: 4 of 4 cases green with <code>REWRITE_VERSION = "ne3"</code> (<code>NeuralEngineBackbone.forward</code> calls <code>ne_embeddings</code>).</td><td><code>test_ne_embeddings_equal_hugging_face</code>, <code>test_rewrite_is_exact_in_fp32</code></td><td><span class="pass">pass</span></td></tr>
+      <tr><td>AC2</td><td>The guard finds the concat fault</td><td>T15 red then green; 0 constant concats in each of the 25 J1 lines</td><td>T15 green: the Hugging Face form gives 1 name, the <code>ne3</code> form none; <code>convert_module</code> raises <code>NeuralEngineGraphError</code> and writes no package. 25 of 25 convert lines have <code>constant_concats</code> 0. The build did not see T15 red (V3), but the test asserts the fault side itself.</td><td>slow session; <code>results/coreml-6d.jsonl</code> lines 1 to 25</td><td><span class="pass">pass</span></td></tr>
+      <tr><td>AC3</td><td>The embeddings part is right on the Neural Engine</td><td>T16: 0 of 789 tokens below cosine 0.999; the concat on the Neural Engine</td><td>T16 green: 0 of 789 tokens below 0.999 (a NaN counts as wrong); <code>op_devices["concat"] == {"NeuralEngine": 1}</code>. Test log: the Hugging Face form gives 788 of 789 tokens below 0.999 (probe E1: 788).</td><td><code>test_embeddings_part_on_neural_engine</code></td><td><span class="pass">pass</span></td></tr>
+      <tr><td>AC4</td><td>Conversion</td><td>25 of 25 <code>ne3</code> packages convert and compile, each with its times, size and peak footprint; the 25 <code>ne2</code> packages are gone</td><td>25 of 25 lines done, 25 different configurations, all with trace, conversion, save and compile times, size and peak footprint. Sum of the four times 5.2 min; lock hold 6 min 20 s. Total package size 12.81 GB. Largest peak footprint 5.64 GB. <code>~/.cache/dinov3-apple/coreml/</code> holds 25 <code>ne3</code> compiled models and the plain Step 6c model, no <code>ne2</code> model.</td><td>lines 1 to 25; folder listing</td><td><span class="pass">pass</span></td></tr>
+      <tr><td>AC5</td><td>Parity on the Neural Engine</td><td>15 of 15 configurations pass 0.999 / 0.999 / 0.99 on CPU_AND_NE for the 3 test images</td><td>15 of 15 pass, recomputed from the 3 images of each line. Smallest: frame 0.99983 (ViT-S+/16, 224 px); patch mean 0.99959 and patch 1st percentile 0.99377 (ViT-H+/16, 224 px). T17 green. Verify check of ViT-S/16 448 px, ViT-L/16 224 px and ViT-H+/16 512 px: all 3 images pass, the same values as J2 to 6 digits, 0 tokens below 0.99.</td><td>parity lines; T17; Table 2</td><td><span class="pass">pass</span></td></tr>
+      <tr><td>AC6</td><td>Parity on the GPU and with ALL</td><td>30 of 30 rows pass the fp16 thresholds</td><td>30 of 30 pass. Smallest: frame 0.999993 (ViT-B/16, 448 px), patch mean 0.999964 and patch 1st percentile 0.99952 (ViT-H+/16, 224 px). CPU_AND_GPU and ALL give the same values.</td><td>parity lines</td><td><span class="pass">pass</span></td></tr>
+      <tr><td>AC7</td><td>Compute plan</td><td>Neural Engine cost share &ge; 0.99 for each of the 25 packages, each concat on the Neural Engine</td><td>25 of 25 plan lines done (7 more lines «skipped: disk», then done again). Share 1.000 in each; every op on the Neural Engine; 0 ops off the Neural Engine. Concats: 49 (15 packages), 97 (5), 129 (5), all on the Neural Engine.</td><td>plan lines; Table 3 of <code>coreml-6d-table.md</code></td><td><span class="pass">pass</span></td></tr>
+      <tr><td>AC8</td><td>Load times</td><td>Cached load &le; 0.5 s for each package and compute unit; the first load in each line</td><td>135 of 135 Core ML lines have a first and a cached load. Cached load 0.023 to 0.249 s. First load up to 118.8 s (matrix, ViT-H+/16 512 px b8 package on CPU_AND_NE), not 16.9 s as the hand-over says (V1).</td><td>line 169 and the other Core ML lines</td><td><span class="pass">pass</span></td></tr>
+      <tr><td>AC9</td><td>Matrix</td><td>70 of 70 cells with a throughput or a reason; every coreml-ne cell valid (both batch-size-8 forms); each Core ML cell with its ratio to mlx</td><td>70 of 70 lines done, 70 different cells. 30 of 30 coreml-ne lines valid (10 b1, 10 b8 package, 10 batch API). 50 of 50 Core ML cells have a ratio to the mlx line of the same group. At 224 px the batch API is faster than the b8 package (ViT-S/16: 666.0 against 493.6 img/s); at 512 px the two forms are within 1 %.</td><td>matrix lines; Table 4 of <code>coreml-6d-table.md</code></td><td><span class="pass">pass</span></td></tr>
+      <tr><td>AC10</td><td>Paired runs (report only)</td><td>P1 b8, P1 b1, P3 b8, P2 b8: median paired ratio over 5 rounds, two runs at batch size 8, spread, verdict D21</td><td>Run 1 and run 2 at the three b8 points, run 1 at P1 b1. The largest spread between runs is 0.108 (coreml-ne at P2); the other spreads are 0.002 to 0.037. The verdicts of the two runs agree (Section 4, Table 3).</td><td>pairs lines; Table 5 of <code>coreml-6d-table.md</code></td><td><span class="pass">pass</span></td></tr>
+      <tr><td>AC11</td><td>Two-stream run</td><td>Median stream ratio over 3 rounds, each run: P1 &ge; 1.20; P3 &ge; 1.10; P2 report only; every Neural Engine side valid</td><td>P1: 1.324 and 1.318. P3: 1.122 and 1.184. P2 (run 1 only): 1.081. Each Neural Engine side runs the batch API on the valid b1 package (matrix and pairs lines valid).</td><td>streams lines; Table 6 of <code>coreml-6d-table.md</code>; Figure 1</td><td><span class="pass">pass</span></td></tr>
+      <tr><td>AC12</td><td>Run rules and disk</td><td>One job for each lock call; 0 lines with an entry in <code>other_heavy_jobs_seen</code>; a memory check before each conversion and load; a disk check (&ge; 10 GB) before each job; no change to the bundle cache</td><td>Lock log: one hold for each build job (convert, parity, parity --skip-done, matrix, pairs, streams, slow tests), no overlap; other jobs waited. 0 of 322 lines with an entry. Memory checks: convert 75, parity 77, matrix 90, pairs 80, streams 27 lines for 25, 77, 70, 60 and 27 workers; Verify pairs 60, streams 18. Disk checks at job start: 12.6 GB (J1, the smallest), 23.7, 149.6, 137.7, 116.9 and 116.7 GB. Bundle cache: 114 &rarr; 131 GB during J2, then deleted (approved Q4); not met (V4).</td><td><code>gpu-lock.log</code>; driver logs; deviations 1 and 2</td><td><span class="partial">partial</span></td></tr>
+      <tr><td>AC13</td><td>Tests, lint and docs</td><td>pytest 0 failed, default session &le; 60 s; slow <code>test_coreml.py</code> 0 failed; ruff clean; ADR 0016; two terms in <code>GLOSSARY.md</code>; the Learn section; roadmap row 6d</td><td>Default session: 973 passed, 18 skipped, 0 failed in 54.04 s. Slow session: 32 passed in 5.45 s. ruff check and format clean (85 files). <code>GLOSSARY.md</code> has «Concat fault» and «Constant prefix». No ADR 0016; <code>docs/learn/06c-neural-engine.html</code> does not name <code>ne_embeddings</code> or <code>constant_concats</code>; roadmap row 6d says «open» (V5).</td><td>commands c1 to c3; <code>docs/adr/</code>; <code>roadmap.md</code> line 16</td><td><span class="partial">partial</span></td></tr>
+    </tbody>
+  </table>
+</div>
+  <p class="caption"><b>Table 1.</b> The 13 acceptance criteria of plan Table 5 with the measured values. «Partial» means that a part of the target is not met. Line numbers are 1-based in <code>results/coreml-6d.jsonl</code>.</p>
+</section>
+
+<section id="run2">
+  <h2>4 Run 2 against run 1</h2>
+  <p>Run 1 is the build (2026-11-09, 00:25 to 00:59 local time). Run 2 is Verify (15:48 to 16:10). Each run of the paired runs has 5 rounds; each run of the two-stream run has 3 rounds. The agent recomputed the medians from the lines; they agree with the table to 3 digits.</p>
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>Point</th><th>Backend</th><th>Run 1</th><th>Run 2</th><th>Pooled</th><th>Spread</th><th>Verdict D21</th></tr></thead>
+    <tbody>
+      <tr><td>P1 b8 (ViT-S/16, 224 px, frame)</td><td>coreml-ne (batch API)</td><td class="num">0.370</td><td class="num">0.373</td><td class="num">0.372</td><td class="num">0.009</td><td>not above 1</td></tr>
+      <tr><td>P1 b8</td><td>coreml-gpu</td><td class="num">1.009</td><td class="num">1.024</td><td class="num">1.011</td><td class="num">0.015</td><td>above 1, inside the noise</td></tr>
+      <tr><td>P3 b8 (ViT-L/16, 224 px, patch)</td><td>coreml-ne (batch API)</td><td class="num">0.262</td><td class="num">0.272</td><td class="num">0.267</td><td class="num">0.037</td><td>not above 1</td></tr>
+      <tr><td>P3 b8</td><td>coreml-gpu</td><td class="num">1.031</td><td class="num">1.048</td><td class="num">1.044</td><td class="num">0.017</td><td>above 1</td></tr>
+      <tr><td>P2 b8 (ViT-H+/16, 512 px, patch)</td><td>coreml-ne (batch API)</td><td class="num">0.135</td><td class="num">0.150</td><td class="num">0.145</td><td class="num">0.108</td><td>not above 1</td></tr>
+      <tr><td>P2 b8</td><td>coreml-gpu</td><td class="num">0.802</td><td class="num">0.800</td><td class="num">0.801</td><td class="num">0.002</td><td>not above 1</td></tr>
+      <tr><td>P1 b1</td><td>coreml-ne</td><td class="num">1.168</td><td class="num">&ndash;</td><td class="num">1.168</td><td class="num">&ndash;</td><td>above 1 (one run)</td></tr>
+      <tr><td>P1 b1</td><td>coreml-gpu</td><td class="num">0.864</td><td class="num">&ndash;</td><td class="num">0.864</td><td class="num">&ndash;</td><td>not above 1 (one run)</td></tr>
+    </tbody>
+  </table>
+</div>
+  <p class="caption"><b>Table 2.</b> AC10: the median paired ratio Core ML / mlx of each run. The plan asks for run 2 only at batch size 8. All coreml-ne lines of both runs are valid.</p>
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>Point</th><th>Run</th><th>ne alone</th><th>mlx alone</th><th>both: ne</th><th>both: mlx</th><th>Rounds</th><th>Stream ratio</th><th>Target</th><th>Result</th></tr></thead>
+    <tbody>
+      <tr><td>P1 b8</td><td>1</td><td class="num">677.3</td><td class="num">1,543.4</td><td class="num">670.0</td><td class="num">1,374.1</td><td class="num">1.334, 1.324, 1.285</td><td class="num">1.324</td><td>&ge; 1.20</td><td><span class="pass">pass</span></td></tr>
+      <tr><td>P1 b8</td><td>2</td><td class="num">676.4</td><td class="num">1,939.9</td><td class="num">655.8</td><td class="num">1,938.5</td><td class="num">1.298, 1.318, 1.426</td><td class="num">1.318</td><td>&ge; 1.20</td><td><span class="pass">pass</span></td></tr>
+      <tr><td>P3 b8</td><td>1</td><td class="num">65.7</td><td class="num">233.6</td><td class="num">64.6</td><td class="num">198.0</td><td class="num">1.148, 1.122, 1.120</td><td class="num">1.122</td><td>&ge; 1.10</td><td><span class="pass">pass</span></td></tr>
+      <tr><td>P3 b8</td><td>2</td><td class="num">65.4</td><td class="num">246.9</td><td class="num">55.3</td><td class="num">238.5</td><td class="num">1.243, 1.184, 1.162</td><td class="num">1.184</td><td>&ge; 1.10</td><td><span class="pass">pass</span></td></tr>
+      <tr><td>P2 b8</td><td>1</td><td class="num">2.8</td><td class="num">19.7</td><td class="num">2.8</td><td class="num">18.7</td><td class="num">1.131, 1.080, 1.081</td><td class="num">1.081</td><td>report only</td><td>&ndash;</td></tr>
+    </tbody>
+  </table>
+</div>
+  <p class="caption"><b>Table 3.</b> AC11: the two-stream run, img/s, medians over the rounds. Stream ratio = (ne + mlx, both) / (mlx alone) of the same round. The Neural Engine side runs the batch API with 8 inputs on the b1 package in each case (the fastest valid form of the matrix).</p>
+  <figure>
+    <div class="fig">
+<svg viewBox="0 0 760 270" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Stream ratio of run 1 and run 2 at P1 and P3 against the targets">
+<rect x="0" y="0" width="760" height="270" fill="#ffffff"/>
+<g font-size="12" fill="#4a5655" text-anchor="end">
+<text x="110" y="224">1.0</text><text x="110" y="188">1.1</text><text x="110" y="152">1.2</text><text x="110" y="116">1.3</text><text x="110" y="80">1.4</text><text x="110" y="44">1.5</text>
+</g>
+<g stroke="#d6dedd" stroke-width="1">
+<line x1="120" y1="220" x2="640" y2="220"/><line x1="120" y1="184" x2="640" y2="184"/><line x1="120" y1="148" x2="640" y2="148"/><line x1="120" y1="112" x2="640" y2="112"/><line x1="120" y1="76" x2="640" y2="76"/><line x1="120" y1="40" x2="640" y2="40"/>
+</g>
+<rect x="180" y="103.4" width="60" height="116.6" fill="#057379"/>
+<rect x="260" y="105.5" width="60" height="114.5" fill="#7fb9bc"/>
+<rect x="440" y="176.1" width="60" height="43.9" fill="#057379"/>
+<rect x="520" y="153.8" width="60" height="66.2" fill="#7fb9bc"/>
+<g font-size="12" fill="#111414" text-anchor="middle" font-family="ui-monospace, Menlo, monospace">
+<text x="210" y="97">1.324</text><text x="290" y="99">1.318</text><text x="470" y="170">1.122</text><text x="550" y="148">1.184</text>
+</g>
+<line x1="170" y1="148" x2="330" y2="148" stroke="#b3261e" stroke-width="2" stroke-dasharray="6 4"/>
+<line x1="430" y1="184" x2="590" y2="184" stroke="#b3261e" stroke-width="2" stroke-dasharray="6 4"/>
+<g font-size="12" fill="#b3261e"><text x="334" y="152">target 1.20</text><text x="594" y="188">target 1.10</text></g>
+<g font-size="13" fill="#111414" text-anchor="middle"><text x="250" y="242">P1: ViT-S/16, 224 px, b8</text><text x="510" y="242">P3: ViT-L/16, 224 px, b8</text></g>
+<rect x="650" y="40" width="14" height="14" fill="#057379"/><text x="670" y="52" font-size="12" fill="#111414">run 1</text>
+<rect x="650" y="62" width="14" height="14" fill="#7fb9bc"/><text x="670" y="74" font-size="12" fill="#111414">run 2</text>
+</svg>
+    </div>
+    <figcaption class="caption"><b>Figure 1.</b> The median stream ratio of each run at P1 and P3 (the y axis starts at 1.0). Both runs meet both targets. P3 run 1 has the smallest margin: 0.022.</figcaption>
+  </figure>
+  <p><b>The mlx side moves between runs.</b> At P1 «mlx alone» is 1,507 to 1,639 img/s in run 1 and 1,838 to 1,990 img/s in run 2 (+26 % in the median). In run 1 mlx kept 0.89 of its throughput in «both»; in run 2 it kept 1.00. In round 2 of run 2 mlx in «both» (1,965 img/s) is above «mlx alone» (1,838 img/s) of the same round. The Neural Engine side is stable (676 to 680 img/s alone). The stream ratio at P1 is about the same in both runs (1.32), but the parts are not. At P3 the Neural Engine side in «both» drops from 64.6 to 55.3 img/s, and mlx in «both» rises from 198 to 239 img/s. The spread of the stream ratio inside one run is up to 0.13 (P1 run 2). The P3 margin of run 1 (0.022) is smaller than this spread (V6).</p>
+</section>
+
+<section id="deviations">
+  <h2>5 Deviations of the build</h2>
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>No.</th><th>Deviation (hand-over)</th><th>Check</th><th>Result</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td>Disk during J2: the bundle cache grew 114 &rarr; 131 GB, free disk fell to about 5 GB, 7 compute-plan workers «skipped: disk»; after the user's answer to Q4 the cache and the probe packages were deleted; <code>parity --skip-done</code> ran the 7 plans</td><td>7 plan lines with the reason «disk: 5.9 GB free, below 6 GB»; then 7 done lines at 23:55 UTC (149.6 GB free). The table takes the latest line: Table 3 of the table file has 25 done rows.</td><td>Correct. The worker disk check worked as planned.</td></tr>
+      <tr><td>2</td><td>AC12 «no change to the bundle cache» not met</td><td>Bundle cache 19 GB before and after Verify; the build deleted it during J2.</td><td>Correct; AC12 partial (V4).</td></tr>
+      <tr><td>3</td><td>The free-disk check reads statfs; a Time Machine local snapshot held the deleted space for some minutes</td><td><code>free_disk_bytes</code> uses <code>shutil.disk_usage(Path.home())</code>. Not checked further.</td><td>Plausible; no effect on a result.</td></tr>
+      <tr><td>4</td><td>Verify run 2 commands</td><td>The options exist (<code>--points</code>, <code>--rounds</code>, <code>--run</code>). The commands lack <code>--group coreml</code> (V8).</td><td>Correct with <code>--group coreml</code>.</td></tr>
+    </tbody>
+  </table>
+</div>
+  <p class="caption"><b>Table 4.</b> The deviations of the build and their check.</p>
+</section>
+
+<section id="code">
+  <h2>6 Code check</h2>
+  <ul>
+    <li><code>ne_embeddings</code> (coreml.py:168) follows plan Section 5: one constant prefix of 5 rows, then one concat. T14 shows bit equality.</li>
+    <li><code>constant_concats</code> (coreml.py:354) and <code>_is_constant</code> (coreml.py:347) count a <code>const</code> op output or a value with <code>val</code> and no producing op, as the plan says. <code>convert_module</code> calls the guard after <code>ct.convert</code> and before the save (coreml.py:398). T15 asserts that no package and no compiled model exist after the error.</li>
+    <li><code>bench_coreml.py</code>: <code>faster_ne_form</code> and <code>stream_ne_choice</code> use only valid matrix lines of the current rewrite version. For P1, P3 and P2 both pick the batch API at batch size 8 (also for the stream run at P3, where the batch API is 65.9 img/s against 65.2 img/s for b1). <code>test_step6d_plans</code> covers the choice, also for an invalid faster form.</li>
+    <li>The disk checks: the job check after the lock wait (exit 2 below 10 GB) and the worker check (below 6 GB: «skipped»). <code>test_disk_check_skips_a_worker</code> covers the worker check. Each line has <code>disk_free_bytes</code> (322 of 322).</li>
+  </ul>
+</section>
+
+<section id="findings">
+  <h2>7 Findings</h2>
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>ID</th><th>Severity</th><th>Finding</th><th>Location</th><th>Fix</th></tr></thead>
+    <tbody>
+      <tr><td>V1</td><td>low</td><td>The hand-over says «first load up to 16.9 s». The largest first load is 118.8 s: the ViT-H+/16 512 px b8 package on CPU_AND_NE in the matrix. AC8 sets no target for the first load, so the row passes.</td><td><code>results/coreml-6d.jsonl:169</code></td><td>Use 118.8 s in the Learn section and in the roadmap row.</td></tr>
+      <tr><td>V2</td><td>low</td><td>The hand-over gives ViT-H+/16 224 px as the lowest Neural Engine row with «frame 0.9999». The lowest frame is 0.99983 (ViT-S+/16, 224 px). ViT-H+/16 224 px has the lowest patch mean and patch 1st percentile.</td><td>parity lines of <code>results/coreml-6d.jsonl</code></td><td>Give the smallest value of each measure with its configuration.</td></tr>
+      <tr><td>V3</td><td>low</td><td>The build did not see T15 to T17 red (spec loop, stage 3). The hand-over gives «785 of 789» wrong tokens for the Hugging Face form; the Verify run of T16 gives 788 of 789 (as probe E1). T15 asserts the fault side (1 name for the Hugging Face form), and T17 failed with <code>ne2</code> in Step 6c, so the tests can fail.</td><td><code>tests/test_coreml.py:487</code> to <code>:577</code></td><td>Record in the Learn section that the red side comes from the asserted Hugging Face form, the T16 log and Step 6c.</td></tr>
+      <tr><td>V4</td><td>medium</td><td>AC12 «no change to the bundle cache» is not met: the cache grew to 131 GB during J2 and was deleted after the user's answer to Q4. J1 started with 12.6 GB free, 2.6 GB above the job limit. Each new package and each process adds bundles; the plan estimate (6 GB) was low by a factor of about 3.</td><td><code>scripts/bench_coreml.py:1037</code>; deviation 1</td><td>Record the cache growth (about 17 GB in J2) in ADR 0016 or the Learn section; let the job disk check also count the expected cache growth.</td></tr>
+      <tr><td>V5</td><td>medium</td><td>AC13 docs are open: no ADR 0016, no Learn section for <code>ne_embeddings</code> and <code>constant_concats</code>, roadmap row 6d «open», <code>docs/plan.html</code> not updated.</td><td><code>docs/adr/</code>; <code>docs/learn/06c-neural-engine.html</code>; <code>roadmap.md:16</code></td><td>Write them in the Learn and Close stages.</td></tr>
+      <tr><td>V6</td><td>low</td><td>The stream ratio rests on «mlx alone», which moved +26 % between the runs at P1 (1,543 &rarr; 1,940 img/s). Inside one run the stream ratio spreads by up to 0.13. The P3 margin of run 1 (0.022) is inside this spread; run 2 gives 1.184. Table 6 shows no spread.</td><td><code>scripts/bench_coreml.py:942</code></td><td>Add the smallest and the largest round value to Table 6; use 5 rounds for a point with a target.</td></tr>
+      <tr><td>V7</td><td>low</td><td><code>_is_constant</code> counts a value of a non-const op as not constant, also when value inference has set its <code>val</code> (for example an unfolded <code>tile</code> of the prefix at batch size 8). Today all 25 graphs have one constant input per concat, and the compute plans put every concat on the Neural Engine, so no result is wrong.</td><td><code>src/dinov3_apple/coreml.py:347</code></td><td>Count a value as constant when <code>value.val is not None</code>, also with a producing op; add a T15 case at batch size 8.</td></tr>
+      <tr><td>V8</td><td>low</td><td>The Verify commands of the hand-over (deviation 4) lack <code>--group coreml</code>; the script usage needs it (coremltools is only in the <code>coreml</code> group). The default session in the hand-over also ran without the group, so the counts differ by environment.</td><td>hand-over, deviation 4; <code>scripts/bench_coreml.py:17</code></td><td>Write <code>uv run --group coreml</code> in each command of the Close notes.</td></tr>
+    </tbody>
+  </table>
+</div>
+  <p class="caption"><b>Table 5.</b> Findings: 0 high, 2 medium, 6 low. No finding changes a measured value or a pass of a target.</p>
+</section>
+
+<section id="commands">
+  <h2>8 Commands</h2>
+  <p>Each GPU command ran as <code>uv run --group coreml python -m dinov3_apple.gpu_lock --label &lt;label&gt; -- &lt;command&gt;</code>, one at a time. The run scripts set <code>MLX_ENABLE_TF32=0</code> and the MPS watermarks 0.8 and 0.6 for each worker.</p>
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>No.</th><th>Command</th><th>Local time</th><th>Result</th></tr></thead>
+    <tbody>
+      <tr><td>c1</td><td><code>uv run --group coreml pytest -q --no-header -p no:cacheprovider</code> (default session)</td><td>15:46:04 to 15:47:02</td><td>973 passed, 18 skipped, 0 failed in 54.04 s</td></tr>
+      <tr><td>c2</td><td><code>DINOV3_SLOW=1 uv run --group coreml pytest tests/test_coreml.py -q --no-header -p no:cacheprovider -rA -s</code></td><td>15:47:34 to 15:47:42</td><td>32 passed in 5.45 s (T14 to T17 included); log: «788 of 789 tokens below cosine 0.999» for the Hugging Face form</td></tr>
+      <tr><td>c3</td><td><code>uv run ruff check src scripts tests</code>; <code>uv run ruff format --check src scripts tests</code></td><td>15:47</td><td>All checks passed; 85 files already formatted</td></tr>
+      <tr><td>c4</td><td>Own script (scratchpad, no GPU): recompute AC2 and AC4 to AC12 from <code>results/coreml-6d.jsonl</code></td><td>15:45 to 15:47, again at 16:05 and 16:10</td><td>The values of Table 1 to Table 3</td></tr>
+      <tr><td>c5</td><td><code>uv run --group coreml python scripts/bench_coreml.py table --table &lt;scratch file&gt;</code>, then <code>diff</code> against the committed table</td><td>15:47</td><td>Only the date differs</td></tr>
+      <tr><td>c6</td><td><code>uv run --group coreml python scripts/bench_coreml.py pairs --points P1-b8 P3-b8 P2-b8 --rounds 5 --run 2</code></td><td>15:48:21 to 16:05:14</td><td>45 of 45 workers done; lines 260 to 304</td></tr>
+      <tr><td>c7</td><td><code>uv run --group coreml python scripts/bench_coreml.py streams --points P1-b8 P3-b8 --rounds 3 --run 2</code></td><td>16:05:34 to 16:10:36</td><td>18 of 18 cases done; lines 305 to 322</td></tr>
+      <tr><td>c8</td><td><code>uv run --group coreml python scripts/bench_coreml.py table</code></td><td>16:10</td><td><code>results/coreml-6d-table.md</code> made again with run 2</td></tr>
+      <tr><td>c9</td><td>Own script (scratchpad): <code>load_package</code> on CPU_AND_NE and <code>measure_parity</code> for the 3 test images of ViT-S/16 448 px, ViT-L/16 224 px and ViT-H+/16 512 px, one subprocess each after a memory check</td><td>16:11:06 to 16:11:15</td><td>3 of 3 packages pass on all 3 images; 0 tokens below 0.99; the same values as J2</td></tr>
+    </tbody>
+  </table>
+</div>
+  <p class="caption"><b>Table 6.</b> The Verify commands. Free disk 103 GB before c1 and 102 GB after c9; the bundle cache stayed at 19 GB.</p>
+</section>
+</main>
+</body>
+</html>
