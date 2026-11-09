@@ -148,3 +148,16 @@ Ours runs the same model size at the same token count (dinov2 518 px: ours ViT-S
 | port-6 | C2 | ViT-H+/16, 512 (512) | bf16 | 8 | done | – | 15.2 | 11.1 | 1.265, 1.324, 1.371, 1.366, 1.369 | 1.366 | 0.084 | above 1 | 0.999924 | 0.999859 | 0.999616 | 5 of 5 | 33 parameters keep the values of the port |
 | port-7 | C1 | dinov2, 518 (592) | fp32 | 8 | done | – | 80.5 | 62.8 | 1.277, 1.280, 1.281, 1.288, 1.283 | 1.281 | 0.009 | above 1 | – | – | – | 5 of 5 | random pixels: finite only; 24 parameters keep the values of the port |
 | port-8 | C1 | dinov2, 518 (592) | bf16 | 8 | done | – | 215.7 | 139.9 | 1.476, 1.510, 1.533, 1.561, 1.533 | 1.533 | 0.058 | above 1 | – | – | – | 5 of 5 | random pixels: finite only; 24 parameters keep the values of the port |
+
+Two runs of J5 (finding V15 of verify.html): run 1 is the table above; run 2 ran later with the same plan. Pooled, spread between runs and verdict as for the two runs of J1 (Section 2).
+
+| Cell | Candidate | Model, px | Dtype | Batch size | Run 1 | Run 2 | Pooled | Spread between runs | n | Verdict | Valid run 1 | Valid run 2 | Run id of run 2 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| port-1 | C1 | ViT-S/16, 224 | fp32 | 8 | 1.162 | 1.163 | 1.162 | 0.001 | 10 | above 1 | 0 of 5 | 0 of 5 | 2026-11-09T10:29:04+00:00 |
+| port-2 | C1 | ViT-S/16, 224 | bf16 | 8 | 1.276 | 1.274 | 1.274 | 0.002 | 10 | above 1 | 5 of 5 | 5 of 5 | 2026-11-09T10:29:04+00:00 |
+| port-3 | C1 | ViT-S/16, 224 | fp16 | 8 | 1.334 | 1.339 | 1.335 | 0.004 | 10 | above 1 | 0 of 5 | 0 of 5 | 2026-11-09T10:29:04+00:00 |
+| port-4 | C1 | ViT-S/16, 224 | fp32 | 1 | 1.204 | 1.197 | 1.199 | 0.006 | 10 | above 1 | 0 of 5 | 0 of 5 | 2026-11-09T10:29:04+00:00 |
+| port-5 | C2 | ViT-H+/16, 512 | fp32 | 8 | 1.168 | 1.187 | 1.169 | 0.017 | 10 | above 1 | 0 of 5 | 0 of 5 | 2026-11-09T10:29:04+00:00 |
+| port-6 | C2 | ViT-H+/16, 512 | bf16 | 8 | 1.366 | 1.368 | 1.366 | 0.001 | 10 | above 1 | 5 of 5 | 5 of 5 | 2026-11-09T10:29:04+00:00 |
+| port-7 | C1 | dinov2, 518 | fp32 | 8 | 1.281 | 1.272 | 1.277 | 0.007 | 10 | above 1 | 5 of 5 | 5 of 5 | 2026-11-09T10:29:04+00:00 |
+| port-8 | C1 | dinov2, 518 | bf16 | 8 | 1.533 | 1.534 | 1.533 | 0.000 | 10 | above 1 | 5 of 5 | 5 of 5 | 2026-11-09T10:29:04+00:00 |

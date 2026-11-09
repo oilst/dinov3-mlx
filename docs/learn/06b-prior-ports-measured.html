@@ -500,17 +500,18 @@ class Bf16RotationAttention(Attention):
       <tr><td><code>grid_tokens</code></td><td>(1, D, h, w) → (h · w, D), row-major.</td></tr>
       <tr><td><code>export_outputs</code></td><td>The output names of C7, C8 and C9 → frame embedding (or None) and patch embeddings.</td></tr>
       <tr><td><code>export_parity</code></td><td>The parity of one export output against the reference tokens, as <code>check_validity</code>; frame None without a frame embedding.</td></tr>
-      <tr><td><code>parity_passes</code>, <code>worst_parity</code></td><td>The verdict against <code>THRESHOLDS</code> (a missing frame does not count); the smallest value of each field over the test images.</td></tr>
+      <tr><td><code>parity_passes</code>, <code>worst_parity</code></td><td>The verdict against <code>THRESHOLDS</code> (a missing frame does not count); the smallest value of each field over the test images. A NaN in any image gives NaN: <code>min()</code> keeps a NaN only in the first place (finding V11 of <code>verify.html</code>).</td></tr>
       <tr><td><code>eight_bit_pixels</code></td><td>V5: stored pixels to the 8-bit grid and back.</td></tr>
       <tr><td><code>ours_spec</code>, <code>export_spec</code></td><td>The spec of one worker of ours (compiled, full budget) and of one Core ML worker.</td></tr>
       <tr><td><code>coreml_plan</code></td><td>J1: 5 rounds × 24 workers, groups rotated, ours first in odd rounds and last in even rounds.</td></tr>
       <tr><td><code>all_units_plan</code>, <code>image_input_plan</code></td><td>J2: the 14 export workers with ALL; the 3 parity-only workers with the 8-bit image input.</td></tr>
       <tr><td><code>variant_parity_plan</code>, <code>variant_speed_plan</code></td><td>J3: V0 to V5 × ViT-S/16, ViT-H+/16 × fp32, bf16-cast. J4: V0, V1, V4 at P1 and P2, 3 rounds, the order rotates.</td></tr>
       <tr><td><code>port_plan</code></td><td>J5 (gated): each port cell paired with ours, 5 rounds.</td></tr>
+      <tr><td><code>port_rows</code></td><td>The 8 rows of Section 6: for each port cell only the lines of its newest run id (<code>run_id</code>, the start time of the driver; finding V12), in that run the last line of each round and side. Lines without a run id count as the oldest run. Also the worst parity, the valid count, the input kind, the validity notes and the count of parameters that keep the values of the port. A cell without run lines is "blocked"; a cell without a done pair is "error".</td></tr>
       <tr><td><code>_rotate</code>, <code>_number</code>, <code>_done</code></td><td>Helpers: rotate a list, number the positions, a line that is done and has a patch throughput.</td></tr>
       <tr><td><code>PriorArtRow</code>, <code>cell_row</code></td><td>One paired cell: the ratios, the lower median, the spread, the verdict, the median throughput of both sides.</td></tr>
       <tr><td><code>prior_art_rows</code>, <code>variant_parity_rows</code>, <code>variant_speed_rows</code></td><td>The rows of Sections 2, 4 and 5 of <code>results/prior-art-table.md</code>.</td></tr>
-      <tr><td><code>between_runs</code></td><td>Two runs of J1: the run medians, the pooled lower median, the spread between the runs and <code>pass_verdict</code> (finding V1 of <code>verify.html</code>).</td></tr>
+      <tr><td><code>between_runs</code>, <code>port_between_runs</code>, <code>_two_runs</code></td><td>Two runs of J1 and two runs of J5: the run medians, the pooled lower median, the spread between the runs (<code>spread_between_runs</code>) and <code>pass_verdict</code> (findings V1 and V15 of <code>verify.html</code>). For J5 also the valid count and the run id of each run.</td></tr>
       <tr><td><code>slow_cell_facts</code></td><td>For each cell with a prior-art ratio below 0.97: the transfer share of ours (1 − patch ÷ device throughput) and the ratio of our device throughput to the export throughput (AC4).</td></tr>
     </tbody>
   </table></div>
@@ -533,7 +534,7 @@ class Bf16RotationAttention(Attention):
   </table></div>
   <h3>8.3 Scripts</h3>
   <ul>
-    <li><code>scripts/bench_prior_art.py</code>: the driver. Subcommands <code>coreml</code> (J1, J2), <code>variants</code> (J3, J4), <code>ports</code> (J5, gated by <code>--allow-third-party-python</code>), <code>table</code>. One GPU lock, a memory check before each worker, <code>other_heavy_jobs_seen</code> before and after each worker, <code>MLX_ENABLE_TF32=0</code> for every mlx worker.</li>
+    <li><code>scripts/bench_prior_art.py</code>: the driver. Subcommands <code>coreml</code> (J1, J2), <code>variants</code> (J3, J4), <code>ports</code> (J5, gated by <code>--allow-third-party-python</code>), <code>table</code>. One GPU lock, a memory check before each worker, <code>other_heavy_jobs_seen</code> before and after each worker, <code>MLX_ENABLE_TF32=0</code> for every mlx worker. Each line has the run id of its driver (<code>RUN_ID</code>). <code>parity_fields</code> gives the parity of the exports and of the ports in one code path. <code>bench_dir_of</code> puts the batch files and the driver log of another results file below <code>BENCH_ROOT</code>, which git ignores (finding V14).</li>
     <li><code>scripts/prior_art_coreml_worker.py</code>: runs in <code>venv-coreml</code> with <code>-I</code>; standard library, NumPy, safetensors, coremltools and Pillow only.</li>
     <li><code>scripts/prior_art_port_worker.py</code>: runs in <code>venv-mlx</code> with <code>-I</code>, only after the user's yes to Q1.</li>
     <li><code>scripts/prior_art_meta_names.py</code>: our ViT-H+/16 weights in the Meta names for C2, from the safetensors files (no pickle).</li>

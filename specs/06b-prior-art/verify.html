@@ -537,6 +537,40 @@ uv run python -m dinov3_apple.gpu_lock -- uv run python scripts/bench_prior_art.
   </div>
   <p class="caption"><b>Table 18.</b> The commands of this check. Before A6 the GPU lock was held by Core ML jobs of the Step 6d session (<code>bench_coreml.py matrix</code> to 23:24:31, <code>pairs</code> 23:24:55 to 23:45:09). No other heavy job ran during A6. New files: <code>results/prior-art-verify-j5.jsonl</code> (16 lines) and <code>tests/fixtures/generated/bench/prior-art/verify-j5-batches/ports/</code> (driver log, batch files, output files; git ignores it).</p>
 </section>
+
+<section id="fixes-j5">
+  <h2>9 Fixes after the check of AC9 (2026-11-09)</h2>
+  <p>The build session wrote this section after the check of Section 8, after the user's yes of 2026-11-09. Sections 1 to 8 stay as written. The fixes are in commit <code>9dcd4fb</code> (code and tests) and the commit after it (run 2 of J5, the table, the documents). Times are local time (UTC + 1).</p>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Finding</th><th>Severity</th><th>Status</th><th>What changed, with the measured value</th></tr></thead>
+    <tbody>
+      <tr><td>V11</td><td>low</td><td>fixed</td><td><code>worst_parity</code> gives NaN for a field when any value is NaN, in each place; None stays None. Test <code>test_worst_parity_keeps_a_nan</code> was red before the fix (<code>[finite, NaN]</code> gave 0.9998). Sections 1 to 6 of the table do not change: no other cell has a NaN.</td></tr>
+      <tr><td>V12</td><td>low</td><td>fixed for new lines</td><td>Each line has <code>run_id</code>, the start time of its driver (UTC). <code>port_rows</code> uses for each cell only the lines of its newest run id; lines without a run id count as the oldest run. Section 6 has a column Run. Test <code>test_port_rows_use_the_newest_run</code>: a run that stopped after round 3 gives 3 ratios, not 5. The 168 J5 lines of <code>results/prior-art.jsonl</code> have no run id: they count as one run, with the last line of each round and side, as before.</td></tr>
+      <tr><td>V13</td><td>low</td><td>fixed</td><td>The note &laquo;random pixels: finite only&raquo; now needs the input &laquo;random&raquo;. A cell with stored pixels and no parity gets the validity notes of its lines (for example &laquo;parity error: KeyError: &hellip;&raquo;). Test <code>test_port_note_names_a_parity_error</code>.</td></tr>
+      <tr><td>V14</td><td>low</td><td>fixed</td><td><code>bench_dir_of</code> puts the files of another results file in <code>tests/fixtures/generated/bench/prior-art/&lt;stem&gt;-batches/&lt;subcommand&gt;/</code>, which git ignores. Run 2 of J5 wrote its files there. Test <code>test_bench_dir_stays_below_the_bench_root</code>.</td></tr>
+      <tr><td>V15</td><td>low</td><td>fixed</td><td>J5 ran a second time with the same plan (5 rounds, 80 workers, 11:29 to 11:54; run id <code>2026-11-09T10:29:04+00:00</code>; <code>results/prior-art-run2.jsonl</code>). 80 of 80 workers &laquo;done&raquo;; 0 of 80 lines with an entry in <code>other_heavy_jobs_seen</code>. The spread between the run medians is 0.017 or less in 8 of 8 cells. C2: port-5 1.168 and 1.187 (pooled 1.169), port-6 1.366 and 1.368 (pooled 1.366). So the Verify round of Section 8 (1.298 and 1.450, one round) is an outlier. The verdict &laquo;above 1&raquo; holds in 8 of 8 cells with pass_verdict. The valid counts of both runs are equal in 8 of 8 cells. Section 6 of the table has the two-run table.</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="caption"><b>Table 19.</b> The findings of Table 17 after the fixes.</p>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Cell</th><th>Port, model, dtype, batch size</th><th>Run 1</th><th>Run 2</th><th>Pooled</th><th>Spread between runs</th><th>Valid run 1, run 2</th></tr></thead>
+    <tbody>
+      <tr><td>port-1</td><td>C1 ViT-S/16 224 px, fp32, 8</td><td>1.162</td><td>1.163</td><td>1.162</td><td>0.001</td><td>0 of 5, 0 of 5</td></tr>
+      <tr><td>port-2</td><td>C1 ViT-S/16 224 px, bf16, 8</td><td>1.276</td><td>1.274</td><td>1.274</td><td>0.002</td><td>5 of 5, 5 of 5</td></tr>
+      <tr><td>port-3</td><td>C1 ViT-S/16 224 px, fp16, 8</td><td>1.334</td><td>1.339</td><td>1.335</td><td>0.004</td><td>0 of 5, 0 of 5</td></tr>
+      <tr><td>port-4</td><td>C1 ViT-S/16 224 px, fp32, 1</td><td>1.204</td><td>1.197</td><td>1.199</td><td>0.006</td><td>0 of 5, 0 of 5</td></tr>
+      <tr><td>port-5</td><td>C2 ViT-H+/16 512 px, fp32, 8</td><td>1.168</td><td>1.187</td><td>1.169</td><td>0.017</td><td>0 of 5, 0 of 5</td></tr>
+      <tr><td>port-6</td><td>C2 ViT-H+/16 512 px, bf16, 8</td><td>1.366</td><td>1.368</td><td>1.366</td><td>0.001</td><td>5 of 5, 5 of 5</td></tr>
+      <tr><td>port-7</td><td>C1 dinov2 518 px (ours 592 px), fp32, 8</td><td>1.281</td><td>1.272</td><td>1.277</td><td>0.007</td><td>5 of 5, 5 of 5 (finite only)</td></tr>
+      <tr><td>port-8</td><td>C1 dinov2 518 px (ours 592 px), bf16, 8</td><td>1.533</td><td>1.534</td><td>1.533</td><td>0.000</td><td>5 of 5, 5 of 5 (finite only)</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="caption"><b>Table 20.</b> The ratio ours &divide; port in two runs of J5 (lower medians of 5 rounds; pooled: the lower median of 10 ratios). AC9 stays pass.</p>
+</section>
 </main>
 </body>
 </html>

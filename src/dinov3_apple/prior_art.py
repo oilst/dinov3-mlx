@@ -17,7 +17,13 @@ import numpy as np
 from dinov3_apple.bench import TIMED, WARM_UP, BenchConfig, TimeBudget
 from dinov3_apple.outputs import NUM_PREFIX_TOKENS
 from dinov3_apple.parity import THRESHOLDS, measure_parity
-from dinov3_apple.speedup import NOISE, _lower_median, pass_verdict, single_verdict
+from dinov3_apple.speedup import (
+    NOISE,
+    _lower_median,
+    pass_verdict,
+    single_verdict,
+    spread_between_runs,
+)
 from dinov3_apple.stored import IMAGENET_MEAN_VALUES, IMAGENET_STD_VALUES
 
 PRIOR_ART_DIR = Path(
@@ -975,7 +981,7 @@ def _two_runs(first: PriorArtRow, second: PriorArtRow) -> dict:
     return {
         "run_medians": medians,
         "pooled": pooled,
-        "spread": (max(medians) - min(medians)) / min(medians),
+        "spread": spread_between_runs(medians),
         "verdict": verdict,
         "n": len(first.ratios) + len(second.ratios),
     }
