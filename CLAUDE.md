@@ -36,6 +36,7 @@ This Mac crashed from out-of-memory before.
 - Weights live in the Hugging Face cache, outside the repo.
 - Commit code, docs, small test images and small result tables. Private context (client data, local paths, the production fine-tuning code) lives in `CLAUDE.local.md`, which git ignores.
 - Commit messages describe the change only.
+- The repo is by Ueli Peter. No company name and no company logo in any file, also not in the HTML files.
 
 ## Code
 

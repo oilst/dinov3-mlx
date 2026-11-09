@@ -153,7 +153,8 @@ td:first-child code { white-space: nowrap; overflow-wrap: normal; }
 .table-wrap table.wide { min-width: 40rem; }
 li code, p code { white-space: normal; overflow-wrap: anywhere; }
 
-/* Header: title "Research Report - Topic", Contents. Nothing else. */
+/* Header: title "Research Report - Topic", author, Contents. Nothing else. */
+.byline { margin: 0; color: var(--muted); }
 .masthead { display: grid; gap: 1rem; padding-bottom: 1rem; }
 .toc { display: grid; gap: 0.5rem; }
 .toc-label { font-family: var(--font-display); font-size: 1.12rem; font-weight: 600; color: var(--fg); }
@@ -226,6 +227,7 @@ figcaption { font-size: 0.88rem; color: var(--muted); max-width: 52rem; }
 <div class="wrap">
   <header class="masthead">
     <h1>Research Report - DINOv3 on Apple Silicon with MLX</h1>
+    <p class="byline">Ueli Peter</p>
     <nav class="toc" aria-labelledby="toc-label">
       <p class="toc-label" id="toc-label">Contents</p>
       <ol>
