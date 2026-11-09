@@ -857,6 +857,18 @@ figcaption { font-size: 0.88rem; color: var(--muted); max-width: 52rem; }
       <p>CI cannot download the gated weights without a token. So CI runs the tests without weights, for example the RoPE tables and the shapes with random weights. The parity tests with weights run on this Mac before each release. The step ends when the repo is public, CI passes and the README shows the results.</p>
     </div>
 
+    <div class="sub" id="step-7b">
+      <h3>Step 7b. Neural Engine backend</h3>
+      <p>Step 7b adds an optional inference backend for frame embedding. Core ML runs on the Neural Engine and compiled <code>mlx</code> runs on the GPU at the same time. In Step 6d the two streams gave 1.18 to 1.32 times the throughput of <code>mlx</code> alone at P1 and P3, with valid outputs. The spec folder is <code>specs/07b-neural-engine-backend/</code>.</p>
+      <ol class="steps">
+        <li>Add a backend option to the public API of Step 7, for example <code>embed_frames(..., backend="mlx+ne")</code>. <code>mlx</code> stays the default.</li>
+        <li>Convert and cache the Core ML packages outside the repo (ADR 0015), one for each model size, input resolution and batch size, with the <code>ne3</code> rewrite (ADR 0014, ADR 0016).</li>
+        <li>Split the frames between the two streams, and give the outputs back in the order of the input frames.</li>
+        <li>Measure the stream ratio and the parity through the public API.</li>
+      </ol>
+      <p>The backend is for inference only: fine-tuning (Step 8) stays in <code>mlx</code>. The Neural Engine runs in fp16, so the backend uses the fp16 thresholds. Each new shape needs a new package: the conversion takes minutes, the first load can take up to 119 s, and the bundle cache of Core ML can grow by many GB. The step ends when the backend passes parity and reaches the stream ratio of Step 6d through the public API.</p>
+    </div>
+
     <div class="sub" id="step-8">
       <h3>Step 8. Fine-tuning</h3>
       <p>Step 8 is the last step. Step 8a makes the reference fine-tuning setup fast in MLX. Step 8b compares better adapters with it. Section 8 gives the details. The explainer covers the DINO loss, the iBOT loss, the KoLeo regularizer and Gram anchoring.</p>
