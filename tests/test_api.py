@@ -14,6 +14,7 @@ import pytest
 from PIL import Image
 from small_mlx import load_small_mlx
 from small_model import small_hf_model
+from under_test import SLOW
 
 from dinov3_mlx import api, hub
 from dinov3_mlx.hub import MODEL_IDS, WeightsNotFoundError
@@ -337,3 +338,32 @@ print(json.dumps({"downloads": len(calls)}))
 def test_gated_repo_no_download_on_import() -> None:
     """T9: the import of the package and of the API downloads nothing."""
     assert run_python(COUNT_DOWNLOADS) == {"downloads": 0}
+
+
+@pytest.mark.skipif(not SLOW, reason="the wheel test belongs to the slow session (DINOV3_SLOW=1)")
+def test_wheel_installs_without_torch(small_folder: Path, tmp_path: Path) -> None:
+    """T5: the wheel installs with the core packages only, and T4 runs in its venv."""
+    root = TESTS_DIR.parent
+    dist, venv = tmp_path / "dist", tmp_path / "venv"
+    subprocess.run(["uv", "build", "--wheel", "--out-dir", str(dist)], cwd=root, check=True)
+    wheel = next(dist.glob("dinov3_mlx-*.whl"))
+    subprocess.run(["uv", "venv", "--python", sys.executable, str(venv)], check=True)
+    python = str(venv / "bin" / "python")
+    subprocess.run(["uv", "pip", "install", "--python", python, str(wheel)], check=True)
+    listed = subprocess.run(
+        ["uv", "pip", "list", "--python", python], capture_output=True, text=True, check=True
+    ).stdout
+    assert not {"torch", "transformers"} & {line.split()[0] for line in listed.splitlines()[2:]}
+    environ = {k: v for k, v in os.environ.items() if k not in ("MLX_ENABLE_TF32", "VIRTUAL_ENV")}
+    result = subprocess.run(
+        [python, "-c", NO_TORCH, str(small_folder)],
+        capture_output=True,
+        text=True,
+        env=environ | {"PYTHONPATH": str(TESTS_DIR)},
+        cwd=tmp_path,
+        check=False,
+        timeout=300,
+    )
+    assert result.returncode == 0, result.stderr
+    line = json.loads(result.stdout.strip().splitlines()[-1])
+    assert line["imported"] == [] and line["finite"]

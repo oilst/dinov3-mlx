@@ -171,8 +171,13 @@ source = { editable = "." }
 dependencies = [
     { name = "huggingface-hub" },
     { name = "mlx" },
+    { name = "numpy" },
     { name = "pillow" },
     { name = "safetensors" },
+]
+
+[package.optional-dependencies]
+reference = [
     { name = "torch" },
     { name = "transformers" },
 ]
@@ -184,23 +189,29 @@ coreml = [
 dev = [
     { name = "pytest" },
     { name = "ruff" },
+    { name = "torch" },
+    { name = "transformers" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "huggingface-hub", specifier = "==2.4.0" },
-    { name = "mlx", specifier = "==0.32.4" },
-    { name = "pillow", specifier = "==13.0.0" },
-    { name = "safetensors", specifier = "==0.8.0" },
-    { name = "torch", specifier = "==2.15.0" },
-    { name = "transformers", specifier = "==5.22.1" },
+    { name = "huggingface-hub", specifier = ">=2.4.0,<3" },
+    { name = "mlx", specifier = ">=0.32.4,<0.33" },
+    { name = "numpy", specifier = ">=2.5.4,<3" },
+    { name = "pillow", specifier = ">=13.0.0,<14" },
+    { name = "safetensors", specifier = ">=0.8.0,<0.9" },
+    { name = "torch", marker = "extra == 'reference'", specifier = ">=2.15.0,<2.16" },
+    { name = "transformers", marker = "extra == 'reference'", specifier = ">=5.22.1,<6" },
 ]
+provides-extras = ["reference"]
 
 [package.metadata.requires-dev]
 coreml = [{ name = "coremltools", specifier = "==9.0" }]
 dev = [
     { name = "pytest", specifier = "==9.2.0" },
     { name = "ruff", specifier = "==0.17.4" },
+    { name = "torch", specifier = "==2.15.0" },
+    { name = "transformers", specifier = "==5.22.1" },
 ]
 
 [[package]]

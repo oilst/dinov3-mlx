@@ -9,14 +9,26 @@ authors = [
     { name = "Ueli Peter" }
 ]
 requires-python = ">=3.12"
+# The packages of the API path. uv.lock keeps the tested versions (README, "Tested versions").
 dependencies = [
-    "huggingface-hub==2.4.0",
-    "mlx==0.32.4",
-    "pillow==13.0.0",
-    "safetensors==0.8.0",
-    "torch==2.15.0",
-    "transformers==5.22.1",
+    "huggingface-hub>=2.4.0,<3",
+    "mlx>=0.32.4,<0.33",
+    "numpy>=2.5.4,<3",
+    "pillow>=13.0.0,<14",
+    "safetensors>=0.8.0,<0.9",
 ]
+
+[project.optional-dependencies]
+# The reference outputs and the torch-mps baseline (scripts/make_reference.py, scripts/benchmark.py).
+reference = [
+    "torch>=2.15.0,<2.16",
+    "transformers>=5.22.1,<6",
+]
+
+[project.urls]
+Homepage = "https://github.com/oilst/dinov3-mlx"
+Documentation = "https://oilst.github.io/dinov3-mlx/"
+Issues = "https://github.com/oilst/dinov3-mlx/issues"
 
 [build-system]
 requires = ["uv_build>=0.12.15,<0.13.0"]
@@ -29,6 +41,8 @@ coreml = [
 dev = [
     "pytest==9.2.0",
     "ruff==0.17.4",
+    "torch==2.15.0",
+    "transformers==5.22.1",
 ]
 
 [tool.pytest.ini_options]
