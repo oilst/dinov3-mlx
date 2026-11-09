@@ -39,8 +39,9 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-# The prefix of a home folder on macOS: never in the public history (AC15).
-HOME_PREFIX = "~/"
+# The prefix of a home folder on macOS: never in the public history (AC15). Built from two parts,
+# so this file passes its own check.
+HOME_PREFIX = "/" + "Users/"
 HEX_TOKEN = re.compile(r"\b[0-9a-f]{7,12}\b")
 CITING_SUFFIXES = (".html", ".md")
 NEW_ID_LENGTH = 7
@@ -257,7 +258,8 @@ def rewrite(repo: Path, patterns: Path, email: str) -> dict:
     """Rewrite the history of repo and check it.
 
     Args:
-        repo: A new clone. Its branches are rewritten in place.
+        repo: A new clone. Its branches and tags are rewritten in place; its remotes and other
+            refs are removed, because they keep the old history.
         patterns: The pattern file.
         email: The author and committer address of every commit.
 
@@ -268,6 +270,8 @@ def rewrite(repo: Path, patterns: Path, email: str) -> dict:
         ReleaseCheckError: If a check of AC15 or AC16 fails.
     """
     rules = read_rules(patterns)
+    for remote in git(repo, "remote").split():  # its refs keep the old history (AC15)
+        git(repo, "remote", "remove", remote)
     branch = git(repo, "symbolic-ref", "HEAD").strip()
     old_ids = git(repo, "rev-list", "--reverse", branch).split()
     with tempfile.TemporaryDirectory() as folder:
@@ -307,8 +311,9 @@ def rewrite(repo: Path, patterns: Path, email: str) -> dict:
     id_map = dict(zip(old_ids, new_ids, strict=True))
     report = {"commits": len(new_ids)}
     report |= check_trees(repo, f"refs/original/{branch}", rules, id_map)
-    for ref in git(repo, "for-each-ref", "--format=%(refname)", "refs/original").split():
-        git(repo, "update-ref", "-d", ref)
+    for ref in git(repo, "for-each-ref", "--format=%(refname)").split():
+        if not ref.startswith(("refs/heads/", "refs/tags/")):  # refs/original, refs/stash
+            git(repo, "update-ref", "-d", ref)
     git(repo, "reflog", "expire", "--expire=now", "--all")
     git(repo, "gc", "-q", "--prune=now")
     report |= check_objects(repo, rules, email, len(old_ids))

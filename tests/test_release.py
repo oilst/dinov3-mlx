@@ -36,6 +36,18 @@ def test_no_old_package_name() -> None:
     assert hits == []
 
 
+def test_no_home_folder_path() -> None:
+    """AC15 guard: no tracked file holds a home folder path of macOS. The rewrite check of
+    scripts/rewrite_history.py refuses the whole history with one."""
+    prefix = "/" + "Users/"
+    hits = [
+        str(path.relative_to(ROOT))
+        for path in tracked_files()
+        if path.is_file() and prefix in path.read_bytes().decode("utf-8", errors="ignore")
+    ]
+    assert hits == []
+
+
 # The packages of the API path (D3 B of specs/07-release/explore.html).
 CORE_PACKAGES = {"mlx", "numpy", "safetensors", "huggingface-hub", "pillow"}
 REFERENCE_PACKAGES = {"torch", "transformers"}
