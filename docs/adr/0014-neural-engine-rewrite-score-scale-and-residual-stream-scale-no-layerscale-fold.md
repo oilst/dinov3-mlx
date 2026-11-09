@@ -33,4 +33,6 @@ Consequences:
 - The rewrite does not make the Neural Engine correct in general. On CPU_AND_NE only the packages whose compute plan keeps the first ops (input cast, patch embedding, first attention branch) on the CPU pass: ViT-S/16 and ViT-S+/16 at 224 px, batch size 1. In every other package the output of the embeddings is already wrong (Q3 probe of the build: cosine 0.19 for ViT-S/16 at 448 px). A patch embedding as reshape + matmul (exact) did not change this; the orchestrator had approved it as a deviation from Q3 on the condition that it fixes the fault, so the build removed it again. The cause is open (follow-up).
 - The package names carry the rewrite version: `ne2` (score scale, residual-stream scale, ε / r²).
 
+Update 2026-11-09: Step 6d found the cause of the open fault above, the concat fault of the token concat. ADR 0016 gives the fix (one constant prefix, rewrite version `ne3`) and the guard.
+
 Status: accepted on 2026-11-08 by the Step 6c build, from D2 of `specs/06c-neural-engine/explore.html` (the user asked the agent to decide, night of 2026-11-07).

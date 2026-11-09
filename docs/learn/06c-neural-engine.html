@@ -42,7 +42,7 @@ a { color: var(--accent); }
 <main>
 <header>
   <h1>DINOv3 on the Neural Engine</h1>
-  <p>Explainer for roadmap Step 6c. Date: 2026-11-08. It explains how the Apple Neural Engine runs the attention and the feed-forward network of DINOv3, the numeric range of DINOv3 in fp16, and every function that Step 6c adds to <code>src/dinov3_apple/coreml.py</code>.</p>
+  <p>Explainer for roadmap Steps 6c and 6d. Date: 2026-11-08; Section 10 (Step 6d): 2026-11-09. It explains how the Apple Neural Engine runs the attention and the feed-forward network of DINOv3, the numeric range of DINOv3 in fp16, the concat fault of the Neural Engine and its fix, and every function that Steps 6c and 6d add to <code>src/dinov3_apple/coreml.py</code>.</p>
   <p class="steps">Step 6 explainers: <a href="06-1-compiled-forward-pass.html">1 Compiled forward pass</a> · <a href="06-2-attention-and-batch-size.html">2 Attention and batch size</a> · <a href="06-3-quantized-weights.html">3 Quantized weights</a> · <a href="06-4-preprocessing.html">4 Preprocessing</a> · <a href="06b-prior-ports-measured.html">6b Prior ports</a> · 6c Neural Engine (this page). Numeric range: <a href="05-3-numeric-range.html">05-3</a>.</p>
 </header>
 
@@ -58,8 +58,9 @@ a { color: var(--accent); }
     <li><a href="#run">Running a package</a></li>
     <li><a href="#plan">The compute plan</a></li>
     <li><a href="#results">The measured results of Step 6c</a></li>
+    <li><a href="#concat">Step 6d: the concat fault and the constant prefix</a></li>
     <li><a href="#surprises">Surprises</a></li>
-    <li><a href="#functions">Every function of Step 6c</a></li>
+    <li><a href="#functions">Every function of Steps 6c and 6d</a></li>
     <li><a href="#sources">Sources</a></li>
   </ol>
 </nav>
@@ -272,6 +273,7 @@ while value / scale > MAX_STREAM_VALUE:          # 32,768: half of the fp16 rang
     <li><b>An fp16 input</b> without the cast at the start (job J3 of the build). The output stays wrong with nearly the same values (ViT-S/16 448 px frame 0.0097 to 0.71). So the cast is not the cause either.</li>
   </ul>
   <p class="note">The explore stage first named this fault F4, "batch size 8 breaks the patch embedding". The build data show that batch size is not the cause: at 448 and 512 px, batch size 1 fails in the same way. The batch size changes only the compute plan.</p>
+  <p class="note">Step 6d found the cause: the concat of the CLS token, the register tokens and the patch tokens (the concat fault). Section 10 gives the cause, the fix and the new results.</p>
 </section>
 
 <section id="run">
@@ -356,8 +358,138 @@ times = _time_calls(lambda: model.predict(feed), timed)</code></pre>
   <p>At P1 the Neural Engine is a real second accelerator: with both running, mlx loses 7 % and the Neural Engine 7 %, and the sum is 1.26 times mlx alone. At P2 the two compete: mlx loses 18 % and the Neural Engine adds only 2.5 img/s, so the sum is below mlx alone.</p>
 </section>
 
+<section id="concat">
+  <h2>10 Step 6d: the concat fault and the constant prefix</h2>
+  <p>Step 6d (<code>specs/06d-neural-engine-fault/</code>) looked for the first wrong op of Section 6 and fixed it. The probes ran on the M5 Max with macOS 26 and coremltools 9.0. The fix is rewrite version <code>ne3</code> (ADR 0016).</p>
+
+  <h3>10.1 The first wrong op is the token concat</h3>
+  <p>The embeddings of the Hugging Face backbone run four ops: the 16 × 16 patch convolution, a reshape, a transpose and <code>torch.cat([cls_token, register_tokens, patch_embeddings], dim=1)</code>. The CLS token (1 row) and the register tokens (4 rows) are parameters, so the converter makes them two separate constants. Probe E1 converted the graph up to each op, with every op on the Neural Engine:</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Graph ends after</th><th class="num">Cosine on CPU_AND_NE</th><th class="num">Wrong tokens</th><th class="num">Cosine on CPU_AND_GPU</th></tr></thead>
+    <tbody>
+      <tr><td>conv</td><td class="num pass">1.000000</td><td class="num">–</td><td class="num">0.999989</td></tr>
+      <tr><td>reshape, transpose</td><td class="num pass">1.000000</td><td class="num">0 of 784</td><td class="num">0.999989</td></tr>
+      <tr><td>concat</td><td class="num over">0.192437</td><td class="num">788 of 789</td><td class="num">0.999989</td></tr>
+    </tbody>
+  </table></div>
+  <p class="caption">Table 6. Probe E1 of Step 6d: ViT-S/16 at 448 px, batch size 1, against torch-cpu fp32. 0.192437 is the value of the block-1 input in the Q3 probe of Section 6.</p>
+  <p>Probe E2 compared each output row with each reference row. Each row of the Neural Engine is an exact copy of some reference row: the register tokens are missing, and the patch tokens start 3 rows too early.</p>
+  <figure>
+    <div class="fig">
+      <svg viewBox="0 0 900 250" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system, Helvetica, Arial, sans-serif" font-size="13">
+        <rect width="900" height="250" fill="#ffffff"/>
+        <text x="10" y="40" fill="#111414" font-weight="600">Expected</text>
+        <text x="10" y="110" fill="#111414" font-weight="600">Neural Engine</text>
+        <text x="10" y="126" fill="#4a5655">(concat 3 inputs)</text>
+        <text x="10" y="190" fill="#111414" font-weight="600">Fix cat2</text>
+        <text x="10" y="206" fill="#4a5655">(1 constant input)</text>
+        <g stroke="#111414" stroke-width="1">
+          <!-- expected -->
+          <rect x="150" y="22" width="50" height="28" fill="#d9eef0"/><rect x="200" y="22" width="50" height="28" fill="#f3e3c3"/><rect x="250" y="22" width="50" height="28" fill="#f3e3c3"/><rect x="300" y="22" width="50" height="28" fill="#f3e3c3"/><rect x="350" y="22" width="50" height="28" fill="#f3e3c3"/>
+          <rect x="400" y="22" width="50" height="28" fill="#ffffff"/><rect x="450" y="22" width="50" height="28" fill="#ffffff"/><rect x="500" y="22" width="50" height="28" fill="#ffffff"/><rect x="550" y="22" width="150" height="28" fill="#ffffff"/><rect x="700" y="22" width="50" height="28" fill="#ffffff"/><rect x="750" y="22" width="50" height="28" fill="#ffffff"/><rect x="800" y="22" width="50" height="28" fill="#ffffff"/>
+          <!-- NE -->
+          <rect x="150" y="92" width="50" height="28" fill="#d9eef0"/><rect x="200" y="92" width="50" height="28" fill="#d9eef0" stroke="#b3261e" stroke-width="2"/><rect x="250" y="92" width="50" height="28" fill="#ffffff" stroke="#b3261e" stroke-width="2"/><rect x="300" y="92" width="50" height="28" fill="#ffffff" stroke="#b3261e" stroke-width="2"/><rect x="350" y="92" width="50" height="28" fill="#ffffff" stroke="#b3261e" stroke-width="2"/>
+          <rect x="400" y="92" width="50" height="28" fill="#ffffff" stroke="#b3261e" stroke-width="2"/><rect x="450" y="92" width="50" height="28" fill="#ffffff" stroke="#b3261e" stroke-width="2"/><rect x="500" y="92" width="50" height="28" fill="#ffffff" stroke="#b3261e" stroke-width="2"/><rect x="550" y="92" width="150" height="28" fill="#ffffff" stroke="#b3261e" stroke-width="2"/><rect x="700" y="92" width="50" height="28" fill="#ffffff" stroke="#b3261e" stroke-width="2"/><rect x="750" y="92" width="50" height="28" fill="#e6e6e6" stroke="#b3261e" stroke-width="2"/><rect x="800" y="92" width="50" height="28" fill="#e6e6e6" stroke="#b3261e" stroke-width="2"/>
+          <!-- fix -->
+          <rect x="150" y="172" width="50" height="28" fill="#d9eef0"/><rect x="200" y="172" width="50" height="28" fill="#f3e3c3"/><rect x="250" y="172" width="50" height="28" fill="#f3e3c3"/><rect x="300" y="172" width="50" height="28" fill="#f3e3c3"/><rect x="350" y="172" width="50" height="28" fill="#f3e3c3"/>
+          <rect x="400" y="172" width="50" height="28" fill="#ffffff"/><rect x="450" y="172" width="50" height="28" fill="#ffffff"/><rect x="500" y="172" width="50" height="28" fill="#ffffff"/><rect x="550" y="172" width="150" height="28" fill="#ffffff"/><rect x="700" y="172" width="50" height="28" fill="#ffffff"/><rect x="750" y="172" width="50" height="28" fill="#ffffff"/><rect x="800" y="172" width="50" height="28" fill="#ffffff"/>
+        </g>
+        <g fill="#111414" text-anchor="middle">
+          <text x="175" y="41">CLS</text><text x="225" y="41">R1</text><text x="275" y="41">R2</text><text x="325" y="41">R3</text><text x="375" y="41">R4</text><text x="425" y="41">P0</text><text x="475" y="41">P1</text><text x="525" y="41">P2</text><text x="625" y="41">…</text><text x="725" y="41">P781</text><text x="775" y="41">P782</text><text x="825" y="41">P783</text>
+          <text x="175" y="111">CLS</text><text x="225" y="111">CLS</text><text x="275" y="111">P0</text><text x="325" y="111">P1</text><text x="375" y="111">P2</text><text x="425" y="111">P3</text><text x="475" y="111">P4</text><text x="525" y="111">P5</text><text x="625" y="111">…</text><text x="725" y="111">P783</text><text x="775" y="111">0</text><text x="825" y="111">0</text>
+          <text x="175" y="191">CLS</text><text x="225" y="191">R1</text><text x="275" y="191">R2</text><text x="325" y="191">R3</text><text x="375" y="191">R4</text><text x="425" y="191">P0</text><text x="475" y="191">P1</text><text x="525" y="191">P2</text><text x="625" y="191">…</text><text x="725" y="191">P781</text><text x="775" y="191">P782</text><text x="825" y="191">P783</text>
+        </g>
+        <g fill="#4a5655" font-size="12" text-anchor="middle">
+          <text x="175" y="14">row 0</text><text x="425" y="14">row 5</text><text x="825" y="14">row 788</text>
+        </g>
+        <text x="150" y="146" fill="#b3261e" font-size="12">Red: a wrong row. The register tokens are missing, each patch token is 3 rows too early, the last rows are zero.</text>
+        <text x="150" y="228" fill="#4a5655" font-size="12">cat2: torch.cat([prefix, patches]) with prefix = cat(cls_token, register_tokens), one constant of 5 rows.</text>
+      </svg>
+    </div>
+    <figcaption>Figure 3. The token map of probe E2 of Step 6d (rewrite <code>ne2</code>): ViT-S/16 at 448 px, 789 rows of 384 values. Each output row of the Neural Engine is an exact copy (cosine 1.0) of the reference row in the same box. Rows 787 and 788 are zero.</figcaption>
+  </figure>
+
+  <h3>10.2 The fault needs two or more constant inputs</h3>
+  <p>Probe E6 put a random 16 × 16 convolution in front of a concat with constants, without DINOv3. With 784 patch tokens the Neural Engine runs all ops. Every form with one constant input was right; 3 of 5 forms with two or more constant inputs were wrong. On CPU_ONLY every form was right.</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Concat inputs (rows)</th><th class="num">Constant inputs</th><th class="num">Wrong rows on CPU_AND_NE</th></tr></thead>
+    <tbody>
+      <tr><td>c1, c4, patches (Hugging Face)</td><td class="num">2</td><td class="num over">788 (from row 1)</td></tr>
+      <tr><td>c2, c3, patches</td><td class="num">2</td><td class="num over">787 (from row 2)</td></tr>
+      <tr><td>c1, c1, c1, c1, c1, patches</td><td class="num">5</td><td class="num over">4 (rows 1 to 4)</td></tr>
+      <tr><td>patches, c1, c4</td><td class="num">2</td><td class="num over">4 (rows 785 to 788)</td></tr>
+      <tr><td>c4, c1, patches</td><td class="num">2</td><td class="num pass">0</td></tr>
+      <tr><td>c3, c2, patches</td><td class="num">2</td><td class="num pass">0</td></tr>
+      <tr><td>c5, patches</td><td class="num">1</td><td class="num pass">0</td></tr>
+      <tr><td>c1, patches</td><td class="num">1</td><td class="num pass">0</td></tr>
+      <tr><td>c4, patches</td><td class="num">1</td><td class="num pass">0</td></tr>
+    </tbody>
+  </table></div>
+  <p class="caption">Table 7. Probe E6 of Step 6d: 784 patch tokens of 384 values, batch size 1, fp16 compute. cN: a constant of N rows. Wrong row: largest absolute error above 0.05. The two passing forms with two constants have no input and output cast in the compute plan, so the converter changed them in another way. Step 6d did not find the exact rule.</p>
+  <p>So the concat fault is a fault of the row offsets, not of the fp16 range: the wrong values are exact copies of other rows. The two packages of Step 6c that passed on CPU_AND_NE (ViT-S/16 and ViT-S+/16 at 224 px, batch size 1) passed because their compute plan put the concat on the CPU (Table 2).</p>
+
+  <h3>10.3 The fix: one constant prefix</h3>
+  <pre><code># src/dinov3_apple/coreml.py: ne_embeddings (called by NeuralEngineBackbone.forward)
+patches = embeddings.patch_embeddings(pixels).flatten(2).transpose(1, 2)   # (B, N, D): conv, reshape, transpose
+prefix = torch.cat([embeddings.cls_token, embeddings.register_tokens], dim=1)  # (1, 5, D): parameters only,
+                                                                            # so the trace folds it to ONE constant
+return torch.cat([prefix.expand(pixels.shape[0], -1, -1), patches], dim=1) # one constant input: no concat fault</code></pre>
+  <p class="caption">Code 6. <code>ne_embeddings</code>. The first <code>torch.cat</code> joins two parameters, so the converter computes it at conversion time and the graph gets one constant of 5 rows. In fp32 the output is bit-equal to the Hugging Face embeddings (test T14, 8 cases). <code>REWRITE_VERSION</code> is now <code>"ne3"</code>, and the version is part of each package name.</p>
+
+  <h3>10.4 The guard: no package with the concat fault</h3>
+  <pre><code># src/dinov3_apple/coreml.py: _is_constant and constant_concats
+def _is_constant(value):
+    if value.op is not None:                 # a value that an op makes:
+        return value.op.op_type == "const"   #   constant only if the op is "const"
+    return value.val is not None             # a value without an op: constant if it has a value
+
+def constant_concats(mlmodel):
+    names = []
+    for op in mlmodel._mil_program.functions["main"].operations:   # the MIL program of ct.convert
+        if op.op_type == "concat" and sum(_is_constant(v) for v in op.values) &gt;= 2:
+            names.append(op.name)                                  # two or more constant inputs
+    return names
+
+# convert_module, after ct.convert and before the save:
+faults = constant_concats(mlmodel)
+if faults:
+    raise NeuralEngineGraphError(f"concats with two or more constant inputs (the concat fault): ...")</code></pre>
+  <p class="caption">Code 7. The guard. <code>convert_module</code> writes no package with the concat fault, and each conversion line has the field <code>constant_concats</code> (0 in 25 of 25 lines of J1). Test T15 checks that the Hugging Face form has one such concat and the <code>ne3</code> form none. Test T16 converts only the <code>ne3</code> embeddings of ViT-S/16 at 448 px (a small package) and checks them on CPU_AND_NE, so a new macOS that changes the fault shows at once. A limit (finding V7 of the Step 6d <code>verify.html</code>): a value with <code>val</code> that a non-const op makes does not count as a constant. No current graph has this form.</p>
+  <p><code>compute_plan_report</code> now also gives <code>op_devices</code>: the devices of each op type, without the opset prefix (<code>ios18.concat</code> → <code>concat</code>). So the J2 lines show that each concat runs on the Neural Engine.</p>
+
+  <h3>10.5 The measured results of Step 6d</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Measurement</th><th>Step 6c (<code>ne2</code>)</th><th>Step 6d (<code>ne3</code>)</th></tr></thead>
+    <tbody>
+      <tr><td>Parity on CPU_AND_NE, 5 model sizes × 224, 448, 512 px, batch size 1</td><td class="over">2 of 15 pass</td><td class="pass">15 of 15 pass. Worst: frame 0.99983 (ViT-S+/16, 224 px), patch mean 0.99959 and patch 1st percentile 0.99377 (ViT-H+/16, 224 px)</td></tr>
+      <tr><td>Parity on CPU_AND_GPU and ALL</td><td>30 of 30 pass</td><td>30 of 30 pass (frame ≥ 0.99999)</td></tr>
+      <tr><td>Compute plan on CPU_AND_NE, 25 packages</td><td>cost share 0.754 to 0.996</td><td>cost share 1.000 in 25 of 25; every concat on the Neural Engine</td></tr>
+      <tr><td>Stream ratio at P1 (ViT-S/16, 224 px, b8)</td><td>1.257 and 1.312</td><td>1.324 and 1.318 (runs 1 and 2)</td></tr>
+      <tr><td>Stream ratio at P3 (ViT-L/16, 224 px, b8)</td><td>–</td><td>1.122 and 1.184</td></tr>
+      <tr><td>Stream ratio at P2 (ViT-H+/16, 512 px, b8)</td><td class="over">0.934 and 0.981 (output wrong)</td><td>1.081 (run 1, output valid)</td></tr>
+      <tr><td>Paired ratio coreml-ne / mlx at P1 b8 (batch API)</td><td>0.388 and 0.420</td><td>0.370 and 0.373</td></tr>
+      <tr><td>Paired ratio coreml-ne / mlx at P1 b1</td><td>1.016</td><td>1.168</td></tr>
+    </tbody>
+  </table></div>
+  <p class="caption">Table 8. Step 6c against Step 6d. Values from <code>results/coreml-table.md</code> and <code>results/coreml-6d-table.md</code> (run 1: build, run 2: Verify). Stream ratio = (ne + mlx, both) / (mlx alone), median of 3 rounds. Paired ratio: median of 5 rounds.</p>
+  <ul>
+    <li>The batch-size-8 packages are right now too. At 224 px the batch API (8 calls of the batch-size-1 package in one <code>predict</code>) is still faster than the batch-size-8 package: 666 against 494 img/s for ViT-S/16. At 512 px both forms are equal.</li>
+    <li>The Neural Engine speed does not change much with the fix: the fix changes one op. At batch size 1 and 224 px it is now faster than mlx (1.168 against 1.016 in Step 6c). One reason: the 46 ops of Table 2 now also run on the Neural Engine.</li>
+    <li>The first load of a new package compiles it for the Neural Engine: up to 118.8 s (ViT-H+/16, 512 px, batch-size-8 package). A cached load takes 0.023 to 0.249 s.</li>
+  </ul>
+
+  <h3>10.6 Surprises of Step 6d</h3>
+  <ol>
+    <li class="note"><b>Not an fp16 fault.</b> After two steps of fp16 range work, the last fault was a wrong row offset in a concat. Each wrong row is an exact copy of another row.</li>
+    <li class="note"><b>The CPU hid the fault.</b> The two packages that passed in Step 6c ran the concat on the CPU. A larger input or batch size moved it to the Neural Engine.</li>
+    <li class="note"><b>A minimal graph does not show it.</b> A concat of constants and an input alone runs on the CPU, and the CPU is right. The fault needs a compute op (the patch convolution) in front, so that Core ML puts the graph on the Neural Engine.</li>
+    <li class="note"><b>The order of the constants matters.</b> c1, c4 in front of the patches is wrong; c4, c1 is right (Table 7). So the rule is not only "two constants".</li>
+    <li class="note"><b>The fix is also faster.</b> With one constant, the 46 CPU ops of ViT-S/16 at 224 px move to the Neural Engine: 1.58 ms against 1.83 ms for one image in the explore probe.</li>
+  </ol>
+</section>
+
 <section id="surprises">
-  <h2>10 Surprises</h2>
+  <h2>11 Surprises</h2>
   <ol>
     <li class="note"><b>A wrong output that looks fine.</b> The plain fp16 package on the Neural Engine gives finite tokens of normal size (largest value 4.0) with frame cosine 0.035.</li>
     <li class="note"><b>The CPU saved the two passing packages.</b> ViT-S/16 and ViT-S+/16 at 224 px batch size 1 pass on CPU_AND_NE only because Core ML runs their first 46 ops on the CPU. A larger input or batch size moves these ops to the Neural Engine, and the output breaks.</li>
@@ -370,41 +502,45 @@ times = _time_calls(lambda: model.predict(feed), timed)</code></pre>
 </section>
 
 <section id="functions">
-  <h2>11 Every function of Step 6c</h2>
+  <h2>12 Every function of Steps 6c and 6d</h2>
   <div class="table-wrap"><table>
     <thead><tr><th>Function or class in <code>src/dinov3_apple/coreml.py</code></th><th>What it does</th><th>Section</th></tr></thead>
     <tbody>
+      <tr><td><code>REWRITE_VERSION</code></td><td>The rewrite version in the package name: <code>"ne3"</code> since Step 6d</td><td>10</td></tr>
       <tr><td><code>CoremltoolsVersionError</code></td><td>Raised by the patch for a coremltools version other than 9.0</td><td>2</td></tr>
       <tr><td><code>_cast_with_item</code></td><td>The <code>aten::Int</code> op of coremltools 9.0 with <code>.item()</code></td><td>2</td></tr>
       <tr><td><code>patch_coremltools_cast</code></td><td>Points the torch frontend at <code>_cast_with_item</code> at run time</td><td>2</td></tr>
       <tr><td><code>ne_attention</code></td><td>Attention with score scale 256; registered as "coreml-ne"</td><td>4</td></tr>
-      <tr><td><code>NeuralEngineBackbone</code></td><td>pixels → tokens: embeddings / r, RoPE, each block, final layer norm</td><td>5</td></tr>
+      <tr><td><code>ne_embeddings</code></td><td>Step 6d: the embeddings with one constant prefix of 5 rows; bit-equal to Hugging Face in fp32</td><td>10</td></tr>
+      <tr><td><code>NeuralEngineBackbone</code></td><td>pixels → tokens: <code>ne_embeddings</code> / r, RoPE, each block, final layer norm</td><td>5, 10</td></tr>
       <tr><td><code>rewrite_for_neural_engine</code></td><td>Sets the attention, ε / r², <code>o_proj</code> and <code>down_proj</code> / r; returns the backbone</td><td>5</td></tr>
       <tr><td><code>largest_token_value</code></td><td>Reads the fp32 row of a model size from the token-range table</td><td>5</td></tr>
       <tr><td><code>residual_scale</code></td><td>The smallest power of two r with largest / r ≤ 32,768</td><td>5</td></tr>
       <tr><td><code>package_path</code>, <code>compiled_path</code></td><td>The package name with every setting; the .mlmodelc next to it</td><td>2</td></tr>
       <tr><td><code>trace_module</code>, <code>convert_traced</code></td><td>torch.jit.trace; ct.convert with fp16 compute</td><td>2</td></tr>
       <tr><td><code>_op_counts</code>, <code>_size_bytes</code></td><td>Op counts of the MIL program; package size</td><td>2</td></tr>
-      <tr><td><code>convert_module</code></td><td>Trace, convert, save, compile, with the times</td><td>2</td></tr>
+      <tr><td><code>NeuralEngineGraphError</code>, <code>_is_constant</code>, <code>constant_concats</code></td><td>Step 6d: the concats with two or more constant inputs of a converted graph; the error of the guard</td><td>10</td></tr>
+      <tr><td><code>convert_module</code></td><td>Trace, convert, the guard (Step 6d), save, compile, with the times and the field <code>constant_concats</code></td><td>2, 10</td></tr>
       <tr><td><code>convert_need_bytes</code>, <code>convert_backbone</code></td><td>Memory need; run rule, memory check, load, rewrite, conversion</td><td>2</td></tr>
       <tr><td><code>rewrite_fields</code></td><td>The field "rewrite" of a result line</td><td>7</td></tr>
       <tr><td><code>load_package</code></td><td>First load and cached load of a compiled package</td><td>7</td></tr>
       <tr><td><code>output_validity</code>, <code>_worst</code></td><td>The fp16 parity check of one image; the worst of 3 images</td><td>7</td></tr>
       <tr><td><code>run_coreml</code>, <code>_time_calls</code></td><td>The Core ML worker: parity, warm-up, timed batches, batch API</td><td>7</td></tr>
-      <tr><td><code>_device_name</code>, <code>compute_plan_report</code></td><td>The compute plan of a compiled package</td><td>8</td></tr>
+      <tr><td><code>_device_name</code>, <code>compute_plan_report</code></td><td>The compute plan of a compiled package; since Step 6d also <code>op_devices</code>, the devices of each op type</td><td>8, 10</td></tr>
     </tbody>
   </table></div>
-  <p class="caption">Table 6. Every function and class that Step 6c adds to <code>src/</code>. The driver is <code>scripts/bench_coreml.py</code>; the tests are <code>tests/test_coreml.py</code> (T1 to T13).</p>
+  <p class="caption">Table 9. Every function and class that Steps 6c and 6d add to <code>src/</code>. The driver is <code>scripts/bench_coreml.py</code>; the tests are <code>tests/test_coreml.py</code> (T1 to T13 of Step 6c, T14 to T17 of Step 6d).</p>
 </section>
 
 <section id="sources">
-  <h2>12 Sources</h2>
+  <h2>13 Sources</h2>
   <ul>
     <li>Repo code: <code>src/dinov3_apple/coreml.py</code>, <code>scripts/bench_coreml.py</code>, <code>tests/test_coreml.py</code>.</li>
     <li>Results: <code>results/coreml.jsonl</code>, <code>results/coreml-table.md</code>; <code>results/token-range-mlx.md</code> for r.</li>
     <li>Spec: <code>specs/06c-neural-engine/explore.html</code> (findings F1 to F4, Tables 2 to 7), <code>plan.html</code> (with the amendment of 2026-11-08), <code>verify.html</code>; ADR 0014 and ADR 0015.</li>
     <li>Probes outside the repo: <code>~/.cache/dinov3-apple/coreml/probe-logs/</code> (explore p1 to p17) and <code>~/.cache/dinov3-apple/coreml/build-logs/</code> (Q3 probes of the build: <code>q3-probe-*.log</code>, <code>q3-r-*.log</code>, <code>P.log</code>, <code>F.log</code>).</li>
     <li>coremltools 9.0: <code>converters/mil/frontend/torch/ops.py</code> (<code>_cast</code>), <code>models/compute_plan.py</code>, <code>models/_compiled_model.py</code> (the batch API of <code>predict</code>).</li>
+    <li>Step 6d: <code>specs/06d-neural-engine-fault/explore.html</code> (probes E1 to E6), <code>plan.html</code>, <code>verify.html</code>; <code>results/coreml-6d.jsonl</code>, <code>results/coreml-6d-table.md</code>; ADR 0016.</li>
     <li>Hugging Face transformers: <code>models/dinov3_vit/modeling_dinov3_vit.py</code> (<code>DINOv3ViTEmbeddings</code>, <code>eager_attention_forward</code>, <code>DINOv3ViTLayer</code>).</li>
     <li>Apple Machine Learning Research, "Deploying Transformers on the Apple Neural Engine" (2022), and github.com/apple/ml-ane-transformers: a layout for the Neural Engine that Step 6c did not try (plan Q1).</li>
   </ul>
