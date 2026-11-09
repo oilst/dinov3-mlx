@@ -43,7 +43,7 @@ a { color: var(--accent); }
 <main>
 <header>
   <h1>Step 7 Release: Explore</h1>
-  <p>Roadmap step 7. Status: options picked. On 2026-11-09 the user took all recommendations (Table 9). Q2 (the legal check) is open. Date: 2026-11-09.</p>
+  <p>Roadmap step 7. Status: options picked. On 2026-11-09 the user took all recommendations (Table 9). All questions are answered. Date: 2026-11-09.</p>
 </header>
 
 <section id="task">
@@ -341,7 +341,7 @@ frame, patches = model.embed(frames)     # one forward pass for both
         </g>
       </svg>
     </div>
-    <figcaption><b>Figure 2.</b> The recommended order of the release. G1 to G3 are the gates of the user.</figcaption>
+    <figcaption><b>Figure 2.</b> The recommended order of the release. G1 to G3 are the gates of the user. On 2026-11-09 the user set the order of G1: the legal check must end before G3, so G2 can come before G1 (Table 9).</figcaption>
   </figure>
 </section>
 
@@ -360,7 +360,7 @@ frame, patches = model.embed(frames)     # one forward pass for both
         <tr><td>Q3: the GitHub owner</td><td>The personal GitHub account of the user</td><td>The user, 2026-11-09 ("it will be uploaded to my github")</td></tr>
         <tr><td>Q4: the private strings of Table 4</td><td>They stay out of the public repo (follows from D7 B)</td><td>The user, 2026-11-09 (D7 B)</td></tr>
         <tr><td>Q5: a company name and logo</td><td>None in the whole repo. The repo is by Ueli Peter. The HTML files keep their layout without the logo. Done in the current files on 2026-11-09; D7 B removes them from the history</td><td>The user, 2026-11-09</td></tr>
-        <tr><td>Q2: the legal check (G1)</td><td>Open</td><td>–</td></tr>
+        <tr><td>Q2: the legal check (G1)</td><td>The user does it. It must end before the repo goes public (G3), not before the private push (G2)</td><td>The user, 2026-11-09</td></tr>
         <tr><td>Q6: the author address of the commits</td><td><code>ueli.peter@gmail.com</code>, for the new commits (git setting of this repo) and for the history rewrite of D7 B</td><td>The user, 2026-11-09</td></tr>
         <tr><td>G3: the repo goes public</td><td>Open (a gate of the user)</td><td>–</td></tr>
       </tbody>
@@ -373,7 +373,7 @@ frame, patches = model.embed(frames)     # one forward pass for both
   <h2>5 Questions for the user</h2>
   <ul>
     <li>Q1: Do you take the recommendations D1 to D8 (Section 4), or do you change some of them? <i>Answered (Table 9).</i></li>
-    <li>Q2: The legal check of ADR 0002 (and of the name): who does it, and must it end before the private push (G2) or only before the repo goes public (G3)? <i>Open.</i></li>
+    <li>Q2: The legal check of ADR 0002 (and of the name): who does it, and must it end before the private push (G2) or only before the repo goes public (G3)? <i>Answered: you do it, before G3 (Table 9).</i></li>
     <li>Q3: Which GitHub owner gets the repo? <i>Answered: your personal account (Table 9).</i> You create the empty private repo, because <code>gh</code> is not installed and the push needs your credentials.</li>
     <li>Q4: Must the private strings of Table 4 stay out of the public repo? <i>Answered with D7 B: yes.</i> The run settings of Table 12 of <code>docs/plan.html</code> stay, as "a video frame classifier".</li>
     <li>Q5: Does a company name or logo stay in the repo? <i>Answered: no (Table 9).</i></li>

@@ -1,0 +1,349 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Step 7 Release: Plan</title>
+<style>
+/* Spec page. White page, black text, no dark mode. */
+:root { --bg: #ffffff; --fg: #111414; --muted: #4a5655; --rule: #d6dedd; --panel: #f5f8f7; --accent: #057379; --pass: #1d7a3a; --fail: #b3261e; --gate: #9a5b00; color-scheme: light; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif; }
+main { max-width: 64rem; margin: 0 auto; padding: 40px 20px 64px; display: grid; gap: 1.75rem; }
+main > *, section > * { min-width: 0; }
+h1 { font-size: 1.9rem; line-height: 1.15; margin: 0; }
+h2 { font-size: 1.3rem; margin: 0; }
+h3 { font-size: 1.05rem; margin: 0; }
+section { display: grid; gap: 0.8rem; }
+p, ul, ol { margin: 0; max-width: 46rem; }
+li + li { margin-top: 0.25rem; }
+code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.86em; }
+p code, li code, td code { overflow-wrap: anywhere; }
+pre { margin: 0; background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 0.8rem 1rem; overflow-x: auto; }
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+th, td { text-align: left; vertical-align: top; padding: 0.45rem 0.7rem 0.45rem 0; border-bottom: 1px solid var(--rule); }
+th { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); border-bottom: 1.5px solid var(--fg); }
+td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.caption { font-size: 0.88rem; color: var(--muted); }
+.pass { color: var(--pass); font-weight: 600; }
+.fail { color: var(--fail); font-weight: 600; }
+.gate { color: var(--gate); font-weight: 600; }
+.box { border: 1.5px solid var(--accent); border-radius: 6px; padding: 0.8rem 1rem; display: grid; gap: 0.5rem; }
+figure { margin: 0; display: grid; gap: 0.4rem; }
+.fig { border: 1px solid var(--rule); border-radius: 6px; padding: 0.5rem; overflow-x: auto; }
+.fig svg { display: block; width: 100%; height: auto; min-width: 640px; }
+figcaption { font-size: 0.88rem; color: var(--muted); }
+a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+<header>
+  <h1>Step 7 Release: Plan</h1>
+  <p>Roadmap step 7. Status: approved by the user on 2026-11-10 ("Approve plan"), with yes to P1 and P2. Date: 2026-11-09. The options come from <code>explore.html</code> (Table 9: the user took all recommendations on 2026-11-09).</p>
+</header>
+
+<section id="goal">
+  <h2>1 Goal</h2>
+  <p>Step 7 publishes version 0.1.0 of the repo as <code>dinov3-mlx</code> on the GitHub account of the user (<code>github.com/oilst/dinov3-mlx</code>). Users get a public API that gives frame embeddings and patch embeddings of all six model sizes from uint8 RGB frames, with one line of setup. The README shows how to install it, how to get access to the weights, the results of Steps 2 to 6d and their limits. CI runs the tests that need no weights on each push. The public history holds no private string and no company name, and each commit id that the docs cite is valid.</p>
+  <p>The step ends when the repo is public, CI passes, the README shows the results, and the tag <code>v0.1.0</code> exists.</p>
+</section>
+
+<section id="topic">
+  <h2>2 DINOv3 topic</h2>
+  <p>The roadmap row gives no new DINOv3 part. The Learn stage writes <code>docs/learn/07-public-api.html</code>: the path of one video frame through the public API. It covers the preprocessing contract of the Hugging Face image processor of DINOv3 (224 × 224 px, bilinear resize with antialiasing on float values, ImageNet mean and standard deviation), the TF32 probe, the padded last batch, the token split into the frame embedding and the patch embeddings, and why the default dtype mode is fp16-autocast (Table 2 of <code>explore.html</code>).</p>
+</section>
+
+<section id="design">
+  <h2>3 Design</h2>
+  <p>The design applies the picked options D1 to D8 of <code>explore.html</code>. The Build does the work packages of Table 1 in this order. The rename comes first, so all later code has the new name. The history rewrite comes last, so it also covers the Build commits.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Work package</th><th>What</th><th>Option</th></tr></thead>
+      <tbody>
+        <tr><td>W1 Rename</td><td>Package <code>dinov3_apple</code> to <code>dinov3_mlx</code>, distribution name <code>dinov3-mlx</code>, cache folder <code>~/.cache/dinov3-apple/</code> to <code>~/.cache/dinov3-mlx/</code> (one local move, no conversion again), the GPU lock command in <code>CLAUDE.md</code>. <code>specs/07-release/</code> and the new ADR keep the old name where they describe the rename</td><td>D4 B</td></tr>
+        <tr><td>W2 Public API</td><td><code>src/dinov3_mlx/api.py</code>: class <code>Embedder</code> with <code>embed_frames</code>, <code>embed_patches</code> and <code>embed</code>; the TF32 probe; the download on first use; the lazy export in <code>__init__.py</code></td><td>D1 B, D2</td></tr>
+        <tr><td>W3 Dependencies</td><td>Core: mlx, numpy, safetensors, huggingface_hub, pillow, with ranges. torch and transformers go into the extra <code>reference</code> and the dev group. <code>uv.lock</code> keeps the exact versions</td><td>D3 B</td></tr>
+        <tr><td>W4 Test fixes</td><td>The 2 failures of a new clone without weights (Table 3 of <code>explore.html</code>)</td><td>D6 A</td></tr>
+        <tr><td>W5 CI</td><td><code>.github/workflows/tests.yml</code> on <code>macos-26</code></td><td>D6 A</td></tr>
+        <tr><td>W6 Pages</td><td><code>scripts/make_site.py</code> builds <code>_site/</code> (an index, <code>docs/</code>, <code>specs/</code>); <code>.github/workflows/pages.yml</code> publishes it</td><td>D8 A</td></tr>
+        <tr><td>W7 README and cleanup</td><td>The README (Section 3.4). The private strings of Table 4 of <code>explore.html</code> leave the current files. <code>pyproject.toml</code> gets the URLs of the repo</td><td>D5 A, D7 B</td></tr>
+        <tr><td>W8 Release check</td><td>The full default session with the weights on this Mac, the slow session for the API parity of all six model sizes, the benchmark B1, the scan of the current files</td><td>D6</td></tr>
+        <tr><td>W9 History rewrite</td><td><code>scripts/rewrite_history.py</code> in a new clone: private strings out, author and committer address <code>ueli.peter@gmail.com</code>, cited commit ids mapped, then the checks of AC15 and AC16</td><td>D7 B</td></tr>
+        <tr><td>W10 Gates</td><td>G2: the push of the new clone to the private repo, after the yes of the user. CI must pass there. G1: the legal check of the user. G3: the user turns the repo public. Then the tag <code>v0.1.0</code> and the GitHub release, after the yes of the user</td><td>Figure 2 of <code>explore.html</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 1.</b> The work packages of the Build, in their order.</p>
+
+  <h3>3.1 The public API</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Part</th><th>Contract</th></tr></thead>
+      <tbody>
+        <tr><td><code>Embedder(model_size="ViT-S/16", dtype_mode="fp16-autocast", batch_size=8, bits=None, backend="mlx")</code></td><td>Loads the weights (download on first use), loads the backbone with <code>load_mlx_backbone</code>, compiles it with <code>compile_backbone</code>, and holds both. <code>model_size</code> is a model size name or its Hugging Face id. <code>bits=8</code> gives the 8-bit weights of ADR 0011 (fp16-autocast and bf16-autocast only). <code>backend</code> accepts only <code>"mlx"</code>; Step 7b adds <code>"mlx+ne"</code></td></tr>
+        <tr><td><code>embed_frames(frames, size=224, as_numpy=True)</code></td><td>Frame embeddings (B, D), fp32</td></tr>
+        <tr><td><code>embed_patches(frames, size=224, as_numpy=True, patch_fp32=False)</code></td><td>Patch embeddings (B, H/16, W/16, D): fp16 in the four half dtype modes (D13 of Step 6), fp32 in fp32 or with <code>patch_fp32=True</code></td></tr>
+        <tr><td><code>embed(frames, size=224, as_numpy=True, patch_fp32=False)</code></td><td>Both, from one forward pass</td></tr>
+        <tr><td><code>frames</code></td><td>A uint8 NumPy array (B, h, w, 3) of RGB frames, or a list of PIL images or uint8 arrays (h, w, 3) of one size. Another dtype raises <code>TypeError</code>; frames of different sizes raise <code>ValueError</code></td></tr>
+        <tr><td><code>size</code></td><td>An int (square) or (H, W). Each side is a multiple of 16, else <code>ValueError</code>. The default 224 is the default of the Hugging Face image processor</td></tr>
+        <tr><td>Batches</td><td>The API cuts the frames into batches of <code>batch_size</code>. It pads the last batch with zero frames to <code>batch_size</code>, so each input resolution needs one trace only, and drops the padded rows from the outputs</td></tr>
+        <tr><td><code>as_numpy=False</code></td><td>The outputs stay <code>mx.array</code> on the GPU</td></tr>
+        <tr><td>Side effects</td><td><code>import dinov3_mlx</code> sets <code>MLX_ENABLE_TF32=0</code> with <code>setdefault</code>, and imports no mlx and no torch. The <code>Embedder</code> leaves the memory limit of the process as it was before the load. It does not take the GPU lock</td></tr>
+        <tr><td>Errors</td><td><code>TF32ModeError</code> when the TF32 probe finds TF32 on: the text says "import dinov3_mlx before mlx, or set MLX_ENABLE_TF32=0". <code>WeightsAccessError</code> when the gated repo refuses the download: the text names the model page, the DINOv3 License and <code>hf auth login</code>. <code>RunRuleError</code> for ViT-7B/16 in fp32. <code>InsufficientMemoryError</code> from the memory check</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 2.</b> The public API of version 0.1.0. A change to it needs a new version.</p>
+
+  <h3>3.2 The TF32 probe (a refinement of D2e)</h3>
+  <p><code>tf32_enabled</code> reads the environment variable. When a user ran mlx before <code>import dinov3_mlx</code>, mlx can use TF32 while the variable now says 0. So the <code>Embedder</code> checks the real state once: a 64 × 64 fp32 matmul on the GPU whose exact result needs more than the 10-bit mantissa of TF32. If the result has the TF32 rounding, the <code>Embedder</code> raises <code>TF32ModeError</code>. The probe costs below 10 ms. Test T6 runs it in two subprocesses, one with TF32 on and one with TF32 off. This refinement is decision P1 of Section 9.</p>
+
+  <h3>3.3 The history rewrite</h3>
+  <ol>
+    <li>Clone this repo into a new folder: <code>git clone --no-local</code> to <code>~/Documents/Development/dinov3-mlx</code>.</li>
+    <li>Run <code>scripts/rewrite_history.py --patterns &lt;file&gt;</code> there. The pattern file lives outside the repo (<code>~/.cache/dinov3-mlx/release/patterns.txt</code>), because it holds the private strings. Each line is a literal string or a regular expression with its replacement. The script contains no private string.</li>
+    <li>The script runs <code>git filter-branch</code> with an <code>--env-filter</code> (author and committer address to <code>ueli.peter@gmail.com</code>) and a <code>--tree-filter</code>. The tree filter applies the patterns to each text file, and in <code>*.html</code> and <code>*.md</code> files it replaces each token of 7 to 12 hex digits that names a commit of the old history with the first 7 digits of its new id. The new id comes from the map folder of filter-branch: each doc cites only older commits, so their new ids exist when the tree filter runs.</li>
+    <li>The script then runs the checks of AC15 and AC16 and stops with an error when one fails.</li>
+    <li>The new clone gets the remote <code>origin = https://github.com/oilst/dinov3-mlx.git</code>. This folder (<code>dinov3-apple</code>) keeps the old history as a private archive and gets no remote. The ignored files (<code>CLAUDE.local.md</code>, <code>tests/fixtures/generated/</code>) are copied into the new clone. Sessions after the rewrite work in the new clone (decision P2 of Section 9).</li>
+  </ol>
+
+  <h3>3.4 The README</h3>
+  <p>The README has these sections: what the package does; installation (<code>uv add git+https://github.com/oilst/dinov3-mlx@v0.1.0</code>); access to the weights (accept the DINOv3 License on Hugging Face, <code>hf auth login</code>); usage (the code of Section 5.1, plus the one line for the L2 normalization); the dtype modes (Table 2 of <code>explore.html</code>, with bf16-cast as the fast choice); results (the paired runs P1 and P2 against torch-mps, the parity summary of all six model sizes, the prior-art summary, the Neural Engine result with a pointer to Step 7b); limits (V2, V4, V17 of Step 6, the M5 Max as the only measured Mac, the TF32 side effect); tested versions; how to run the tests and the benchmarks; license (MIT for the code, the DINOv3 License for the weights, the acknowledgment of clause 1.b.ii); links to the pages. Each number in the README comes from a table in <code>results/</code> and names it.</p>
+</section>
+
+<section id="flow">
+  <h2>4 Data flow</h2>
+  <figure>
+    <div class="fig">
+      <svg viewBox="0 0 960 300" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Data flow of Embedder.embed">
+        <defs><marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#111414"/></marker></defs>
+        <g font-family="-apple-system, Helvetica, Arial, sans-serif" font-size="13" fill="#111414">
+          <rect x="250" y="10" width="460" height="56" rx="6" fill="#f5f8f7" stroke="#057379" stroke-width="1.5"/>
+          <text x="480" y="31" text-anchor="middle" font-weight="600">Embedder(model_size, dtype_mode, batch_size)</text>
+          <text x="480" y="50" text-anchor="middle" font-size="11.5">TF32 probe · weights · load_mlx_backbone · compile_backbone · limit back</text>
+          <rect x="10" y="110" width="150" height="70" rx="6" fill="#ffffff" stroke="#111414"/>
+          <text x="85" y="134" text-anchor="middle" font-weight="600">frames</text>
+          <text x="85" y="152" text-anchor="middle" font-size="12">uint8 (B, h, w, 3)</text>
+          <text x="85" y="168" text-anchor="middle" font-size="12">or a list, one size</text>
+          <rect x="190" y="110" width="150" height="70" rx="6" fill="#ffffff" stroke="#111414"/>
+          <text x="265" y="134" text-anchor="middle" font-weight="600">batch loop</text>
+          <text x="265" y="152" text-anchor="middle" font-size="12">batch_size frames;</text>
+          <text x="265" y="168" text-anchor="middle" font-size="12">last batch padded</text>
+          <rect x="370" y="110" width="160" height="70" rx="6" fill="#ffffff" stroke="#111414"/>
+          <text x="450" y="134" text-anchor="middle" font-weight="600">preprocess_frames</text>
+          <text x="450" y="152" text-anchor="middle" font-size="12">GPU, fp32</text>
+          <text x="450" y="168" text-anchor="middle" font-size="12">(b, 3, H, W)</text>
+          <rect x="560" y="110" width="170" height="70" rx="6" fill="#ffffff" stroke="#111414"/>
+          <text x="645" y="134" text-anchor="middle" font-weight="600">compiled forward</text>
+          <text x="645" y="152" text-anchor="middle" font-size="12">one trace for each (b, H, W)</text>
+          <text x="645" y="168" text-anchor="middle" font-size="12">tokens (b, 5 + N, D)</text>
+          <rect x="760" y="92" width="190" height="50" rx="6" fill="#ffffff" stroke="#111414"/>
+          <text x="855" y="113" text-anchor="middle" font-weight="600">frame embedding</text>
+          <text x="855" y="131" text-anchor="middle" font-size="12">token 0 → (B, D) fp32</text>
+          <rect x="760" y="152" width="190" height="50" rx="6" fill="#ffffff" stroke="#111414"/>
+          <text x="855" y="173" text-anchor="middle" font-weight="600">patch embeddings</text>
+          <text x="855" y="191" text-anchor="middle" font-size="12">tokens 5… → (B, H/16, W/16, D)</text>
+          <line x1="160" y1="145" x2="186" y2="145" stroke="#111414" stroke-width="1.5" marker-end="url(#a1)"/>
+          <line x1="340" y1="145" x2="366" y2="145" stroke="#111414" stroke-width="1.5" marker-end="url(#a1)"/>
+          <line x1="530" y1="145" x2="556" y2="145" stroke="#111414" stroke-width="1.5" marker-end="url(#a1)"/>
+          <line x1="730" y1="135" x2="756" y2="120" stroke="#111414" stroke-width="1.5" marker-end="url(#a1)"/>
+          <line x1="730" y1="155" x2="756" y2="174" stroke="#111414" stroke-width="1.5" marker-end="url(#a1)"/>
+          <line x1="645" y1="66" x2="645" y2="106" stroke="#057379" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#a1)"/>
+          <path d="M855 202 L855 240 L265 240 L265 184" fill="none" stroke="#4a5655" stroke-dasharray="4 3" marker-end="url(#a1)"/>
+          <text x="560" y="258" text-anchor="middle" font-size="12" fill="#4a5655">next batch: drop the padded rows, append the outputs, then NumPy (or mx.array with as_numpy=False)</text>
+          <text x="10" y="290" font-size="12" fill="#4a5655">New: the Embedder, the batch loop, the TF32 probe, the download error. Existing: preprocess_frames, the compiled forward pass (ADR 0010).</text>
+        </g>
+      </svg>
+    </div>
+    <figcaption><b>Figure 1.</b> The data flow of <code>Embedder.embed</code>. The teal box runs once, in the constructor. The loop runs once for each batch.</figcaption>
+  </figure>
+  <figure>
+    <div class="fig">
+      <svg viewBox="0 0 960 190" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Release flow">
+        <defs><marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#111414"/></marker></defs>
+        <g font-family="-apple-system, Helvetica, Arial, sans-serif" font-size="12" fill="#111414">
+          <rect x="6" y="30" width="140" height="84" rx="6" fill="#f5f8f7" stroke="#057379" stroke-width="1.5"/>
+          <text x="76" y="52" text-anchor="middle" font-weight="600">W1 to W7</text>
+          <text x="76" y="70" text-anchor="middle" font-size="11.5">rename, API, deps,</text>
+          <text x="76" y="85" text-anchor="middle" font-size="11.5">tests, CI, pages,</text>
+          <text x="76" y="100" text-anchor="middle" font-size="11.5">README, cleanup</text>
+          <rect x="166" y="30" width="130" height="84" rx="6" fill="#f5f8f7" stroke="#057379" stroke-width="1.5"/>
+          <text x="231" y="52" text-anchor="middle" font-weight="600">W8 release check</text>
+          <text x="231" y="70" text-anchor="middle" font-size="11.5">weights, slow API</text>
+          <text x="231" y="85" text-anchor="middle" font-size="11.5">parity, B1, scan</text>
+          <text x="231" y="100" text-anchor="middle" font-size="11.5">(this Mac)</text>
+          <rect x="316" y="30" width="140" height="84" rx="6" fill="#f5f8f7" stroke="#057379" stroke-width="1.5"/>
+          <text x="386" y="52" text-anchor="middle" font-weight="600">W9 rewrite</text>
+          <text x="386" y="70" text-anchor="middle" font-size="11.5">new clone; strings,</text>
+          <text x="386" y="85" text-anchor="middle" font-size="11.5">address, ids;</text>
+          <text x="386" y="100" text-anchor="middle" font-size="11.5">AC15, AC16</text>
+          <rect x="476" y="30" width="130" height="84" rx="6" fill="#fff7ea" stroke="#9a5b00" stroke-width="1.5"/>
+          <text x="541" y="52" text-anchor="middle" font-weight="600">G2 push</text>
+          <text x="541" y="70" text-anchor="middle" font-size="11.5">private repo</text>
+          <text x="541" y="85" text-anchor="middle" font-size="11.5">oilst/dinov3-mlx</text>
+          <text x="541" y="100" text-anchor="middle" font-size="11.5">(the user says yes)</text>
+          <rect x="626" y="30" width="100" height="84" rx="6" fill="#f5f8f7" stroke="#057379" stroke-width="1.5"/>
+          <text x="676" y="52" text-anchor="middle" font-weight="600">CI green</text>
+          <text x="676" y="70" text-anchor="middle" font-size="11.5">AC12</text>
+          <rect x="746" y="30" width="90" height="84" rx="6" fill="#fff7ea" stroke="#9a5b00" stroke-width="1.5"/>
+          <text x="791" y="52" text-anchor="middle" font-weight="600">G1 legal</text>
+          <text x="791" y="70" text-anchor="middle" font-size="11.5">check</text>
+          <text x="791" y="85" text-anchor="middle" font-size="11.5">(the user)</text>
+          <rect x="856" y="30" width="98" height="84" rx="6" fill="#fff7ea" stroke="#9a5b00" stroke-width="1.5"/>
+          <text x="905" y="52" text-anchor="middle" font-weight="600">G3 public</text>
+          <text x="905" y="70" text-anchor="middle" font-size="11.5">pages, tag</text>
+          <text x="905" y="85" text-anchor="middle" font-size="11.5">v0.1.0, release</text>
+          <line x1="146" y1="72" x2="162" y2="72" stroke="#111414" stroke-width="1.5" marker-end="url(#a2)"/>
+          <line x1="296" y1="72" x2="312" y2="72" stroke="#111414" stroke-width="1.5" marker-end="url(#a2)"/>
+          <line x1="456" y1="72" x2="472" y2="72" stroke="#111414" stroke-width="1.5" marker-end="url(#a2)"/>
+          <line x1="606" y1="72" x2="622" y2="72" stroke="#111414" stroke-width="1.5" marker-end="url(#a2)"/>
+          <line x1="726" y1="72" x2="742" y2="72" stroke="#111414" stroke-width="1.5" marker-end="url(#a2)"/>
+          <line x1="836" y1="72" x2="852" y2="72" stroke="#111414" stroke-width="1.5" marker-end="url(#a2)"/>
+          <text x="6" y="150" font-size="12" fill="#4a5655">Amber: a gate of the user. A CI fix after G2 is a new commit in the new clone; it needs no new rewrite, because its author address is already right.</text>
+          <text x="6" y="170" font-size="12" fill="#4a5655">The pages need a public repo on the free plan, so their check (AC18 on GitHub) comes after G3.</text>
+        </g>
+      </svg>
+    </div>
+    <figcaption><b>Figure 2.</b> The order of the release.</figcaption>
+  </figure>
+</section>
+
+<section id="code">
+  <h2>5 Key code</h2>
+  <h3>5.1 Usage</h3>
+  <pre>import numpy as np
+from dinov3_mlx import Embedder
+
+model = Embedder("ViT-S/16")                 # fp16-autocast, batch size 8
+frames = np.stack(rgb_frames)                 # uint8, (B, h, w, 3)
+frame = model.embed_frames(frames)            # (B, 384) fp32
+frame = frame / np.linalg.norm(frame, axis=1, keepdims=True)   # L2 normalization, if needed
+frame, patches = model.embed(frames, size=(224, 400))          # both from one forward pass</pre>
+  <h3>5.2 The package import</h3>
+  <pre>"""DINOv3 on Apple silicon with MLX."""
+
+import os
+
+os.environ.setdefault("MLX_ENABLE_TF32", "0")  # before the first mlx import (ADR 0005, D2e)
+
+__all__ = ["Embedder"]
+
+
+def __getattr__(name: str) -&gt; object:
+    """Import the API on first use, so a torch process that imports a module of this package
+    gets no mlx (PEP 562)."""
+    if name == "Embedder":
+        from dinov3_mlx.api import Embedder
+
+        return Embedder
+    raise AttributeError(name)</pre>
+  <h3>5.3 The batch loop</h3>
+  <pre>def embed(self, frames: Frames, size: Size = 224, as_numpy: bool = True,
+          patch_fp32: bool = False) -&gt; tuple[Array, Array]:
+    batch = as_uint8_batch(frames)                     # TypeError, ValueError (Table 2)
+    height, width = input_resolution(size)             # ValueError if not a multiple of 16
+    frame_parts, patch_parts = [], []
+    for start in range(0, len(batch), self.batch_size):
+        chunk = batch[start : start + self.batch_size]
+        used = len(chunk)
+        chunk = pad_to(chunk, self.batch_size)         # zero frames: one trace per resolution
+        tokens = self._forward(preprocess_frames(chunk, (height, width)))
+        frame_parts.append(tokens[:used, 0].astype(mx.float32))
+        patch_parts.append(tokens[:used, NUM_PREFIX_TOKENS:].astype(self._patch_dtype(patch_fp32)))
+    frame = mx.concatenate(frame_parts)
+    patches = mx.concatenate(patch_parts).reshape(len(batch), height // 16, width // 16, -1)
+    return to_host(frame, patches) if as_numpy else (frame, patches)</pre>
+  <p>The Build may change the names. The contract of Table 2 stays.</p>
+</section>
+
+<section id="tests">
+  <h2>6 Tests</h2>
+  <p>Write each test first and see it go red. "Small model" means the random small models of <code>tests/small_model.py</code>; these tests also run in CI. A test that needs the weights skips without them.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Test</th><th>What it checks</th><th>AC</th></tr></thead>
+      <tbody>
+        <tr><td>T1 <code>test_embedder_parity</code></td><td>From the image files through <code>Embedder.embed</code>, the 12 configurations, fp16-autocast, against the reference output: the fp16 thresholds of ADR 0003. ViT-S/16 in the default session, all six model sizes in the slow session</td><td>AC1</td></tr>
+        <tr><td>T2 <code>test_embedder_parity_other_modes</code></td><td>ViT-S/16 in fp32 and bf16-cast: the thresholds of each dtype mode</td><td>AC2</td></tr>
+        <tr><td>T3 <code>test_padded_batch_equals_unpadded</code></td><td>Small model, 5 frames: batch size 8 (3 padded rows) against batch size 5: cosine of each frame embedding and the patch mean ≥ 0.99999; outputs have 5 rows</td><td>AC3</td></tr>
+        <tr><td>T4 <code>test_api_imports_without_torch</code></td><td>A subprocess blocks <code>torch</code> and <code>transformers</code> in <code>sys.modules</code>, imports <code>dinov3_mlx</code>, gets <code>Embedder</code> and embeds frames with an MLX small model</td><td>AC4</td></tr>
+        <tr><td>T5 <code>test_wheel_installs_without_torch</code></td><td><code>uv build</code>, a new venv, install of the wheel with the core packages only; the run of T4 in that venv. Slow session</td><td>AC4, AC11</td></tr>
+        <tr><td>T6 <code>test_tf32_*</code></td><td>(a) <code>import dinov3_mlx</code> in a new process sets <code>MLX_ENABLE_TF32=0</code>; (b) the probe finds TF32 on and off in two subprocesses; (c) the <code>Embedder</code> raises <code>TF32ModeError</code> with the fix text when the probe finds TF32 on; (d) an explicit <code>MLX_ENABLE_TF32=1</code> stays</td><td>AC5</td></tr>
+        <tr><td>T7 <code>test_embedder_keeps_the_memory_limit</code></td><td><code>mx.get_memory_limit()</code> after the constructor equals the value before (fake loader that sets a limit)</td><td>AC6</td></tr>
+        <tr><td>T8 <code>test_embedder_inputs_*</code></td><td>Array, list of PIL images, list of arrays: same outputs. float input: <code>TypeError</code>. Mixed sizes, a side that is not a multiple of 16: <code>ValueError</code>. Shapes and dtypes of Table 2 for each dtype mode, <code>as_numpy=False</code> gives <code>mx.array</code>. <code>backend="mlx+ne"</code>: <code>ValueError</code> that names Step 7b</td><td>AC7</td></tr>
+        <tr><td>T9 <code>test_gated_repo_error</code></td><td>A fake Hub that refuses access: <code>WeightsAccessError</code> names the model page, the license and <code>hf auth login</code>; no download without the user's call of the constructor</td><td>AC8</td></tr>
+        <tr><td>T10 <code>test_no_old_package_name</code></td><td>The tracked files contain no old package name and no old cache path, except <code>specs/07-release/</code> and the rename ADR</td><td>AC10</td></tr>
+        <tr><td>T11 <code>test_core_dependencies</code></td><td><code>pyproject.toml</code>: the five core packages with ranges, torch and transformers only in the extra and the dev group; <code>uv lock --check</code> passes</td><td>AC11</td></tr>
+        <tr><td>T12 <code>test_site_links_resolve</code></td><td><code>make_site.py</code> builds <code>_site/</code>; its index links each explainer, each spec page and the plan; each relative link and anchor in <code>_site/</code> resolves</td><td>AC18</td></tr>
+        <tr><td>T13 <code>test_readme_*</code></td><td>Each relative link of the README resolves. The README has the sections of Section 3.4 and names V2, V4 and V17. Each result table in the README names its source file</td><td>AC17</td></tr>
+        <tr><td>T14 W4 fixes</td><td><code>test_required_bench_bytes_grows_with_batch_and_side</code> skips without weights. <code>test_driver_records_other_heavy_jobs</code> uses a fake machine state</td><td>AC13</td></tr>
+        <tr><td>T15 <code>test_rewrite_history</code></td><td>On a small fake repo with 4 commits: a pattern leaves every commit, the address changes, a cited id in a later <code>.md</code> file becomes the new id of its commit, a hex token that names no commit stays, and the checks fail on a planted miss</td><td>AC15, AC16</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 3.</b> The tests of Step 7. All existing tests keep passing after the rename (AC14).</p>
+</section>
+
+<section id="bench">
+  <h2>7 Benchmarks</h2>
+  <p><b>B1, API overhead.</b> One worker for each configuration, through the GPU lock, after the memory check. Two forms on the same uint8 batch: <code>api</code> (<code>Embedder.embed_frames</code> or <code>embed_patches</code>) and <code>direct</code> (<code>preprocess_frames</code>, the compiled forward pass and <code>mlx_embeddings</code>). The forms rotate from round to round, 5 rounds, the budgets <code>WARM_UP</code> and <code>TIMED</code> of <code>bench.py</code>. The ratio is api ÷ direct of the throughput; the result is the lower median of the 5 round ratios.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Configuration</th><th>Model size</th><th>Input resolution</th><th>Batch size</th><th>Output</th><th>Dtype mode</th></tr></thead>
+      <tbody>
+        <tr><td>P1</td><td>ViT-S/16</td><td class="num">224</td><td class="num">8</td><td>frame</td><td>fp16-autocast</td></tr>
+        <tr><td>P2</td><td>ViT-H+/16</td><td class="num">512</td><td class="num">8</td><td>patch</td><td>fp16-autocast</td></tr>
+        <tr><td>P1-pad (report only)</td><td>ViT-S/16</td><td class="num">224</td><td class="num">8</td><td>frame</td><td>fp16-autocast; 13 frames for each call, so one padded batch</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 4.</b> The configurations of B1. Results go to <code>results/api-overhead.jsonl</code> and <code>results/api-table.md</code>. The absolute throughput is report only (V2).</p>
+</section>
+
+<section id="ac">
+  <h2>8 Acceptance criteria</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>No.</th><th>Criterion</th><th>Target</th><th>Checked by</th></tr></thead>
+      <tbody>
+        <tr><td>AC1</td><td>API parity in the default dtype mode, 6 model sizes × 12 configurations</td><td>72 of 72 rows pass the fp16 thresholds (frame ≥ 0.999, patch mean ≥ 0.999, patch 1st percentile ≥ 0.99)</td><td>T1 (default and slow session)</td></tr>
+        <tr><td>AC2</td><td>API parity of ViT-S/16 in fp32 and bf16-cast</td><td>24 of 24 rows pass the thresholds of their dtype mode</td><td>T2</td></tr>
+        <tr><td>AC3</td><td>Padded last batch</td><td>Cosine ≥ 0.99999 for each frame embedding and patch mean; 5 output rows</td><td>T3</td></tr>
+        <tr><td>AC4</td><td>The API runs without torch and transformers</td><td>Neither module is imported; embed works</td><td>T4, T5</td></tr>
+        <tr><td>AC5</td><td>TF32 handling</td><td>4 of 4 cases of T6</td><td>T6</td></tr>
+        <tr><td>AC6</td><td>Memory limit</td><td>Equal before and after the constructor</td><td>T7</td></tr>
+        <tr><td>AC7</td><td>Input and output contract</td><td>All cases of T8</td><td>T8</td></tr>
+        <tr><td>AC8</td><td>Clear error without access to the gated repo</td><td>The error names the model page, the license and <code>hf auth login</code></td><td>T9</td></tr>
+        <tr><td>AC9</td><td>API overhead</td><td>api ÷ direct ≥ 0.97 at P1 and P2 (lower median of 5 rounds)</td><td>B1</td></tr>
+        <tr><td>AC10</td><td>Rename</td><td>0 old names outside the allowed files; the cache folder moved; no package converted again</td><td>T10; the Verify reads the cache folder</td></tr>
+        <tr><td>AC11</td><td>Dependencies</td><td>5 core packages with ranges; the wheel installs and runs without torch</td><td>T11, T5</td></tr>
+        <tr><td>AC12</td><td>CI on the private repo</td><td>The workflow passes on the pushed head: ruff format check, ruff check, pytest without weights with 0 failed</td><td>GitHub Actions run (link in <code>verify.html</code>)</td></tr>
+        <tr><td>AC13</td><td>A new clone without weights on this Mac</td><td>0 failed (explore Table 3: 2 failed)</td><td>The run of Table 3 of <code>explore.html</code> again</td></tr>
+        <tr><td>AC14</td><td>Release check on this Mac</td><td>Default session with the weights: 0 failed. Slow session: T1 and T5 pass. The fingerprint test reports its values</td><td>W8</td></tr>
+        <tr><td>AC15</td><td>No private string in the public history</td><td>0 hits of the pattern file and of local home folder paths over all blobs, messages, author and committer fields; all 2 × N addresses are <code>ueli.peter@gmail.com</code>; the new history has the commit count of the old history</td><td>The check of <code>rewrite_history.py</code>; T15</td></tr>
+        <tr><td>AC16</td><td>Cited commit ids</td><td>Each cited id resolves to a commit with the same subject as the old cited commit; 0 unresolved; the HEAD trees differ only in the cited ids and the patterns</td><td>The check of <code>rewrite_history.py</code>; T15</td></tr>
+        <tr><td>AC17</td><td>README</td><td>All sections of Section 3.4; V2, V4, V17 named; each table names its source; 0 broken relative links</td><td>T13; the Verify compares each number with its source</td></tr>
+        <tr><td>AC18</td><td>Pages</td><td><code>_site/</code> with 0 broken links (CI); after G3 the published index opens and links each page</td><td>T12; the Verify opens the public pages</td></tr>
+        <tr><td>AC19</td><td>Gates</td><td>G2 and the tag only after the yes of the user; G1 done by the user before G3; G3 by the user</td><td>The Verify reads the record in <code>verify.html</code></td></tr>
+        <tr><td>AC20</td><td>Release</td><td>Tag <code>v0.1.0</code> on the public repo; a GitHub release whose notes give the release check result</td><td>The Verify reads the tag and the release</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="caption"><b>Table 5.</b> The acceptance criteria of Step 7.</p>
+  <p>ADRs at Close: the rename and the name (D4), the public API and its defaults (D1, D2, the TF32 probe), the dependency ranges (D3), the history rewrite and the move of the working folder (D7).</p>
+</section>
+
+<section id="open">
+  <h2>9 Open questions</h2>
+  <ul>
+    <li>P1 (the user): the TF32 probe of Section 3.2 as a refinement of D2e. Recommendation: yes. <i>Answered: yes (2026-11-10).</i></li>
+    <li>P2 (the user): after the rewrite, the work moves to <code>~/Documents/Development/dinov3-mlx</code>, and this folder stays as a private archive without a remote. Recommendation: yes. <i>Answered: yes (2026-11-10).</i></li>
+    <li>P3 (the user): the targets of AC3 (0.99999) and AC9 (0.97) are estimates without a probe. The Build measures first; if a target fails for a reason that is not a fault, the user decides.</li>
+  </ul>
+  <p>Answered before the plan: the repo is <code>https://github.com/oilst/dinov3-mlx.git</code> (the user, 2026-11-09; private, the GitHub API gives 404 for it). The legal check is the user's, before G3. The address is <code>ueli.peter@gmail.com</code>.</p>
+</section>
+</main>
+</body>
+</html>
