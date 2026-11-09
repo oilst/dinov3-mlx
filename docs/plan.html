@@ -860,7 +860,7 @@ figcaption { font-size: 0.88rem; color: var(--muted); max-width: 52rem; }
       <p>Step 7 publishes the first version.</p>
       <ol class="steps">
         <li>Write the public API <code>embed_frames</code> and <code>embed_patches</code>.</li>
-        <li>Write the README with installation, usage and the result tables.</li>
+        <li>Write the README with installation, usage and the result tables. The README states the limits of the Step 6 results: one paired round per matrix cell does not decide the cells within about 1 ± 0.10, the absolute throughput drifts between jobs by up to 53 %, and the best batch size rests on one round (ADR 0009).</li>
         <li>Add a GitHub Actions workflow for the tests that need no weights.</li>
         <li>Ask the user to approve the license, the name and the first push.</li>
         <li>Create the public GitHub repo and push.</li>

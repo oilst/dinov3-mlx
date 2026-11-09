@@ -600,6 +600,45 @@ uv run python -m dinov3_apple.gpu_lock -- uv run python scripts/bench_speed.py p
 uv run python -m dinov3_apple.gpu_lock -- uv run python scripts/bench_speed.py pairs --priority P1 P2 --rounds 3 --run 3 --results &lt;scratch&gt;/pairs.jsonl</pre>
   <p>VJ6 took the specs of <code>bench_speed.matrix_plan(None, quantized=True)</code> and kept the groups (each model size, 224 px, 8) and (ViT-7B/16, 512 px, 8), then called <code>bench_speed.run_specs</code> under <code>heavy_job</code>. The new lines: <code>results/verify-speed-changes.jsonl</code> (VJ4), <code>results/verify-speed-pairs.jsonl</code> (VJ5), <code>results/verify-speed-matrix.jsonl</code> (VJ6).</p>
 </section>
+
+<section id="decisions">
+  <h2>14 Decisions and fixes of 2026-11-09</h2>
+  <p>The user answered the open items of Section 12 with "go with your suggestion, finish everything till now and commit" (2026-11-09). So each item below takes the recommendation of the session that closed Steps 6 to 6d. Sections 1 to 13 stay as written. A fix changes no result line; the only table change is the mark "inside the noise" on the 2 P2 bf16 rows of section 1 of <code>results/speedup-table.md</code>.</p>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Item</th><th>Decision</th><th>What changed</th></tr></thead>
+    <tbody>
+      <tr><td>V13: deviations 1 and 2</td><td>confirmed</td><td>Deviation 1 (the CPU-stream fault bounds of T34) and deviation 2 (the bound 5e-6 for the patch 1st percentile extra loss of W4) are the new targets of AC1 and AC15. The plan target 1e-5 cannot hold in a half dtype on the CPU stream. ADR 0010 records the confirmation.</td></tr>
+      <tr><td>V2, V4, V17</td><td>accepted as limits</td><td>No new runs. ADR 0009 records the limits, and Step 7 of <code>docs/plan.html</code> says that the README states them: one paired round per matrix cell, the drift of the absolute throughput, the best batch size of one round.</td></tr>
+      <tr><td>V5</td><td>fixed</td><td><code>pass_verdict</code> gives the mark "inside the noise" when the pooled median is within 1 &plusmn; NOISE. <code>prior_art._two_runs</code> and Table 5 of <code>bench_coreml.py</code> no longer add the mark themselves. T26 has the new cases (red before the fix). The 2 P2 bf16 rows of section 1 now read "above 1, inside the noise".</td></tr>
+      <tr><td>V6</td><td>target limited</td><td>AC16 and AC20 apply to the bench lines. The 28 change lines, the 4 profile lines and the 2 token-range lines are not bench lines; they keep their fields.</td></tr>
+      <tr><td>V10</td><td>fixed</td><td><code>speedup._row</code> takes both sides from the group of the fastest torch-mps row; a group without a usable mlx row of the dtype takes the fastest mlx row of the cell. New test <code>test_row_pairs_both_sides_of_one_group</code> (red before the fix). <code>results/speedup-table.md</code> does not change.</td></tr>
+      <tr><td>V12</td><td>accepted</td><td>The GPU lock keeps no order. It still holds one heavy job at a time, and a late waiter only waits longer. A queue changes the lock of all sessions for a small gain.</td></tr>
+      <tr><td>V14</td><td>fixed</td><td>The two parents of T5 start with <code>start_new_session=True</code>, as two jobs of two shells. T5 is green on the code; it is red only with the mutation of VJ8.</td></tr>
+      <tr><td>V15</td><td>fixed</td><td>T15 compares <code>BenchConfig("B1", *config.key)</code> with <code>replace(config, run="B1")</code>. Green on the code; red only with the mutation M-bits.</td></tr>
+      <tr><td>V16</td><td>fixed</td><td><code>other_heavy_jobs</code> also leaves out each process in the process group of a registered process (the forked subshell of a pipeline). New test <code>test_other_heavy_jobs_leaves_out_the_group_of_a_registered_job</code> (red before the fix). This also covers the pipe case of the note <code>gpu-lock-pipe-deadlock.md</code>.</td></tr>
+      <tr><td>V7, AC23</td><td>accepted</td><td>The Learn explainer <code>docs/learn/06-2-attention-and-batch-size.html</code> gives the time ratio, the FLOP ratio and the NAX ratio (Tables 3 and 4). The speedup table needs no such column.</td></tr>
+      <tr><td>L1</td><td>accepted</td><td>torch is in the process of 14 Learn lines, but the pixels do not change (<code>load_image</code> uses PIL and NumPy only). No new run.</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="caption"><b>Table 18.</b> The decisions and fixes of 2026-11-09.</p>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>AC</th><th>Before</th><th>After</th><th>Reason</th></tr></thead>
+    <tbody>
+      <tr><td>AC1</td><td>partial</td><td>pass</td><td>Deviation 1 confirmed; the measured values pass its bounds (5.1 to 6.2 times margin).</td></tr>
+      <tr><td>AC9</td><td>partial</td><td>pass</td><td>V5 fixed: every ratio within 1 &plusmn; 0.03 has the mark. V17 is an accepted limit.</td></tr>
+      <tr><td>AC15</td><td>partial</td><td>pass</td><td>Deviation 2 confirmed; the largest patch 1st percentile extra loss 1.27e-6 is below 5e-6.</td></tr>
+      <tr><td>AC16</td><td>partial</td><td>pass</td><td>Target limited to the bench lines (V6): 583 of 583 have both fields.</td></tr>
+      <tr><td>AC19</td><td>partial</td><td>pass</td><td>V14 fixed (T5 in two sessions); V16 fixed (no false positive of a pipeline subshell).</td></tr>
+      <tr><td>AC20</td><td>partial</td><td>pass</td><td>Target limited to the bench lines (V6); V15 fixed.</td></tr>
+      <tr><td>AC23</td><td>partial</td><td>pass</td><td>The ratios are in the Learn explainer (V7 accepted); L1 accepted.</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="caption"><b>Table 19.</b> The 7 partial rows after the decisions. Final count: 28 rows pass, 0 partial, 0 fail. The default session after the fixes is in the commit of this section.</p>
+</section>
 </main>
 </body>
 </html>

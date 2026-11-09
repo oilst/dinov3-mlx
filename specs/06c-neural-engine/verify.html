@@ -396,6 +396,24 @@ uv run --group coreml python scripts/bench_coreml.py table</pre>
   </table></div>
   <p class="caption">Table 7. The response of the build to each finding (V6 was resolved during Verify).</p>
 </section>
+
+<section id="closed-by-6d">
+  <h2>14 Closed by Step 6d (2026-11-09)</h2>
+  <p>Step 6d (<code>specs/06d-neural-engine-fault/</code>) found the cause of V1, the concat fault, fixed it with rewrite version <code>ne3</code> (ADR 0016) and measured the Step 6c jobs again with the <code>ne3</code> packages. The <code>ne2</code> packages are deleted. The user answered the open items with "go with your suggestion, finish everything till now and commit" (2026-11-09). Sections 1 to 13 stay as written.</p>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Item</th><th>State</th><th>Evidence in Step 6d</th></tr></thead>
+    <tbody>
+      <tr><td>V1, AC4 (fail)</td><td>closed by Step 6d</td><td>15 of 15 CPU_AND_NE parity rows pass with <code>ne3</code> (AC5 of Step 6d); 30 of 30 CPU_AND_GPU and ALL rows pass (AC6).</td></tr>
+      <tr><td>V2</td><td>closed by Step 6d</td><td>The two-stream run takes the faster valid Neural Engine form of the matrix, and Table 6 of <code>results/coreml-6d-table.md</code> shows the validity and the ratio of each round. Every stream group of Step 6d has a valid output. The stream worker itself still checks no output: accepted.</td></tr>
+      <tr><td>V3, AC6 (partial)</td><td>closed by Step 6d</td><td>25 of 25 compute plans of the current <code>ne3</code> packages (AC7 of Step 6d): Neural Engine share 1.000.</td></tr>
+      <tr><td>V5, AC7 (partial)</td><td>closed by Step 6d</td><td>Cached load 0.023 to 0.249 s in 135 lines, all &le; 0.5 s (AC8 of Step 6d).</td></tr>
+      <tr><td>V9</td><td>closed</td><td>The probe packages and the Core ML bundle cache were deleted during the Step 6d build (the user's answer to Q4).</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="caption"><b>Table 8.</b> The open items of Step 6c after Step 6d. The Step 6c rows stay as measured with <code>ne2</code>; the current results are those of Step 6d.</p>
+</section>
 </main>
 </body>
 </html>

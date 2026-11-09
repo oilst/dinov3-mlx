@@ -571,6 +571,29 @@ uv run python -m dinov3_apple.gpu_lock -- uv run python scripts/bench_prior_art.
   </div>
   <p class="caption"><b>Table 20.</b> The ratio ours &divide; port in two runs of J5 (lower medians of 5 rounds; pooled: the lower median of 10 ratios). AC9 stays pass.</p>
 </section>
+
+<section id="deviations-confirmed">
+  <h2>10 Deviations confirmed (2026-11-09)</h2>
+  <p>The build hand-over (<code>step6b-handover.md</code>, Section 3) lists 10 deviations from <code>plan.html</code> for the user to confirm (finding V10). The user answered "go with your suggestion, finish everything till now and commit" (2026-11-09), and the session that closed Steps 6 to 6d recommended to confirm each one. No result changes.</p>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>No.</th><th>Deviation</th><th>Decision</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td>Two source files: <code>prior_art.py</code> (no backend, for the dry run) and <code>port_variants.py</code> (mlx)</td><td>confirmed</td></tr>
+      <tr><td>2</td><td>T6 bound 0.04, not 0.02: at angles near 2&pi; one bf16 step is 2<sup>&minus;5</sup></td><td>confirmed</td></tr>
+      <tr><td>3</td><td>T9 bound relative to the largest absolute V0 value (small model with random weights)</td><td>confirmed</td></tr>
+      <tr><td>4</td><td>T12 checks the candidate packages and coremltools not in the main dependencies; coremltools is the group <code>coreml</code> of Step 6c</td><td>confirmed</td></tr>
+      <tr><td>5</td><td>T16 checks V0 against <code>compile_backbone</code> (0.0)</td><td>confirmed</td></tr>
+      <tr><td>6</td><td><code>MLX_ENABLE_TF32=0</code> also for the port workers (ADR 0005)</td><td>confirmed</td></tr>
+      <tr><td>7</td><td>Red first: T1 to T5 and T8 to T10 were green at their first run (GPU queue); the mutation probes of Verify made 13 of 14 red, and T10 was fixed (V5)</td><td>confirmed</td></tr>
+      <tr><td>8</td><td>Additions: T5b and <code>slow_cell_facts</code>, <code>between_runs</code> and run 2 of J1, the separate folder of another <code>--results</code> file (below <code>BENCH_ROOT</code> since V14)</td><td>confirmed</td></tr>
+      <tr><td>9</td><td>The 14 J2 ALL lines ran again (V2) and replace the old lines (old lines in commit 4ab7e2c)</td><td>confirmed</td></tr>
+      <tr><td>10</td><td>The ViT-H+/16 case of <code>test_converted_weights_match_hub</code> runs in the slow session only (V9)</td><td>confirmed</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="caption"><b>Table 21.</b> The deviations of the build and the decision of 2026-11-09. With Section 9, every finding of Step 6b is closed.</p>
+</section>
 </main>
 </body>
 </html>
