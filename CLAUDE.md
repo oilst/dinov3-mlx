@@ -1,4 +1,4 @@
-# dinov3-apple
+# dinov3-mlx
 
 DINOv3 on Apple silicon with MLX: fast frame embeddings and patch embeddings for every model size, then fast fine-tuning. `mission.md` gives the goals, `roadmap.md` the current step, `docs/plan.html` the detail of every step, `tech-stack.md` the tools and model ids.
 
@@ -29,7 +29,7 @@ This Mac crashed from out-of-memory before.
 - Start each benchmark configuration in its own subprocess. Check the free memory first. Skip a configuration that does not fit, and record the skip in the results.
 - PyTorch on MPS: set `PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.8` and `PYTORCH_MPS_LOW_WATERMARK_RATIO=0.6`. MLX: set a limit with `mx.set_memory_limit`.
 - Run ViT-7B/16 in fp16, bf16 or with quantized weights. In fp32 its weights alone need about 27 GB.
-- Start every GPU job, also a light one, through the GPU lock: `uv run python -m dinov3_apple.gpu_lock -- <command>`.
+- Start every GPU job, also a light one, through the GPU lock: `uv run python -m dinov3_mlx.gpu_lock -- <command>`.
 
 ## Public repo
 

@@ -14,19 +14,19 @@ from pathlib import Path
 
 import numpy as np
 
-from dinov3_apple.bench import TIMED, WARM_UP, BenchConfig, TimeBudget
-from dinov3_apple.outputs import NUM_PREFIX_TOKENS
-from dinov3_apple.parity import THRESHOLDS, measure_parity
-from dinov3_apple.speedup import (
+from dinov3_mlx.bench import TIMED, WARM_UP, BenchConfig, TimeBudget
+from dinov3_mlx.outputs import NUM_PREFIX_TOKENS
+from dinov3_mlx.parity import THRESHOLDS, measure_parity
+from dinov3_mlx.speedup import (
     _lower_median,
     pass_verdict,
     single_verdict,
     spread_between_runs,
 )
-from dinov3_apple.stored import IMAGENET_MEAN_VALUES, IMAGENET_STD_VALUES
+from dinov3_mlx.stored import IMAGENET_MEAN_VALUES, IMAGENET_STD_VALUES
 
 PRIOR_ART_DIR = Path(
-    os.environ.get("DINOV3_PRIOR_ART_DIR", Path.home() / ".cache" / "dinov3-apple" / "prior-art")
+    os.environ.get("DINOV3_PRIOR_ART_DIR", Path.home() / ".cache" / "dinov3-mlx" / "prior-art")
 )
 RUN = "P6b"  # the run of every line of results/prior-art.jsonl
 VERDICTS = ("measure", "gated", "skip")
@@ -42,7 +42,7 @@ BLOCKED_REASON = (
     "blocked: no permission to run third-party Python code (Q1 of specs/06b-prior-art/plan.html)"
 )
 J5_COMMAND = (
-    "uv run python -m dinov3_apple.gpu_lock -- uv run python scripts/bench_prior_art.py ports "
+    "uv run python -m dinov3_mlx.gpu_lock -- uv run python scripts/bench_prior_art.py ports "
     "--rounds 5 --allow-third-party-python"
 )
 

@@ -66,7 +66,7 @@ a { color: var(--accent); }
 <section id="why">
   <h2>1 Why this explainer</h2>
   <p>DINOv3 has no learned position embedding. RoPE gives each patch token its position. Each block rotates the queries and the keys of the patch tokens by angles that come from the 2D position of the patch. The tensor v does not rotate. The prefix tokens do not rotate.</p>
-  <p>Step 4 ported ViT-S/16 to MLX (commit <code>c212226</code>). This page explains the RoPE part of the port. It covers four functions of <code>src/dinov3_apple/mlx_model.py</code> and two attributes of <code>MlxBackbone</code> (Table 1). Each section quotes the code with its line numbers. The line numbers are those of commit <code>ea82d58</code>, which fixed the findings of the verification. That commit did not change the RoPE code, but it added 2 lines to the docstring of <code>Embeddings.__call__</code>. So each line after this docstring moved down by 2. The RoPE functions come before it and kept their line numbers. Some comments in the quotes are annotations of this page. Section 12 gives the measured results.</p>
+  <p>Step 4 ported ViT-S/16 to MLX (commit <code>c212226</code>). This page explains the RoPE part of the port. It covers four functions of <code>src/dinov3_mlx/mlx_model.py</code> and two attributes of <code>MlxBackbone</code> (Table 1). Each section quotes the code with its line numbers. The line numbers are those of commit <code>ea82d58</code>, which fixed the findings of the verification. That commit did not change the RoPE code, but it added 2 lines to the docstring of <code>Embeddings.__call__</code>. So each line after this docstring moved down by 2. The RoPE functions come before it and kept their line numbers. Some comments in the quotes are annotations of this page. Section 12 gives the measured results.</p>
   <p>The result in three numbers:</p>
   <ul>
     <li>The MLX RoPE tables differ from the Hugging Face tables by at most 1.2e-7 on all six patch grids (acceptance criterion AC5, target 1e-6).</li>
@@ -86,7 +86,7 @@ a { color: var(--accent); }
       </tbody>
     </table>
   </div>
-  <p class="caption"><b>Table 1.</b> The RoPE code of Step 4 in <code>src/dinov3_apple/mlx_model.py</code>. The callers are <code>Attention.__call__</code> (line 266), <code>MlxBackbone.__call__</code> (line 347) and <code>run_mlx_hidden_states</code> (line 386). <code>MlxConfig</code> gives <code>head_dim</code> (lines 90–93) and <code>rope_theta</code> (line 81); <a href="04-1-patch-embedding.html">04-1</a> explains it. The test numbers are the numbers of Table 6 and Table 8 of <code>specs/04-mlx-port/plan.html</code>.</p>
+  <p class="caption"><b>Table 1.</b> The RoPE code of Step 4 in <code>src/dinov3_mlx/mlx_model.py</code>. The callers are <code>Attention.__call__</code> (line 266), <code>MlxBackbone.__call__</code> (line 347) and <code>run_mlx_hidden_states</code> (line 386). <code>MlxConfig</code> gives <code>head_dim</code> (lines 90–93) and <code>rope_theta</code> (line 81); <a href="04-1-patch-embedding.html">04-1</a> explains it. The test numbers are the numbers of Table 6 and Table 8 of <code>specs/04-mlx-port/plan.html</code>.</p>
 </section>
 
 <section id="picture">
@@ -186,7 +186,7 @@ a { color: var(--accent); }
     <figcaption><b>Figure 1.</b> RoPE in the MLX backbone of ViT-S/16 at 224 × 224 px. Teal frames: Step 4 code for RoPE. Dashed teal arrows: only on the first call for a patch grid. In each table, row 0 (teal) is the CLS token, rows 1 to 4 (amber) are the register tokens and rows 5 to 200 (light teal) are the patch tokens. The tables are not parameters of the backbone. The tensor v goes to SDPA without RoPE. <a href="04-3-attention.html">04-3</a> explains the attention around it.</figcaption>
   </figure>
   <p>The backbone finds the patch grid from the shape of the pixels and gets the tables once for the whole forward pass:</p>
-  <pre><code># src/dinov3_apple/mlx_model.py, lines 345–349 (MlxBackbone.__call__)
+  <pre><code># src/dinov3_mlx/mlx_model.py, lines 345–349 (MlxBackbone.__call__)
 x = self.embeddings(pixels)
 p = self.config.patch_size
 cos, sin = self.rope(pixels.shape[2] // p, pixels.shape[3] // p)   # (H // 16, W // 16)
@@ -317,7 +317,7 @@ q, k = apply_rope(q, cos, sin), apply_rope(k, cos, sin)             # v is not r
     </svg></div>
     <figcaption><b>Figure 2.</b> The RoPE box from −1 to 1 on each axis. Each dot is the center of one patch. Left: the 14 × 14 grid of a 224 × 224 px input. Middle: the 14 × 19 grid of a 224 × 304 px input (the forest test image). Its 19 columns fill the same box, so the x spacing (2/19 = 0.105) is smaller than the y spacing (2/14 = 0.143). y grows from the top row to the bottom row, as the rows of the image.</figcaption>
   </figure>
-  <pre><code># src/dinov3_apple/mlx_model.py, lines 139–142 (rope_tables)
+  <pre><code># src/dinov3_mlx/mlx_model.py, lines 139–142 (rope_tables)
 coord_h = np.arange(0.5, grid_h, dtype=np.float32) / grid_h    # (i + 0.5) / Hp, in (0, 1)
 coord_w = np.arange(0.5, grid_w, dtype=np.float32) / grid_w    # (j + 0.5) / Wp
 coords = np.stack(np.meshgrid(coord_h, coord_w, indexing="ij"), axis=-1).reshape(-1, 2)  # (N, 2), row-major
@@ -342,7 +342,7 @@ coords = 2.0 * coords - 1.0  # (N, 2): y, x in [-1, 1]</code></pre>
 <section id="freqs">
   <h2>4 Sixteen frequencies from base 100</h2>
   <p>One head of ViT-S/16 has 64 values. RoPE rotates them in 32 pairs. Each axis gets 16 pairs. Pair k of an axis has the frequency f<sub>k</sub> = 100<sup>−k/16</sup>, for k = 0 to 15. Its period is p<sub>k</sub> = 1 / f<sub>k</sub> = 100<sup>k/16</sup>, from 1 to 75. The angle of the pair is θ = 2π · c · f<sub>k</sub>, with c the y or the x coordinate of the patch. The base 100 is <code>rope_theta</code> in <code>config.json</code>. All six model sizes use 100.</p>
-  <pre><code># src/dinov3_apple/mlx_model.py, line 138 and lines 143–144 (rope_tables)
+  <pre><code># src/dinov3_mlx/mlx_model.py, line 138 and lines 143–144 (rope_tables)
 inv_freq = 1 / theta ** np.arange(0, 1, 4 / head_dim, dtype=np.float32)  # 100^(-k/16): 16 frequencies for head_dim 64
 angles = (2 * np.pi * coords[:, :, None] * inv_freq[None, None, :]).reshape(len(coords), -1)
                                                                        # (N, 2, 16) -> (N, 32): 16 y angles, then 16 x angles
@@ -430,7 +430,7 @@ angles = np.tile(angles, 2)                                            # (N, 64)
     </svg></div>
     <figcaption><b>Figure 3.</b> The half-split layout of one head of ViT-S/16. Dark teal: values whose angle comes from the y coordinate. Light teal: values whose angle comes from the x coordinate. The two arcs show two of the 32 pairs. Each pair rotates by one angle. Top: the values of q or k. Middle: the angles in one row of the RoPE tables. Bottom: <code>rotate_half</code> of the top row.</figcaption>
   </figure>
-  <pre><code># src/dinov3_apple/mlx_model.py, lines 149–152
+  <pre><code># src/dinov3_mlx/mlx_model.py, lines 149–152
 def rotate_half(x: mx.array) -> mx.array:
     """Return (-x2, x1) for the halves x1 and x2 of the last axis (the half-split layout)."""
     half = x.shape[-1] // 2                                         # 32 for head_dim 64
@@ -451,7 +451,7 @@ q_prefix_tokens, q_patches = q.split((num_prefix_tokens, num_patches), dim=-2)
 q_patches = (q_patches * cos) + (rotate_half(q_patches) * sin)
 q = torch.cat((q_prefix_tokens, q_patches), dim=-2)                 # the same three lines for k</code></pre>
   <p>The MLX port puts 5 identity rows on top of the tables: cos 1 and sin 0. Then <code>apply_rope</code> gives x · 1 + rotate_half(x) · 0 = x for each prefix token. The result is exact for finite values, because a product with 1 and a sum with 0 do not round.</p>
-  <pre><code># src/dinov3_apple/mlx_model.py, lines 145–146 (rope_tables)
+  <pre><code># src/dinov3_mlx/mlx_model.py, lines 145–146 (rope_tables)
 prefix = np.ones((NUM_PREFIX_TOKENS, head_dim), np.float32)        # NUM_PREFIX_TOKENS = 5 (outputs.py)
 return np.concatenate([prefix, np.cos(angles)]), np.concatenate([0 * prefix, np.sin(angles)])</code></pre>
   <ul>
@@ -504,7 +504,7 @@ return np.concatenate([prefix, np.cos(angles)]), np.concatenate([0 * prefix, np.
 
 <section id="cache">
   <h2>9 The cache by patch grid</h2>
-  <pre><code># src/dinov3_apple/mlx_model.py, line 333 (MlxBackbone.__init__) and lines 336–341
+  <pre><code># src/dinov3_mlx/mlx_model.py, line 333 (MlxBackbone.__init__) and lines 336–341
 self._rope_cache: dict[tuple[int, int], tuple[mx.array, mx.array]] = {}
 
 def rope(self, grid_h: int, grid_w: int) -> tuple[mx.array, mx.array]:
@@ -681,7 +681,7 @@ if self.training:
   <h2>14 Sources</h2>
   <ul>
     <li>Repo files: <code>specs/04-mlx-port/explore.html</code> (Section 3.3, Tables 6 to 8, risks R5, R11 and R17), <code>specs/04-mlx-port/plan.html</code> (Sections 2, 3.4 and 6, Table 11), <code>docs/adr/0006-hugging-face-rope-tables-as-the-target.md</code>, <code>GLOSSARY.md</code>, <code>docs/learn/01-prior-ports.html</code>, <code>docs/learn/03-where-the-compute-goes.html</code>.</li>
-    <li>Code and tests: <code>src/dinov3_apple/mlx_model.py</code> (commit <code>c212226</code>; the line numbers of this page are those of commit <code>ea82d58</code>), <code>src/dinov3_apple/mlx_weights.py</code>, <code>src/dinov3_apple/outputs.py</code>, <code>tests/test_mlx_rope.py</code>, <code>tests/test_mlx_parts.py</code>, <code>tests/small_model.py</code>.</li>
+    <li>Code and tests: <code>src/dinov3_mlx/mlx_model.py</code> (commit <code>c212226</code>; the line numbers of this page are those of commit <code>ea82d58</code>), <code>src/dinov3_mlx/mlx_weights.py</code>, <code>src/dinov3_mlx/outputs.py</code>, <code>tests/test_mlx_rope.py</code>, <code>tests/test_mlx_parts.py</code>, <code>tests/small_model.py</code>.</li>
     <li>Results: <code>results/parity-mlx.md</code>, <code>results/bench-mlx-port.jsonl</code> and the test report of the build, <code>tests/fixtures/generated/mlx/report.jsonl</code> (not in git).</li>
     <li>Hugging Face transformers 5.22.1: <code>models/dinov3_vit/modeling_dinov3_vit.py</code> (<code>get_patches_center_coordinates</code>, <code>augment_patches_center_coordinates</code>, <code>DINOv3ViTRopePositionEmbedding</code>, <code>rotate_half</code>, <code>apply_rotary_pos_emb</code>) and <code>configuration_dinov3_vit.py</code>, Apache-2.0. <a href="https://github.com/huggingface/transformers">github.com/huggingface/transformers</a>.</li>
     <li>Official DINOv3 code, <code>dinov3/layers/rope_position_encoding.py</code> and <code>dinov3/layers/attention.py</code>. Read to check facts only (ADR 0002). <a href="https://github.com/facebookresearch/dinov3">github.com/facebookresearch/dinov3</a>.</li>

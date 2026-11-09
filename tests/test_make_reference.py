@@ -14,7 +14,7 @@ from safetensors import safe_open
 from small_model import save_small_model, small_hf_model, small_pixels
 from transformers import DINOv3ViTModel
 
-from dinov3_apple.reference import (
+from dinov3_mlx.reference import (
     HIDDEN_STATES_CONFIG,
     LOAD_RATIO,
     REQUIRED_METADATA,
@@ -235,13 +235,13 @@ def small_weights(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict:
     stored[f"{HIDDEN_STATES_CONFIG}/hidden_states"] = hidden
     out = tmp_path / "reference-small.safetensors"
     monkeypatch.setattr(make_reference, "weights_dir", lambda m: folder)
-    monkeypatch.setattr("dinov3_apple.reference.weights_dir", lambda m: folder)
+    monkeypatch.setattr("dinov3_mlx.reference.weights_dir", lambda m: folder)
     monkeypatch.setattr(make_reference, "read_inputs", lambda: pixels)
     monkeypatch.setattr(make_reference, "reference_path", lambda m: out)
     monkeypatch.setattr(make_reference, "load_torch_backbone", fail_if_called("load_torch"))
     monkeypatch.setattr(DINOv3ViTModel, "from_pretrained", fail_if_called("from_pretrained"))
-    monkeypatch.setattr(logging.getLogger("dinov3_apple.memory"), "handlers", [])
-    monkeypatch.setattr("dinov3_apple.memory.available_memory_bytes", lambda: 10**12)
+    monkeypatch.setattr(logging.getLogger("dinov3_mlx.memory"), "handlers", [])
+    monkeypatch.setattr("dinov3_mlx.memory.available_memory_bytes", lambda: 10**12)
     return {"stored": stored, "out": out}
 
 
@@ -296,7 +296,7 @@ def test_streamed_default_runs_only_no_fp32_weights_sizes() -> None:
     """T33 (V2 of specs/05-all-sizes/verify.html)."""
     from make_reference import model_sizes_to_run
 
-    from dinov3_apple.hub import MODEL_IDS
+    from dinov3_mlx.hub import MODEL_IDS
 
     assert model_sizes_to_run([], streamed=True, check=False) == ["ViT-7B/16"]
     assert model_sizes_to_run([], streamed=True, check=True) == [

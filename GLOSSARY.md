@@ -110,7 +110,7 @@ A `.pth` weight file of the official DINOv3 code, with the Meta weight names, fo
 _Avoid_: original weights, raw weights
 
 **Converted weights**:
-A Hugging Face model folder that `scripts/convert_meta_checkpoint.py` made from a Meta checkpoint, in `~/.cache/dinov3-apple/converted/`. We use them only while a gated repo is not available.
+A Hugging Face model folder that `scripts/convert_meta_checkpoint.py` made from a Meta checkpoint, in `~/.cache/dinov3-mlx/converted/`. We use them only while a gated repo is not available.
 
 **MLX weights**:
 The weights of one model size as MLX arrays, with the names and layouts of the MLX backbone. The key map makes them at load time from the Hugging Face safetensors.
@@ -537,7 +537,7 @@ A pytest session with `DINOV3_SLOW=1`.
 The CPU device of MLX (`mx.cpu`). Some tests run the MLX backbone there as a second device; it rounds differently from the GPU.
 
 **Core ML package**:
-One converted backbone for one model size, input resolution and batch size (`.mlpackage`, with its compiled `.mlmodelc`), in `~/.cache/dinov3-apple/coreml/`. Its name holds every setting.
+One converted backbone for one model size, input resolution and batch size (`.mlpackage`, with its compiled `.mlmodelc`), in `~/.cache/dinov3-mlx/coreml/`. Its name holds every setting.
 
 **Compute plan**:
 The device and the estimated cost of each op of a compiled Core ML package, from `MLComputePlan`.

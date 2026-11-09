@@ -13,7 +13,7 @@ import statistics
 from datetime import date
 from pathlib import Path
 
-from dinov3_apple.bench import (
+from dinov3_mlx.bench import (
     BATCH_SIZES,
     DTYPE_MODE_NAMES,
     GIANT_MODEL_SIZE,
@@ -26,7 +26,7 @@ from dinov3_apple.bench import (
     baseline_rows,
     latest_lines,
 )
-from dinov3_apple.flops import PART_NAMES
+from dinov3_mlx.flops import PART_NAMES
 
 REPO_ROOT = Path(__file__).parents[1]
 RESULTS_DIR = REPO_ROOT / "results"
@@ -514,7 +514,7 @@ def write_profile_table(lines: list[dict]) -> str:
         "",
         (
             "Each part of block 1 runs alone in a loop with one synchronize at the end. The time is "
-            "the median of five loops. The FLOP share comes from `dinov3_apple.flops`. Limits of the "
+            "the median of five loops. The FLOP share comes from `dinov3_mlx.flops`. Limits of the "
             "checks: 15 %."
         ),
         "",

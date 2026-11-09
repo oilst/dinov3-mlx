@@ -16,8 +16,8 @@ import torch
 from safetensors.torch import save_file
 from transformers import DINOv3ViTConfig, DINOv3ViTModel
 
-from dinov3_apple.mlx_model import MLX_DTYPE_MODES, MlxBackbone, MlxConfig, linear_parameter_names
-from dinov3_apple.mlx_weights import mlx_weights
+from dinov3_mlx.mlx_model import MLX_DTYPE_MODES, MlxBackbone, MlxConfig, linear_parameter_names
+from dinov3_mlx.mlx_weights import mlx_weights
 
 # The values of config.json of ViT-S/16, with 2 blocks.
 SMALL_CONFIG = {

@@ -3,7 +3,7 @@
 The run rule of CLAUDE.md says that ViT-7B/16 runs in fp16, bf16 or with quantized weights, because its fp32 weights alone need about 27 GB. We read this rule as a limit on the fp32 weights in memory, not as a ban on fp32 arithmetic:
 
 - The fp32 weights of the whole model never load. The guards stay: `check_run_rule` in `load_torch_backbone` and in `load_mlx_backbone` raises `RunRuleError` before the memory check, and `scripts/make_reference.py` records a skip without `--streamed`. No full fp32 load on torch or `mlx`, no lazily memory-mapped full fp32 model and no autocast mode with fp32 weights.
-- The streamed reference (`run_torch_streamed` in `src/dinov3_apple/reference.py`) holds the fp32 weights of one block at a time. It reads the tensors of one block through `ShardIndex`, runs all configurations through the block, frees the block and then reads the next block. It is the only fp32 path of ViT-7B/16.
+- The streamed reference (`run_torch_streamed` in `src/dinov3_mlx/reference.py`) holds the fp32 weights of one block at a time. It reads the tensors of one block through `ShardIndex`, runs all configurations through the block, frees the block and then reads the next block. It is the only fp32 path of ViT-7B/16.
 - The limit applies to the resident memory, not to the address space. `ShardIndex.read` maps the whole shard of each tensor (about 5 GB), and the tensors of `OuterParts` keep the maps of their shards open during the whole run. A mapped file is not a load (finding V4 of `specs/05-all-sizes/verify.html`).
 
 Why:

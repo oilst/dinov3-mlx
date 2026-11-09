@@ -25,7 +25,7 @@ from parity_checks import (
 )
 from under_test import MLX_MODEL_SIZES_UNDER_TEST
 
-from dinov3_apple.mlx_model import (
+from dinov3_mlx.mlx_model import (
     MLX_DTYPE_MODES,
     MlxBackbone,
     mlx_embeddings,
@@ -33,9 +33,9 @@ from dinov3_apple.mlx_model import (
     run_mlx_hidden_states,
     run_mlx_token_range,
 )
-from dinov3_apple.outputs import NUM_PREFIX_TOKENS
-from dinov3_apple.parity import Parity, measure_parity
-from dinov3_apple.stored import HIDDEN_STATES_CONFIG
+from dinov3_mlx.outputs import NUM_PREFIX_TOKENS
+from dinov3_mlx.parity import Parity, measure_parity
+from dinov3_mlx.stored import HIDDEN_STATES_CONFIG
 
 pytestmark = pytest.mark.mlx
 

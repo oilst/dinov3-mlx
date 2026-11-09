@@ -15,8 +15,8 @@ of the wait, one for the start of the hold and one for the end of each job.
 
 Light GPU work runs through the command line:
 
-    uv run python -m dinov3_apple.gpu_lock -- <command>
-    uv run python -m dinov3_apple.gpu_lock --timeout 600 -- <command>
+    uv run python -m dinov3_mlx.gpu_lock -- <command>
+    uv run python -m dinov3_mlx.gpu_lock --timeout 600 -- <command>
 
 No torch, no mlx import.
 """
@@ -38,9 +38,9 @@ from typing import TextIO
 # pgrep of the pattern from a match with its own command line.
 HEAVY_JOB_PATTERN = (
     r"[b]in/pytest|[s]cripts/bench|[c]ross_check\.py|[m]ake_reference\.py|[p]rofile_block\.py"
-    r"|[d]inov3_apple\.gpu_lock"
+    r"|[d]inov3_mlx\.gpu_lock"
 )
-LOCK_PATH = Path.home() / ".cache" / "dinov3-apple" / "gpu.lock"
+LOCK_PATH = Path.home() / ".cache" / "dinov3-mlx" / "gpu.lock"
 LOCK_REGISTRY = LOCK_PATH.parent / "gpu-lock.d"  # one file for each lock-aware process
 LOG_PATH = LOCK_PATH.parent / "gpu-lock.log"
 LOCK_ENV = "DINOV3_GPU_LOCK"  # the process id of the holder; its child processes inherit it
@@ -258,7 +258,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         The exit code of the command, or 1 after a timeout of the wait.
     """
     parser = argparse.ArgumentParser(
-        prog="python -m dinov3_apple.gpu_lock",
+        prog="python -m dinov3_mlx.gpu_lock",
         description="Run one command under the GPU lock (CLAUDE.md, run rules).",
     )
     parser.add_argument("--timeout", type=float, help="the longest wait in seconds")

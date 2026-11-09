@@ -21,10 +21,10 @@ from parity_checks import load_peak_lower_bound, load_peak_target
 from safetensors import safe_open
 from small_model import SMALL_CONFIGS, save_small_model, small_hf_model
 
-from dinov3_apple.bench import DTYPE_OF_MODE, bytes_per_weight
-from dinov3_apple.hub import MODEL_IDS, WeightsNotFoundError, weights_dir
-from dinov3_apple.memory import InsufficientMemoryError, RunRuleError
-from dinov3_apple.mlx_model import (
+from dinov3_mlx.bench import DTYPE_OF_MODE, bytes_per_weight
+from dinov3_mlx.hub import MODEL_IDS, WeightsNotFoundError, weights_dir
+from dinov3_mlx.memory import InsufficientMemoryError, RunRuleError
+from dinov3_mlx.mlx_model import (
     MLP,
     MLX_DTYPE_MODES,
     Block,
@@ -34,7 +34,7 @@ from dinov3_apple.mlx_model import (
     TF32ModeError,
     linear_parameter_names,
 )
-from dinov3_apple.mlx_weights import (
+from dinov3_mlx.mlx_weights import (
     PATCH_WEIGHT,
     LoadReport,
     UnknownWeightError,
@@ -44,7 +44,7 @@ from dinov3_apple.mlx_weights import (
     mlx_weights,
     required_mlx_load_bytes,
 )
-from dinov3_apple.parity import THRESHOLDS
+from dinov3_mlx.parity import THRESHOLDS
 
 pytestmark = pytest.mark.mlx
 
@@ -288,13 +288,9 @@ def test_mlx_config_from_hf() -> None:
 
 def test_load_mlx_backbone_refuses_tf32_mismatch(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MLX_ENABLE_TF32", "1")
-    monkeypatch.setattr(
-        "dinov3_apple.mlx_weights.parameter_count", fail_if_called("parameter_count")
-    )
-    monkeypatch.setattr("dinov3_apple.mlx_weights.weights_dir", fail_if_called("weights_dir"))
-    monkeypatch.setattr(
-        "dinov3_apple.memory.available_memory_bytes", fail_if_called("memory check")
-    )
+    monkeypatch.setattr("dinov3_mlx.mlx_weights.parameter_count", fail_if_called("parameter_count"))
+    monkeypatch.setattr("dinov3_mlx.mlx_weights.weights_dir", fail_if_called("weights_dir"))
+    monkeypatch.setattr("dinov3_mlx.memory.available_memory_bytes", fail_if_called("memory check"))
     with pytest.raises(TF32ModeError):
         load_mlx_backbone("ViT-S/16", "fp32", tf32=False)
 
@@ -305,27 +301,23 @@ def test_load_mlx_backbone_refuses_7b_fp32(
     """T7: the run rule stops ViT-7B/16 in fp32 before any file read and before the memory check.
     The four fp16 and bf16 dtype modes pass the run rule and stop at the memory check."""
     # The lines of a monkeypatched memory check must not reach memory-checks.log of the session.
-    monkeypatch.setattr(logging.getLogger("dinov3_apple.memory"), "handlers", [])
-    monkeypatch.setattr(
-        "dinov3_apple.mlx_weights.parameter_count", fail_if_called("parameter_count")
-    )
-    monkeypatch.setattr("dinov3_apple.mlx_weights.weights_dir", fail_if_called("weights_dir"))
-    monkeypatch.setattr(
-        "dinov3_apple.memory.available_memory_bytes", fail_if_called("memory check")
-    )
-    monkeypatch.setattr("dinov3_apple.mlx_weights.tf32_enabled", fail_if_called("tf32_enabled"))
+    monkeypatch.setattr(logging.getLogger("dinov3_mlx.memory"), "handlers", [])
+    monkeypatch.setattr("dinov3_mlx.mlx_weights.parameter_count", fail_if_called("parameter_count"))
+    monkeypatch.setattr("dinov3_mlx.mlx_weights.weights_dir", fail_if_called("weights_dir"))
+    monkeypatch.setattr("dinov3_mlx.memory.available_memory_bytes", fail_if_called("memory check"))
+    monkeypatch.setattr("dinov3_mlx.mlx_weights.tf32_enabled", fail_if_called("tf32_enabled"))
     with pytest.raises(RunRuleError, match="ViT-7B/16"):
         load_mlx_backbone("ViT-7B/16", "fp32")
     monkeypatch.setattr(
-        "dinov3_apple.mlx_weights.parameter_count", lambda model_size: VIT7B16_PARAMETER_COUNT
+        "dinov3_mlx.mlx_weights.parameter_count", lambda model_size: VIT7B16_PARAMETER_COUNT
     )
-    monkeypatch.setattr("dinov3_apple.memory.available_memory_bytes", lambda: 0)
-    caplog.set_level(logging.INFO, logger="dinov3_apple.memory")
+    monkeypatch.setattr("dinov3_mlx.memory.available_memory_bytes", lambda: 0)
+    caplog.set_level(logging.INFO, logger="dinov3_mlx.memory")
     for dtype_mode in HALF_MODES:
         caplog.clear()
         with pytest.raises(InsufficientMemoryError):
             load_mlx_backbone("ViT-7B/16", dtype_mode)
-        messages = [r.getMessage() for r in caplog.records if r.name == "dinov3_apple.memory"]
+        messages = [r.getMessage() for r in caplog.records if r.name == "dinov3_mlx.memory"]
         assert len(messages) == 1
         assert f"ViT-7B/16 mlx {dtype_mode}" in messages[0]
         assert "needs 20.1 GB" in messages[0]
@@ -334,7 +326,7 @@ def test_load_mlx_backbone_refuses_7b_fp32(
 def test_required_mlx_load_bytes_by_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     """T8: the need counts the bytes of the matmul dtype."""
     counts = {"ViT-S/16": VITS16_PARAMETER_COUNT, "ViT-7B/16": VIT7B16_PARAMETER_COUNT}
-    monkeypatch.setattr("dinov3_apple.mlx_weights.parameter_count", counts.__getitem__)
+    monkeypatch.setattr("dinov3_mlx.mlx_weights.parameter_count", counts.__getitem__)
     assert required_mlx_load_bytes("ViT-S/16", "fp32") == 4_103_663_411
     for dtype_mode in HALF_MODES:
         assert required_mlx_load_bytes("ViT-S/16", dtype_mode) == 4_051_831_706
@@ -346,18 +338,18 @@ def test_load_mlx_backbone_checks_memory_first(
 ) -> None:
     """T9: one memory-check line for fp32 and for bf16-autocast."""
     # The lines of a monkeypatched memory check must not reach memory-checks.log of the session.
-    monkeypatch.setattr(logging.getLogger("dinov3_apple.memory"), "handlers", [])
+    monkeypatch.setattr(logging.getLogger("dinov3_mlx.memory"), "handlers", [])
     monkeypatch.setattr(
-        "dinov3_apple.mlx_weights.parameter_count", lambda model_size: VITS16_PARAMETER_COUNT
+        "dinov3_mlx.mlx_weights.parameter_count", lambda model_size: VITS16_PARAMETER_COUNT
     )
-    monkeypatch.setattr("dinov3_apple.mlx_weights.weights_dir", fail_if_called("weights_dir"))
-    monkeypatch.setattr("dinov3_apple.memory.available_memory_bytes", lambda: 0)
-    caplog.set_level(logging.INFO, logger="dinov3_apple.memory")
+    monkeypatch.setattr("dinov3_mlx.mlx_weights.weights_dir", fail_if_called("weights_dir"))
+    monkeypatch.setattr("dinov3_mlx.memory.available_memory_bytes", lambda: 0)
+    caplog.set_level(logging.INFO, logger="dinov3_mlx.memory")
     for dtype_mode in ("fp32", "bf16-autocast"):
         caplog.clear()
         with pytest.raises(InsufficientMemoryError):
             load_mlx_backbone("ViT-S/16", dtype_mode)
-        messages = [r.getMessage() for r in caplog.records if r.name == "dinov3_apple.memory"]
+        messages = [r.getMessage() for r in caplog.records if r.name == "dinov3_mlx.memory"]
         assert len(messages) == 1
         assert f"ViT-S/16 mlx {dtype_mode}" in messages[0]
         assert "needs 4.1 GB" in messages[0]
@@ -366,7 +358,7 @@ def test_load_mlx_backbone_checks_memory_first(
 def test_load_mlx_backbone_sets_memory_limit_to_need(monkeypatch: pytest.MonkeyPatch) -> None:
     """T10: the MLX memory limit is the need of the load, in fp32 and in bf16-cast."""
     # The lines of a monkeypatched memory check must not reach memory-checks.log of the session.
-    monkeypatch.setattr(logging.getLogger("dinov3_apple.memory"), "handlers", [])
+    monkeypatch.setattr(logging.getLogger("dinov3_mlx.memory"), "handlers", [])
 
     class Sentinel(Exception):
         pass
@@ -378,10 +370,10 @@ def test_load_mlx_backbone_sets_memory_limit_to_need(monkeypatch: pytest.MonkeyP
         raise Sentinel
 
     monkeypatch.setattr(
-        "dinov3_apple.mlx_weights.parameter_count", lambda model_size: VITS16_PARAMETER_COUNT
+        "dinov3_mlx.mlx_weights.parameter_count", lambda model_size: VITS16_PARAMETER_COUNT
     )
-    monkeypatch.setattr("dinov3_apple.mlx_weights.weights_dir", fail_if_called("weights_dir"))
-    monkeypatch.setattr("dinov3_apple.memory.available_memory_bytes", lambda: 10**12)
+    monkeypatch.setattr("dinov3_mlx.mlx_weights.weights_dir", fail_if_called("weights_dir"))
+    monkeypatch.setattr("dinov3_mlx.memory.available_memory_bytes", lambda: 10**12)
     monkeypatch.setattr(mx, "set_memory_limit", recorder)
     for dtype_mode in ("fp32", "bf16-cast"):
         with pytest.raises(Sentinel):
@@ -409,14 +401,14 @@ def test_load_mlx_backbone_reads_two_files(
     assert len(list((tmp_path / "two").glob("*.safetensors"))) == 2
     folders = {"one": tmp_path / "one", "two": tmp_path / "two"}
     # The lines of this small model must not reach memory-checks.log of the test session.
-    monkeypatch.setattr(logging.getLogger("dinov3_apple.memory"), "handlers", [])
+    monkeypatch.setattr(logging.getLogger("dinov3_mlx.memory"), "handlers", [])
     session_limit = mx.get_memory_limit()
     models: dict[str, Any] = {}
     try:
         for name, folder in folders.items():
-            monkeypatch.setattr("dinov3_apple.hub.weights_dir", lambda model_size, f=folder: f)
+            monkeypatch.setattr("dinov3_mlx.hub.weights_dir", lambda model_size, f=folder: f)
             monkeypatch.setattr(
-                "dinov3_apple.mlx_weights.weights_dir", lambda model_size, f=folder: f
+                "dinov3_mlx.mlx_weights.weights_dir", lambda model_size, f=folder: f
             )
             try:
                 models[name] = load_mlx_backbone("ViT-7B/16", "bf16-cast")
@@ -569,7 +561,7 @@ def lone_slot(
     slot = conftest._BackboneSlot()
     yield slot.get
     slot.free()
-    logging.getLogger("dinov3_apple.memory").removeHandler(slot.handler)
+    logging.getLogger("dinov3_mlx.memory").removeHandler(slot.handler)
     slot.handler.close()
 
 
@@ -599,7 +591,7 @@ def test_backbone_slot_checks_the_load_report(
     )
     model = SimpleNamespace(load_report=load_report)
     monkeypatch.setattr(
-        "dinov3_apple.mlx_weights.load_mlx_backbone", lambda model_size, dtype_mode: model
+        "dinov3_mlx.mlx_weights.load_mlx_backbone", lambda model_size, dtype_mode: model
     )
     monkeypatch.setattr(
         parity_checks, "load_peak_target", lambda model_size, dtype_mode, bits=None: 1_000
@@ -637,7 +629,7 @@ def test_backbone_slot_holds_the_compiled_forward(monkeypatch: pytest.MonkeyPatc
 
     hf = small_hf_model(seed=0)
     monkeypatch.setattr(
-        "dinov3_apple.mlx_weights.load_mlx_backbone",
+        "dinov3_mlx.mlx_weights.load_mlx_backbone",
         lambda model_size, dtype_mode, **kwargs: small_mlx_model(hf, dtype_mode),
     )
     monkeypatch.setattr(conftest._BackboneSlot, "check_load_report", lambda *args: None)
@@ -658,7 +650,7 @@ def test_backbone_slot_holds_the_compiled_forward(monkeypatch: pytest.MonkeyPatc
         assert reference() is None
     finally:
         slot.free()
-        logging.getLogger("dinov3_apple.memory").removeHandler(slot.handler)
+        logging.getLogger("dinov3_mlx.memory").removeHandler(slot.handler)
         slot.handler.close()
 
 
@@ -671,7 +663,7 @@ def _quantized_small(name: str, dtype_mode: str, bits: int) -> MlxBackbone:
     """A small backbone with quantized block modules, before any load."""
     from mlx import nn
 
-    from dinov3_apple.mlx_weights import block_linear_predicate
+    from dinov3_mlx.mlx_weights import block_linear_predicate
 
     model = MlxBackbone(MlxConfig.from_hf(SMALL_CONFIGS[name]), dtype_mode)
     nn.quantize(model, class_predicate=block_linear_predicate(bits))
@@ -681,7 +673,7 @@ def _quantized_small(name: str, dtype_mode: str, bits: int) -> MlxBackbone:
 def test_required_mlx_load_bytes_quantized(monkeypatch: pytest.MonkeyPatch) -> None:
     """T42 (Table 9 of the plan)."""
     counts = {"ViT-H+/16": VITH16PLUS_PARAMETER_COUNT, "ViT-7B/16": VIT7B16_PARAMETER_COUNT}
-    monkeypatch.setattr("dinov3_apple.mlx_weights.parameter_count", counts.__getitem__)
+    monkeypatch.setattr("dinov3_mlx.mlx_weights.parameter_count", counts.__getitem__)
     for mode in AUTOCAST_MODES:
         assert required_mlx_load_bytes("ViT-H+/16", mode, bits=8) == 5_073_703_936
         assert required_mlx_load_bytes("ViT-H+/16", mode, bits=4) == 4_570_387_456
@@ -694,7 +686,7 @@ def test_linear_parameter_names_sees_quantized_linear() -> None:
     bias count as parameters of the matmul dtype."""
     from mlx import nn
 
-    from dinov3_apple.mlx_model import quantized_weight_names
+    from dinov3_mlx.mlx_model import quantized_weight_names
 
     model = _quantized_small("vits16plus", "bf16-autocast", 8)
     linear = linear_parameter_names(model)
@@ -716,7 +708,7 @@ def test_block_linear_predicate() -> None:
     """T44 (D16)."""
     from mlx import nn
 
-    from dinov3_apple.mlx_weights import GROUP_SIZE, QUANTIZED_BITS, block_linear_predicate
+    from dinov3_mlx.mlx_weights import GROUP_SIZE, QUANTIZED_BITS, block_linear_predicate
 
     assert GROUP_SIZE == 64 and QUANTIZED_BITS == (8, 4)
     predicate = block_linear_predicate(8)
@@ -737,7 +729,7 @@ def test_placeholder_skeleton_stays_small() -> None:
 
     from mlx import nn
 
-    from dinov3_apple.mlx_weights import block_linear_predicate, placeholder_skeleton
+    from dinov3_mlx.mlx_weights import block_linear_predicate, placeholder_skeleton
 
     config = MlxConfig.from_hf(
         SMALL_CONFIGS["vit7b16-shape"]
@@ -775,12 +767,12 @@ def small_folder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """The weights of vits16plus in a temporary folder, as the folder of ViT-S+/16."""
     folder = tmp_path / "vits16plus"
     save_small_model(small_hf_model(seed=2, name="vits16plus"), folder, files=2)
-    monkeypatch.setattr("dinov3_apple.hub.weights_dir", lambda model_size: folder)
-    monkeypatch.setattr("dinov3_apple.mlx_weights.weights_dir", lambda model_size: folder)
+    monkeypatch.setattr("dinov3_mlx.hub.weights_dir", lambda model_size: folder)
+    monkeypatch.setattr("dinov3_mlx.mlx_weights.weights_dir", lambda model_size: folder)
     monkeypatch.setattr(
-        "dinov3_apple.mlx_weights.parameter_count", lambda model_size: VITS16_PARAMETER_COUNT
+        "dinov3_mlx.mlx_weights.parameter_count", lambda model_size: VITS16_PARAMETER_COUNT
     )
-    monkeypatch.setattr(logging.getLogger("dinov3_apple.memory"), "handlers", [])
+    monkeypatch.setattr(logging.getLogger("dinov3_mlx.memory"), "handlers", [])
     return folder
 
 
@@ -795,12 +787,12 @@ def test_quantized_loader_equals_load_then_quantize(
     nn.quantize) bit for bit in every parameter; the strict load passes; the memory check runs."""
     from mlx import nn
 
-    from dinov3_apple.mlx_weights import block_linear_predicate
+    from dinov3_mlx.mlx_weights import block_linear_predicate
 
     checks: list[int] = []
     original = check_free_memory_of_module()
     monkeypatch.setattr(
-        "dinov3_apple.mlx_weights.check_free_memory",
+        "dinov3_mlx.mlx_weights.check_free_memory",
         lambda need, label: checks.append(need) or original(need, label),
     )
     session_limit = mx.get_memory_limit()
@@ -820,7 +812,7 @@ def test_quantized_loader_equals_load_then_quantize(
 
 
 def check_free_memory_of_module() -> Callable[[int, str], int]:
-    from dinov3_apple import mlx_weights
+    from dinov3_mlx import mlx_weights
 
     return mlx_weights.check_free_memory
 
@@ -894,7 +886,7 @@ def test_backbone_slot_checks_a_quantized_load(
         return SimpleNamespace(load_report=report)
 
     targets: list[Any] = []
-    monkeypatch.setattr("dinov3_apple.mlx_weights.load_mlx_backbone", load)
+    monkeypatch.setattr("dinov3_mlx.mlx_weights.load_mlx_backbone", load)
     monkeypatch.setattr(
         parity_checks,
         "load_peak_target",
@@ -934,9 +926,7 @@ def test_load_mlx_backbone_refuses_bits_outside_the_autocast_modes(
 ) -> None:
     """T50 (D15): bits in fp32 and in the cast modes, and bits=6, raise ValueError before any
     file read."""
-    monkeypatch.setattr("dinov3_apple.mlx_weights.weights_dir", fail_if_called("weights_dir"))
-    monkeypatch.setattr(
-        "dinov3_apple.mlx_weights.parameter_count", fail_if_called("parameter_count")
-    )
+    monkeypatch.setattr("dinov3_mlx.mlx_weights.weights_dir", fail_if_called("weights_dir"))
+    monkeypatch.setattr("dinov3_mlx.mlx_weights.parameter_count", fail_if_called("parameter_count"))
     with pytest.raises(ValueError, match="bits"):
         load_mlx_backbone("ViT-S/16", dtype_mode, bits=bits)

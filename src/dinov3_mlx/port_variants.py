@@ -17,26 +17,26 @@ from datetime import UTC, datetime
 import mlx.core as mx
 import numpy as np
 
-from dinov3_apple import stored
-from dinov3_apple.bench import (
+from dinov3_mlx import stored
+from dinov3_mlx.bench import (
     BenchConfig,
     TimeBudget,
     check_validity,
     make_batch,
     required_bench_bytes,
 )
-from dinov3_apple.machine import read_versions
-from dinov3_apple.mlx_model import (
+from dinov3_mlx.machine import read_versions
+from dinov3_mlx.mlx_model import (
     Attention,
     MlxBackbone,
     apply_rope,
     compile_backbone,
     rope_layout,
 )
-from dinov3_apple.outputs import NUM_PREFIX_TOKENS
-from dinov3_apple.parity import THRESHOLDS, measure_parity
-from dinov3_apple.prior_art import VARIANTS, eight_bit_pixels, parity_passes
-from dinov3_apple.stored import read_inputs, read_reference
+from dinov3_mlx.outputs import NUM_PREFIX_TOKENS
+from dinov3_mlx.parity import THRESHOLDS, measure_parity
+from dinov3_mlx.prior_art import VARIANTS, eight_bit_pixels, parity_passes
+from dinov3_mlx.stored import read_inputs, read_reference
 
 Forward = Callable[[mx.array], mx.array]
 
@@ -240,7 +240,7 @@ def run_variant_parity(
     Returns:
         The worker fields: one row for each configuration with the parity, passes and finite.
     """
-    from dinov3_apple import mlx_weights
+    from dinov3_mlx import mlx_weights
 
     start = time.perf_counter()
     model = mlx_weights.load_mlx_backbone(model_size, dtype_mode, tf32=False)
@@ -294,9 +294,9 @@ def run_variant_speed(
         warm_up: The time budget of the warm-up batches.
         timed: The time budget of the timed batches.
     """
-    from dinov3_apple import mlx_weights
-    from dinov3_apple.bench import SIDES, reference_tokens, summarize
-    from dinov3_apple.mlx_bench import phase, time_batch_mlx
+    from dinov3_mlx import mlx_weights
+    from dinov3_mlx.bench import SIDES, reference_tokens, summarize
+    from dinov3_mlx.mlx_bench import phase, time_batch_mlx
 
     start = time.perf_counter()
     model = mlx_weights.load_mlx_backbone(config.model_size, config.dtype_mode, tf32=False)

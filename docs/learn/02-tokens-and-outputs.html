@@ -65,7 +65,7 @@ a { color: var(--accent); }
 
 <section id="pixels">
   <h2>2 From image file to pixels</h2>
-  <p>The backbone takes a normalized fp32 tensor with shape (1, 3, H, W). H and W are multiples of 16. <code>src/dinov3_apple/preprocess.py</code> makes this tensor in four steps:</p>
+  <p>The backbone takes a normalized fp32 tensor with shape (1, 3, H, W). H and W are multiples of 16. <code>src/dinov3_mlx/preprocess.py</code> makes this tensor in four steps:</p>
   <ol>
     <li><code>load_image</code> decodes the file with Pillow to an (h, w, 3) uint8 RGB array.</li>
     <li><code>preprocess</code> divides the pixels by 255.</li>
@@ -832,31 +832,31 @@ def split_tokens(tokens: np.ndarray, height: int, width: int) -> tuple[np.ndarra
       </tbody>
     </table>
   </div>
-  <p class="caption"><b>Table 4.</b> <code>THRESHOLDS</code> in <code>src/dinov3_apple/parity.py</code>. They hold for every backend and model size. The bf16 row takes the worst measured bf16 values, rounded down (decision of the user, 2026-11-06).</p>
+  <p class="caption"><b>Table 4.</b> <code>THRESHOLDS</code> in <code>src/dinov3_mlx/parity.py</code>. They hold for every backend and model size. The bf16 row takes the worst measured bf16 values, rounded down (decision of the user, 2026-11-06).</p>
 </section>
 
 <section id="code">
   <h2>8 The code of Step 2</h2>
-  <h3>8.1 <code>src/dinov3_apple/hub.py</code></h3>
+  <h3>8.1 <code>src/dinov3_mlx/hub.py</code></h3>
   <ul>
-    <li><code>CONVERTED_DIR</code> is the folder of the converted weights, <code>~/.cache/dinov3-apple/converted</code>. <code>scripts/convert_meta_checkpoint.py</code> now imports it from here.</li>
+    <li><code>CONVERTED_DIR</code> is the folder of the converted weights, <code>~/.cache/dinov3-mlx/converted</code>. <code>scripts/convert_meta_checkpoint.py</code> now imports it from here.</li>
     <li><code>weights_dir(model_size, cache_dir=None, converted_dir=CONVERTED_DIR)</code> returns the folder with <code>config.json</code> and the safetensors files. It takes the Hugging Face cache first, but only when every shard of the index is there. Else it takes the converted folder. Else it raises <code>WeightsNotFoundError</code>. The tests use a temporary cache folder, also one with a missing shard.</li>
   </ul>
-  <h3>8.2 <code>src/dinov3_apple/memory.py</code></h3>
+  <h3>8.2 <code>src/dinov3_mlx/memory.py</code></h3>
   <ul>
     <li><code>available_memory_bytes()</code> reads <code>vm_stat</code>. It counts the free, speculative and purgeable pages, plus the inactive pages up to the number of file-backed pages, times the page size. macOS can drop file-backed pages at once; the other inactive pages hold app memory that macOS must compress or swap first. (Changed after Verify, finding F6. The Step 2 runs used free plus all inactive pages.)</li>
     <li><code>check_free_memory(required_bytes, label)</code> logs one line ("memory check: ViT-S/16 torch-mps fp16-cast: needs 4.1 GB, 21.0 GB available, ok") and raises <code>InsufficientMemoryError</code> when the memory does not fit. It returns the available bytes. <code>GB</code> is 1e9, the unit of the log line.</li>
   </ul>
-  <h3>8.3 <code>src/dinov3_apple/preprocess.py</code> and <code>outputs.py</code></h3>
+  <h3>8.3 <code>src/dinov3_mlx/preprocess.py</code> and <code>outputs.py</code></h3>
   <ul>
     <li><code>IMAGENET_MEAN</code>, <code>IMAGENET_STD</code>, <code>PATCH_SIZE</code>, <code>own_aspect_size</code>, <code>load_image</code> and <code>preprocess</code>: Section 2.</li>
     <li><code>NUM_PREFIX_TOKENS</code> and <code>split_tokens</code>: Section 4.</li>
   </ul>
-  <h3>8.4 <code>src/dinov3_apple/parity.py</code></h3>
+  <h3>8.4 <code>src/dinov3_mlx/parity.py</code></h3>
   <ul>
     <li><code>Parity</code> holds the four measures. <code>THRESHOLDS</code> maps each dtype mode to a <code>Parity</code> with the limits; its <code>patch_min</code> is −1 because the minimum is report only. <code>measure_parity</code>: Section 7. The module uses NumPy only, so the MLX tests of Steps 4 and 5 can use it without torch.</li>
   </ul>
-  <h3>8.5 <code>src/dinov3_apple/reference.py</code></h3>
+  <h3>8.5 <code>src/dinov3_mlx/reference.py</code></h3>
   <ul>
     <li><code>DtypeMode</code> holds the dtype of the weights and the dtype of autocast (or <code>None</code>). <code>DTYPE_MODES</code> maps the five names of Table 3 to it.</li>
     <li><code>Configuration</code> is one test image at one input resolution. Its <code>id</code> is the key in the stored files, for example <code>forest/224x304</code>. It also gives <code>image_path</code> and <code>num_patches</code>. <code>configurations()</code> returns the 12 configurations of Table 1 in a fixed order.</li>

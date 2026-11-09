@@ -39,8 +39,8 @@ def test_cross_check_dry_run(
     import cross_check
 
     monkeypatch.setattr(cross_check, "parameter_count", lambda model_size: VIT7B16_PARAMETER_COUNT)
-    monkeypatch.setattr("dinov3_apple.reference.load_torch_backbone", fail_load)
-    monkeypatch.setattr("dinov3_apple.mlx_weights.load_mlx_backbone", fail_load)
+    monkeypatch.setattr("dinov3_mlx.reference.load_torch_backbone", fail_load)
+    monkeypatch.setattr("dinov3_mlx.mlx_weights.load_mlx_backbone", fail_load)
     cross_check.main(
         [
             "--model-size",

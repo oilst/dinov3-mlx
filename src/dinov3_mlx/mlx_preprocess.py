@@ -12,8 +12,8 @@ from functools import cache
 import mlx.core as mx
 import numpy as np
 
-from dinov3_apple.mlx_model import TF32ModeError, tf32_enabled
-from dinov3_apple.stored import IMAGENET_MEAN_VALUES, IMAGENET_STD_VALUES
+from dinov3_mlx.mlx_model import TF32ModeError, tf32_enabled
+from dinov3_mlx.stored import IMAGENET_MEAN_VALUES, IMAGENET_STD_VALUES
 
 
 @cache

@@ -77,7 +77,7 @@ a { color: var(--accent); }
     <table>
       <thead><tr><th>Name</th><th>File, lines</th><th>Job</th><th>Tests (numbers of the plan)</th><th>Section</th></tr></thead>
       <tbody>
-        <tr class="group"><td colspan="5"><code>src/dinov3_apple/mlx_model.py</code></td></tr>
+        <tr class="group"><td colspan="5"><code>src/dinov3_mlx/mlx_model.py</code></td></tr>
         <tr><td><code>SwiGLU.__init__(config)</code> (new)</td><td class="num">353–359</td><td>Makes <code>gate_proj</code> and <code>up_proj</code> (D → FF) and <code>down_proj</code> (FF → D). Raises <code>NotImplementedError</code> for an activation other than "silu".</td><td>T6 <code>test_mlx_config_from_hf</code></td><td>2, 5.1</td></tr>
         <tr><td><code>SwiGLU.activation(gate, up)</code> (new)</td><td class="num">361–364</td><td>Returns silu(gate) · up. Computes in fp32 and rounds once to the dtype of gate.</td><td>T16 part <code>activation</code>, T23</td><td>3, 6</td></tr>
         <tr><td><code>SwiGLU.hidden(x)</code> (new)</td><td class="num">366–368</td><td>Returns the feed-forward hidden values silu(gate_proj(x)) · up_proj(x).</td><td>Through <code>Block.ff_hidden</code>: T22, T26</td><td>5.1</td></tr>
@@ -88,7 +88,7 @@ a { color: var(--accent); }
         <tr><td><code>Block.__init__</code> (changed)</td><td class="num">384–392</td><td>Line 391 makes <code>SwiGLU</code> if <code>config.gated</code> is true, else <code>MLP</code>. The <code>NotImplementedError</code> of Step 4 is gone.</td><td>T6</td><td>5.3</td></tr>
         <tr><td><code>Block.ff_hidden(x)</code> (new)</td><td class="num">398–400</td><td>Runs norm2, casts its output to the matmul dtype and returns <code>mlp.hidden</code> of it.</td><td>T22, T26</td><td>2, 5.3</td></tr>
         <tr><td><code>Block.__call__</code> (changed)</td><td class="num">402–408</td><td>Line 408: <code>layer_scale2(mlp.down_proj(ff_hidden(x))) + x</code>.</td><td>T20, T21, W2</td><td>2, 5.3</td></tr>
-        <tr class="group"><td colspan="5"><code>src/dinov3_apple/mlx_weights.py</code></td></tr>
+        <tr class="group"><td colspan="5"><code>src/dinov3_mlx/mlx_weights.py</code></td></tr>
         <tr><td><code>block_parameter_names()</code> (changed)</td><td class="num">79–109</td><td>Returns the union of the parameter names of an MLP probe block and a SwiGLU probe block: 20 names.</td><td>T1 <code>test_block_parameter_names_union</code></td><td>7</td></tr>
         <tr><td><code>map_key(name)</code> (behaviour changed)</td><td class="num">112–136</td><td>Accepts <code>layer.{i}.mlp.gate_proj.weight</code> and <code>.bias</code>, because the union has these names. The code of the function did not change.</td><td>T2, T3, H1 <code>test_key_map_covers_file</code></td><td>7</td></tr>
       </tbody>
@@ -300,14 +300,14 @@ swiglu_hidden_features = d + (-d % align_to)</code></pre>
       </tbody>
     </table>
   </div>
-  <p class="caption"><b>Table 2.</b> The feed-forward network of each model size. D, FF, <code>hidden_act</code> and <code>use_gated_mlp</code>: the <code>config.json</code> files of the six Hugging Face repos, read on 2026-11-07. <code>ffn_ratio</code> and <code>align_to</code>: the hub functions of the official DINOv3 code (<code>dinov3/hub/backbones.py</code>; ViT-7B/16 uses the layer "swiglu64"). Weights and shares of the block weights: Table 4 of <code>specs/05-all-sizes/explore.html</code>. FLOPs: <code>part_flops</code> of <code>src/dinov3_apple/flops.py</code> for one image and one block with T = 201 tokens, 2 FLOPs per multiply-add. "Feed-forward" is <code>ff_in</code> + <code>ff_out</code>; <code>ff_in</code> counts 2 matrices for SwiGLU. The share divides by the sum of all parts of <code>part_flops</code>, as in Table 3 of <a href="04-5-mlp.html#flops">04-5</a>.</p>
+  <p class="caption"><b>Table 2.</b> The feed-forward network of each model size. D, FF, <code>hidden_act</code> and <code>use_gated_mlp</code>: the <code>config.json</code> files of the six Hugging Face repos, read on 2026-11-07. <code>ffn_ratio</code> and <code>align_to</code>: the hub functions of the official DINOv3 code (<code>dinov3/hub/backbones.py</code>; ViT-7B/16 uses the layer "swiglu64"). Weights and shares of the block weights: Table 4 of <code>specs/05-all-sizes/explore.html</code>. FLOPs: <code>part_flops</code> of <code>src/dinov3_mlx/flops.py</code> for one image and one block with T = 201 tokens, 2 FLOPs per multiply-add. "Feed-forward" is <code>ff_in</code> + <code>ff_out</code>; <code>ff_in</code> counts 2 matrices for SwiGLU. The share divides by the sum of all parts of <code>part_flops</code>, as in Table 3 of <a href="04-5-mlp.html#flops">04-5</a>.</p>
 </section>
 
 <section id="code">
   <h2>5 The code</h2>
 
   <h3>5.1 SwiGLU</h3>
-  <pre><code># src/dinov3_apple/mlx_model.py, lines 349 to 372
+  <pre><code># src/dinov3_mlx/mlx_model.py, lines 349 to 372
 class SwiGLU(nn.Module):
     """The feed-forward network of ViT-S+/16, ViT-H+/16 and ViT-7B/16 (D1 of
     specs/05-all-sizes/explore.html). Three nn.Linear modules with the Hugging Face names."""
@@ -342,7 +342,7 @@ class SwiGLU(nn.Module):
 
   <h3>5.2 MLP.activation and MLP.hidden</h3>
   <p>The MLP of Step 4 gets the same three methods. Its formula does not change.</p>
-  <pre><code># src/dinov3_apple/mlx_model.py, lines 331 to 346 (class MLP)
+  <pre><code># src/dinov3_mlx/mlx_model.py, lines 331 to 346 (class MLP)
     def activation(self, up: mx.array) -&gt; mx.array:
         """Return gelu(up). It computes in fp32 and rounds once to the dtype of up.
 
@@ -365,7 +365,7 @@ class SwiGLU(nn.Module):
   </ul>
 
   <h3>5.3 Block</h3>
-  <pre><code># src/dinov3_apple/mlx_model.py, lines 391 and 398 to 408 (class Block)
+  <pre><code># src/dinov3_mlx/mlx_model.py, lines 391 and 398 to 408 (class Block)
         self.mlp = SwiGLU(config) if config.gated else MLP(config)               # line 391
 
     def ff_hidden(self, x: mx.array) -&gt; mx.array:
@@ -560,7 +560,7 @@ class SwiGLU(nn.Module):
     </svg></div>
     <figcaption><b>Figure 4.</b> The key map for <code>gate_proj</code>. The union of the two probe blocks has 20 names. <code>map_key</code> accepts names 1 and 2 of test T2 for every model size. It rejects the Meta name <code>w3</code> and the wrong name <code>gate</code>. The strict load of the real backbone then accepts a <code>gate_proj</code> tensor only for a SwiGLU model size. T3 adds a <code>gate_proj</code> key to the state dict of the small model <code>vits16</code>: the strict load raises <code>ValueError</code> with the name of the key.</figcaption>
   </figure>
-  <pre><code># src/dinov3_apple/mlx_weights.py, lines 79 to 109 (the config values abbreviated)
+  <pre><code># src/dinov3_mlx/mlx_weights.py, lines 79 to 109 (the config values abbreviated)
 @cache
 def block_parameter_names() -&gt; frozenset[str]:
     """Return the parameter names of an MLP block and of a SwiGLU block, both with all biases.
@@ -685,7 +685,7 @@ def block_parameter_names() -&gt; frozenset[str]:
 <section id="sources">
   <h2>10 Sources</h2>
   <ul>
-    <li>Repo code: <code>src/dinov3_apple/mlx_model.py</code> (commit <code>01cc631</code>; the working tree has the same lines), <code>src/dinov3_apple/mlx_weights.py</code> (working tree after the Verify fixes), <code>src/dinov3_apple/flops.py</code> (<code>part_flops</code>, <code>MODEL_SHAPES</code>), <code>src/dinov3_apple/block_profile.py</code> (<code>block_parts</code>), <code>scripts/convert_meta_checkpoint.py</code> (lines 120 to 124).</li>
+    <li>Repo code: <code>src/dinov3_mlx/mlx_model.py</code> (commit <code>01cc631</code>; the working tree has the same lines), <code>src/dinov3_mlx/mlx_weights.py</code> (working tree after the Verify fixes), <code>src/dinov3_mlx/flops.py</code> (<code>part_flops</code>, <code>MODEL_SHAPES</code>), <code>src/dinov3_mlx/block_profile.py</code> (<code>block_parts</code>), <code>scripts/convert_meta_checkpoint.py</code> (lines 120 to 124).</li>
     <li>Tests: <code>tests/test_mlx_parts.py</code> (T16 to T18, T20 to T23, T26), <code>tests/test_mlx_weights.py</code> (T1 to T3, T6, H1).</li>
     <li>Spec files: <code>specs/05-all-sizes/explore.html</code> (Tables 1, 4, 5, 6, 7, 8 and 19; finding 6; D1, D2), <code>specs/05-all-sizes/plan.html</code> (Tables 1 to 4, 12, 13 and 20; Sections 3.2 and 6.1), <code>specs/05-all-sizes/verify.html</code> (AC1 to AC5, AC10, AC12, AC13; Table 5; Sections 4.2, 9 and 10; for path D4-Y Section 12 with Tables 22 and 23).</li>
     <li>Results: <code>results/parity-mlx.md</code> (Tables 1 and 5; the ViT-7B/16 rows of Table 1 after path D4-Y), <code>results/parity-torch-mps.md</code> (the ViT-7B/16 rows of Table 1), <code>results/token-range-mlx.md</code> (Table 2), and <code>tests/fixtures/generated/mlx/report.jsonl</code> (git ignores it).</li>

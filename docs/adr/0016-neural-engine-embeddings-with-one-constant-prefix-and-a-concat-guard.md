@@ -11,7 +11,7 @@ We call this the concat fault (`GLOSSARY.md`).
 
 Decision (option A of `explore.html`, picked by the user on 2026-11-08):
 
-1. **One constant prefix.** `ne_embeddings` in `src/dinov3_apple/coreml.py` joins the CLS token and the 4 register tokens first. The trace folds this join into one constant of 5 rows, and the token concat gets one constant input. In fp32 the output is bit-equal to the Hugging Face embeddings. `NeuralEngineBackbone.forward` calls it. The rest of the rewrite of ADR 0014 does not change.
+1. **One constant prefix.** `ne_embeddings` in `src/dinov3_mlx/coreml.py` joins the CLS token and the 4 register tokens first. The trace folds this join into one constant of 5 rows, and the token concat gets one constant input. In fp32 the output is bit-equal to the Hugging Face embeddings. `NeuralEngineBackbone.forward` calls it. The rest of the rewrite of ADR 0014 does not change.
 2. **Rewrite version `ne3`.** `REWRITE_VERSION` is `"ne3"`, and it is part of each package name, so no `ne2` package is used again. The `ne2` packages were deleted before the conversion of Step 6d.
 3. **A guard in the conversion.** `constant_concats` lists the concat ops with two or more constant inputs in the MIL program of `ct.convert`. `convert_module` raises `NeuralEngineGraphError` before the save when the list is not empty, and each conversion line has the field `constant_concats`.
 4. **A part test.** Test T16 converts only the `ne3` embeddings of ViT-S/16 at 448 px and checks them on CPU_AND_NE, so a change of the fault in a new macOS or coremltools shows at once.

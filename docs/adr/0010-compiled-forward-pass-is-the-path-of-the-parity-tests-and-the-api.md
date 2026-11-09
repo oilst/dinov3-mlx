@@ -1,6 +1,6 @@
 # The compiled forward pass is the path of the parity tests and the API
 
-The compiled forward pass is the forward pass that the parity tests and the benchmarks run. The API of Step 7 will run it too. `compile_backbone(model)` in `src/dinov3_apple/mlx_model.py` makes it:
+The compiled forward pass is the forward pass that the parity tests and the benchmarks run. The API of Step 7 will run it too. `compile_backbone(model)` in `src/dinov3_mlx/mlx_model.py` makes it:
 
 - One `mx.compile` function for each backbone, over the whole forward pass. It has one trace for each input shape (batch size, height, width). It does not use `shapeless=True`.
 - The weights enter as inputs (`inputs=model.state`). So the output follows a weight change after the compile.

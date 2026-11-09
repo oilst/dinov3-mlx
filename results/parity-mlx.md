@@ -90,7 +90,7 @@ Table 2. Batch consistency.
 | fp16-autocast | 0.999 | 0.999 | 0.99 |
 | bf16-autocast | 0.998 | 0.995 | 0.96 |
 
-Table 3. Thresholds of `src/dinov3_apple/parity.py`. On 2026-11-06 the user gave bf16 its own row: bf16 activations give lower parity on torch-mps and on torch-cpu alike.
+Table 3. Thresholds of `src/dinov3_mlx/parity.py`. On 2026-11-06 the user gave bf16 its own row: bf16 activations give lower parity on torch-mps and on torch-cpu alike.
 
 ## 4 Stored hidden states
 

@@ -7,7 +7,7 @@ Step 6c runs the Hugging Face backbone as a Core ML package on the Apple Neural 
 
 The plain fp16 package gives finite but wrong tokens on CPU_AND_NE (frame cosine 0.035 for ViT-S/16), and correct tokens on CPU_AND_GPU.
 
-Decision: before the trace, the build changes the torch graph with the Neural Engine rewrite (`rewrite_for_neural_engine` in `src/dinov3_apple/coreml.py`). It is exact in real numbers:
+Decision: before the trace, the build changes the torch graph with the Neural Engine rewrite (`rewrite_for_neural_engine` in `src/dinov3_mlx/coreml.py`). It is exact in real numbers:
 
 1. **Score scale.** `ne_attention` computes z = (q · (1/√d) / 256) · kᵀ, then softmax(clip(z − max z, −60,000 / 256) · 256). The row maximum comes before the multiplication, so no value above 0 enters the softmax. 256 is a power of two, so the division adds no rounding error.
 2. **Residual-stream scale.** The embeddings are divided by r, and the weights and the bias of `o_proj` and `down_proj` are multiplied by 1/r. r is the smallest power of two with (largest token value) / r ≤ 32,768: 1 for ViT-S/16, ViT-S+/16 and ViT-B/16, 8 for ViT-L/16 and ViT-H+/16. `residual_scale` reads the value from the token-range table. The layer norms remove the factor. Each layer norm ε becomes ε / r², so each layer norm gives exactly its old output (plan amendment of 2026-11-08).

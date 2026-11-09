@@ -293,7 +293,7 @@ a { color: var(--accent); }
   <h3>3.2 D2: weights</h3>
   <p>The MLX backbone reads the Hugging Face safetensors. Two changes are necessary. The patch embedding weight gets a new layout (D4). The mask token goes away, because only training uses it. Table 5 gives the key map. The question is when the key map runs, and if its result goes into a file.</p>
   <p><b>Option A: convert at load time.</b> <code>mx.load</code> reads each safetensors file of <code>weights_dir</code>. The read is lazy. The key map runs in memory. No new file.</p>
-  <p><b>Option B: a converted MLX file in a cache folder outside the repo</b>, for example <code>~/.cache/dinov3-apple/mlx/&lt;Hugging Face id&gt;/&lt;snapshot&gt;/&lt;dtype&gt;.safetensors</code>. A command writes it once. The loader reads only this file.</p>
+  <p><b>Option B: a converted MLX file in a cache folder outside the repo</b>, for example <code>~/.cache/dinov3-mlx/mlx/&lt;Hugging Face id&gt;/&lt;snapshot&gt;/&lt;dtype&gt;.safetensors</code>. A command writes it once. The loader reads only this file.</p>
   <p><b>Option C: both.</b> The first load converts and writes the file. The next loads read the file.</p>
   <div class="table-wrap">
     <table>
@@ -449,7 +449,7 @@ a { color: var(--accent); }
     </ol>
     <p><code>test_rope_tables</code> compares the MLX tables with the module <code>DINOv3ViTRopePositionEmbedding</code> of Hugging Face on <code>torch-cpu</code>, for the six grids, with the target ≤ 1e-6. A second, report-only test gives the difference to the Meta formula with the bf16 periods. The plan records the new wording of Table 9. The Learn stage corrects Table 1 of <code>docs/learn/01-prior-ports.html</code>.</p>
   </div>
-  <pre><code># src/dinov3_apple/mlx_model.py (shape of the code, not final)
+  <pre><code># src/dinov3_mlx/mlx_model.py (shape of the code, not final)
 def rope_tables(grid_h: int, grid_w: int, head_dim: int, theta: float) -&gt; tuple[np.ndarray, np.ndarray]:
     inv_freq = 1 / theta ** np.arange(0, 1, 4 / head_dim, dtype=np.float32)   # (head_dim / 4,)
     coord_h = np.arange(0.5, grid_h, dtype=np.float32) / grid_h
@@ -633,11 +633,11 @@ def apply_rope(x: mx.array, cos: mx.array, sin: mx.array) -&gt; mx.array:
       <thead><tr><th>Name</th><th>Place</th><th>What it does</th></tr></thead>
       <tbody>
         <tr><td>backend <code>mlx</code></td><td>GLOSSARY.md</td><td>The name in test ids, log lines and result files</td></tr>
-        <tr><td><code>MlxBackbone</code>, <code>rope_tables</code>, <code>apply_rope</code>, the part modules</td><td><code>src/dinov3_apple/mlx_model.py</code></td><td>The backbone of D1, D3, D4 and D5</td></tr>
+        <tr><td><code>MlxBackbone</code>, <code>rope_tables</code>, <code>apply_rope</code>, the part modules</td><td><code>src/dinov3_mlx/mlx_model.py</code></td><td>The backbone of D1, D3, D4 and D5</td></tr>
         <tr><td><code>run_mlx(model, pixels, dtype_mode) -&gt; np.ndarray</code></td><td><code>mlx_model.py</code></td><td>The contract of <code>run_torch</code>. In: stored pixels (B, 3, H, W), fp32, NCHW. Out: all tokens after the final layer norm, (B, 5 + N, D), fp32 NumPy. It casts to fp32 before <code>np.array</code>, because a bf16 <code>mx.array</code> does not convert to NumPy</td></tr>
         <tr><td><code>run_mlx_hidden_states(model, pixels) -&gt; np.ndarray</code></td><td><code>mlx_model.py</code></td><td>(L + 1, 5 + N, D) before the final layer norm. Test 7 and the Step 5 record of the largest token value in each block</td></tr>
-        <tr><td><code>load_mlx_backbone(model_size, dtype_mode)</code>, <code>MLX_DTYPE_MODES</code></td><td><code>src/dinov3_apple/mlx_weights.py</code></td><td>D2. Raises <code>WeightsNotFoundError</code> and <code>InsufficientMemoryError</code>, as the torch loader does, so that the fixture skips. <code>MLX_DTYPE_MODES</code> holds only "fp32" in Step 4. Each key must be a key of <code>THRESHOLDS</code> and <code>DTYPE_OF_MODE</code></td></tr>
-        <tr><td><code>read_inputs</code>, <code>read_reference</code>, <code>configurations</code>, <code>own_aspect_size</code></td><td><code>src/dinov3_apple/stored.py</code></td><td>Moved out of <code>reference.py</code> and <code>preprocess.py</code>, without torch. Both old modules re-export them, so the imports of Steps 2 and 3 keep working</td></tr>
+        <tr><td><code>load_mlx_backbone(model_size, dtype_mode)</code>, <code>MLX_DTYPE_MODES</code></td><td><code>src/dinov3_mlx/mlx_weights.py</code></td><td>D2. Raises <code>WeightsNotFoundError</code> and <code>InsufficientMemoryError</code>, as the torch loader does, so that the fixture skips. <code>MLX_DTYPE_MODES</code> holds only "fp32" in Step 4. Each key must be a key of <code>THRESHOLDS</code> and <code>DTYPE_OF_MODE</code></td></tr>
+        <tr><td><code>read_inputs</code>, <code>read_reference</code>, <code>configurations</code>, <code>own_aspect_size</code></td><td><code>src/dinov3_mlx/stored.py</code></td><td>Moved out of <code>reference.py</code> and <code>preprocess.py</code>, without torch. Both old modules re-export them, so the imports of Steps 2 and 3 keep working</td></tr>
         <tr><td><code>backbone</code>, <code>record</code> fixtures</td><td><code>tests/conftest.py</code></td><td>The device "mlx" goes to <code>load_mlx_backbone</code>. <code>free()</code> also calls <code>mx.clear_cache()</code>. <code>record</code> takes the backend and writes <code>parity/mlx.jsonl</code>. The sort key of the tests includes the backend. conftest sets <code>MLX_ENABLE_TF32=0</code> before any import of mlx (D7)</td></tr>
         <tr><td><code>--backend mlx</code></td><td><code>scripts/parity_table.py</code></td><td>Writes <code>results/parity-mlx.md</code></td></tr>
         <tr><td><code>mlx_bench.run_worker</code>, <code>benchmark.py --backend mlx</code>, <code>results/bench-mlx.jsonl</code></td><td>Step 6</td><td>Not in Step 4. The timing keeps the four times of Step 3 with <code>mx.eval</code> in place of the synchronize</td></tr>

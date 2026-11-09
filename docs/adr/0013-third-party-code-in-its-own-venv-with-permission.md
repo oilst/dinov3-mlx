@@ -2,10 +2,10 @@
 
 Step 6b measures code and model files that other people published (`specs/06b-prior-art/`). For each candidate:
 
-1. The clone or the download goes into its own new folder below `~/.cache/dinov3-apple/prior-art/`, outside the repo. The repo gets numbers only: no code, no model file and no weight of a candidate.
+1. The clone or the download goes into its own new folder below `~/.cache/dinov3-mlx/prior-art/`, outside the repo. The repo gets numbers only: no code, no model file and no weight of a candidate.
 2. Each kind of third-party code gets its own venv there: `venv-coreml` (coremltools 9.0 for the Core ML exports) and `venv-mlx` (mlx 0.32.4 for the Python MLX ports). No candidate package goes into `pyproject.toml` or `uv.lock`.
 3. The driver `scripts/bench_prior_art.py` starts a third-party worker as `<venv>/bin/python -I <our worker> '<spec>'`, inside the GPU lock. The worker is our own file in `scripts/`; the driver refuses a worker file inside the prior-art folder. `-I` keeps the PYTHON variables, the current folder and the script folder out of `sys.path`, so a planted module of a download cannot load. A worker that needs a clone inserts the path of the clone itself.
-4. The workers import no module of the repo. They write one safetensors file of outputs and one JSON line; the driver computes the parity with `dinov3_apple.parity`, so all sides share one parity code path.
+4. The workers import no module of the repo. They write one safetensors file of outputs and one JSON line; the driver computes the parity with `dinov3_mlx.parity`, so all sides share one parity code path.
 5. No pickle file of a third party loads: not with `torch.load`, not in a worker. A port whose converter reads a pickle gets our own weights in its key names (`scripts/prior_art_meta_names.py`).
 6. We read each Python file before it runs.
 7. The run of third-party Python code (a port, not a model file) needs the user's yes. Until then the driver writes the port rows with the status "blocked", the reason and the command (`ports` without `--allow-third-party-python`).
@@ -19,7 +19,7 @@ Why:
 
 We considered two other options:
 
-- Install our package into the third-party venv, so the worker imports `dinov3_apple` (D9 option A). It gives two copies of our code and puts our pinned tree into a third-party venv.
+- Install our package into the third-party venv, so the worker imports `dinov3_mlx` (D9 option A). It gives two copies of our code and puts our pinned tree into a third-party venv.
 - Put the candidate packages into a dependency group of `pyproject.toml` (D9 option C). Simple, but against rule 2.
 
 Consequences:

@@ -11,8 +11,8 @@ import numpy as np
 import pytest
 from safetensors.numpy import save_file
 
-from dinov3_apple import bench
-from dinov3_apple.bench import (
+from dinov3_mlx import bench
+from dinov3_mlx.bench import (
     DTYPE_MODE_NAMES,
     TIMED,
     WARM_UP,
@@ -31,8 +31,8 @@ from dinov3_apple.bench import (
     run_worker_subprocess,
     summarize,
 )
-from dinov3_apple.hub import WeightsNotFoundError
-from dinov3_apple.parity import TEST_IMAGES
+from dinov3_mlx.hub import WeightsNotFoundError
+from dinov3_mlx.parity import TEST_IMAGES
 
 
 def _batches(budget: TimeBudget, seconds_per_batch: float) -> tuple[int, float]:
@@ -102,7 +102,7 @@ def _need(model_size: str, dtype_mode: str, side: int, batch_size: int) -> int:
 
 
 def test_required_bench_bytes_grows_with_batch_and_side() -> None:
-    from dinov3_apple.reference import DTYPE_MODES, required_load_bytes
+    from dinov3_mlx.reference import DTYPE_MODES, required_load_bytes
 
     load = required_load_bytes("ViT-S/16", DTYPE_MODES["fp32"].weights)
     small = _need("ViT-S/16", "fp32", 224, 1)
@@ -118,7 +118,7 @@ def test_required_bench_bytes_examples() -> None:
 
 
 def test_bench_module_does_not_import_torch() -> None:
-    code = "import sys, dinov3_apple.bench, dinov3_apple.flops; print('torch' in sys.modules)"
+    code = "import sys, dinov3_mlx.bench, dinov3_mlx.flops; print('torch' in sys.modules)"
     import subprocess
 
     result = subprocess.run(
@@ -262,7 +262,7 @@ def test_baseline_rows_use_latest_line() -> None:
 
 
 def test_result_line_without_worker_has_a_time() -> None:
-    from dinov3_apple.machine import read_machine_state
+    from dinov3_mlx.machine import read_machine_state
 
     config = BenchConfig("B1", "ViT-S/16", "fp32", 224, 1)
     line = result_line(
@@ -320,7 +320,7 @@ def test_bytes_per_weight_of_each_backend() -> None:
 # A worker: one memory-check line for the driver, one other line on each stream, then its result.
 WORKER = """
 import json, os, sys
-print("memory-check-record 1700000000.250000 dinov3_apple.memory memory check: x: ok", file=sys.stderr)
+print("memory-check-record 1700000000.250000 dinov3_mlx.memory memory check: x: ok", file=sys.stderr)
 print("a line that is not a check", file=sys.stderr)
 print("a line that is not the result")
 print(json.dumps({"status": "done", "argument": sys.argv[1], "env": os.environ["WORKER_VALUE"]}))
@@ -334,12 +334,12 @@ def test_run_worker_subprocess(
     the last JSON line of the worker and replays its memory-check lines in the driver. A worker
     that exits with an error or runs too long gives the status "error"."""
     # The replayed record must not reach memory-checks.log of the test session.
-    monkeypatch.setattr(logging.getLogger("dinov3_apple.memory"), "handlers", [])
+    monkeypatch.setattr(logging.getLogger("dinov3_mlx.memory"), "handlers", [])
     env = os.environ | {"WORKER_VALUE": "from the driver"}
     with caplog.at_level(logging.INFO):
         result = run_worker_subprocess([sys.executable, "-c", WORKER, "7"], env, timeout_s=60)
     assert result == {"status": "done", "argument": "7", "env": "from the driver"}
-    records = [record for record in caplog.records if record.name == "dinov3_apple.memory"]
+    records = [record for record in caplog.records if record.name == "dinov3_mlx.memory"]
     assert [record.getMessage() for record in records] == ["memory check: x: ok"]
     assert records[0].created == 1700000000.25
 
@@ -499,7 +499,7 @@ def test_bench_configurations_compile_outside_priority() -> None:
 
 def test_result_line_takes_the_backend() -> None:
     """T20."""
-    from dinov3_apple.machine import read_machine_state
+    from dinov3_mlx.machine import read_machine_state
 
     config = BenchConfig("S6", "ViT-S/16", "fp32", 224, 1, bits=None)
     worker = {"status": "skipped", "reason": "does not fit"}
@@ -515,8 +515,8 @@ TORCH_WORKER_UNTIL_THE_CHECK = """
 from typing import NoReturn
 
 import benchmark
-from dinov3_apple import reference
-from dinov3_apple.hub import WeightsNotFoundError
+from dinov3_mlx import reference
+from dinov3_mlx.hub import WeightsNotFoundError
 
 
 def stop(model_size: str) -> NoReturn:
@@ -553,18 +553,18 @@ def test_benchmark_worker_memory_check_reaches_the_driver_log(
     )
     assert "memory check: ViT-S/16 torch-mps fp32" in worker.stderr, worker.stderr
     monkeypatch.setattr(subprocess, "run", lambda command, **kwargs: worker)
-    monkeypatch.setattr(logging.getLogger("dinov3_apple.memory"), "handlers", [])
+    monkeypatch.setattr(logging.getLogger("dinov3_mlx.memory"), "handlers", [])
     with caplog.at_level(logging.INFO):
         result = benchmark.run_worker_subprocess(config)
     assert result["status"] == "error"
-    records = [record for record in caplog.records if record.name == "dinov3_apple.memory"]
+    records = [record for record in caplog.records if record.name == "dinov3_mlx.memory"]
     assert [r.getMessage().split(":")[1].strip() for r in records] == ["ViT-S/16 torch-mps fp32"]
 
 
 def test_public_path_and_public_text_remove_local_folders(tmp_path: Path) -> None:
     """A path in a committed results file is repo-relative; the home folder becomes ~."""
     home = tmp_path / "home"
-    root = home / "code" / "dinov3-apple"
+    root = home / "code" / "dinov3-mlx"
     output = root / "tests" / "fixtures" / "generated" / "x.safetensors"
     assert bench.public_path(output, root, home) == "tests/fixtures/generated/x.safetensors"
     assert bench.public_path(str(output), root, home) == "tests/fixtures/generated/x.safetensors"
@@ -581,14 +581,14 @@ def test_public_path_and_public_text_remove_local_folders(tmp_path: Path) -> Non
     )
     # A sibling folder with the same start is not the repo root and not the home folder.
     assert bench.public_text(f"{home}-other/a {root}-old/b", root, home) == (
-        f"{home}-other/a ~/code/dinov3-apple-old/b"
+        f"{home}-other/a ~/code/dinov3-mlx-old/b"
     )
     assert bench.public_text("", root, home) == ""
 
 
 def test_repo_path_resolves_against_the_repo_root(tmp_path: Path) -> None:
     """A reader of a results file resolves a repo-relative path against the repo root."""
-    from dinov3_apple.stored import REPO_ROOT
+    from dinov3_mlx.stored import REPO_ROOT
 
     assert bench.repo_path("tests/x.safetensors") == REPO_ROOT / "tests" / "x.safetensors"
     assert bench.repo_path(tmp_path / "a") == tmp_path / "a"

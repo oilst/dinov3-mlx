@@ -54,7 +54,7 @@ a { color: var(--accent); }
     <li>The Hugging Face <code>DINOv3ViTModel</code> is the source graph (our reference model). Its weights come from the Hugging Face cache.</li>
     <li>ADR 0004: a speedup comes from paired runs, and two runs at different times. Step 6c measures our compiled <code>mlx</code> again in the same paired runs.</li>
     <li>ADR 0008 and the run rules of <code>CLAUDE.md</code>: one heavy job at a time through the GPU lock, a memory check before each load, ViT-7B/16 never with the fp32 weights of the whole model.</li>
-    <li>Converted <code>.mlpackage</code> files live outside the repo, in <code>~/.cache/dinov3-apple/coreml/</code>.</li>
+    <li>Converted <code>.mlpackage</code> files live outside the repo, in <code>~/.cache/dinov3-mlx/coreml/</code>.</li>
   </ul>
   <p>The Step 6b probes (shared note of 2026-11-07, 22:40) found that the public fp16 Core ML exports of DINOv3 break on CPU_AND_NE (patch mean 0.66 and −0.03), and pass on CPU_AND_GPU (≥ 0.999992). Section 2.3 gives the cause.</p>
 </section>
@@ -63,7 +63,7 @@ a { color: var(--accent); }
   <h2>2 Measured facts and probe results</h2>
 
   <h3>2.1 The probes</h3>
-  <p>All probes ran through the GPU lock, one at a time, on AC power. The scripts and logs are outside the repo: scripts in the scratchpad of this session (copied to <code>~/.cache/dinov3-apple/coreml/probe-scripts/</code>), logs in <code>~/.cache/dinov3-apple/coreml/probe-logs/</code>, packages in <code>~/.cache/dinov3-apple/coreml/probes/</code>. Each probe uses the stored pixels of <code>iss-kibo-lab</code> and the reference file of its model size. The timed loops of the probes are short (1 to 5 s). They show the size of an effect. They are not benchmark results.</p>
+  <p>All probes ran through the GPU lock, one at a time, on AC power. The scripts and logs are outside the repo: scripts in the scratchpad of this session (copied to <code>~/.cache/dinov3-mlx/coreml/probe-scripts/</code>), logs in <code>~/.cache/dinov3-mlx/coreml/probe-logs/</code>, packages in <code>~/.cache/dinov3-mlx/coreml/probes/</code>. Each probe uses the stored pixels of <code>iss-kibo-lab</code> and the reference file of its model size. The timed loops of the probes are short (1 to 5 s). They show the size of an effect. They are not benchmark results.</p>
   <div class="table-wrap">
     <table>
       <thead><tr><th>Log</th><th>What it measures</th></tr></thead>
@@ -280,7 +280,7 @@ a { color: var(--accent); }
     </table>
   </div>
   <p class="caption"><b>Table 8.</b> Trade-offs of D1.</p>
-  <div class="box"><p><b>Recommendation: Option A</b>, with the <code>_cast</code> patch in <code>src/dinov3_apple/coreml.py</code>. Option B is the fallback when a torch version breaks the trace. The orchestrator added on 2026-11-08: the patch is a small named function (<code>patch_coremltools_cast</code>) with a test and a comment that names coremltools 9.0 and numpy 2.5.4; it never edits the installed package. The user asked the agent to decide (night of 2026-11-07).</p></div>
+  <div class="box"><p><b>Recommendation: Option A</b>, with the <code>_cast</code> patch in <code>src/dinov3_mlx/coreml.py</code>. Option B is the fallback when a torch version breaks the trace. The orchestrator added on 2026-11-08: the patch is a small named function (<code>patch_coremltools_cast</code>) with a test and a comment that names coremltools 9.0 and numpy 2.5.4; it never edits the installed package. The user asked the agent to decide (night of 2026-11-07).</p></div>
 
   <h3>3.2 D2: The graph for the Neural Engine</h3>
   <div class="table-wrap">
@@ -328,7 +328,7 @@ a { color: var(--accent); }
   <p>Options: A. two processes (Core ML on CPU_AND_NE, compiled <code>mlx</code> on the GPU) with a common start time; each counts its batches in the same time window; the combined throughput is the sum. B. Two threads in one process. C. One Core ML package with ALL. C does not split the work (Section 2.9). B shares one Python interpreter and its lock between the two loops. <span class="rec">Recommendation: A</span>, in the order alone, alone, both, rotated over the rounds, so each round has its own reference. The user asked the agent to decide (night of 2026-11-07).</p>
 
   <h3>3.9 D9: Where the code goes</h3>
-  <p><span class="rec">Recommendation:</span> new files only: <code>src/dinov3_apple/coreml.py</code> (the rewrite, the conversion, the <code>_cast</code> patch, the load and the run), <code>scripts/bench_coreml.py</code> (the driver, its own result file <code>results/coreml.jsonl</code>), <code>tests/test_coreml.py</code>. coremltools stays in the dependency group <code>coreml</code>; the tests skip without it. The shared modules (<code>bench.py</code>, <code>speedup.py</code>, <code>mlx_bench.py</code>) do not change; <code>bench_coreml.py</code> calls their public functions. Step 6b works in parallel on its own new files. The user asked the agent to decide (night of 2026-11-07).</p>
+  <p><span class="rec">Recommendation:</span> new files only: <code>src/dinov3_mlx/coreml.py</code> (the rewrite, the conversion, the <code>_cast</code> patch, the load and the run), <code>scripts/bench_coreml.py</code> (the driver, its own result file <code>results/coreml.jsonl</code>), <code>tests/test_coreml.py</code>. coremltools stays in the dependency group <code>coreml</code>; the tests skip without it. The shared modules (<code>bench.py</code>, <code>speedup.py</code>, <code>mlx_bench.py</code>) do not change; <code>bench_coreml.py</code> calls their public functions. Step 6b works in parallel on its own new files. The user asked the agent to decide (night of 2026-11-07).</p>
 </section>
 
 <section id="risks">
@@ -383,7 +383,7 @@ a { color: var(--accent); }
   <h2>7 New terms</h2>
   <p>Terms for <code>GLOSSARY.md</code>. The build adds them when the code uses them.</p>
   <ul>
-    <li><b>Core ML package</b>: one converted backbone for one model size, input resolution and batch size (<code>.mlpackage</code>), in <code>~/.cache/dinov3-apple/coreml/</code>.</li>
+    <li><b>Core ML package</b>: one converted backbone for one model size, input resolution and batch size (<code>.mlpackage</code>), in <code>~/.cache/dinov3-mlx/coreml/</code>.</li>
     <li><b>Compute unit</b>: the Core ML setting that names the devices a package may use: CPU_ONLY, CPU_AND_GPU, CPU_AND_NE or ALL.</li>
     <li><b>Compute plan</b>: the device and the estimated cost of each op of a compiled package, from <code>MLComputePlan</code>.</li>
     <li><b>Neural Engine rewrite</b>: the two exact changes to the Hugging Face backbone before the conversion that keep every value inside fp16: score scaling and residual-stream scale.</li>

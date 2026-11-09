@@ -24,11 +24,11 @@ from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 
-from dinov3_apple.bench import BenchConfig, make_batch, required_bench_bytes
-from dinov3_apple.flops import MODEL_SHAPES, part_bytes, part_flops, tokens
-from dinov3_apple.gpu_lock import heavy_job
-from dinov3_apple.machine import check_machine_state, read_machine_state
-from dinov3_apple.memory import GB, available_memory_bytes
+from dinov3_mlx.bench import BenchConfig, make_batch, required_bench_bytes
+from dinov3_mlx.flops import MODEL_SHAPES, part_bytes, part_flops, tokens
+from dinov3_mlx.gpu_lock import heavy_job
+from dinov3_mlx.machine import check_machine_state, read_machine_state
+from dinov3_mlx.memory import GB, available_memory_bytes
 
 REPO_ROOT = Path(__file__).parents[1]
 RESULTS = REPO_ROOT / "results" / "block-profile-torch-mps.jsonl"
@@ -46,9 +46,9 @@ def child(model_size: str, dtype_mode: str) -> None:
     """Load one backbone and profile all input resolutions and batch sizes. Print JSON lines."""
     import torch
 
-    from dinov3_apple.block_profile import profile_block
-    from dinov3_apple.reference import DTYPE_MODES as MODES
-    from dinov3_apple.reference import load_torch_backbone, read_inputs
+    from dinov3_mlx.block_profile import profile_block
+    from dinov3_mlx.reference import DTYPE_MODES as MODES
+    from dinov3_mlx.reference import load_torch_backbone, read_inputs
 
     model = load_torch_backbone(model_size, "mps", dtype_mode)
     inputs = read_inputs()

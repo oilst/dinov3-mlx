@@ -32,7 +32,7 @@ from collections import Counter
 from dataclasses import asdict
 from pathlib import Path
 
-from dinov3_apple.bench import (
+from dinov3_mlx.bench import (
     ACTIVATION_FACTOR,
     DEFERRED_REASON,
     GIANT_MODEL_SIZE,
@@ -45,15 +45,15 @@ from dinov3_apple.bench import (
     required_bench_bytes,
     result_line,
 )
-from dinov3_apple.bench import run_worker_subprocess as run_worker_command
-from dinov3_apple.gpu_lock import heavy_job
-from dinov3_apple.hub import MODEL_IDS, WeightsNotFoundError
-from dinov3_apple.machine import (
+from dinov3_mlx.bench import run_worker_subprocess as run_worker_command
+from dinov3_mlx.gpu_lock import heavy_job
+from dinov3_mlx.hub import MODEL_IDS, WeightsNotFoundError
+from dinov3_mlx.machine import (
     MachineStateError,
     check_machine_state,
     read_machine_state,
 )
-from dinov3_apple.memory import (
+from dinov3_mlx.memory import (
     GB,
     InsufficientMemoryError,
     available_memory_bytes,
@@ -91,7 +91,7 @@ def worker_main(config_json: str) -> None:
     specs/06-speed/plan.html).
     """
     send_checks_to(sys.stderr)
-    from dinov3_apple.torch_bench import run_worker
+    from dinov3_mlx.torch_bench import run_worker
 
     config = BenchConfig(**json.loads(config_json))
     try:

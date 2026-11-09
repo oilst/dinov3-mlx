@@ -17,12 +17,12 @@ import pytest
 from small_model import small_hf_model, small_mlx_model, small_pixels
 from under_test import SLOW
 
-from dinov3_apple import prior_art
-from dinov3_apple.mlx_model import apply_rope, compile_backbone, rope_layout, rope_tables
-from dinov3_apple.outputs import NUM_PREFIX_TOKENS
-from dinov3_apple.parity import TEST_IMAGES, THRESHOLDS
-from dinov3_apple.speedup import NOISE
-from dinov3_apple.stored import IMAGENET_MEAN_VALUES, IMAGENET_STD_VALUES
+from dinov3_mlx import prior_art
+from dinov3_mlx.mlx_model import apply_rope, compile_backbone, rope_layout, rope_tables
+from dinov3_mlx.outputs import NUM_PREFIX_TOKENS
+from dinov3_mlx.parity import TEST_IMAGES, THRESHOLDS
+from dinov3_mlx.speedup import NOISE
+from dinov3_mlx.stored import IMAGENET_MEAN_VALUES, IMAGENET_STD_VALUES
 
 REPO_ROOT = Path(__file__).parents[1]
 SCRIPTS = REPO_ROOT / "scripts"
@@ -55,7 +55,7 @@ def test_candidates_cover_the_explore_table() -> None:
 
 def test_exports_have_package_paths_inside_prior_art_dir() -> None:
     """T2."""
-    from dinov3_apple.flops import tokens
+    from dinov3_mlx.flops import tokens
 
     assert list(prior_art.EXPORTS) == [f"E{i}" for i in range(1, 8)]
     for name, export in prior_art.EXPORTS.items():
@@ -233,7 +233,7 @@ def test_port_rope_tables_match_a_numpy_oracle(grid: tuple[int, int]) -> None:
     0.0314 at 14 × 14): the angles reach 2π, where one bf16 step is 2^-5 = 0.031 (deviation of the
     build).
     """
-    from dinov3_apple.port_variants import port_rope_tables
+    from dinov3_mlx.port_variants import port_rope_tables
 
     cos, sin = port_rope_tables(*grid, HEAD_DIM, THETA)
     assert cos.dtype == sin.dtype == mx.bfloat16
@@ -254,7 +254,7 @@ def test_port_rope_tables_match_a_numpy_oracle(grid: tuple[int, int]) -> None:
 @pytest.mark.parametrize(("grid", "angle"), [((14, 14), 0.00791), ((32, 32), 0.00825)])
 def test_meta_periods_angle_difference(grid: tuple[int, int], angle: float) -> None:
     """T7."""
-    from dinov3_apple.port_variants import meta_periods, meta_rope_tables
+    from dinov3_mlx.port_variants import meta_periods, meta_rope_tables
 
     periods = meta_periods(HEAD_DIM, THETA)
     exact = THETA ** (np.arange(HEAD_DIM // 4, dtype=np.float64) / (HEAD_DIM // 4))
@@ -284,7 +284,7 @@ def _tokens(forward: object, pixels: np.ndarray) -> np.ndarray:
 @pytest.mark.mlx
 def test_variant_v0_is_bit_for_bit(small_hf: object) -> None:
     """T8."""
-    from dinov3_apple.port_variants import variant_forward
+    from dinov3_mlx.port_variants import variant_forward
 
     pixels = small_pixels((2, 3, 224, 224))
     want = _tokens(compile_backbone(small_mlx_model(small_hf)), pixels)
@@ -300,7 +300,7 @@ def test_variant_v0_is_bit_for_bit(small_hf: object) -> None:
 @pytest.mark.parametrize(("dtype_mode", "bound"), [("fp32", 1e-5), ("fp16-cast", 0.03)])
 def test_unfused_attention_matches_sdpa(small_hf: object, dtype_mode: str, bound: float) -> None:
     """T9. The bound is relative to the largest absolute value of the V0 tokens."""
-    from dinov3_apple.port_variants import UnfusedAttention, variant_forward
+    from dinov3_mlx.port_variants import UnfusedAttention, variant_forward
 
     pixels = small_pixels((2, 3, 224, 224))
     want = _tokens(variant_forward(small_mlx_model(small_hf, dtype_mode), "V0"), pixels)
@@ -315,7 +315,7 @@ def test_unfused_attention_matches_sdpa(small_hf: object, dtype_mode: str, bound
 def test_bf16_rotation_rounds_prefix_tokens(small_hf: object) -> None:
     """T10. Bf16RotationAttention calls port_apply_rope, so a check of port_apply_rope on fp32 q
     covers the cast of the prefix tokens (finding V5 of verify.html)."""
-    from dinov3_apple.port_variants import (
+    from dinov3_mlx.port_variants import (
         Bf16RotationAttention,
         port_apply_rope,
         port_rope_tables,
@@ -385,7 +385,7 @@ def test_workers_are_standalone_and_safe(path: Path, allowed: set[str]) -> None:
     tree = ast.parse(path.read_text())
     third_party = _imports(tree) - set(sys.stdlib_module_names) - {"__future__"}
     assert third_party <= allowed, third_party - allowed
-    assert "dinov3_apple" not in _imports(tree)
+    assert "dinov3_mlx" not in _imports(tree)
     assert not {"pickle", "torch", "subprocess", "importlib", "marshal", "shelve"} & _imports(tree)
     for node in ast.walk(tree):
         if isinstance(node, ast.Call):
@@ -430,7 +430,7 @@ def test_ports_subcommand_is_gated(tmp_path: Path) -> None:
         assert line["side_kind"] == "port" and line["job"] == "J5"
         assert "no permission to run third-party Python code" in line["reason"]
         assert "--allow-third-party-python" in line["command"]
-        assert "dinov3_apple.gpu_lock" in line["command"]
+        assert "dinov3_mlx.gpu_lock" in line["command"]
 
 
 def test_driver_env_and_command(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -481,7 +481,7 @@ def test_lines_have_no_local_folders() -> None:
     folder in its reason (a public repo)."""
     import bench_prior_art
 
-    from dinov3_apple.stored import REPO_ROOT
+    from dinov3_mlx.stored import REPO_ROOT
 
     spec = prior_art.export_spec("E1", batch_size=1, units="CPU_AND_GPU")
     outputs = REPO_ROOT / "tests" / "fixtures" / "generated" / "bench" / "o.safetensors"
@@ -504,7 +504,7 @@ def test_parity_error_note_has_no_local_folders() -> None:
     repo-relative (a public repo)."""
     import bench_prior_art
 
-    from dinov3_apple.stored import REPO_ROOT
+    from dinov3_mlx.stored import REPO_ROOT
 
     spec = prior_art.export_spec("E1", batch_size=1, units="CPU_AND_GPU")
     missing = REPO_ROOT / "tests" / "fixtures" / "generated" / "bench" / "missing.safetensors"
@@ -826,7 +826,7 @@ def test_coreml_worker_end_to_end(tmp_path: Path) -> None:
 def test_variant_parity_vits16() -> None:
     """T16: V0 equals the compiled forward pass bit for bit on ViT-S/16 fp32 at 224 px; V1 gives a
     lower patch 1st percentile."""
-    from dinov3_apple.port_variants import run_variant_parity
+    from dinov3_mlx.port_variants import run_variant_parity
 
     v0 = run_variant_parity("ViT-S/16", "fp32", "V0", configurations=["iss-kibo-lab/224x224"])
     v1 = run_variant_parity("ViT-S/16", "fp32", "V1", configurations=["iss-kibo-lab/224x224"])

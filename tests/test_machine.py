@@ -1,6 +1,6 @@
 import pytest
 
-from dinov3_apple.machine import (
+from dinov3_mlx.machine import (
     MachineState,
     MachineStateError,
     check_machine_state,
@@ -101,6 +101,6 @@ def test_check_machine_state_accepts_no_adapter_report() -> None:
 
 def test_versions_include_mlx_metal() -> None:
     """T31 (D19 of specs/06-speed/plan.html): mlx-metal is an indirect dependency."""
-    from dinov3_apple.machine import read_versions
+    from dinov3_mlx.machine import read_versions
 
     assert read_versions()["mlx-metal"] == "0.32.4"

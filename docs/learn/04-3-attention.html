@@ -66,7 +66,7 @@ a { color: var(--accent); }
 
 <section id="why">
   <h2>1 Why this explainer</h2>
-  <p>The attention is the only part of a block that mixes information between tokens. Step 4 ports it to MLX in the class <code>Attention</code> of <code>src/dinov3_apple/mlx_model.py</code>, lines 227 to 268. The class is short. Most of the work happens in one MLX call: <code>mx.fast.scaled_dot_product_attention</code>. On the GPU, with 201 or more queries, this call starts the full-attention kernel of MLX. The full-attention kernel is one fused GPU kernel: it computes the scores, the softmax and the weighted sum of the values, and never writes the full score matrix to memory. For 8 or fewer queries, MLX starts a different kernel, the vector kernel (Section 6.3).</p>
+  <p>The attention is the only part of a block that mixes information between tokens. Step 4 ports it to MLX in the class <code>Attention</code> of <code>src/dinov3_mlx/mlx_model.py</code>, lines 227 to 268. The class is short. Most of the work happens in one MLX call: <code>mx.fast.scaled_dot_product_attention</code>. On the GPU, with 201 or more queries, this call starts the full-attention kernel of MLX. The full-attention kernel is one fused GPU kernel: it computes the scores, the softmax and the weighted sum of the values, and never writes the full score matrix to memory. For 8 or fewer queries, MLX starts a different kernel, the vector kernel (Section 6.3).</p>
   <p>This explainer shows what the class does, what the full-attention kernel does inside, how close the result is to the Hugging Face module and to NumPy float64, and why the fp32 dtype mode of <code>mlx</code> runs with TF32 off. It also shows why the attention cost grows with the square of the token count.</p>
   <p>The measured values come from four places: the test report of the Step 4 build of 2026-11-07 (<code>tests/fixtures/generated/mlx/report.jsonl</code>, which git ignores), <code>results/parity-mlx.md</code>, <code>results/bench-mlx-port.jsonl</code> and the targets of <code>specs/04-mlx-port/plan.html</code>. The build ran every mlx test on the GPU with TF32 off, except the TF32-on half of the TF32 probe (Section 8.2). For this page, nobody loaded a model and nobody ran a GPU computation. The NumPy emulations of Sections 6 and 8 ran on the CPU with NumPy 2.5.4.</p>
   <div class="note">
@@ -240,7 +240,7 @@ a { color: var(--accent); }
 <span class="ln">266</span>         q, k = apply_rope(q, cos, sin), apply_rope(k, cos, sin)
 <span class="ln">267</span>         a = mx.fast.scaled_dot_product_attention(q, k, v, scale=self.scale, mask=None)
 <span class="ln">268</span>         return self.output(a)</code></pre>
-  <p class="caption"><b>Listing 1.</b> <code>src/dinov3_apple/mlx_model.py</code>, lines 227 to 268, the class <code>Attention</code>. The grey numbers are the line numbers of the file.</p>
+  <p class="caption"><b>Listing 1.</b> <code>src/dinov3_mlx/mlx_model.py</code>, lines 227 to 268, the class <code>Attention</code>. The grey numbers are the line numbers of the file.</p>
 </section>
 
 <section id="proj">
@@ -602,7 +602,7 @@ a { color: var(--accent); }
   <pre><code># tests/conftest.py
 <span class="ln">12</span> os.environ["MLX_ENABLE_TF32"] = "0"                 # before line 23: import mlx.core as mx
 
-# src/dinov3_apple/mlx_model.py
+# src/dinov3_mlx/mlx_model.py
 <span class="ln">29</span> class TF32ModeError(RuntimeError):
 <span class="ln">30</span>     """The TF32 state of a load differs from the value of MLX_ENABLE_TF32."""
 …
@@ -614,7 +614,7 @@ a { color: var(--accent); }
 <span class="ln">49</span>     match = re.match(r"\s*([+-]?\d+)", value)            # the leading integer, as atoi
 <span class="ln">50</span>     return bool(match and int(match.group(1)))
 
-# src/dinov3_apple/mlx_weights.py, in load_mlx_backbone
+# src/dinov3_mlx/mlx_weights.py, in load_mlx_backbone
 <span class="ln">172</span>     dtype = MLX_DTYPE_MODES[dtype_mode]
 <span class="ln">173</span>     if dtype == mx.float32 and tf32_enabled() != tf32:
 <span class="ln">174</span>         raise TF32ModeError(f"set MLX_ENABLE_TF32={int(tf32)} before the first use of mlx")
@@ -731,7 +731,7 @@ a { color: var(--accent); }
 <section id="sources">
   <h2>12 Sources</h2>
   <ul>
-    <li>Step 4 code (commit <code>c212226</code>, and commit <code>ea82d58</code> for the fixes of F1, F4, F5, F6 and F7; the line numbers on this page are those of <code>ea82d58</code>): <code>src/dinov3_apple/mlx_model.py</code>, <code>src/dinov3_apple/mlx_weights.py</code>, <code>tests/test_mlx_parts.py</code>, <code>tests/test_mlx_environment.py</code>, <code>tests/test_mlx_weights.py</code>, <code>tests/conftest.py</code>, <code>scripts/bench_mlx_port.py</code>.</li>
+    <li>Step 4 code (commit <code>c212226</code>, and commit <code>ea82d58</code> for the fixes of F1, F4, F5, F6 and F7; the line numbers on this page are those of <code>ea82d58</code>): <code>src/dinov3_mlx/mlx_model.py</code>, <code>src/dinov3_mlx/mlx_weights.py</code>, <code>tests/test_mlx_parts.py</code>, <code>tests/test_mlx_environment.py</code>, <code>tests/test_mlx_weights.py</code>, <code>tests/conftest.py</code>, <code>scripts/bench_mlx_port.py</code>.</li>
     <li><code>specs/04-mlx-port/explore.html</code> (D5, D7, Tables 10 and 14), <code>specs/04-mlx-port/plan.html</code> (Tables 1, 5, 6, 7, 8 and 11) and <code>specs/04-mlx-port/verify.html</code> (Table 3, findings F4 and F7).</li>
     <li><code>results/parity-mlx.md</code>, <code>results/bench-mlx-port.jsonl</code> and the test report of the build of 2026-11-07 (<code>tests/fixtures/generated/mlx/report.jsonl</code>, not in git).</li>
     <li><code>docs/adr/0005-fp32-on-mlx-runs-with-tf32-off.md</code>, <a href="02-tokens-and-outputs.html">02-tokens-and-outputs.html</a> and <a href="03-where-the-compute-goes.html">03-where-the-compute-goes.html</a>.</li>

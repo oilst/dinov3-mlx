@@ -11,10 +11,10 @@ from small_model import save_small_model, small_hf_model, small_pixels
 from transformers import DINOv3ViTModel
 from under_test import MODEL_SIZES_UNDER_TEST
 
-import dinov3_apple.reference as torch_reference
-from dinov3_apple.memory import NO_FP32_WEIGHTS
-from dinov3_apple.outputs import NUM_PREFIX_TOKENS
-from dinov3_apple.reference import (
+import dinov3_mlx.reference as torch_reference
+from dinov3_mlx.memory import NO_FP32_WEIGHTS
+from dinov3_mlx.outputs import NUM_PREFIX_TOKENS
+from dinov3_mlx.reference import (
     HIDDEN_STATES_CONFIG,
     REQUIRED_METADATA,
     configurations,
@@ -102,11 +102,9 @@ def test_reproduced_tokens_of_7b_never_load_the_whole_model(
     save_small_model(hf_model, tmp_path / "weights", files=2)
     pixels = small_pixels((1, 3, 224, 224), seed=5)
     expected = run_torch(hf_model, pixels, "fp32")[0]
-    monkeypatch.setattr(
-        "dinov3_apple.reference.weights_dir", lambda model_size: tmp_path / "weights"
-    )
-    monkeypatch.setattr(logging.getLogger("dinov3_apple.memory"), "handlers", [])
-    monkeypatch.setattr("dinov3_apple.memory.available_memory_bytes", lambda: 10**12)
+    monkeypatch.setattr("dinov3_mlx.reference.weights_dir", lambda model_size: tmp_path / "weights")
+    monkeypatch.setattr(logging.getLogger("dinov3_mlx.memory"), "handlers", [])
+    monkeypatch.setattr("dinov3_mlx.memory.available_memory_bytes", lambda: 10**12)
     monkeypatch.setattr(torch_reference, "load_torch_backbone", fail_if_called("load_torch"))
     monkeypatch.setattr(DINOv3ViTModel, "from_pretrained", fail_if_called("from_pretrained"))
     calls: list[tuple[str, list[str], str | None]] = []

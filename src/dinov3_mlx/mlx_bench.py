@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
-from dinov3_apple.bench import (
+from dinov3_mlx.bench import (
     SIDES,
     TIMED,
     WARM_UP,
@@ -33,15 +33,15 @@ from dinov3_apple.bench import (
     required_bench_bytes,
     summarize,
 )
-from dinov3_apple.footprint import read_footprint
-from dinov3_apple.machine import read_versions
-from dinov3_apple.outputs import NUM_PREFIX_TOKENS
-from dinov3_apple.stored import model_slug, read_inputs
+from dinov3_mlx.footprint import read_footprint
+from dinov3_mlx.machine import read_versions
+from dinov3_mlx.outputs import NUM_PREFIX_TOKENS
+from dinov3_mlx.stored import model_slug, read_inputs
 
 if TYPE_CHECKING:  # the module imports mlx only inside its functions
     import mlx.core as mx
 
-    from dinov3_apple.mlx_model import Block
+    from dinov3_mlx.mlx_model import Block
 
 Forward = Callable[["mx.array"], "mx.array"]
 
@@ -88,7 +88,7 @@ def time_batch_mlx(
     """
     import mlx.core as mx
 
-    from dinov3_apple.mlx_model import patch_dtype
+    from dinov3_mlx.mlx_model import patch_dtype
 
     t0 = time.perf_counter()
     tokens = forward(mx.array(batch))
@@ -167,8 +167,8 @@ def run_mlx_worker(
     """
     import mlx.core as mx
 
-    from dinov3_apple import mlx_weights
-    from dinov3_apple.mlx_model import compile_backbone, patch_dtype
+    from dinov3_mlx import mlx_weights
+    from dinov3_mlx.mlx_model import compile_backbone, patch_dtype
 
     start_time = datetime.now(UTC).isoformat(timespec="seconds")
     base = read_footprint()
@@ -264,7 +264,7 @@ def mlx_block_parts(block: "Block") -> dict[str, Callable[..., tuple["mx.array",
     """
     import mlx.core as mx
 
-    from dinov3_apple import mlx_model
+    from dinov3_mlx import mlx_model
 
     attention, mlp = block.attention, block.mlp
 
@@ -313,13 +313,13 @@ class _Step5Rope:
     """A context that runs the attention of mlx_model with the Step 5 rotation."""
 
     def __enter__(self) -> None:
-        from dinov3_apple import mlx_model
+        from dinov3_mlx import mlx_model
 
         self.saved = mlx_model.apply_rope
         mlx_model.apply_rope = _apply_rope_step5
 
     def __exit__(self, *args: object) -> None:
-        from dinov3_apple import mlx_model
+        from dinov3_mlx import mlx_model
 
         mlx_model.apply_rope = self.saved
 
@@ -334,7 +334,7 @@ def change_forms(model: Any, forms: list[str], side: int) -> dict[str, tuple[For
     """
     import mlx.core as mx
 
-    from dinov3_apple.mlx_model import compile_backbone, rope_tables
+    from dinov3_mlx.mlx_model import compile_backbone, rope_tables
 
     grid = side // model.config.patch_size
     cos, sin = rope_tables(grid, grid, model.config.head_dim, model.config.rope_theta)
@@ -384,7 +384,7 @@ def run_change_worker(
     """
     import mlx.core as mx
 
-    from dinov3_apple import mlx_weights
+    from dinov3_mlx import mlx_weights
 
     model = mlx_weights.load_mlx_backbone(config.model_size, config.dtype_mode, tf32=False)
     batch = make_batch(read_inputs(), config.side, config.batch_size)
@@ -508,9 +508,9 @@ def run_profile_worker(config: BenchConfig, bench_dir: Path = Path(".")) -> dict
     """
     import mlx.core as mx
 
-    from dinov3_apple import mlx_weights
-    from dinov3_apple.flops import PART_NAMES
-    from dinov3_apple.mlx_model import compile_backbone
+    from dinov3_mlx import mlx_weights
+    from dinov3_mlx.flops import PART_NAMES
+    from dinov3_mlx.mlx_model import compile_backbone
 
     model = mlx_weights.load_mlx_backbone(config.model_size, config.dtype_mode, tf32=False)
     forward = compile_backbone(model)
@@ -606,8 +606,8 @@ def run_profile_worker(config: BenchConfig, bench_dir: Path = Path(".")) -> dict
 def run_token_range_worker(config: BenchConfig, pixels: np.ndarray) -> dict:
     """Return the token range of image 0 (eager run_mlx_token_range) above 512 px (D11): the
     report for the prediction that fp16-autocast stays valid at high input resolution."""
-    from dinov3_apple import mlx_weights
-    from dinov3_apple.mlx_model import run_mlx_token_range
+    from dinov3_mlx import mlx_weights
+    from dinov3_mlx.mlx_model import run_mlx_token_range
 
     model = mlx_weights.load_mlx_backbone(config.model_size, config.dtype_mode, tf32=False)
     token_range = run_mlx_token_range(model, pixels[:1])

@@ -84,11 +84,11 @@ a { color: var(--accent); }
     <table>
       <thead><tr><th>File</th><th>New public names</th><th>Job</th></tr></thead>
       <tbody>
-        <tr><td><code>src/dinov3_apple/stored.py</code></td><td><code>Configuration</code>, <code>configurations</code>, <code>own_aspect_size</code>, <code>read_inputs</code>, <code>read_reference</code>, <code>reference_path</code>, <code>model_slug</code>, <code>REPO_ROOT</code>, <code>IMAGES_DIR</code>, <code>REFERENCE_DIR</code>, <code>INPUTS_FILE</code>, <code>SQUARE_SIZES</code>, <code>HIDDEN_STATES_CONFIG</code></td><td>The readers of the stored pixels and the reference files, moved without change from <code>reference.py</code> and <code>preprocess.py</code>. No torch import (D6, R12).</td></tr>
-        <tr><td><code>src/dinov3_apple/mlx_model.py</code></td><td><code>MlxConfig</code>, <code>MLX_DTYPE_MODES</code>, <code>tf32_enabled</code>, <code>TF32ModeError</code>, <code>rope_tables</code>, <code>rotate_half</code>, <code>apply_rope</code>, <code>patchify</code>, <code>Embeddings</code>, <code>Attention</code>, <code>LayerScale</code>, <code>MLP</code>, <code>Block</code>, <code>MlxBackbone</code>, <code>run_mlx</code>, <code>run_mlx_hidden_states</code></td><td>The MLX backbone (D1, D3, D4, D5) and the run functions with the contract of <code>run_torch</code>. The module docstring names <code>modeling_dinov3_vit.py</code> of transformers (Apache-2.0) as the source (ADR 0002). No torch import.</td></tr>
-        <tr><td><code>src/dinov3_apple/mlx_weights.py</code></td><td><code>DROPPED_KEYS</code>, <code>UnknownWeightError</code>, <code>map_key</code>, <code>mlx_weights</code>, <code>required_mlx_load_bytes</code>, <code>load_mlx_backbone</code></td><td>The key map and the load (D2). Raises <code>WeightsNotFoundError</code> and <code>InsufficientMemoryError</code>, as the torch loader does, so the test fixture skips. No torch import.</td></tr>
+        <tr><td><code>src/dinov3_mlx/stored.py</code></td><td><code>Configuration</code>, <code>configurations</code>, <code>own_aspect_size</code>, <code>read_inputs</code>, <code>read_reference</code>, <code>reference_path</code>, <code>model_slug</code>, <code>REPO_ROOT</code>, <code>IMAGES_DIR</code>, <code>REFERENCE_DIR</code>, <code>INPUTS_FILE</code>, <code>SQUARE_SIZES</code>, <code>HIDDEN_STATES_CONFIG</code></td><td>The readers of the stored pixels and the reference files, moved without change from <code>reference.py</code> and <code>preprocess.py</code>. No torch import (D6, R12).</td></tr>
+        <tr><td><code>src/dinov3_mlx/mlx_model.py</code></td><td><code>MlxConfig</code>, <code>MLX_DTYPE_MODES</code>, <code>tf32_enabled</code>, <code>TF32ModeError</code>, <code>rope_tables</code>, <code>rotate_half</code>, <code>apply_rope</code>, <code>patchify</code>, <code>Embeddings</code>, <code>Attention</code>, <code>LayerScale</code>, <code>MLP</code>, <code>Block</code>, <code>MlxBackbone</code>, <code>run_mlx</code>, <code>run_mlx_hidden_states</code></td><td>The MLX backbone (D1, D3, D4, D5) and the run functions with the contract of <code>run_torch</code>. The module docstring names <code>modeling_dinov3_vit.py</code> of transformers (Apache-2.0) as the source (ADR 0002). No torch import.</td></tr>
+        <tr><td><code>src/dinov3_mlx/mlx_weights.py</code></td><td><code>DROPPED_KEYS</code>, <code>UnknownWeightError</code>, <code>map_key</code>, <code>mlx_weights</code>, <code>required_mlx_load_bytes</code>, <code>load_mlx_backbone</code></td><td>The key map and the load (D2). Raises <code>WeightsNotFoundError</code> and <code>InsufficientMemoryError</code>, as the torch loader does, so the test fixture skips. No torch import.</td></tr>
         <tr><td><code>scripts/bench_mlx_port.py</code></td><td>&ndash;</td><td>The small paired benchmark of Section 7. Options <code>--rounds</code>, <code>--dry-run</code>. The mlx worker imports no torch.</td></tr>
-        <tr><td><code>src/dinov3_apple/reference.py</code>, <code>preprocess.py</code></td><td>(changed)</td><td>Import the moved names from <code>stored.py</code> and re-export them in <code>__all__</code>. <code>reference.py</code> also keeps <code>TEST_IMAGES</code> in <code>__all__</code>, because <code>scripts/make_reference.py</code> imports it from <code>reference.py</code>. The imports of Steps 2 and 3 keep working.</td></tr>
+        <tr><td><code>src/dinov3_mlx/reference.py</code>, <code>preprocess.py</code></td><td>(changed)</td><td>Import the moved names from <code>stored.py</code> and re-export them in <code>__all__</code>. <code>reference.py</code> also keeps <code>TEST_IMAGES</code> in <code>__all__</code>, because <code>scripts/make_reference.py</code> imports it from <code>reference.py</code>. The imports of Steps 2 and 3 keep working.</td></tr>
         <tr><td><code>scripts/parity_table.py</code></td><td>(changed)</td><td>Option <code>--backend {torch-mps,mlx}</code>. With <code>mlx</code> it reads <code>parity/mlx.jsonl</code> and writes <code>results/parity-mlx.md</code>. <code>record</code> writes the version under the name of the backend package (<code>"torch"</code> in torch-mps lines, <code>"mlx"</code> in mlx lines). <code>write_table</code> takes the backend, reads the version field of that package, and puts the backend name in the title, the batch text and the table captions.</td></tr>
       </tbody>
     </table>
@@ -347,7 +347,7 @@ a { color: var(--accent); }
 <section id="code">
   <h2>5 Key code</h2>
   <p>These snippets show the shape of the code. The build can change the details. It must keep the public names, the contract of <code>run_mlx</code> and the order of the operations in <code>rope_tables</code>.</p>
-  <pre><code># src/dinov3_apple/mlx_weights.py
+  <pre><code># src/dinov3_mlx/mlx_weights.py
 DROPPED_KEYS = frozenset({"embeddings.mask_token"})  # training only
 PATCH_WEIGHT = "embeddings.patch_embeddings.weight"
 OUTER_KEYS = frozenset({"embeddings.cls_token", "embeddings.register_tokens", PATCH_WEIGHT,
@@ -388,7 +388,7 @@ def mlx_weights(tensors: Mapping[str, mx.array], dtype: mx.Dtype) -&gt; list[tup
             array = array.reshape(array.shape[0], -1)
         pairs.append((key, array.astype(dtype)))
     return pairs</code></pre>
-  <pre><code># src/dinov3_apple/mlx_weights.py
+  <pre><code># src/dinov3_mlx/mlx_weights.py
 def load_mlx_backbone(
     model_size: str, dtype_mode: str = "fp32", tf32: bool = False, ratio: float = LOAD_RATIO
 ) -&gt; MlxBackbone:
@@ -414,7 +414,7 @@ def load_mlx_backbone(
     model.load_weights(mlx_weights(tensors, dtype), strict=True)
     mx.eval(model.parameters())                          # the load cost stays out of the first call (R14)
     return model</code></pre>
-  <pre><code># src/dinov3_apple/mlx_model.py
+  <pre><code># src/dinov3_mlx/mlx_model.py
 def rope_tables(grid_h: int, grid_w: int, head_dim: int, theta: float) -&gt; tuple[np.ndarray, np.ndarray]:
     """Return the RoPE tables cos and sin of one patch grid, each (5 + Hp · Wp, head_dim), fp32.
 
@@ -445,7 +445,7 @@ def apply_rope(x: mx.array, cos: mx.array, sin: mx.array) -&gt; mx.array:
     """
     xf = x.astype(mx.float32)
     return (xf * cos + rotate_half(xf) * sin).astype(x.dtype)</code></pre>
-  <pre><code># src/dinov3_apple/mlx_model.py
+  <pre><code># src/dinov3_mlx/mlx_model.py
 def patchify(pixels: mx.array, patch_size: int) -&gt; mx.array:
     """Cut NCHW pixels (B, C, H, W) into patches (B, Hp · Wp, C · p · p): channel, row, column.
 
@@ -475,7 +475,7 @@ class Embeddings(nn.Module):
         prefix = mx.concatenate([self.cls_token, self.register_tokens], axis=1)
         prefix = mx.broadcast_to(prefix, (pixels.shape[0], *prefix.shape[1:]))
         return mx.concatenate([prefix, patches], axis=1)</code></pre>
-  <pre><code># src/dinov3_apple/mlx_model.py
+  <pre><code># src/dinov3_mlx/mlx_model.py
 class Attention(nn.Module):
     """Full attention over all tokens, with RoPE on the queries and keys of the patch tokens."""
 
@@ -539,7 +539,7 @@ class Block(nn.Module):
     def __call__(self, x: mx.array, cos: mx.array, sin: mx.array) -&gt; mx.array:
         x = self.layer_scale1(self.attention(self.norm1(x), cos, sin)) + x
         return self.layer_scale2(self.mlp(self.norm2(x))) + x</code></pre>
-  <pre><code># src/dinov3_apple/mlx_model.py
+  <pre><code># src/dinov3_mlx/mlx_model.py
 MLX_DTYPE_MODES: dict[str, mx.Dtype] = {"fp32": mx.float32}   # Step 5 adds fp16 and bf16 modes
 
 
@@ -666,7 +666,7 @@ def worker_plan(rounds: int = 3) -&gt; list[tuple[int, int, str, bool | None]]:
         <tr><td>T4</td><td><code>test_mlx_dtype_modes_are_known</code></td><td>Each key of <code>MLX_DTYPE_MODES</code> is a key of <code>THRESHOLDS</code> and <code>DTYPE_OF_MODE</code>. Step 4 has only "fp32".</td><td>Exact</td></tr>
         <tr><td>T5</td><td><code>test_mlx_config_from_hf</code></td><td>The ViT-S/16 <code>config.json</code> values (a dict in the test) give embedding dimension 384, 6 heads, head dimension 64, 12 blocks, MLP width 1,536, eps 1e-5, RoPE base 100, no k bias. A dict with <code>use_gated_mlp</code> true gives a config with the gated flag True, and <code>Block(config)</code> of that config raises <code>NotImplementedError</code>.</td><td>Exact</td></tr>
         <tr><td>T6</td><td><code>test_load_mlx_backbone_refuses_tf32_mismatch</code></td><td><code>MLX_ENABLE_TF32=1</code> (monkeypatch) with <code>tf32=False</code> raises <code>TF32ModeError</code> before the memory check and before any file read.</td><td>Exact</td></tr>
-        <tr><td>T7</td><td><code>test_load_mlx_backbone_checks_memory_first</code></td><td><code>parameter_count</code> in <code>mlx_weights</code> (monkeypatch) gives 21,596,544, so the test reads no weights file. An available memory of 0 bytes (monkeypatch) raises <code>InsufficientMemoryError</code>. The log line has the label "ViT-S/16 mlx fp32" and the need 4.1 GB. The monkeypatch patches <code>dinov3_apple.mlx_weights.parameter_count</code>, the name that <code>mlx_weights</code> imports, and not <code>hub.parameter_count</code>.</td><td>Exact</td></tr>
+        <tr><td>T7</td><td><code>test_load_mlx_backbone_checks_memory_first</code></td><td><code>parameter_count</code> in <code>mlx_weights</code> (monkeypatch) gives 21,596,544, so the test reads no weights file. An available memory of 0 bytes (monkeypatch) raises <code>InsufficientMemoryError</code>. The log line has the label "ViT-S/16 mlx fp32" and the need 4.1 GB. The monkeypatch patches <code>dinov3_mlx.mlx_weights.parameter_count</code>, the name that <code>mlx_weights</code> imports, and not <code>hub.parameter_count</code>.</td><td>Exact</td></tr>
         <tr><td>T7b</td><td><code>test_load_mlx_backbone_sets_memory_limit_to_need</code></td><td><code>available_memory_bytes</code> (monkeypatch) gives a large value, and <code>parameter_count</code> in <code>mlx_weights</code> (monkeypatch) gives 21,596,544. A recorder replaces <code>mx.set_memory_limit</code>: it records its argument and then raises a sentinel error, so the test reads no weights file. The recorded limit equals <code>required_mlx_load_bytes("ViT-S/16", "fp32")</code>.</td><td>4,103,663,411 bytes, exact</td></tr>
         <tr class="group"><td colspan="4"><code>tests/test_mlx_rope.py</code></td></tr>
         <tr><td>T8</td><td><code>test_rope_tables</code></td><td><code>rope_tables</code> against <code>DINOv3ViTRopePositionEmbedding</code> on <code>torch-cpu</code>, six grids. Rows 5 and up against the Hugging Face rows. Rows 0 to 4 are cos 1 and sin 0. Dtype fp32. Shape (5 + N, 64).</td><td>Largest difference ≤ 1e-6; rows 0 to 4 exact</td></tr>

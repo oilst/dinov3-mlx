@@ -100,7 +100,7 @@ a { color: var(--accent); }
       </tbody>
     </table>
   </div>
-  <p class="caption"><b>Table 1.</b> The Step 5 code of this page, from row 05-3 of Table 1 of <code>specs/05-all-sizes/plan.html</code>. The files in <code>src/dinov3_apple/</code> have the line numbers of commit <code>7c30a3e</code>; the fixes in the working tree after the Verify stage did not change them. <code>tests/parity_checks.py</code> has the line numbers of the working tree: the fixes added 3 lines above <code>check_finite</code> (lines 58–74 at <code>HEAD</code>). The test numbers are those of the plan. The rows of path D4-Y have the line numbers of the working tree on 2026-11-07, before the commit of path D4-Y. The rows of path D4-Y are not in plan Table 1: <code>run_torch_streamed</code> belongs to 05-2, and the <code>scripts/token_range_table.py</code> functions are new in the build of path D4-Y.</p>
+  <p class="caption"><b>Table 1.</b> The Step 5 code of this page, from row 05-3 of Table 1 of <code>specs/05-all-sizes/plan.html</code>. The files in <code>src/dinov3_mlx/</code> have the line numbers of commit <code>7c30a3e</code>; the fixes in the working tree after the Verify stage did not change them. <code>tests/parity_checks.py</code> has the line numbers of the working tree: the fixes added 3 lines above <code>check_finite</code> (lines 58–74 at <code>HEAD</code>). The test numbers are those of the plan. The rows of path D4-Y have the line numbers of the working tree on 2026-11-07, before the commit of path D4-Y. The rows of path D4-Y are not in plan Table 1: <code>run_torch_streamed</code> belongs to 05-2, and the <code>scripts/token_range_table.py</code> functions are new in the build of path D4-Y.</p>
 </section>
 
 <section id="dtypes">
@@ -260,7 +260,7 @@ a { color: var(--accent); }
   </figure>
 
   <h3>3.1 TokenRange</h3>
-  <pre><code># src/dinov3_apple/mlx_model.py, lines 511 to 549
+  <pre><code># src/dinov3_mlx/mlx_model.py, lines 511 to 549
 @dataclass(frozen=True)
 class TokenRange:
     """The largest absolute values of one configuration, block by block (D6). Report only.
@@ -308,7 +308,7 @@ class TokenRange:
   </ul>
 
   <h3>3.2 The two helpers</h3>
-  <pre><code># src/dinov3_apple/mlx_model.py, lines 552 to 559
+  <pre><code># src/dinov3_mlx/mlx_model.py, lines 552 to 559
 def _largest(t: mx.array) -&gt; mx.array:
     return mx.abs(t.astype(mx.float32)).max()  # inf stays inf
 
@@ -325,7 +325,7 @@ def _token_values(x: mx.array) -&gt; tuple[mx.array, mx.array, mx.array]:
   </ul>
 
   <h3>3.3 run_mlx_token_range</h3>
-  <pre><code># src/dinov3_apple/mlx_model.py, lines 562 to 602 (docstring shortened)
+  <pre><code># src/dinov3_mlx/mlx_model.py, lines 562 to 602 (docstring shortened)
 def run_mlx_token_range(model: MlxBackbone, pixels: np.ndarray) -&gt; TokenRange:
     """Run image 0 block by block and keep only the largest absolute values (D6). Report only.
 
@@ -379,7 +379,7 @@ def run_mlx_token_range(model: MlxBackbone, pixels: np.ndarray) -&gt; TokenRange
   <pre><code># Step 4, commit ea82d58
 x = model.embeddings(mx.array(pixels[:1]).astype(model.norm.weight.dtype))
 
-# Step 5, src/dinov3_apple/mlx_model.py, lines 487 to 508 (docstring shortened)
+# Step 5, src/dinov3_mlx/mlx_model.py, lines 487 to 508 (docstring shortened)
 def run_mlx_hidden_states(model: MlxBackbone, pixels: np.ndarray) -&gt; np.ndarray:
     """Return the token sequence before block 1 and after each block, before the final layer norm.
     ...
@@ -741,7 +741,7 @@ def run_mlx_hidden_states(model: MlxBackbone, pixels: np.ndarray) -&gt; np.ndarr
   </ul>
   <h3>8.1 Where the fp32 values come from</h3>
   <p><code>run_torch_streamed</code> keeps the token sequence of the hidden-states configuration before block 1 and after each block. <a href="05-2-model-scaling.html#runrule">05-2, Section 8</a> explains the rest of the streamed path.</p>
-  <pre><code># src/dinov3_apple/reference.py, lines 467 to 485 (the loop shortened)
+  <pre><code># src/dinov3_mlx/reference.py, lines 467 to 485 (the loop shortened)
     hidden = [states[hidden_config][0].numpy().copy()] if hidden_config is not None else []
     for block in range(outer.config.num_hidden_layers):
         ...
@@ -813,7 +813,7 @@ def read_stored() -&gt; dict[str, tuple[np.ndarray, bool]]:
 <section id="expected">
   <h2>9 Expected failures in the tests</h2>
   <p>A parity test with a non-finite output must not pass, and it must not hide a bug. Step 2 marked any non-finite fp16-cast output as an xfail (way M1 of <code>explore.html</code>). Then a bug that gives NaN in ViT-S/16 would also xfail. Step 5 uses way M2: a list of pairs with evidence, and one helper for both backends.</p>
-  <pre><code># src/dinov3_apple/parity.py, lines 36 to 43
+  <pre><code># src/dinov3_mlx/parity.py, lines 36 to 43
 FP16_OVERFLOW = (
     "fp16 overflow: a register token is above 65,504 (Table 3 of specs/05-all-sizes/explore.html)"
 )
@@ -918,7 +918,7 @@ def check_finite(
 <section id="sources">
   <h2>13 Sources</h2>
   <ul>
-    <li>Repo code: <code>src/dinov3_apple/reference.py</code> (<code>run_torch_streamed</code>, working tree of path D4-Y), <code>src/dinov3_apple/mlx_model.py</code> (commit <code>7c30a3e</code>), <code>src/dinov3_apple/parity.py</code>, <code>tests/parity_checks.py</code>, <code>tests/test_mlx_parity.py</code> (W4, W5, W6, W7, W8), <code>tests/test_mlx_parts.py</code> (T26), <code>tests/test_run_rules.py</code> (T14), <code>scripts/token_range_table.py</code> (with <code>stored_range</code>, <code>stored_rows</code>, <code>read_stored</code> and <code>_stored_section</code> of path D4-Y), <code>tests/test_token_range_table.py</code>. Step 4 version: commit <code>ea82d58</code>.</li>
+    <li>Repo code: <code>src/dinov3_mlx/reference.py</code> (<code>run_torch_streamed</code>, working tree of path D4-Y), <code>src/dinov3_mlx/mlx_model.py</code> (commit <code>7c30a3e</code>), <code>src/dinov3_mlx/parity.py</code>, <code>tests/parity_checks.py</code>, <code>tests/test_mlx_parity.py</code> (W4, W5, W6, W7, W8), <code>tests/test_mlx_parts.py</code> (T26), <code>tests/test_run_rules.py</code> (T14), <code>scripts/token_range_table.py</code> (with <code>stored_range</code>, <code>stored_rows</code>, <code>read_stored</code> and <code>_stored_section</code> of path D4-Y), <code>tests/test_token_range_table.py</code>. Step 4 version: commit <code>ea82d58</code>.</li>
     <li>Results: <code>results/token-range-mlx.md</code> (Tables 1, 2 and 3), <code>results/parity-mlx.md</code> (Section 6), and the token-range lines in <code>tests/fixtures/generated/parity/mlx.jsonl</code> (not in git; the latest line of each configuration counts, as in <code>scripts/token_range_table.py</code>).</li>
     <li>Spec: <code>specs/05-all-sizes/explore.html</code> (Table 3, Section 3.3 with Tables 9 and 10, Section 3.6, risks R20 and R28), <code>specs/05-all-sizes/plan.html</code> (Table 1, Table 3, Sections 3.6 and 3.7, Table 6, Table 20), <code>specs/05-all-sizes/verify.html</code> (Table 3, Section 4.2, findings F3, F6 and F8, Section 9, Section 12 with Tables 20 to 24).</li>
     <li>Earlier explainers: <a href="02-tokens-and-outputs.html">02</a> (Section 5, Table 2, Figure 2, Table 5, Section 6), <a href="05-2-model-scaling.html#runrule">05-2</a> (Section 8), <a href="04-4-layerscale.html">04-4</a>, <a href="04-5-mlp.html">04-5</a>.</li>

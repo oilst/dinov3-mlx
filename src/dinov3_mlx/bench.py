@@ -18,12 +18,12 @@ from pathlib import Path
 import numpy as np
 from safetensors import safe_open
 
-from dinov3_apple.flops import MODEL_SHAPES, tokens
-from dinov3_apple.hub import MODEL_IDS, parameter_count
-from dinov3_apple.machine import MachineState
-from dinov3_apple.memory import load_bytes, replay_checks
-from dinov3_apple.parity import TEST_IMAGES, THRESHOLDS, Parity, measure_parity
-from dinov3_apple.stored import REPO_ROOT, reference_path
+from dinov3_mlx.flops import MODEL_SHAPES, tokens
+from dinov3_mlx.hub import MODEL_IDS, parameter_count
+from dinov3_mlx.machine import MachineState
+from dinov3_mlx.memory import load_bytes, replay_checks
+from dinov3_mlx.parity import TEST_IMAGES, THRESHOLDS, Parity, measure_parity
+from dinov3_mlx.stored import REPO_ROOT, reference_path
 
 MAIN_MODEL_SIZES = [size for size in MODEL_IDS if size != "ViT-7B/16"]
 GIANT_MODEL_SIZE = "ViT-7B/16"

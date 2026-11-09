@@ -201,7 +201,7 @@ a { color: var(--accent); }
       </tbody>
     </table>
   </div>
-  <p class="caption"><b>Table 1.</b> Shapes of the patch embedding of ViT-S/16 for batch size 1. The line numbers refer to <code>src/dinov3_apple/mlx_model.py</code>. The patch embedding has 196 × 768 × 384 × 2 = 0.116 GFLOP at 224 px. This is 1.23 % of the 9.4 GFLOP of one image (Table 4 of <a href="03-where-the-compute-goes.html">03-where-the-compute-goes.html</a>).</p>
+  <p class="caption"><b>Table 1.</b> Shapes of the patch embedding of ViT-S/16 for batch size 1. The line numbers refer to <code>src/dinov3_mlx/mlx_model.py</code>. The patch embedding has 196 × 768 × 384 × 2 = 0.116 GFLOP at 224 px. This is 1.23 % of the 9.4 GFLOP of one image (Table 4 of <a href="03-where-the-compute-goes.html">03-where-the-compute-goes.html</a>).</p>
   <p class="note">The FLOP share is 1.23 %. The time share on <code>torch-mps</code> is larger, but also small. In the block profile of Step 3 (<code>results/block-profile-torch-mps.md</code>, ViT-S/16, fp32, 224 px), the Hugging Face embeddings module takes 90.7 µs of a 2.74 ms forward pass at batch size 1 (3.3 %) and 330 µs of 15.5 ms at batch size 8 (2.1 %). This is 2.7 and 1.7 times the FLOP share. The profile times each part alone. At batch size 1 the parts alone take 1.61 times the forward pass, so the share inside the forward pass can be smaller than 3.3 %. The <code>qkv_proj</code> part of one block takes 78.8 µs and 233 µs, with 1.54 times the FLOPs of the patch embedding. Step 4 did not time the MLX patch embedding alone. Step 6 times it in the block profile of <code>mlx</code>.</p>
 </section>
 
@@ -216,7 +216,7 @@ a { color: var(--accent); }
 <span class="ln">192</span>    hp, wp = h // patch_size, w // patch_size
 <span class="ln">193</span>    x = pixels.reshape(b, c, hp, patch_size, wp, patch_size).transpose(0, 2, 4, 1, 3, 5)
 <span class="ln">194</span>    return x.reshape(b, hp * wp, c * patch_size * patch_size)</code></pre>
-  <p class="caption"><b>Listing 1.</b> <code>src/dinov3_apple/mlx_model.py</code>, lines 173 and 189–194 (without the docstring).</p>
+  <p class="caption"><b>Listing 1.</b> <code>src/dinov3_mlx/mlx_model.py</code>, lines 173 and 189–194 (without the docstring).</p>
   <ul>
     <li><b>Lines 190–191.</b> An input resolution that is not a multiple of 16 raises <code>ValueError</code>. Test T12 gives pixels of 224 × 230 and expects the message "multiple of 16". The glossary term input resolution says that both sides are multiples of 16.</li>
     <li><b>Line 193, reshape.</b> The reshape splits H into (Hp, 16) and W into (Wp, 16). The order of the values in memory does not change.</li>
@@ -237,7 +237,7 @@ a { color: var(--accent); }
 <span class="ln">126</span>            array = array.reshape(array.shape[0], -1)
 <span class="ln">127</span>        pairs.append((key, array.astype(dtype)))
 <span class="ln">128</span>    return pairs</code></pre>
-  <p class="caption"><b>Listing 2.</b> <code>src/dinov3_apple/mlx_weights.py</code>, lines 121–128: the loop of <code>mlx_weights</code>.</p>
+  <p class="caption"><b>Listing 2.</b> <code>src/dinov3_mlx/mlx_weights.py</code>, lines 121–128: the loop of <code>mlx_weights</code>.</p>
   <ul>
     <li><b>Line 126.</b> <code>array.reshape(array.shape[0], -1)</code> keeps the output axis and merges (3, 16, 16) into 768. Value (d, c, r, s) of the file goes to column 256 c + 16 r + s of row d. This is the column order of the patches of Listing 1. So the weight needs no transpose.</li>
     <li><b>Why the layout (out, in) works.</b> <code>nn.Linear</code> of MLX stores its weight as (out, in) and computes <code>mx.addmm(bias, x, weight.T)</code>, that is x · Wᵀ + b. <code>nn.Linear</code> of torch also uses (out, in). So all other linear weights of the file load without a change. Only the patch embedding weight needs the reshape, because it is a convolution weight in the file.</li>
@@ -265,7 +265,7 @@ a { color: var(--accent); }
 <span class="ln">222</span>        prefix = mx.concatenate([self.cls_token, self.register_tokens], axis=1)
 <span class="ln">223</span>        prefix = mx.broadcast_to(prefix, (pixels.shape[0], *prefix.shape[1:]))
 <span class="ln">224</span>        return mx.concatenate([prefix.astype(patches.dtype), patches], axis=1)</code></pre>
-  <p class="caption"><b>Listing 3.</b> <code>src/dinov3_apple/mlx_model.py</code>, lines 204–209, 211 and 220–224: <code>Embeddings</code> (without the docstrings).</p>
+  <p class="caption"><b>Listing 3.</b> <code>src/dinov3_mlx/mlx_model.py</code>, lines 204–209, 211 and 220–224: <code>Embeddings</code> (without the docstrings).</p>
   <ul>
     <li><b>Lines 207–208.</b> <code>cls_token</code> (1, 1, 384) and <code>register_tokens</code> (1, 4, 384) are parameters. Their names are the keys of the file: <code>embeddings.cls_token</code> and <code>embeddings.register_tokens</code>. The zeros are only start values. The load replaces them.</li>
     <li><b>Line 209.</b> <code>nn.Linear(3 · 16², 384)</code>, that is 768 → 384. It holds the weight (384, 768) and the bias (384). Its name <code>patch_embeddings</code> keeps the key <code>embeddings.patch_embeddings.weight</code> of the file.</li>
@@ -334,7 +334,7 @@ a { color: var(--accent); }
 <span class="ln">113</span>            gated=config[&quot;use_gated_mlp&quot;],
 <span class="ln">114</span>            hidden_act=config[&quot;hidden_act&quot;],
 <span class="ln">115</span>        )</code></pre>
-  <p class="caption"><b>Listing 5.</b> <code>src/dinov3_apple/mlx_model.py</code>, lines 90–93, 95–104 and 113–115.</p>
+  <p class="caption"><b>Listing 5.</b> <code>src/dinov3_mlx/mlx_model.py</code>, lines 90–93, 95–104 and 113–115.</p>
   <div class="table-wrap">
     <table>
       <thead><tr><th>Field</th><th>Key in config.json</th><th>ViT-S/16</th><th>Used by</th></tr></thead>
@@ -409,7 +409,7 @@ a { color: var(--accent); }
 <span class="ln"> 99</span>    if (match := BLOCK_KEY.fullmatch(name)) and match.group(&quot;parameter&quot;) in block_parameter_names():
 <span class="ln">100</span>        return match.group(1)
 <span class="ln">101</span>    raise UnknownWeightError(name)</code></pre>
-  <p class="caption"><b>Listing 6.</b> <code>src/dinov3_apple/mlx_weights.py</code>, lines 27–41, 48–49 and 56–74 (<code>block_parameter_names</code>, without the docstring) and 95–101 (the body of <code>map_key</code>). The fix of F4 after the verification added <code>block_parameter_names</code> and the parameter check of line 99 (commit <code>ea82d58</code>).</p>
+  <p class="caption"><b>Listing 6.</b> <code>src/dinov3_mlx/mlx_weights.py</code>, lines 27–41, 48–49 and 56–74 (<code>block_parameter_names</code>, without the docstring) and 95–101 (the body of <code>map_key</code>). The fix of F4 after the verification added <code>block_parameter_names</code> and the parameter check of line 99 (commit <code>ea82d58</code>).</p>
   <div class="table-wrap">
     <table>
       <thead><tr><th>Rule</th><th>Hugging Face name</th><th>Result of <code>map_key</code></th><th class="num">Tensors in the ViT-S/16 file</th></tr></thead>
@@ -436,7 +436,7 @@ a { color: var(--accent); }
   <h3>8.3 <code>required_mlx_load_bytes</code></h3>
   <p>The memory check asks for the memory of the load before the load starts. The formula is the formula of the torch loader of Step 2:</p>
   <pre class="code"><code><span class="ln">148</span>    return load_bytes(parameter_count(model_size) * MLX_DTYPE_MODES[dtype_mode].size, ratio)</code></pre>
-  <p class="caption"><b>Listing 7.</b> <code>src/dinov3_apple/mlx_weights.py</code>, line 148. <code>load_bytes</code> in <code>memory.py</code> gives round(ratio × weight bytes) + <code>LOAD_RESERVE_BYTES</code>.</p>
+  <p class="caption"><b>Listing 7.</b> <code>src/dinov3_mlx/mlx_weights.py</code>, line 148. <code>load_bytes</code> in <code>memory.py</code> gives round(ratio × weight bytes) + <code>LOAD_RESERVE_BYTES</code>.</p>
   <p>For ViT-S/16 in fp32: <code>parameter_count</code> reads 21,596,544 values from the safetensors header, the mask token included. 4 bytes each give 86,386,176 bytes (86.4 MB). The need is round(1.2 × 86,386,176) + 4,000,000,000 = 4,103,663,411 bytes, 4.10 GB. Test T7b checks this exact value.</p>
   <h3>8.4 <code>load_mlx_backbone</code></h3>
   <pre class="code"><code><span class="ln">172</span>    dtype = MLX_DTYPE_MODES[dtype_mode]
@@ -453,7 +453,7 @@ a { color: var(--accent); }
 <span class="ln">183</span>    model.load_weights(mlx_weights(tensors, dtype), strict=True)
 <span class="ln">184</span>    mx.eval(model.parameters())  # the load cost stays out of the first forward pass (R14)
 <span class="ln">185</span>    return model</code></pre>
-  <p class="caption"><b>Listing 8.</b> <code>src/dinov3_apple/mlx_weights.py</code>, lines 172–185: the body of <code>load_mlx_backbone</code>.</p>
+  <p class="caption"><b>Listing 8.</b> <code>src/dinov3_mlx/mlx_weights.py</code>, lines 172–185: the body of <code>load_mlx_backbone</code>.</p>
   <figure>
     <div class="fig"><svg viewBox="0 0 960 330" role="img" aria-labelledby="fig2-title" font-family="-apple-system, Helvetica Neue, Arial, sans-serif">
       <title id="fig2-title">The eight actions of load_mlx_backbone in order, with the error that stops each check</title>
@@ -540,12 +540,12 @@ a { color: var(--accent); }
 <span class="ln">135</span>        created, name, message = float(fields[0]), fields[1], fields[2]
 <span class="ln">  ⋮</span>
 <span class="ln">146</span>        logging.getLogger(name).handle(record)</code></pre>
-  <p class="caption"><b>Listing 9.</b> <code>src/dinov3_apple/memory.py</code>, lines 110–113 (the body of <code>send_checks_to</code>, without the return) and lines 130–135 and 146 (the loop of <code>replay_checks</code>). <code>FORWARD_PREFIX</code> (line 17) is <code>"memory-check-record"</code>.</p>
+  <p class="caption"><b>Listing 9.</b> <code>src/dinov3_mlx/memory.py</code>, lines 110–113 (the body of <code>send_checks_to</code>, without the return) and lines 130–135 and 146 (the loop of <code>replay_checks</code>). <code>FORWARD_PREFIX</code> (line 17) is <code>"memory-check-record"</code>.</p>
   <ul>
-    <li><b>The worker: <code>send_checks_to(stream)</code>.</b> <code>worker_main</code> calls <code>send_checks_to(sys.stderr)</code> first, before the model load, for the <code>mlx</code> worker and the <code>torch-mps</code> worker. Lines 110–113 give the logger <code>dinov3_apple.memory</code> a handler on stderr. Each memory check then writes one line: the prefix, the time of the check in seconds since 1970, the logger name and the message.</li>
+    <li><b>The worker: <code>send_checks_to(stream)</code>.</b> <code>worker_main</code> calls <code>send_checks_to(sys.stderr)</code> first, before the model load, for the <code>mlx</code> worker and the <code>torch-mps</code> worker. Lines 110–113 give the logger <code>dinov3_mlx.memory</code> a handler on stderr. Each memory check then writes one line: the prefix, the time of the check in seconds since 1970, the logger name and the message.</li>
     <li><b>The driver: <code>replay_checks(text)</code>.</b> <code>run_worker_subprocess</code> gives the stderr of each worker to <code>replay_checks</code>, also after an error or a timeout of the worker. Line 133 skips each line without the prefix. Line 135 splits the line into three fields. Lines 136–145 (not shown) make a log record with the time of the worker. Line 146 gives the record to the handlers of the driver, so <code>driver.log</code> gets it in the format of the driver.</li>
     <li><b>Why a log record and not a copy of the text.</b> The driver reads the stderr only after the worker ends. The record keeps the time of the check in the worker, so the line in <code>driver.log</code> has the correct time.</li>
-    <li><b>The result.</b> In the benchmark run after the fix (2026-11-07, 01:38 to 01:41 UTC), <code>driver.log</code> has this line for each of the 6 <code>mlx</code> workers and each of the 6 <code>torch-mps</code> workers. An example, in local time: "2026-11-07 02:41:10,712 dinov3_apple.memory memory check: ViT-S/16 mlx fp32: needs 4.1 GB, 38.4 GB available, ok". The test <code>test_mlx_worker_memory_check_reaches_the_driver_log</code> runs a real <code>mlx</code> worker up to the memory check and stops it before the read of the weights. Then it gives the stderr of this worker to <code>run_worker_subprocess</code>. It expects one record with the label "ViT-S/16 mlx fp32" and a time between the start and the end of the worker.</li>
+    <li><b>The result.</b> In the benchmark run after the fix (2026-11-07, 01:38 to 01:41 UTC), <code>driver.log</code> has this line for each of the 6 <code>mlx</code> workers and each of the 6 <code>torch-mps</code> workers. An example, in local time: "2026-11-07 02:41:10,712 dinov3_mlx.memory memory check: ViT-S/16 mlx fp32: needs 4.1 GB, 38.4 GB available, ok". The test <code>test_mlx_worker_memory_check_reaches_the_driver_log</code> runs a real <code>mlx</code> worker up to the memory check and stops it before the read of the weights. Then it gives the stderr of this worker to <code>run_worker_subprocess</code>. It expects one record with the label "ViT-S/16 mlx fp32" and a time between the start and the end of the worker.</li>
   </ul>
 </section>
 
@@ -572,7 +572,7 @@ a { color: var(--accent); }
 <span class="ln">109</span>        keys = tensors.keys()
 <span class="ln">110</span>        data = {key.removesuffix(&quot;/tokens&quot;): tensors.get_tensor(key) for key in keys}
 <span class="ln">111</span>    return data, metadata</code></pre>
-  <p class="caption"><b>Listing 10.</b> <code>src/dinov3_apple/stored.py</code>, lines 93–111: the two readers.</p>
+  <p class="caption"><b>Listing 10.</b> <code>src/dinov3_mlx/stored.py</code>, lines 93–111: the two readers.</p>
   <ul>
     <li><b>Line 95.</b> <code>safe_open(path, "np")</code> reads the safetensors file into NumPy arrays. torch is not necessary.</li>
     <li><b>Line 97.</b> The keys in <code>inputs.safetensors</code> are <code>{configuration id}/pixels</code>. The reader removes the suffix, so the dict key is the configuration id, for example <code>forest/224x304</code>. Each value is the stored pixels (1, 3, H, W) in fp32.</li>
@@ -619,7 +619,7 @@ a { color: var(--accent); }
 <span class="ln"> 85</span>    return MODEL_IDS[model_size].split(&quot;dinov3-&quot;, 1)[1].split(&quot;-pretrain&quot;, 1)[0]
 <span class="ln"> ⋮</span>
 <span class="ln"> 90</span>    return REFERENCE_DIR / f&quot;reference-{model_slug(model_size)}.safetensors&quot;</code></pre>
-  <p class="caption"><b>Listing 11.</b> <code>src/dinov3_apple/stored.py</code>, lines 43–45 (<code>own_aspect_size</code>), 56–59 and 66–69 (<code>Configuration</code>), 74–80 (<code>configurations</code>), 85 (<code>model_slug</code>) and 90 (<code>reference_path</code>), without the docstrings of the functions.</p>
+  <p class="caption"><b>Listing 11.</b> <code>src/dinov3_mlx/stored.py</code>, lines 43–45 (<code>own_aspect_size</code>), 56–59 and 66–69 (<code>Configuration</code>), 74–80 (<code>configurations</code>), 85 (<code>model_slug</code>) and 90 (<code>reference_path</code>), without the docstrings of the functions.</p>
   <ul>
     <li><b>Line 43.</b> The long side in patches is long / short × 224 / 16, rounded to the nearest integer. 224 / 16 = 14, so the short side always has 14 patches.</li>
     <li><b>Line 44.</b> The multiplication by 16 gives the long side in pixels. So the long side is always a multiple of 16, and <code>patchify</code> accepts the input resolution.</li>
@@ -647,7 +647,7 @@ a { color: var(--accent); }
 <span class="ln">297</span>        return None
 <span class="ln">298</span>    with safe_open(path, &quot;np&quot;) as tensors:
 <span class="ln">299</span>        return tensors.get_tensor(f&quot;{TEST_IMAGES[0]}/{side}x{side}/tokens&quot;)</code></pre>
-  <p class="caption"><b>Listing 12.</b> <code>src/dinov3_apple/bench.py</code>, lines 293–299.</p>
+  <p class="caption"><b>Listing 12.</b> <code>src/dinov3_mlx/bench.py</code>, lines 293–299.</p>
   <ul>
     <li><b>Line 295.</b> <code>reference_path</code> of <code>stored.py</code> (Listing 11) gives the reference file of the model size.</li>
     <li><b>Lines 296–297.</b> Without a reference file the function gives <code>None</code>. <code>check_validity</code> then checks only that the output is finite, with the note "finite only: no reference file". The reference files are in <code>tests/fixtures/generated/</code>, which git ignores. So a new clone of the repo has no reference file until <code>scripts/make_reference.py</code> runs.</li>
@@ -730,7 +730,7 @@ a { color: var(--accent); }
     <li>MLX 0.32.4: <code>mlx/nn/layers/linear.py</code> (<code>nn.Linear</code>, <code>to_quantized</code>), <code>mlx/nn/layers/base.py</code> (<code>Module.load_weights</code>), <code>mlx/nn/layers/quantized.py</code> (<code>nn.quantize</code>, <code>QuantizedLinear</code>). github.com/ml-explore/mlx. Read in the installed package.</li>
     <li>Weights: huggingface.co/facebook/dinov3-vits16-pretrain-lvd1689m (gated repo), snapshot 114c137: <code>config.json</code> and the header of <code>model.safetensors</code>.</li>
     <li>DINOv3 paper: Siméoni et al., arXiv 2508.10104 (August 2025): the iBOT loss with masked patches.</li>
-    <li>Repo: <code>specs/04-mlx-port/explore.html</code> (D1, D2, D4, D6; Tables 5 and 9; risks R13, R14, R16, R18) and <code>specs/04-mlx-port/plan.html</code> (Tables 1, 3, 6, 7 and 8; Sections 3.3, 3.5 and 5). <code>src/dinov3_apple/mlx_model.py</code>, <code>mlx_weights.py</code>, <code>stored.py</code>, <code>memory.py</code>, <code>hub.py</code>, <code>bench.py</code>, <code>preprocess.py</code>, <code>reference.py</code>, <code>torch_bench.py</code> (commit <code>c212226</code>, and commit <code>ea82d58</code> for the fixes of F1, F4, F5, F6 and F7). <code>scripts/bench_mlx_port.py</code>. <code>tests/test_mlx_weights.py</code>, <code>test_mlx_parts.py</code>, <code>test_mlx_parity.py</code>, <code>test_mlx_environment.py</code>, <code>test_bench.py</code>, <code>test_preprocess.py</code>, <code>small_model.py</code>, <code>conftest.py</code>. <code>specs/04-mlx-port/verify.html</code> (review fix R6, findings F1, F4, F6 and F10, Section 11 "Fixed after Verify").</li>
+    <li>Repo: <code>specs/04-mlx-port/explore.html</code> (D1, D2, D4, D6; Tables 5 and 9; risks R13, R14, R16, R18) and <code>specs/04-mlx-port/plan.html</code> (Tables 1, 3, 6, 7 and 8; Sections 3.3, 3.5 and 5). <code>src/dinov3_mlx/mlx_model.py</code>, <code>mlx_weights.py</code>, <code>stored.py</code>, <code>memory.py</code>, <code>hub.py</code>, <code>bench.py</code>, <code>preprocess.py</code>, <code>reference.py</code>, <code>torch_bench.py</code> (commit <code>c212226</code>, and commit <code>ea82d58</code> for the fixes of F1, F4, F5, F6 and F7). <code>scripts/bench_mlx_port.py</code>. <code>tests/test_mlx_weights.py</code>, <code>test_mlx_parts.py</code>, <code>test_mlx_parity.py</code>, <code>test_mlx_environment.py</code>, <code>test_bench.py</code>, <code>test_preprocess.py</code>, <code>small_model.py</code>, <code>conftest.py</code>. <code>specs/04-mlx-port/verify.html</code> (review fix R6, findings F1, F4, F6 and F10, Section 11 "Fixed after Verify").</li>
     <li>Results: <code>results/parity-mlx.md</code>, <code>results/bench-mlx-port.jsonl</code>, <code>results/block-profile-torch-mps.md</code>, the test report and the memory check log of the build and of the fix session, and <code>driver.log</code> of the benchmark run after the fix of F6 (<code>tests/fixtures/generated/</code>, not in git).</li>
     <li>Our NumPy computations for this page (NumPy, CPU, no model load): the equivalence of the convolution and the matmul (Section 2), the wrong order inside a patch (Section 4), the own aspect sizes of the three test images (Section 9.2) and the fp32 matmul error (Section 11).</li>
   </ul>

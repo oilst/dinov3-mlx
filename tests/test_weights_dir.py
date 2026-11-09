@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from dinov3_apple.hub import MODEL_IDS, WeightsNotFoundError, weights_dir
+from dinov3_mlx.hub import MODEL_IDS, WeightsNotFoundError, weights_dir
 
 MODEL_SIZE = "ViT-S/16"
 

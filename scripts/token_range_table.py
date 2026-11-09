@@ -24,8 +24,8 @@ import numpy as np
 from parity_table import latest_lines, parity_log, table_order
 from safetensors import safe_open
 
-from dinov3_apple.hub import MODEL_IDS
-from dinov3_apple.stored import HIDDEN_STATES_CONFIG, configurations, reference_path
+from dinov3_mlx.hub import MODEL_IDS
+from dinov3_mlx.stored import HIDDEN_STATES_CONFIG, configurations, reference_path
 
 REPO_ROOT = Path(__file__).parents[1]
 RESULTS = REPO_ROOT / "results" / "token-range-mlx.md"

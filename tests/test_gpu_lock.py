@@ -21,8 +21,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from dinov3_apple import gpu_lock
-from dinov3_apple.gpu_lock import (
+from dinov3_mlx import gpu_lock
+from dinov3_mlx.gpu_lock import (
     HEAVY_JOB_PATTERN,
     LOCK_ENV,
     GpuLockTimeoutError,
@@ -34,7 +34,7 @@ from dinov3_apple.gpu_lock import (
 WAITER = """
 import json, sys, time
 from pathlib import Path
-from dinov3_apple.gpu_lock import heavy_job
+from dinov3_mlx.gpu_lock import heavy_job
 
 folder, pattern, poll, hold, label = Path(sys.argv[1]), sys.argv[2], *sys.argv[3:6]
 asked = time.time()
@@ -116,7 +116,7 @@ def test_heavy_job_pattern_matches_the_job_names() -> None:
         "python scripts/cross_check.py",
         "python scripts/make_reference.py --streamed",
         "python scripts/profile_block.py",
-        "python -m dinov3_apple.gpu_lock -- true",
+        "python -m dinov3_mlx.gpu_lock -- true",
     ]
     for job in jobs:
         assert re.search(HEAVY_JOB_PATTERN, job), job
@@ -162,11 +162,11 @@ def test_other_heavy_jobs_leaves_out_the_group_of_a_registered_job(
     """Finding V16 of specs/06-speed/verify.html: the forked subshell of a pipeline keeps the
     command line of its shell and shares the process group of the registered job, so it does not
     count. A process of another group still counts."""
-    shell = "zsh -c uv run python -m dinov3_apple.gpu_lock -- python scripts/bench_x.py | grep x"
+    shell = "zsh -c uv run python -m dinov3_mlx.gpu_lock -- python scripts/bench_x.py | grep x"
     table = {
         900: (1, 900, "zsh"),
         901: (900, 901, shell),  # the shell of the job: the leader of the job's process group
-        902: (901, 901, "uv run python -m dinov3_apple.gpu_lock -- python scripts/bench_x.py"),
+        902: (901, 901, "uv run python -m dinov3_mlx.gpu_lock -- python scripts/bench_x.py"),
         903: (901, 901, shell),  # the forked subshell of the pipeline: a sibling of 902
         950: (1, 950, "python scripts/bench_y.py"),  # a heavy job of another shell
     }
@@ -282,7 +282,7 @@ def test_heavy_job_timeout_ends_a_wait(
         pass
     assert 0.3 <= time.monotonic() - start <= 1.0
     assert not (tmp_path / "gpu-lock.d" / str(os.getpid())).exists()
-    command = [sys.executable, "-m", "dinov3_apple.gpu_lock", "--lock-dir", str(tmp_path)]
+    command = [sys.executable, "-m", "dinov3_mlx.gpu_lock", "--lock-dir", str(tmp_path)]
     done = subprocess.run(
         [*command, "--timeout", "0.3", "--", "true"],
         check=False,
@@ -300,7 +300,7 @@ def test_gpu_lock_command_runs_the_command(tmp_path: Path) -> None:
     jobs and the lock of other sessions (V1 of specs/06-speed/verify.html).
     """
     nothing = f"[n]o-heavy-job-{uuid.uuid4().hex}"
-    command = [sys.executable, "-m", "dinov3_apple.gpu_lock", "--lock-dir", str(tmp_path)]
+    command = [sys.executable, "-m", "dinov3_mlx.gpu_lock", "--lock-dir", str(tmp_path)]
     done = subprocess.run(
         [
             *command,
@@ -378,7 +378,7 @@ def test_drivers_take_the_lock_before_the_first_worker(
     import make_reference
     import profile_block
 
-    from dinov3_apple import bench
+    from dinov3_mlx import bench
 
     def work(*args: object, **kwargs: object) -> Counter:
         events.append("worker")

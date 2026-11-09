@@ -36,8 +36,8 @@ Apple M5 Max, 64 GB unified memory, macOS 26.5.2. All benchmark results in this 
 | pillow | 13.0.0 |
 | pytest | 9.2.0 |
 | ruff | 0.17.4 |
-| coremltools | 9.0 (dependency group `coreml`, Step 6c, 2026-11-07). It is tested with torch 2.7 only; with numpy 2.5 its torch converter needs one patch: `patch_coremltools_cast` in `src/dinov3_apple/coreml.py` (ADR 0015). |
-| Core ML | The framework of macOS (Darwin 25.5 on this Mac). Step 6c packages: ML Program, fp16 compute precision, macOS 15 target, fixed shapes, outside the repo in `~/.cache/dinov3-apple/coreml/`. Compute units CPU_AND_NE (`coreml-ne`), CPU_AND_GPU (`coreml-gpu`) and ALL (`coreml-all`). ADR 0014 and ADR 0015. |
+| coremltools | 9.0 (dependency group `coreml`, Step 6c, 2026-11-07). It is tested with torch 2.7 only; with numpy 2.5 its torch converter needs one patch: `patch_coremltools_cast` in `src/dinov3_mlx/coreml.py` (ADR 0015). |
+| Core ML | The framework of macOS (Darwin 25.5 on this Mac). Step 6c packages: ML Program, fp16 compute precision, macOS 15 target, fixed shapes, outside the repo in `~/.cache/dinov3-mlx/coreml/`. Compute units CPU_AND_NE (`coreml-ne`), CPU_AND_GPU (`coreml-gpu`) and ALL (`coreml-all`). ADR 0014 and ADR 0015. |
 
 Change a version only in its own commit, and record the new version here.
 
@@ -63,7 +63,7 @@ Each bench line of `mlx` in Step 6 records `mlx_architecture` and `versions["mlx
 
 `uv run python scripts/download_weights.py` downloads the six model sizes into the Hugging Face cache, one at a time. All six need 32 GB of disk (fp32 safetensors). ViT-7B/16 alone needs 26.9 GB.
 
-While the access to the gated repos waits, `uv run python scripts/convert_meta_checkpoint.py MODEL_SIZE CHECKPOINT.pth` converts a Meta checkpoint into `~/.cache/dinov3-apple/converted/<Hugging Face id>`. The script checks the checksum and the first output values. On 2026-11-06 ViT-S/16 and ViT-H+/16 were converted, and their tensors are equal to the Hub tensors. The conversion of ViT-H+/16 needs 7.1 GB of memory. Since the access came, the converter is only a fallback.
+While the access to the gated repos waits, `uv run python scripts/convert_meta_checkpoint.py MODEL_SIZE CHECKPOINT.pth` converts a Meta checkpoint into `~/.cache/dinov3-mlx/converted/<Hugging Face id>`. The script checks the checksum and the first output values. On 2026-11-06 ViT-S/16 and ViT-H+/16 were converted, and their tensors are equal to the Hub tensors. The conversion of ViT-H+/16 needs 7.1 GB of memory. Since the access came, the converter is only a fallback.
 
 ## Model ids on Hugging Face
 

@@ -16,7 +16,7 @@ import numpy as np
 import torch
 from transformers import DINOv3ViTModel
 
-from dinov3_apple.bench import (
+from dinov3_mlx.bench import (
     TIMED,
     WARM_UP,
     BenchConfig,
@@ -27,11 +27,11 @@ from dinov3_apple.bench import (
     reference_tokens,
     summarize,
 )
-from dinov3_apple.footprint import read_footprint
-from dinov3_apple.hub import MODEL_IDS
-from dinov3_apple.machine import read_versions
-from dinov3_apple.outputs import NUM_PREFIX_TOKENS
-from dinov3_apple.reference import (
+from dinov3_mlx.footprint import read_footprint
+from dinov3_mlx.hub import MODEL_IDS
+from dinov3_mlx.machine import read_versions
+from dinov3_mlx.outputs import NUM_PREFIX_TOKENS
+from dinov3_mlx.reference import (
     DTYPE_MODES,
     REPO_ROOT,
     DtypeMode,

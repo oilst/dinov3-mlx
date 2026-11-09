@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from dinov3_apple.flops import (
+from dinov3_mlx.flops import (
     MODEL_SHAPES,
     PART_NAMES,
     image_flops,
@@ -10,7 +10,7 @@ from dinov3_apple.flops import (
     part_flops,
     tokens,
 )
-from dinov3_apple.hub import MODEL_IDS, WeightsNotFoundError, weights_dir
+from dinov3_mlx.hub import MODEL_IDS, WeightsNotFoundError, weights_dir
 
 # Table 2 of specs/03-baseline/explore.html (corrected in the build): GFLOP and attention share (%)
 # at 224, 448 and 512 px.

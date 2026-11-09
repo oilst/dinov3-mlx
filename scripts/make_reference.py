@@ -37,9 +37,9 @@ import numpy as np
 import torch
 from safetensors.numpy import save_file
 
-from dinov3_apple.gpu_lock import heavy_job
-from dinov3_apple.hub import CONVERTED_DIR, MODEL_IDS, weights_dir
-from dinov3_apple.memory import (
+from dinov3_mlx.gpu_lock import heavy_job
+from dinov3_mlx.hub import CONVERTED_DIR, MODEL_IDS, weights_dir
+from dinov3_mlx.memory import (
     GB,
     NO_FP32_WEIGHTS,
     InsufficientMemoryError,
@@ -47,8 +47,8 @@ from dinov3_apple.memory import (
     check_free_memory,
     check_run_rule,
 )
-from dinov3_apple.preprocess import IMAGENET_MEAN, IMAGENET_STD, load_image, preprocess
-from dinov3_apple.reference import (
+from dinov3_mlx.preprocess import IMAGENET_MEAN, IMAGENET_STD, load_image, preprocess
+from dinov3_mlx.reference import (
     HIDDEN_STATES_CONFIG,
     IMAGES_DIR,
     INPUTS_FILE,

@@ -5,8 +5,8 @@ import pytest
 import torch
 from under_test import SLOW
 
-from dinov3_apple.block_profile import block_parts, run_parts, time_part
-from dinov3_apple.flops import PART_NAMES
+from dinov3_mlx.block_profile import block_parts, run_parts, time_part
+from dinov3_mlx.flops import PART_NAMES
 
 # ViT-S/16 has an MLP and ViT-S+/16 has SwiGLU. ViT-S+/16 runs with DINOV3_SLOW=1.
 SPLIT_MODEL_SIZES = ["ViT-S/16", "ViT-S+/16"] if SLOW else ["ViT-S/16"]
@@ -42,7 +42,7 @@ def test_profile_block_times_the_forward_pass_before_and_after(
     backbone: Callable[[str, str, str], torch.nn.Module],
     inputs: dict[str, np.ndarray],
 ) -> None:
-    from dinov3_apple.block_profile import profile_block
+    from dinov3_mlx.block_profile import profile_block
 
     model = backbone("ViT-S/16", "cpu", "fp32")
     pixels = torch.from_numpy(inputs["iss-kibo-lab/224x224"])

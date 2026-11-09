@@ -42,7 +42,7 @@ a { color: var(--accent); }
 <main>
 <header>
   <h1>DINOv3 on the Neural Engine</h1>
-  <p>Explainer for roadmap Steps 6c and 6d. Date: 2026-11-08; Section 10 (Step 6d): 2026-11-09. It explains how the Apple Neural Engine runs the attention and the feed-forward network of DINOv3, the numeric range of DINOv3 in fp16, the concat fault of the Neural Engine and its fix, and every function that Steps 6c and 6d add to <code>src/dinov3_apple/coreml.py</code>.</p>
+  <p>Explainer for roadmap Steps 6c and 6d. Date: 2026-11-08; Section 10 (Step 6d): 2026-11-09. It explains how the Apple Neural Engine runs the attention and the feed-forward network of DINOv3, the numeric range of DINOv3 in fp16, the concat fault of the Neural Engine and its fix, and every function that Steps 6c and 6d add to <code>src/dinov3_mlx/coreml.py</code>.</p>
   <p class="steps">Step 6 explainers: <a href="06-1-compiled-forward-pass.html">1 Compiled forward pass</a> · <a href="06-2-attention-and-batch-size.html">2 Attention and batch size</a> · <a href="06-3-quantized-weights.html">3 Quantized weights</a> · <a href="06-4-preprocessing.html">4 Preprocessing</a> · <a href="06b-prior-ports-measured.html">6b Prior ports</a> · 6c Neural Engine (this page). Numeric range: <a href="05-3-numeric-range.html">05-3</a>.</p>
 </header>
 
@@ -111,7 +111,7 @@ a { color: var(--accent); }
         <path d="M674,75 H698" stroke="#4a5655" stroke-width="1.5" marker-end="url(#a1)"/>
         <rect x="700" y="40" width="240" height="70" rx="6" fill="#f5f8f7" stroke="#4a5655"/>
         <text x="820" y="60" text-anchor="middle" font-weight="600">.mlpackage → .mlmodelc</text>
-        <text x="820" y="76" text-anchor="middle" font-size="10.5">~/.cache/dinov3-apple/coreml/</text>
+        <text x="820" y="76" text-anchor="middle" font-size="10.5">~/.cache/dinov3-mlx/coreml/</text>
         <text x="820" y="90" text-anchor="middle" font-size="10.5">vits16-224-b1-ne2-s256-r1-ct9.0</text>
         <text x="820" y="104" text-anchor="middle" font-size="10" fill="#4a5655">convert_module, package_path</text>
         <path d="M820,110 V140" stroke="#4a5655" stroke-width="1.5" marker-end="url(#a1)"/>
@@ -140,7 +140,7 @@ a { color: var(--accent); }
     <li><b>Fixed shapes.</b> The trace makes the RoPE tables constants of one input shape. So each package has one batch size and one input resolution, and the name holds both, plus the rewrite version, the score scale, r and the coremltools version.</li>
     <li><b>fp32 at the edges.</b> The input <code>pixels</code> is fp32 and the output <code>tokens</code> is fp32. The converter adds a <code>cast</code> to fp16 at the start and one to fp32 at the end. Every op between them runs in fp16.</li>
   </ul>
-  <pre><code># src/dinov3_apple/coreml.py: _cast_with_item (the one changed line is marked)
+  <pre><code># src/dinov3_mlx/coreml.py: _cast_with_item (the one changed line is marked)
 x = torch_ops._get_inputs(context, node, expected=1)[0]
 if x.can_be_folded_to_const():
     value = x.val.item() if isinstance(x.val, np.ndarray) else x.val   # changed: .item()
@@ -203,7 +203,7 @@ ct.models.utils.compile_model(str(path), str(compiled_path(path)))   # the .mlmo
     </svg></div>
     <figcaption>Figure 2. Score scaling. The division by 256 brings the largest score of ViT-S/16 (block 1, probe p4) from 36 times the fp16 maximum to 14 % of it.</figcaption>
   </figure>
-  <pre><code># src/dinov3_apple/coreml.py: ne_attention (registered as "coreml-ne" in transformers.AttentionInterface)
+  <pre><code># src/dinov3_mlx/coreml.py: ne_attention (registered as "coreml-ne" in transformers.AttentionInterface)
 s = SCORE_SCALE                                                 # 256.0, a power of two
 z = torch.matmul(query * (scaling / s), key.transpose(2, 3))    # at most 9,877 for ViT-S/16
 z = z - z.amax(-1, keepdim=True)                                # every value at most 0
@@ -222,7 +222,7 @@ return torch.matmul(probs, value).transpose(1, 2).contiguous(), None</code></pre
     <li>LayerScale (λ) stays a separate multiplication;</li>
     <li>each layer norm gets ε / r². A layer norm does not change when its input is scaled, except for ε: LN(x / r) with ε equals LN(x) with ε r². So ε / r² gives exactly the old output.</li>
   </ul>
-  <pre><code># src/dinov3_apple/coreml.py: rewrite_for_neural_engine
+  <pre><code># src/dinov3_mlx/coreml.py: rewrite_for_neural_engine
 for module in model.modules():                   # the layers share model.config; set each config
     config = getattr(module, "config", None)
     if config is not None:
@@ -278,7 +278,7 @@ while value / scale > MAX_STREAM_VALUE:          # 32,768: half of the fp16 rang
 
 <section id="run">
   <h2>7 Running a package</h2>
-  <pre><code># src/dinov3_apple/coreml.py: load_package
+  <pre><code># src/dinov3_mlx/coreml.py: load_package
 model = ct.models.CompiledMLModel(str(compiled), compute_units=unit)   # first load: Neural Engine compile
 first_load_s = ...
 del model
@@ -429,7 +429,7 @@ times = _time_calls(lambda: model.predict(feed), timed)</code></pre>
   <p>So the concat fault is a fault of the row offsets, not of the fp16 range: the wrong values are exact copies of other rows. The two packages of Step 6c that passed on CPU_AND_NE (ViT-S/16 and ViT-S+/16 at 224 px, batch size 1) passed because their compute plan put the concat on the CPU (Table 2).</p>
 
   <h3>10.3 The fix: one constant prefix</h3>
-  <pre><code># src/dinov3_apple/coreml.py: ne_embeddings (called by NeuralEngineBackbone.forward)
+  <pre><code># src/dinov3_mlx/coreml.py: ne_embeddings (called by NeuralEngineBackbone.forward)
 patches = embeddings.patch_embeddings(pixels).flatten(2).transpose(1, 2)   # (B, N, D): conv, reshape, transpose
 prefix = torch.cat([embeddings.cls_token, embeddings.register_tokens], dim=1)  # (1, 5, D): parameters only,
                                                                             # so the trace folds it to ONE constant
@@ -437,7 +437,7 @@ return torch.cat([prefix.expand(pixels.shape[0], -1, -1), patches], dim=1) # one
   <p class="caption">Code 6. <code>ne_embeddings</code>. The first <code>torch.cat</code> joins two parameters, so the converter computes it at conversion time and the graph gets one constant of 5 rows. In fp32 the output is bit-equal to the Hugging Face embeddings (test T14, 8 cases). <code>REWRITE_VERSION</code> is now <code>"ne3"</code>, and the version is part of each package name.</p>
 
   <h3>10.4 The guard: no package with the concat fault</h3>
-  <pre><code># src/dinov3_apple/coreml.py: _is_constant and constant_concats
+  <pre><code># src/dinov3_mlx/coreml.py: _is_constant and constant_concats
 def _is_constant(value):
     if value.op is not None and value.op.op_type == "const":
         return True                          # the output of a const op
@@ -504,7 +504,7 @@ if faults:
 <section id="functions">
   <h2>12 Every function of Steps 6c and 6d</h2>
   <div class="table-wrap"><table>
-    <thead><tr><th>Function or class in <code>src/dinov3_apple/coreml.py</code></th><th>What it does</th><th>Section</th></tr></thead>
+    <thead><tr><th>Function or class in <code>src/dinov3_mlx/coreml.py</code></th><th>What it does</th><th>Section</th></tr></thead>
     <tbody>
       <tr><td><code>REWRITE_VERSION</code></td><td>The rewrite version in the package name: <code>"ne3"</code> since Step 6d</td><td>10</td></tr>
       <tr><td><code>CoremltoolsVersionError</code></td><td>Raised by the patch for a coremltools version other than 9.0</td><td>2</td></tr>
@@ -535,10 +535,10 @@ if faults:
 <section id="sources">
   <h2>13 Sources</h2>
   <ul>
-    <li>Repo code: <code>src/dinov3_apple/coreml.py</code>, <code>scripts/bench_coreml.py</code>, <code>tests/test_coreml.py</code>.</li>
+    <li>Repo code: <code>src/dinov3_mlx/coreml.py</code>, <code>scripts/bench_coreml.py</code>, <code>tests/test_coreml.py</code>.</li>
     <li>Results: <code>results/coreml.jsonl</code>, <code>results/coreml-table.md</code>; <code>results/token-range-mlx.md</code> for r.</li>
     <li>Spec: <code>specs/06c-neural-engine/explore.html</code> (findings F1 to F4, Tables 2 to 7), <code>plan.html</code> (with the amendment of 2026-11-08), <code>verify.html</code>; ADR 0014 and ADR 0015.</li>
-    <li>Probes outside the repo: <code>~/.cache/dinov3-apple/coreml/probe-logs/</code> (explore p1 to p17) and <code>~/.cache/dinov3-apple/coreml/build-logs/</code> (Q3 probes of the build: <code>q3-probe-*.log</code>, <code>q3-r-*.log</code>, <code>P.log</code>, <code>F.log</code>).</li>
+    <li>Probes outside the repo: <code>~/.cache/dinov3-mlx/coreml/probe-logs/</code> (explore p1 to p17) and <code>~/.cache/dinov3-mlx/coreml/build-logs/</code> (Q3 probes of the build: <code>q3-probe-*.log</code>, <code>q3-r-*.log</code>, <code>P.log</code>, <code>F.log</code>).</li>
     <li>coremltools 9.0: <code>converters/mil/frontend/torch/ops.py</code> (<code>_cast</code>), <code>models/compute_plan.py</code>, <code>models/_compiled_model.py</code> (the batch API of <code>predict</code>).</li>
     <li>Step 6d: <code>specs/06d-neural-engine-fault/explore.html</code> (probes E1 to E6), <code>plan.html</code>, <code>verify.html</code>; <code>results/coreml-6d.jsonl</code>, <code>results/coreml-6d-table.md</code>; ADR 0016.</li>
     <li>Hugging Face transformers: <code>models/dinov3_vit/modeling_dinov3_vit.py</code> (<code>DINOv3ViTEmbeddings</code>, <code>eager_attention_forward</code>, <code>DINOv3ViTLayer</code>).</li>

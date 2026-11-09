@@ -63,7 +63,7 @@ a { color: var(--accent); }
     <table>
       <thead><tr><th>File</th><th>Change</th></tr></thead>
       <tbody>
-        <tr><td><code>src/dinov3_apple/coreml.py</code></td><td><code>REWRITE_VERSION = "ne3"</code>. New <code>ne_embeddings</code> (Section 5). <code>NeuralEngineBackbone.forward</code> calls it in place of <code>model.embeddings</code>. New <code>constant_concats(mlmodel)</code>: the names of the concat ops with two or more constant inputs. <code>convert_module</code> calls it after <code>ct.convert</code> and raises the new <code>NeuralEngineGraphError</code> before the save if the list is not empty. The conversion line gets the field <code>constant_concats</code> (a count)</td></tr>
+        <tr><td><code>src/dinov3_mlx/coreml.py</code></td><td><code>REWRITE_VERSION = "ne3"</code>. New <code>ne_embeddings</code> (Section 5). <code>NeuralEngineBackbone.forward</code> calls it in place of <code>model.embeddings</code>. New <code>constant_concats(mlmodel)</code>: the names of the concat ops with two or more constant inputs. <code>convert_module</code> calls it after <code>ct.convert</code> and raises the new <code>NeuralEngineGraphError</code> before the save if the list is not empty. The conversion line gets the field <code>constant_concats</code> (a count)</td></tr>
         <tr><td><code>scripts/bench_coreml.py</code></td><td><code>RUN = "S6d"</code>; the default result file <code>results/coreml-6d.jsonl</code> and table <code>results/coreml-6d-table.md</code>. A new speed point P3 (Section 3.3), local to this script. The matrix runs both Neural Engine forms at batch size 8 (Section 3.4). The two-stream run takes the faster valid Neural Engine form of the matrix. No plain package (the Step 6c F1 lines stay)</td></tr>
         <tr><td><code>tests/test_coreml.py</code></td><td>T14 to T17 (Section 6). T9 expects <code>ne3</code> in the package name</td></tr>
         <tr><td><code>results/coreml-6d.jsonl</code>, <code>results/coreml-6d-table.md</code></td><td>New. <code>results/coreml.jsonl</code> and <code>results/coreml-table.md</code> of Step 6c stay as they are</td></tr>
@@ -80,7 +80,7 @@ a { color: var(--accent); }
     <ol>
       <li>Before J1, the build deletes the 25 <code>ne2</code> compiled packages (about 12 GB): <code>ne3</code> replaces them, and on CPU_AND_NE they give wrong tokens. The <code>ne2</code> result lines stay. The user approved this delete with the plan on 2026-11-08.</li>
       <li>Each job starts with a disk check. Below 10 GB free, the job does not start; the build stops and reports. A worker that cannot run writes the status "skipped: disk".</li>
-      <li>The build does not touch the bundle cache and <code>~/.cache/dinov3-apple/coreml/probes</code> (Q4 of <code>explore.html</code>, open for the user).</li>
+      <li>The build does not touch the bundle cache and <code>~/.cache/dinov3-mlx/coreml/probes</code> (Q4 of <code>explore.html</code>, open for the user).</li>
     </ol>
   </div>
 
@@ -101,7 +101,7 @@ a { color: var(--accent); }
   <p>In Step 6c the batch-size-8 packages were wrong on CPU_AND_NE, so the <code>coreml-ne</code> rows at batch size 8 used the batch API on the batch-size-1 package. With <code>ne3</code> the batch-size-8 package is right (probe: ViT-S/16 224 px, 8 images, frame ≥ 0.99991). The matrix runs both forms at batch size 8: <code>ne_batch_form</code> "package" and "batch-api". The paired runs and the two-stream run take the faster valid form of the matrix for each point. Probe values: ViT-S/16 224 px, package 501 img/s, batch API 673 to 688 img/s (Step 6c).</p>
 
   <h3>3.5 Jobs and machine time</h3>
-  <p>One job for each GPU-lock call: <code>uv run python -m dinov3_apple.gpu_lock -- uv run --group coreml python scripts/bench_coreml.py &lt;subcommand&gt;</code>. Each worker runs in its own subprocess after a memory check. The estimates scale from the measured Step 6c jobs.</p>
+  <p>One job for each GPU-lock call: <code>uv run python -m dinov3_mlx.gpu_lock -- uv run --group coreml python scripts/bench_coreml.py &lt;subcommand&gt;</code>. Each worker runs in its own subprocess after a memory check. The estimates scale from the measured Step 6c jobs.</p>
   <div class="table-wrap">
     <table>
       <thead><tr><th>Job</th><th>Content</th><th>Workers</th><th>Step 6c measured</th><th>Estimate</th></tr></thead>

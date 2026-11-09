@@ -30,7 +30,7 @@ import numpy as np
 import torch
 from transformers import AttentionInterface, DINOv3ViTModel
 
-from dinov3_apple.bench import (
+from dinov3_mlx.bench import (
     GIANT_MODEL_SIZE,
     TIMED,
     WARM_UP,
@@ -41,14 +41,14 @@ from dinov3_apple.bench import (
     make_batch,
     summarize,
 )
-from dinov3_apple.footprint import read_footprint
-from dinov3_apple.hub import parameter_count
-from dinov3_apple.machine import read_versions
-from dinov3_apple.memory import RunRuleError, check_free_memory, check_run_rule
-from dinov3_apple.outputs import NUM_PREFIX_TOKENS
-from dinov3_apple.parity import TEST_IMAGES
-from dinov3_apple.reference import load_torch_backbone, required_load_bytes
-from dinov3_apple.stored import REPO_ROOT, model_slug, read_inputs, read_reference
+from dinov3_mlx.footprint import read_footprint
+from dinov3_mlx.hub import parameter_count
+from dinov3_mlx.machine import read_versions
+from dinov3_mlx.memory import RunRuleError, check_free_memory, check_run_rule
+from dinov3_mlx.outputs import NUM_PREFIX_TOKENS
+from dinov3_mlx.parity import TEST_IMAGES
+from dinov3_mlx.reference import load_torch_backbone, required_load_bytes
+from dinov3_mlx.stored import REPO_ROOT, model_slug, read_inputs, read_reference
 
 SCORE_SCALE = 256.0  # a power of two: the division adds no rounding error
 SCORE_FLOOR = -60000.0  # the clip of the shifted scores, before the multiplication by SCORE_SCALE
@@ -59,7 +59,7 @@ MAX_STREAM_VALUE = 32768.0  # the largest residual-stream value after the scale:
 # one constant prefix in the embeddings (Step 6d).
 REWRITE_VERSION = "ne3"
 COREMLTOOLS_VERSION = "9.0"  # the version of the coreml dependency group and of the _cast patch
-COREML_DIR = Path.home() / ".cache" / "dinov3-apple" / "coreml"
+COREML_DIR = Path.home() / ".cache" / "dinov3-mlx" / "coreml"
 TOKEN_RANGE_TABLE = REPO_ROOT / "results" / "token-range-mlx.md"
 # The compute-unit setting of each Core ML backend.
 COMPUTE_UNITS = {"coreml-ne": "CPU_AND_NE", "coreml-gpu": "CPU_AND_GPU", "coreml-all": "ALL"}
@@ -296,7 +296,7 @@ def package_path(model_size: str, side: int, batch_size: int, rewrite: bool = Tr
         rewrite: True for the Neural Engine rewrite, False for the plain graph (F1 evidence).
 
     Returns:
-        For example ~/.cache/dinov3-apple/coreml/vits16-224-b8-ne2-s256-r1-ct9.0.mlpackage. After
+        For example ~/.cache/dinov3-mlx/coreml/vits16-224-b8-ne2-s256-r1-ct9.0.mlpackage. After
         convert_backbone only its compiled model (compiled_path) stays on disk.
     """
     stem = f"{model_slug(model_size)}-{side}-b{batch_size}"

@@ -29,11 +29,11 @@ from small_model import (
 from transformers.activations import ACT2FN
 from transformers.models.dinov3_vit.modeling_dinov3_vit import DINOv3ViTModel
 
-from dinov3_apple import mlx_model as mlx_model_module
-from dinov3_apple.block_profile import block_parts, run_parts
-from dinov3_apple.flops import PART_NAMES
-from dinov3_apple.mlx_bench import mlx_block_parts
-from dinov3_apple.mlx_model import (
+from dinov3_mlx import mlx_model as mlx_model_module
+from dinov3_mlx.block_profile import block_parts, run_parts
+from dinov3_mlx.flops import PART_NAMES
+from dinov3_mlx.mlx_bench import mlx_block_parts
+from dinov3_mlx.mlx_model import (
     MLP,
     MLX_DTYPE_MODES,
     Block,
@@ -50,7 +50,7 @@ from dinov3_apple.mlx_model import (
     run_mlx_hidden_states,
     run_mlx_token_range,
 )
-from dinov3_apple.outputs import NUM_PREFIX_TOKENS, PATCH_SIZE, split_tokens
+from dinov3_mlx.outputs import NUM_PREFIX_TOKENS, PATCH_SIZE, split_tokens
 
 pytestmark = pytest.mark.mlx
 
@@ -769,7 +769,7 @@ def test_compiled_equals_eager_small(
     for bit. CPU stream: largest difference at most 1e-5 in fp32; in the four fp16 and bf16 dtype
     modes report only with the fault bound CPU_FAULT_BOUND of the mode (decision of 2026-11-07, a
     deviation from AC1)."""
-    from dinov3_apple.mlx_model import compile_backbone
+    from dinov3_mlx.mlx_model import compile_backbone
 
     with mx.stream(DEVICES[device]):
         mlx = small_mlx_model(small_hf_model(seed=0, name=model), dtype_mode)
@@ -798,7 +798,7 @@ def test_compiled_equals_eager_small(
 
 def test_compiled_forward_follows_a_weight_change() -> None:
     """T35 (R35): the weights are inputs of the trace, so a weight change reaches the output."""
-    from dinov3_apple.mlx_model import compile_backbone
+    from dinov3_mlx.mlx_model import compile_backbone
 
     mlx = small_mlx_model(small_hf_model(seed=0), "fp32")
     forward = compile_backbone(mlx)
@@ -815,7 +815,7 @@ def test_compiled_forward_follows_a_weight_change() -> None:
 def test_compiled_forward_frees_the_weights() -> None:
     """T36 (R36): after del forward and del model the active memory is back within 1 MB, without
     gc.collect(): the caller holds the function, the model does not."""
-    from dinov3_apple.mlx_model import compile_backbone
+    from dinov3_mlx.mlx_model import compile_backbone
 
     gc.collect()
     mx.clear_cache()
@@ -836,7 +836,7 @@ def test_compiled_forward_frees_the_weights() -> None:
 
 def test_run_mlx_uses_the_given_forward(mlx_model: MlxBackbone) -> None:
     """T40 (D4): run_mlx runs the given compiled forward pass once; without it, the eager one."""
-    from dinov3_apple.mlx_model import compile_backbone
+    from dinov3_mlx.mlx_model import compile_backbone
 
     calls: list[tuple[int, ...]] = []
     compiled = compile_backbone(mlx_model)
@@ -856,7 +856,7 @@ def test_run_mlx_uses_the_given_forward(mlx_model: MlxBackbone) -> None:
 def test_mlx_embeddings_fp16_patches(dtype_mode: str) -> None:
     """T55 (D13): frame fp32; patches fp16 in the four fp16 and bf16 dtype modes, fp32 in fp32 and
     with patch_fp32=True; the fp16 values equal the fp32 tokens cast to fp16, bit for bit."""
-    from dinov3_apple.mlx_model import mlx_embeddings
+    from dinov3_mlx.mlx_model import mlx_embeddings
 
     mlx = small_mlx_model(small_hf_model(seed=0), dtype_mode)
     tokens = mlx(mx.array(small_pixels(PIXEL_SHAPES[0])))
@@ -903,7 +903,7 @@ def test_mlx_sdpa_nax_fingerprint(report: Callable[..., None]) -> None:
     (head dimension 80; the fp32 kernel on fp16 and bf16 inputs). With the Neural Accelerators
     on, the probe gave 54.5 % (fp16) and 12.6 % (bf16) at head dimension 64 with mlx 0.32.4; a new
     MLX version that turns the NAX kernels off or changes the relaxed precision shows here."""
-    from dinov3_apple.machine import read_versions
+    from dinov3_mlx.machine import read_versions
 
     shares = {}
     for dtype in ("fp16", "bf16"):
@@ -933,7 +933,7 @@ def test_cpu_fault_bound_catches_the_f1_fault(dtype_mode: str, report: Callable[
     """The red case of the CPU fault bounds of T34: the F1 fault of Step 4 (a wrong input cast:
     the pixels pass through an integer dtype) on the CPU stream gives a difference to the eager
     forward pass of at least 5 times the bound of the mode."""
-    from dinov3_apple.mlx_model import compile_backbone
+    from dinov3_mlx.mlx_model import compile_backbone
 
     largest = 0.0
     with mx.stream(mx.cpu):

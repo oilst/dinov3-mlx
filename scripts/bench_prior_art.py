@@ -21,7 +21,7 @@ line has the run id of its driver (RUN_ID).
 
 Usage:
     uv run python scripts/bench_prior_art.py coreml --rounds 5 --dry-run
-    uv run python -m dinov3_apple.gpu_lock -- uv run python scripts/bench_prior_art.py coreml --rounds 5
+    uv run python -m dinov3_mlx.gpu_lock -- uv run python scripts/bench_prior_art.py coreml --rounds 5
     ... bench_prior_art.py coreml --units ALL --rounds 1
     ... bench_prior_art.py coreml --image-input
     ... bench_prior_art.py variants --parity [--model-sizes ViT-S/16]
@@ -41,8 +41,8 @@ from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 
-from dinov3_apple import prior_art
-from dinov3_apple.bench import (
+from dinov3_mlx import prior_art
+from dinov3_mlx.bench import (
     BenchConfig,
     TimeBudget,
     public_path,
@@ -51,12 +51,12 @@ from dinov3_apple.bench import (
     required_bench_bytes,
     run_worker_subprocess,
 )
-from dinov3_apple.gpu_lock import HEAVY_JOB_PATTERN, LOCK_REGISTRY, heavy_job, other_heavy_jobs
-from dinov3_apple.hub import WeightsNotFoundError
-from dinov3_apple.machine import MachineStateError, check_machine_state, read_machine_state
-from dinov3_apple.memory import GB, InsufficientMemoryError, available_memory_bytes, send_checks_to
-from dinov3_apple.parity import TEST_IMAGES
-from dinov3_apple.prior_art import (
+from dinov3_mlx.gpu_lock import HEAVY_JOB_PATTERN, LOCK_REGISTRY, heavy_job, other_heavy_jobs
+from dinov3_mlx.hub import WeightsNotFoundError
+from dinov3_mlx.machine import MachineStateError, check_machine_state, read_machine_state
+from dinov3_mlx.memory import GB, InsufficientMemoryError, available_memory_bytes, send_checks_to
+from dinov3_mlx.parity import TEST_IMAGES
+from dinov3_mlx.prior_art import (
     BLOCKED_REASON,
     BUDGETS,
     EXPORTS,
@@ -69,7 +69,7 @@ from dinov3_apple.prior_art import (
     parity_passes,
     worst_parity,
 )
-from dinov3_apple.stored import INPUTS_FILE, reference_path
+from dinov3_mlx.stored import INPUTS_FILE, reference_path
 
 REPO_ROOT = Path(__file__).parents[1]
 SCRIPTS = Path(__file__).parent
@@ -991,7 +991,7 @@ def worker_main(spec_json: str) -> None:
     warm_up, timed = BUDGETS[spec.get("budget", "full")]
     try:
         if spec["kind"] == "ours":
-            from dinov3_apple.mlx_bench import run_mlx_worker
+            from dinov3_mlx.mlx_bench import run_mlx_worker
 
             batch = None
             if spec.get("pixels") == "random":
@@ -999,11 +999,11 @@ def worker_main(spec_json: str) -> None:
             run_id = f"{spec['job']}-r{spec.get('round', 1)}"
             result = run_mlx_worker(config, warm_up, timed, bench_dir / "mlx", run_id, batch)
         elif spec["kind"] == "variant-parity":
-            from dinov3_apple.port_variants import run_variant_parity
+            from dinov3_mlx.port_variants import run_variant_parity
 
             result = run_variant_parity(config.model_size, config.dtype_mode, spec["variant"])
         elif spec["kind"] == "variant-speed":
-            from dinov3_apple.port_variants import run_variant_speed
+            from dinov3_mlx.port_variants import run_variant_speed
 
             result = run_variant_speed(config, spec["variant"], warm_up, timed)
         else:

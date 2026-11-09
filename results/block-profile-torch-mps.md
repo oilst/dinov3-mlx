@@ -2,7 +2,7 @@
 
 Written by `scripts/baseline_table.py` on 2026-11-07 from `results/block-profile-torch-mps.jsonl`. Spec: Section 3.11 of `specs/03-baseline/plan.html` (D6).
 
-Each part of block 1 runs alone in a loop with one synchronize at the end. The time is the median of five loops. The FLOP share comes from `dinov3_apple.flops`. Limits of the checks: 15 %.
+Each part of block 1 runs alone in a loop with one synchronize at the end. The time is the median of five loops. The FLOP share comes from `dinov3_mlx.flops`. Limits of the checks: 15 %.
 
 The forward pass runs before and after the parts; the check uses the mean of the two. A large change between the two shows a change of the speed of the Mac during the profile. At batch size 1 a block alone takes longer than a block inside the forward pass, so Forward / L gives the time of one block inside the forward pass (finding F4 of `specs/03-baseline/verify.html`). Lines from before F4 have only the time after the parts.
 

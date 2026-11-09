@@ -25,10 +25,10 @@ import mlx.core as mx
 import numpy as np
 from mlx import nn
 
-from dinov3_apple.outputs import NUM_PREFIX_TOKENS
+from dinov3_mlx.outputs import NUM_PREFIX_TOKENS
 
 if TYPE_CHECKING:  # mlx_weights imports this module
-    from dinov3_apple.mlx_weights import LoadReport
+    from dinov3_mlx.mlx_weights import LoadReport
 
 
 @dataclass(frozen=True)

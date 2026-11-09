@@ -77,12 +77,12 @@ a { color: var(--accent); }
     <table>
       <thead><tr><th>File</th><th>New public names</th><th>Job</th></tr></thead>
       <tbody>
-        <tr><td><code>src/dinov3_apple/footprint.py</code></td><td><code>Footprint</code>, <code>read_footprint</code></td><td>The current macOS process footprint and its lifetime maximum, from <code>proc_pid_rusage</code> (D5).</td></tr>
-        <tr><td><code>src/dinov3_apple/machine.py</code></td><td><code>MachineState</code>, <code>MachineStateError</code>, <code>read_machine_state</code>, <code>check_machine_state</code></td><td>Power source, Low Power Mode, thermal notes and versions. Stop on battery or in Low Power Mode (Section 3.8).</td></tr>
-        <tr><td><code>src/dinov3_apple/bench.py</code></td><td><code>BenchConfig</code>, <code>TimeBudget</code>, <code>WARM_UP</code>, <code>TIMED</code>, <code>keep_going</code>, <code>bench_configurations</code>, <code>required_bench_bytes</code>, <code>make_batch</code>, <code>check_validity</code>, <code>summarize</code>, <code>baseline_rows</code></td><td>The benchmark matrix, the time budget, the memory need of one configuration, the input batch, the validity check, the summary statistics and the rule of D2. No torch import at module level, so <code>mlx</code> can reuse it.</td></tr>
-        <tr><td><code>src/dinov3_apple/torch_bench.py</code></td><td><code>run_worker</code>, <code>time_batch</code></td><td>The worker of one configuration on <code>torch-mps</code>: load, validity check, warm-up, timed batches, one result dict (Sections 3.3 to 3.6).</td></tr>
-        <tr><td><code>src/dinov3_apple/flops.py</code></td><td><code>PART_NAMES</code>, <code>part_flops</code>, <code>part_bytes</code>, <code>image_flops</code></td><td>FLOPs and bytes moved for each part of a block, and FLOPs for one image (Table 7). NumPy only.</td></tr>
-        <tr><td><code>src/dinov3_apple/block_profile.py</code></td><td><code>block_parts</code>, <code>run_parts</code>, <code>time_part</code>, <code>profile_block</code></td><td>Split block 1 of a backbone into its parts, check that the parts give the block output, and time each part alone (D6).</td></tr>
+        <tr><td><code>src/dinov3_mlx/footprint.py</code></td><td><code>Footprint</code>, <code>read_footprint</code></td><td>The current macOS process footprint and its lifetime maximum, from <code>proc_pid_rusage</code> (D5).</td></tr>
+        <tr><td><code>src/dinov3_mlx/machine.py</code></td><td><code>MachineState</code>, <code>MachineStateError</code>, <code>read_machine_state</code>, <code>check_machine_state</code></td><td>Power source, Low Power Mode, thermal notes and versions. Stop on battery or in Low Power Mode (Section 3.8).</td></tr>
+        <tr><td><code>src/dinov3_mlx/bench.py</code></td><td><code>BenchConfig</code>, <code>TimeBudget</code>, <code>WARM_UP</code>, <code>TIMED</code>, <code>keep_going</code>, <code>bench_configurations</code>, <code>required_bench_bytes</code>, <code>make_batch</code>, <code>check_validity</code>, <code>summarize</code>, <code>baseline_rows</code></td><td>The benchmark matrix, the time budget, the memory need of one configuration, the input batch, the validity check, the summary statistics and the rule of D2. No torch import at module level, so <code>mlx</code> can reuse it.</td></tr>
+        <tr><td><code>src/dinov3_mlx/torch_bench.py</code></td><td><code>run_worker</code>, <code>time_batch</code></td><td>The worker of one configuration on <code>torch-mps</code>: load, validity check, warm-up, timed batches, one result dict (Sections 3.3 to 3.6).</td></tr>
+        <tr><td><code>src/dinov3_mlx/flops.py</code></td><td><code>PART_NAMES</code>, <code>part_flops</code>, <code>part_bytes</code>, <code>image_flops</code></td><td>FLOPs and bytes moved for each part of a block, and FLOPs for one image (Table 7). NumPy only.</td></tr>
+        <tr><td><code>src/dinov3_mlx/block_profile.py</code></td><td><code>block_parts</code>, <code>run_parts</code>, <code>time_part</code>, <code>profile_block</code></td><td>Split block 1 of a backbone into its parts, check that the parts give the block output, and time each part alone (D6).</td></tr>
         <tr><td><code>scripts/benchmark.py</code></td><td>&ndash;</td><td>The driver: machine state, memory check, one worker subprocess for each configuration, one JSON line for each result or skip. Options <code>--model-size</code>, <code>--repeats</code>, <code>--compile</code>, <code>--priority</code>, <code>--dry-run</code>, <code>--only-skipped</code>.</td></tr>
         <tr><td><code>scripts/profile_block.py</code></td><td>&ndash;</td><td>The block profile of Section 3.11, one subprocess for each model size and dtype mode.</td></tr>
         <tr><td><code>scripts/baseline_table.py</code></td><td>&ndash;</td><td>Turn the JSON lines into <code>results/baseline-torch-mps.md</code> and <code>results/block-profile-torch-mps.md</code>.</td></tr>
@@ -373,7 +373,7 @@ T = tokens (201, 789 or 1,029), F = feed-forward size, a = 2 bytes in cast mode,
 <section id="code">
   <h2>5 Key code</h2>
   <p>These snippets show the shape of the code. The build can change the details.</p>
-  <pre><code># src/dinov3_apple/bench.py
+  <pre><code># src/dinov3_mlx/bench.py
 @dataclass(frozen=True)
 class TimeBudget:
     """When a phase of batches ends (Table 5)."""
@@ -394,7 +394,7 @@ def keep_going(budget: TimeBudget, batches: int, elapsed_s: float) -> bool:
         if batches &gt;= budget.floor_batches:
             return False
     return batches &lt; budget.min_batches or elapsed_s &lt; budget.min_seconds</code></pre>
-  <pre><code># src/dinov3_apple/torch_bench.py
+  <pre><code># src/dinov3_mlx/torch_bench.py
 @torch.inference_mode()
 def time_batch(model: DINOv3ViTModel, batch: np.ndarray, mode: DtypeMode) -&gt; tuple[float, float, float]:
     """Return the device time, the frame time and the patch time of one batch (Table 4)."""
@@ -409,7 +409,7 @@ def time_batch(model: DINOv3ViTModel, batch: np.ndarray, mode: DtypeMode) -&gt; 
     tokens[:, NUM_PREFIX_TOKENS:].cpu().numpy()
     t3 = time.perf_counter()
     return t1 - t0, t2 - t0, (t1 - t0) + (t3 - t2)</code></pre>
-  <pre><code># src/dinov3_apple/footprint.py
+  <pre><code># src/dinov3_mlx/footprint.py
 class _RusageInfoV4(ctypes.Structure):
     _fields_ = [("ri_uuid", ctypes.c_uint8 * 16)] + [(name, ctypes.c_uint64) for name in _V4_FIELDS]
 
@@ -426,7 +426,7 @@ def read_footprint(pid: int | None = None) -&gt; Footprint:
     if _libc.proc_pid_rusage(pid or os.getpid(), RUSAGE_INFO_V4, ctypes.byref(info)) != 0:
         raise OSError(ctypes.get_errno(), "proc_pid_rusage failed")
     return Footprint(info.ri_phys_footprint, info.ri_lifetime_max_phys_footprint)</code></pre>
-  <pre><code># src/dinov3_apple/bench.py
+  <pre><code># src/dinov3_mlx/bench.py
 DTYPE_OF_MODE = {"fp32": "fp32", "fp16-cast": "fp16", "fp16-autocast": "fp16",
                  "bf16-cast": "bf16", "bf16-autocast": "bf16"}
 

@@ -1,4 +1,4 @@
-# dinov3-apple
+# dinov3-mlx
 
 Fast DINOv3 frame embeddings, patch embeddings and fine-tuning on Apple silicon with MLX.
 

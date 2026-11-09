@@ -163,7 +163,7 @@ a { color: var(--accent); }
     </svg></div>
     <figcaption>Figure 2. The order of the workers of job J1: 5 groups by the cell of ours, 24 workers for each round, 120 in all.</figcaption>
   </figure>
-  <pre><code>def cell_row(ours, other, fields=None):                 # src/dinov3_apple/prior_art.py
+  <pre><code>def cell_row(ours, other, fields=None):                 # src/dinov3_mlx/prior_art.py
     by_round = {line["round"]: line for line in ours if _done(line)}
     pairs = [(by_round[line["round"]], line)              # a failed side drops only its round
              for line in other if _done(line) and line["round"] in by_round]
@@ -205,7 +205,7 @@ a { color: var(--accent); }
     <figcaption>Figure 3. Where each variant changes our backbone. V0 changes nothing: it must give the output of <code>compile_backbone</code> bit for bit (test T8 on the small model, AC6 on ViT-S/16).</figcaption>
   </figure>
   <h3>5.1 V1: the RoPE of C1 and C2</h3>
-  <pre><code>def port_rope_tables(grid_h, grid_w, head_dim, base):     # src/dinov3_apple/port_variants.py
+  <pre><code>def port_rope_tables(grid_h, grid_w, head_dim, base):     # src/dinov3_mlx/port_variants.py
     bf16 = mx.bfloat16                                      # pos_embed_rope_dtype="bf16" of the ports
     periods = base ** (2 * mx.arange(head_dim // 4, dtype=bf16) / (head_dim // 2))
     coords_h = mx.arange(0.5, grid_h, dtype=bf16) / grid_h  # every step rounds to bf16
@@ -244,7 +244,7 @@ class Bf16RotationAttention(Attention):
         scores = mx.matmul(q, k.swapaxes(-1, -2)) * self.scale        # (B, heads, T, T) in memory
         return self.output(mx.matmul(mx.softmax(scores, axis=-1), v))</code></pre>
   <h3>5.4 V5: the 8-bit input</h3>
-  <pre><code>def eight_bit_pixels(pixels):                                  # src/dinov3_apple/prior_art.py
+  <pre><code>def eight_bit_pixels(pixels):                                  # src/dinov3_mlx/prior_art.py
     levels = np.clip(np.rint((pixels * std + mean) * 255), 0, 255)  # what an RGB image keeps
     return ((levels / 255 - mean) / std).astype(np.float32)         # moves ≤ 0.5 / 255 / std</code></pre>
   <h3>5.5 Build one variant</h3>
@@ -488,11 +488,11 @@ class Bf16RotationAttention(Attention):
 
 <section id="code">
   <h2>8 The code of Step 6b</h2>
-  <h3>8.1 <code>src/dinov3_apple/prior_art.py</code> (no backend)</h3>
+  <h3>8.1 <code>src/dinov3_mlx/prior_art.py</code> (no backend)</h3>
   <div class="table-wrap"><table>
     <thead><tr><th>Name</th><th>What it does</th></tr></thead>
     <tbody>
-      <tr><td><code>PRIOR_ART_DIR</code></td><td>The folder of the third-party files: <code>~/.cache/dinov3-apple/prior-art</code>, or <code>DINOV3_PRIOR_ART_DIR</code>.</td></tr>
+      <tr><td><code>PRIOR_ART_DIR</code></td><td>The folder of the third-party files: <code>~/.cache/dinov3-mlx/prior-art</code>, or <code>DINOV3_PRIOR_ART_DIR</code>.</td></tr>
       <tr><td><code>Candidate</code>, <code>CANDIDATES</code></td><td>C1 to C9 with kind, license, commit, verdict ("measure", "gated", "skip") and the reason of a skip or a gate (AC1).</td></tr>
       <tr><td><code>Export</code>, <code>EXPORTS</code></td><td>E1 to E7: candidate, model size, input resolution, precision, package path, input kind, outputs and the cell of ours. Properties: <code>path</code>, <code>tokens</code> (1374 for E7 and for our 592 px cell), <code>threshold_mode</code> (fp32 for FP32 and INT8, fp16-cast for FP16), <code>report_only</code> (INT8 and DINOv2).</td></tr>
       <tr><td><code>Group</code>, <code>_groups</code>, <code>GROUPS</code>, <code>GROUP_OF_EXPORT</code></td><td>The 5 cells of ours (G1 to G5) and the exports that pair with each.</td></tr>
@@ -515,7 +515,7 @@ class Bf16RotationAttention(Attention):
       <tr><td><code>slow_cell_facts</code></td><td>For each cell with a prior-art ratio below 0.97: the transfer share of ours (1 − patch ÷ device throughput) and the ratio of our device throughput to the export throughput (AC4).</td></tr>
     </tbody>
   </table></div>
-  <h3>8.2 <code>src/dinov3_apple/port_variants.py</code> (mlx)</h3>
+  <h3>8.2 <code>src/dinov3_mlx/port_variants.py</code> (mlx)</h3>
   <div class="table-wrap"><table>
     <thead><tr><th>Name</th><th>What it does</th></tr></thead>
     <tbody>

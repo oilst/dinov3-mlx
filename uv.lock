@@ -165,7 +165,7 @@ nvtx = [
 ]
 
 [[package]]
-name = "dinov3-apple"
+name = "dinov3-mlx"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

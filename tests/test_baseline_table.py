@@ -1,7 +1,7 @@
 import pytest
 from baseline_table import write_baseline_table, write_profile_table
 
-from dinov3_apple.flops import PART_NAMES
+from dinov3_mlx.flops import PART_NAMES
 
 MACHINE = {
     "power_source": "AC Power",

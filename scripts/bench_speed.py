@@ -40,7 +40,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import asdict, replace
 from pathlib import Path
 
-from dinov3_apple.bench import (
+from dinov3_mlx.bench import (
     BATCH_SIZES,
     DTYPE_MODE_NAMES,
     DTYPE_OF_MODE,
@@ -59,10 +59,10 @@ from dinov3_apple.bench import (
     result_line,
     run_worker_subprocess,
 )
-from dinov3_apple.gpu_lock import HEAVY_JOB_PATTERN, LOCK_REGISTRY, heavy_job, other_heavy_jobs
-from dinov3_apple.hub import MODEL_IDS, WeightsNotFoundError
-from dinov3_apple.machine import MachineStateError, check_machine_state, read_machine_state
-from dinov3_apple.memory import GB, InsufficientMemoryError, available_memory_bytes, send_checks_to
+from dinov3_mlx.gpu_lock import HEAVY_JOB_PATTERN, LOCK_REGISTRY, heavy_job, other_heavy_jobs
+from dinov3_mlx.hub import MODEL_IDS, WeightsNotFoundError
+from dinov3_mlx.machine import MachineStateError, check_machine_state, read_machine_state
+from dinov3_mlx.memory import GB, InsufficientMemoryError, available_memory_bytes, send_checks_to
 
 REPO_ROOT = Path(__file__).parents[1]
 RESULTS_DIR = REPO_ROOT / "results"
@@ -222,7 +222,7 @@ def gate_plan() -> list[Spec]:
 def follow_up_plan(listed: list[tuple[str, int, int, str]], matrix_lines: list[dict]) -> list[Spec]:
     """Return the follow-up groups of the compile check (job J16): torch-mps eager, torch-mps
     compiled and the fastest valid mlx mode of the dtype in that group."""
-    from dinov3_apple.speedup import _fastest
+    from dinov3_mlx.speedup import _fastest
 
     groups = all_groups()
     specs = []
@@ -640,7 +640,7 @@ def plan_of(args: argparse.Namespace) -> list[Spec]:
     if args.gate_7b:
         return gate_plan()
     if args.compile_check:
-        from dinov3_apple.speedup import compile_check
+        from dinov3_mlx.speedup import compile_check
 
         step3 = read_lines(RESULTS_DIR / "baseline-torch-mps.jsonl")
         return follow_up_plan(compile_check(lines, step3), lines)
@@ -737,10 +737,10 @@ def _learn_batch(side: int, batch_size: int) -> "object":
     """The pixels of the Learn data: preprocess_frames of the three test images, cycled."""
     import numpy as np
 
-    from dinov3_apple.mlx_preprocess import preprocess_frames
-    from dinov3_apple.parity import TEST_IMAGES
-    from dinov3_apple.preprocess import load_image
-    from dinov3_apple.stored import IMAGES_DIR
+    from dinov3_mlx.mlx_preprocess import preprocess_frames
+    from dinov3_mlx.parity import TEST_IMAGES
+    from dinov3_mlx.preprocess import load_image
+    from dinov3_mlx.stored import IMAGES_DIR
 
     images = []
     for name in TEST_IMAGES:
@@ -764,7 +764,7 @@ def worker_main(spec_json: str) -> None:
     warm_up, timed = BUDGETS[spec.get("budget", "full")]
     try:
         if spec["kind"] == "bench" and spec["backend"] == "mlx":
-            from dinov3_apple.mlx_bench import run_mlx_worker
+            from dinov3_mlx.mlx_bench import run_mlx_worker
 
             batch = None
             if spec.get("pixels") == "preprocess":
@@ -773,21 +773,21 @@ def worker_main(spec_json: str) -> None:
                 config, warm_up, timed, bench_dir / "mlx", run_id=spec.get("run_id"), batch=batch
             )
         elif spec["kind"] == "bench":
-            from dinov3_apple.torch_bench import run_worker as run_torch_worker
+            from dinov3_mlx.torch_bench import run_worker as run_torch_worker
 
             result = run_torch_worker(config, warm_up, timed, bench_dir / "torch-mps")
         elif spec["kind"] == "change":
-            from dinov3_apple.mlx_bench import run_change_worker
+            from dinov3_mlx.mlx_bench import run_change_worker
 
             result = run_change_worker(
                 config, spec["change"], spec["forms"], spec["rounds"], warm_up, timed
             )
         elif spec["kind"] == "profile":
-            from dinov3_apple.mlx_bench import run_profile_worker
+            from dinov3_mlx.mlx_bench import run_profile_worker
 
             result = run_profile_worker(config, bench_dir / "profile")
         elif spec["kind"] == "token-range":
-            from dinov3_apple.mlx_bench import run_token_range_worker
+            from dinov3_mlx.mlx_bench import run_token_range_worker
 
             result = run_token_range_worker(config, _learn_batch(config.side, 1))
         elif spec["kind"] == "preprocess":
@@ -812,10 +812,10 @@ def run_preprocess_worker(rounds: int) -> dict:
     import numpy as np
     from PIL import Image
 
-    from dinov3_apple.mlx_preprocess import preprocess_frames
-    from dinov3_apple.parity import TEST_IMAGES
-    from dinov3_apple.preprocess import load_image, preprocess
-    from dinov3_apple.stored import IMAGES_DIR
+    from dinov3_mlx.mlx_preprocess import preprocess_frames
+    from dinov3_mlx.parity import TEST_IMAGES
+    from dinov3_mlx.preprocess import load_image, preprocess
+    from dinov3_mlx.stored import IMAGES_DIR
 
     frames = []
     for i in range(8):
@@ -845,7 +845,7 @@ def run_preprocess_worker(rounds: int) -> dict:
         }
     from datetime import UTC, datetime
 
-    from dinov3_apple.machine import read_versions
+    from dinov3_mlx.machine import read_versions
 
     return {
         "status": "done",

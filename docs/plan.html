@@ -354,7 +354,7 @@ figcaption { font-size: 0.88rem; color: var(--muted); max-width: 52rem; }
             <tr><td>D4</td><td>Workflow</td><td>Spec loop with HTML specs, Markdown steering files and a glossary</td><td>User, 2026-11-06</td></tr>
             <tr><td>D5</td><td>Last step</td><td>The reference fine-tuning setup in MLX, then DoRA and other adapters</td><td>User, 2026-11-06</td></tr>
             <tr><td>D6</td><td>Repo license</td><td>Open (Section 9, R1)</td><td>User, before the first push</td></tr>
-            <tr><td>D7</td><td>Repo name</td><td>Working name <code>dinov3-apple</code></td><td>User, before the first push</td></tr>
+            <tr><td>D7</td><td>Repo name</td><td>Working name <code>dinov3-mlx</code></td><td>User, before the first push</td></tr>
           </tbody>
         </table>
       </div>
@@ -720,7 +720,7 @@ figcaption { font-size: 0.88rem; color: var(--muted); max-width: 52rem; }
       <h3>Step 0. Workflow</h3>
       <p>Step 0 gives the repo its steering files, its glossary, its spec template and this report. We did these actions on 2026-11-06.</p>
       <ol class="steps">
-        <li>Create the folder <code>dinov3-apple</code> and a local git repo.</li>
+        <li>Create the folder <code>dinov3-mlx</code> and a local git repo.</li>
         <li>Write <code>mission.md</code>, <code>roadmap.md</code> and <code>tech-stack.md</code>.</li>
         <li>Write <code>GLOSSARY.md</code> with the terms of this report.</li>
         <li>Write <code>CLAUDE.md</code> with the spec loop and the run rules.</li>
@@ -1066,7 +1066,7 @@ figcaption { font-size: 0.88rem; color: var(--muted); max-width: 52rem; }
         <thead><tr><th>No.</th><th>Item</th><th>Effect</th><th>Action</th><th>Owner</th></tr></thead>
         <tbody>
           <tr><td>R1</td><td>Repo license</td><td>Clause 1.b.i of the DINOv3 License covers derivative works of the DINOv3 code. A wrong license breaks the agreement.</td><td>Decide before the first push. Option A: the whole repo under the DINOv3 License. Option B: an own license for original code, after a legal check.</td><td>User</td></tr>
-          <tr><td>R2</td><td>Repo name</td><td>The name is part of the public URL.</td><td>Keep <code>dinov3-apple</code> or rename before the first push.</td><td>User</td></tr>
+          <tr><td>R2</td><td>Repo name</td><td>The name is part of the public URL.</td><td>Keep <code>dinov3-mlx</code> or rename before the first push.</td><td>User</td></tr>
           <tr><td>R3</td><td>Expired Hugging Face token</td><td>The gated weights do not download.</td><td>Renew the token in Step 1.</td><td>User</td></tr>
           <tr><td>R4</td><td>Out-of-memory crash</td><td>This Mac crashed before. Work gets lost.</td><td>The run rules in <code>CLAUDE.md</code>: one heavy job, one subprocess per configuration, a memory check.</td><td>Agent</td></tr>
           <tr><td>R5</td><td>2D RoPE in MLX</td><td><code>mx.fast.rope</code> can possibly not compute the 2D RoPE of DINOv3.</td><td>Step 4 checks it. The fallback keeps sine and cosine tables in a cache. Result of Step 4: confirmed. <code>mx.fast.rope</code> cannot compute it in one call, so the MLX backbone uses RoPE tables, cached by patch grid.</td><td>Agent</td></tr>

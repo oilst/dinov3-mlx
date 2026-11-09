@@ -13,8 +13,8 @@ from parity_checks import (
 )
 from under_test import MODEL_SIZES_UNDER_TEST
 
-from dinov3_apple.parity import Parity, measure_parity
-from dinov3_apple.reference import DTYPE_MODES, run_torch
+from dinov3_mlx.parity import Parity, measure_parity
+from dinov3_mlx.reference import DTYPE_MODES, run_torch
 
 PARITY_PARAMS = [
     pytest.param(model_size, dtype_mode, config, id=f"{model_size}-{dtype_mode}-{config}")

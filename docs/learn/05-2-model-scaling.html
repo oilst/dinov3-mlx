@@ -192,7 +192,7 @@ a { color: var(--accent); }
 
   <h3>2.1 Three differences of ViT-7B/16, and no special code</h3>
   <p><code>MlxConfig.from_hf</code> reads every value of Table 1 from <code>config.json</code>. The modules take their shapes and their bias flags from the config:</p>
-  <pre><code># src/dinov3_apple/mlx_model.py, lines 122 to 125 (MlxConfig) and 140 to 146 (MlxConfig.from_hf)
+  <pre><code># src/dinov3_mlx/mlx_model.py, lines 122 to 125 (MlxConfig) and 140 to 146 (MlxConfig.from_hf)
     @property
     def head_dim(self) -> int:
         """The number of values of one head."""
@@ -213,7 +213,7 @@ a { color: var(--accent); }
         self.v_proj = nn.Linear(dim, dim, bias=config.value_bias)
         self.o_proj = nn.Linear(dim, dim, bias=config.proj_bias)
 
-# src/dinov3_apple/mlx_weights.py, lines 232 to 234 (load_mlx_backbone)
+# src/dinov3_mlx/mlx_weights.py, lines 232 to 234 (load_mlx_backbone)
     tensors: dict[str, mx.array] = {}
     for file in sorted(folder.glob("*.safetensors")):
         tensors |= mx.load(str(file))  # lazy; a str, not a Path (R18)</code></pre>
@@ -241,7 +241,7 @@ a { color: var(--accent); }
 <section id="modes">
   <h2>3 Five dtype modes: two dtypes each</h2>
   <p>In Step 4, <code>MLX_DTYPE_MODES</code> mapped each dtype mode to one dtype: <code>{"fp32": mx.float32}</code>. One dtype cannot describe an autocast mode. There the matmuls run in fp16 or bf16, but the residual stream, the layer norms and LayerScale stay in fp32. So Step 5 gives each dtype mode two dtypes (D2 of <code>explore.html</code>):</p>
-  <pre><code># src/dinov3_apple/mlx_model.py, lines 34 to 57
+  <pre><code># src/dinov3_mlx/mlx_model.py, lines 34 to 57
 @dataclass(frozen=True)
 class MlxDtypeMode:
     """The two dtypes of one dtype mode of mlx (D2 of specs/05-all-sizes/explore.html).
@@ -296,7 +296,7 @@ FP32 = MLX_DTYPE_MODES["fp32"]</code></pre>
 
   <h3>3.1 On <code>mlx</code>, the autocast modes have half-precision weights</h3>
   <p>The word "autocast" means one thing on both backends: the matmuls run in fp16 or bf16, and the residual stream stays in fp32. The weights differ. On torch, the weights stay in fp32, and <code>torch.autocast</code> casts each weight at each matmul. On <code>mlx</code>, the load casts the weight of each matmul once, to the matmul dtype (GLOSSARY, "Autocast mode"). The matmul gets the same rounded weight on both backends. <code>bytes_per_weight</code>, which the first fix session added to <code>bench.py</code>, writes this difference down in one place:</p>
-  <pre><code># src/dinov3_apple/bench.py, lines 41 to 44 and 246 to 250 (working tree)
+  <pre><code># src/dinov3_mlx/bench.py, lines 41 to 44 and 246 to 250 (working tree)
 # Bytes per weight value. Autocast keeps the weights in fp32.
 WEIGHT_BYTES = {"fp32": 4, "fp16-cast": 2, "bf16-cast": 2, "fp16-autocast": 4, "bf16-autocast": 4}
 # The bytes of one value of each dtype of DTYPE_OF_MODE.
@@ -469,11 +469,11 @@ DTYPE_BYTES = {"fp32": 4, "fp16": 2, "bf16": 2}
         <path d="M422,444 H440" marker-end="url(#arrow2)"/>
       </g>
     </svg></div>
-    <figcaption><b>Figure 2.</b> The dtype of each part of one forward pass. Teal parts run in the matmul dtype, amber parts in the stream dtype, grey parts in fp32 in every dtype mode. The two brackets mark the two methods that Step 5 added to <code>Block</code>: <code>attention_branch</code> and <code>ff_hidden</code>. <code>Block.__call__</code> and <code>run_mlx_token_range</code> (<a href="05-3-numeric-range.html">05-3</a>) call the same methods in the same order. For an MLP, the feed-forward branch has <code>up_proj</code> only (<a href="05-1-swiglu.html">05-1</a>). The line numbers are those of <code>src/dinov3_apple/mlx_model.py</code>.</figcaption>
+    <figcaption><b>Figure 2.</b> The dtype of each part of one forward pass. Teal parts run in the matmul dtype, amber parts in the stream dtype, grey parts in fp32 in every dtype mode. The two brackets mark the two methods that Step 5 added to <code>Block</code>: <code>attention_branch</code> and <code>ff_hidden</code>. <code>Block.__call__</code> and <code>run_mlx_token_range</code> (<a href="05-3-numeric-range.html">05-3</a>) call the same methods in the same order. For an MLP, the feed-forward branch has <code>up_proj</code> only (<a href="05-1-swiglu.html">05-1</a>). The line numbers are those of <code>src/dinov3_mlx/mlx_model.py</code>.</figcaption>
   </figure>
 
   <h3>4.1 The casts in <code>Embeddings</code></h3>
-  <pre><code># src/dinov3_apple/mlx_model.py, line 238 (Embeddings.__init__) and lines 256 to 261 (Embeddings.__call__)
+  <pre><code># src/dinov3_mlx/mlx_model.py, line 238 (Embeddings.__init__) and lines 256 to 261 (Embeddings.__call__)
         self.dtypes = dtypes  # a plain attribute: no parameter, nn.quantize keeps it
 ...
         pixels = pixels.astype(self.dtypes.matmul)
@@ -490,7 +490,7 @@ DTYPE_BYTES = {"fp32": 4, "fp16": 2, "bf16": 2}
   </ul>
 
   <h3>4.2 The casts in <code>Block</code>: <code>attention_branch</code> and <code>ff_hidden</code></h3>
-  <pre><code># src/dinov3_apple/mlx_model.py, lines 394 to 408 (Block)
+  <pre><code># src/dinov3_mlx/mlx_model.py, lines 394 to 408 (Block)
     def attention_branch(self, x: mx.array, cos: mx.array, sin: mx.array) -> mx.array:
         """Return the attention branch output before LayerScale, in the matmul dtype."""
         return self.attention(self.norm1(x).astype(self.dtypes.matmul), cos, sin)
@@ -514,7 +514,7 @@ DTYPE_BYTES = {"fp32": 4, "fp16": 2, "bf16": 2}
   </ul>
 
   <h3>4.3 <code>MlxBackbone(config, dtype_mode)</code></h3>
-  <pre><code># src/dinov3_apple/mlx_model.py, lines 419 to 429 (MlxBackbone.__init__)
+  <pre><code># src/dinov3_mlx/mlx_model.py, lines 419 to 429 (MlxBackbone.__init__)
     def __init__(self, config: MlxConfig, dtype_mode: str = "fp32") -> None:
         super().__init__()
         self.config = config
@@ -534,7 +534,7 @@ DTYPE_BYTES = {"fp32": 4, "fp16": 2, "bf16": 2}
   </ul>
 
   <h3>4.4 <code>run_mlx</code>: the mode check</h3>
-  <pre><code># src/dinov3_apple/mlx_model.py, lines 479 to 484 (run_mlx)
+  <pre><code># src/dinov3_mlx/mlx_model.py, lines 479 to 484 (run_mlx)
     if dtype_mode != model.dtype_mode:
         raise ValueError(f"the model runs in {model.dtype_mode}, not in {dtype_mode}")
     tokens = model(mx.array(pixels))
@@ -548,7 +548,7 @@ DTYPE_BYTES = {"fp32": 4, "fp16": 2, "bf16": 2}
   </ul>
 
   <h3>4.5 <code>linear_parameter_names</code></h3>
-  <pre><code># src/dinov3_apple/mlx_model.py, lines 448 to 459
+  <pre><code># src/dinov3_mlx/mlx_model.py, lines 448 to 459
 def linear_parameter_names(model: nn.Module) -> frozenset[str]:
     """Return the names of the weight and bias of each nn.Linear module: the matmul dtype (D2).
 
@@ -594,13 +594,13 @@ def linear_parameter_names(model: nn.Module) -> frozenset[str]:
   <h2>6 The load: one tensor at a time</h2>
   <h3>6.1 Why the Step 4 loader cannot load ViT-7B/16</h3>
   <p>All files store fp32. So a load in fp16 or bf16 reads fp32 and casts. The Step 4 loader built all casts lazily and evaluated them in one call:</p>
-  <pre><code># src/dinov3_apple/mlx_weights.py at commit ae76e6e (Step 4), the end of load_mlx_backbone
+  <pre><code># src/dinov3_mlx/mlx_weights.py at commit ae76e6e (Step 4), the end of load_mlx_backbone
     model.load_weights(mlx_weights(tensors, dtype), strict=True)
     mx.eval(model.parameters())  # the load cost stays out of the first forward pass (R14)</code></pre>
   <p>During this <code>mx.eval</code>, the dict <code>tensors</code> holds every lazy fp32 source, and the parameters hold every cast. So the peak holds the fp32 copy and the half copy of all weights. For ViT-7B/16 in bf16 this is 26.86 GB + 13.43 GB = about 40.3 GB: twice the need of the memory check, 20.12 GB (finding 9 and Figure 2 of <code>explore.html</code>). This value is an estimate from a probe on small arrays, not a measured load. <code>mx.set_memory_limit</code> cannot stop it: the limit is only a guideline (R13 of Step 4). This Mac crashed from out-of-memory before. So D5 asks for a loader that keeps the peak low by itself.</p>
 
   <h3>6.2 <code>mlx_weights</code>: pop, map, reshape, cast</h3>
-  <pre><code># src/dinov3_apple/mlx_weights.py, lines 162 to 168 (mlx_weights)
+  <pre><code># src/dinov3_mlx/mlx_weights.py, lines 162 to 168 (mlx_weights)
     for name in list(tensors):
         array = tensors.pop(name)  # drop the last reference of the dict to the fp32 source
         if (key := map_key(name)) is None:
@@ -616,7 +616,7 @@ def linear_parameter_names(model: nn.Module) -> frozenset[str]:
   </ul>
 
   <h3>6.3 <code>load_mlx_backbone</code></h3>
-  <pre><code># src/dinov3_apple/mlx_weights.py, lines 220 to 251 (load_mlx_backbone, working tree)
+  <pre><code># src/dinov3_mlx/mlx_weights.py, lines 220 to 251 (load_mlx_backbone, working tree)
     dtypes = MLX_DTYPE_MODES[dtype_mode]
     label = f"{model_size} mlx {dtype_mode}"
     check_run_rule(model_size, dtypes.matmul.size, label)
@@ -730,11 +730,11 @@ def linear_parameter_names(model: nn.Module) -> frozenset[str]:
   <p class="note">What the loader does, in the words of the F4 fix: the loader references at most one fp32 source; MLX can release it after the next read. The first version of the docstring said "at most one fp32 source tensor is alive". That claimed too much. MLX releases the buffer of a source asynchronously after <code>mx.eval</code> returns. Section 7 gives the measurement.</p>
 
   <h3>6.4 <code>required_mlx_load_bytes</code>: the need</h3>
-  <pre><code># src/dinov3_apple/mlx_weights.py, lines 189 and 190 (required_mlx_load_bytes)
+  <pre><code># src/dinov3_mlx/mlx_weights.py, lines 189 and 190 (required_mlx_load_bytes)
     bytes_per_weight = MLX_DTYPE_MODES[dtype_mode].matmul.size
     return load_bytes(parameter_count(model_size) * bytes_per_weight, ratio)
 
-# src/dinov3_apple/memory.py, line 137 (load_bytes)
+# src/dinov3_mlx/memory.py, line 137 (load_bytes)
     return round(ratio * weight_bytes) + LOAD_RESERVE_BYTES</code></pre>
   <p>The need is 1.2 × the weight bytes in the matmul dtype + 4 GB. Step 5 changed one thing: the bytes come from the matmul dtype, not from one dtype of the mode. So an autocast mode has the need of the cast mode.</p>
   <div class="table-wrap">
@@ -753,7 +753,7 @@ def linear_parameter_names(model: nn.Module) -> frozenset[str]:
   <p class="caption"><b>Table 6.</b> The need of the memory check for each model size on <code>mlx</code>, from Table 5 of <code>plan.html</code>. The tests T8 and T10 check the exact values: ViT-S/16 4,103,663,411 bytes in fp32 and 4,051,831,706 bytes in each half mode; ViT-7B/16 20,118,484,173 bytes in each half mode. <code>load_mlx_backbone</code> sets <code>mx.set_memory_limit</code> to the need. For ViT-7B/16 in fp32 the check would ask 36.24 GB. This check can pass on this Mac (up to 46.0 GB free memory in the log, <code>explore.html</code>), so only the run rule stops the load. The streamed reference of Section 8 runs on <code>torch-cpu</code>, not on <code>mlx</code>; its need is 4.82 GB. The largest fp32 tensor is the <code>down_proj</code> weight of block 0; Section 7 uses it.</p>
 
   <h3>6.5 <code>LoadReport</code> and <code>record_load_peak</code></h3>
-  <pre><code># src/dinov3_apple/mlx_weights.py, lines 61 to 76 (working tree)
+  <pre><code># src/dinov3_mlx/mlx_weights.py, lines 61 to 76 (working tree)
 @dataclass(frozen=True)
 class LoadReport:
     """The memory of one mlx load (D5 of specs/05-all-sizes/explore.html).
@@ -771,7 +771,7 @@ class LoadReport:
     cache_bytes: int
     footprint_bytes: int
 
-# src/dinov3_apple/memory.py, lines 111 and 122 to 124 (record_load_peak)
+# src/dinov3_mlx/memory.py, lines 111 and 122 to 124 (record_load_peak)
 def record_load_peak(label: str, peak_bytes: int, cache_bytes: int) -> None:
 ...
     logger.info(
@@ -876,7 +876,7 @@ def record_load_peak(label: str, peak_bytes: int, cache_bytes: int) -> None:
 <section id="runrule">
   <h2>8 The run rule as code and the streamed reference</h2>
   <p>CLAUDE.md says: run ViT-7B/16 in fp16, bf16 or with quantized weights; in fp32 its weights alone need about 27 GB. Before Step 5, only the memory check stopped such a load. The memory check of a full fp32 load asks 36.2 to 36.6 GB, and it can pass on this Mac (finding 8 of <code>explore.html</code>). So Step 5 writes the run rule as code, in <code>memory.py</code>, and both loaders call it first:</p>
-  <pre><code># src/dinov3_apple/memory.py, lines 23 to 25, 32 and 33, and 36 to 51
+  <pre><code># src/dinov3_mlx/memory.py, lines 23 to 25, 32 and 33, and 36 to 51
 # CLAUDE.md, run rules: ViT-7B/16 runs in fp16, bf16 or with quantized weights. In fp32 its
 # weights alone need about 27 GB.
 NO_FP32_WEIGHTS = frozenset({"ViT-7B/16"})
@@ -901,7 +901,7 @@ def check_run_rule(model_size: str, bytes_per_weight: int, label: str) -> None:
             "(CLAUDE.md run rules)"
         )
 
-# src/dinov3_apple/reference.py, lines 168 to 173 (load_torch_backbone)
+# src/dinov3_mlx/reference.py, lines 168 to 173 (load_torch_backbone)
     dtype = DTYPE_MODES[dtype_mode].weights
     label = f"{model_size} torch-{device} {dtype_mode}"
     check_run_rule(model_size, dtype.itemsize, label)
@@ -945,7 +945,7 @@ def check_run_rule(model_size: str, bytes_per_weight: int, label: str) -> None:
   <h3>8.1 Path D4-Y: the user's yes and the reading of the run rule</h3>
   <p>D4 asked the user one separate question: "May the streamed fp32 reference of ViT-7B/16 run, with the fp32 weights of one block in memory at a time?" The plan approval was not the answer, and an approval by the agent did not count. Step 5 closed on path D4-N in commit <code>ad93caf</code>: ViT-7B/16 had no reference file, and its 48 <code>mlx</code> parity rows skipped. On 2026-11-07 the user answered "Yes, run it" (Table 20 of <code>plan.html</code>). So path D4-Y applies now. A build session wrote the streamed reference, and a separate Verify agent checked it (Section 12 of <code>verify.html</code>).</p>
   <p>Path D4-Y reads the run rule as a limit on the fp32 weights in memory. The rule refuses the fp32 weights of the whole model: 26.86 GB. It permits the fp32 weights of one block and of the outer parts: 0.68 GB at most. Two comments in the code record this reading:</p>
-  <pre><code># src/dinov3_apple/reference.py, lines 455 to 458 (run_torch_streamed)
+  <pre><code># src/dinov3_mlx/reference.py, lines 455 to 458 (run_torch_streamed)
     # Run rule of CLAUDE.md: ViT-7B/16 never loads with fp32 weights. This path reads the rule as
     # a limit on the fp32 weights in memory: one block and the parts outside the blocks, never
     # the whole model. The user said yes to this reading on 2026-11-07 (Table 20 of
@@ -1030,7 +1030,7 @@ STREAMED_RUN_RULE = (
   </figure>
 
   <h3>8.3 <code>ShardIndex</code>: the shard and the bytes of each key</h3>
-  <pre><code># src/dinov3_apple/reference.py, lines 126 to 131 (constants)
+  <pre><code># src/dinov3_mlx/reference.py, lines 126 to 131 (constants)
 STREAMED_ATTN_IMPLEMENTATION = "sdpa"
 ...
 BLOCK_KEY = re.compile(r"(?:model\.)?layer\.(?P&lt;block&gt;\d+)\.(?P&lt;name&gt;.+)")
@@ -1091,7 +1091,7 @@ SAFETENSORS_DTYPE_BYTES = {"F64": 8, "F32": 4, "F16": 2, "BF16": 2}
   </ul>
 
   <h3>8.4 <code>OuterParts</code> and <code>_check_materialized</code></h3>
-  <pre><code># src/dinov3_apple/reference.py, lines 346 to 350 (_check_materialized)
+  <pre><code># src/dinov3_mlx/reference.py, lines 346 to 350 (_check_materialized)
 def _check_materialized(module: nn.Module, name: str) -> None:
     """Stop the run if a load with assign=True left a tensor on the meta device."""
     tensors = [*module.parameters(), *module.buffers()]
@@ -1121,7 +1121,7 @@ def _check_materialized(module: nn.Module, name: str) -> None:
   </ul>
 
   <h3>8.5 <code>run_torch_streamed</code>, <code>streamed_label</code> and <code>required_streamed_bytes</code></h3>
-  <pre><code># src/dinov3_apple/reference.py, lines 419 to 425 and 453 to 485 (run_torch_streamed)
+  <pre><code># src/dinov3_mlx/reference.py, lines 419 to 425 and 453 to 485 (run_torch_streamed)
 @torch.inference_mode()
 def run_torch_streamed(
     model_size: str,
@@ -1477,7 +1477,7 @@ def run_torch_streamed(
 
   <h3>9.1 <code>run_worker_subprocess</code></h3>
   <p>Each worker of the benchmark runs in its own subprocess, as the run rules ask. The first fix session moved the runner of the workers into <code>bench.py</code>, so <code>scripts/bench_mlx_port.py</code>, <code>scripts/cross_check.py</code> and <code>scripts/benchmark.py</code> share one copy (finding F20):</p>
-  <pre><code># src/dinov3_apple/bench.py, lines 435 to 454 (run_worker_subprocess, working tree)
+  <pre><code># src/dinov3_mlx/bench.py, lines 435 to 454 (run_worker_subprocess, working tree)
     try:
         done = subprocess.run(
             command,
@@ -1576,7 +1576,7 @@ def run_torch_streamed(
       </tbody>
     </table>
   </div>
-  <p class="caption"><b>Table 15.</b> The code that this page explains, with the line numbers of the working tree on 2026-11-07 (commit <code>ad93caf</code> plus the uncommitted changes of path D4-Y). A file without a folder is in <code>src/dinov3_apple/</code>. Table 1 of <code>plan.html</code> assigns these names to this page, except <code>bytes_per_weight</code> and <code>run_worker_subprocess</code>, which the fix of F20 added after the plan (Section 9.1 of <code>verify.html</code> asks an explainer to cover them). The test helpers <code>run_rule_skip</code>, <code>load_peak_target</code>, <code>load_peak_lower_bound</code> and <code>check_load_report</code> are in <code>tests/</code> (Sections 7 and 8). The rows of path D4-Y are the functions that path D4-Y added or changed in <code>src/</code> and in the two scripts (Table 1 of <code>plan.html</code> and Table 21 of <code>verify.html</code>). The test helpers of path D4-Y are in <code>tests/</code>: the fixture <code>backbone_slot</code> of <code>conftest.py</code>, <code>reproduced_tokens</code> of <code>test_reference.py</code> and <code>save_small_model</code>, which moved to <code>small_model.py</code> (Section 8.7). SwiGLU, <code>MLP.activation</code>, <code>MLP.hidden</code> and <code>block_parameter_names</code> are on <a href="05-1-swiglu.html">05-1</a>; <code>TokenRange</code>, <code>run_mlx_token_range</code> and <code>run_mlx_hidden_states</code> on <a href="05-3-numeric-range.html">05-3</a>.</p>
+  <p class="caption"><b>Table 15.</b> The code that this page explains, with the line numbers of the working tree on 2026-11-07 (commit <code>ad93caf</code> plus the uncommitted changes of path D4-Y). A file without a folder is in <code>src/dinov3_mlx/</code>. Table 1 of <code>plan.html</code> assigns these names to this page, except <code>bytes_per_weight</code> and <code>run_worker_subprocess</code>, which the fix of F20 added after the plan (Section 9.1 of <code>verify.html</code> asks an explainer to cover them). The test helpers <code>run_rule_skip</code>, <code>load_peak_target</code>, <code>load_peak_lower_bound</code> and <code>check_load_report</code> are in <code>tests/</code> (Sections 7 and 8). The rows of path D4-Y are the functions that path D4-Y added or changed in <code>src/</code> and in the two scripts (Table 1 of <code>plan.html</code> and Table 21 of <code>verify.html</code>). The test helpers of path D4-Y are in <code>tests/</code>: the fixture <code>backbone_slot</code> of <code>conftest.py</code>, <code>reproduced_tokens</code> of <code>test_reference.py</code> and <code>save_small_model</code>, which moved to <code>small_model.py</code> (Section 8.7). SwiGLU, <code>MLP.activation</code>, <code>MLP.hidden</code> and <code>block_parameter_names</code> are on <a href="05-1-swiglu.html">05-1</a>; <code>TokenRange</code>, <code>run_mlx_token_range</code> and <code>run_mlx_hidden_states</code> on <a href="05-3-numeric-range.html">05-3</a>.</p>
 </section>
 
 <section id="surprises">
@@ -1602,7 +1602,7 @@ def run_torch_streamed(
 <section id="sources">
   <h2>13 Sources</h2>
   <ul>
-    <li>Repo files: <code>specs/05-all-sizes/explore.html</code> (Table 1, findings 5, 8 and 9, Tables 6, 7, 12 to 14, Figure 2), <code>specs/05-all-sizes/plan.html</code> (Tables 1 to 5, 7, 10, 12, 14, 16, 17, 19 and 20, Sections 3.5, 3.8 and 9), <code>specs/05-all-sizes/verify.html</code> (Tables 3 to 10 and 13 to 18, findings F1 to F4, F10, F11, F17, F18 and F20, Section 6; Section 12 with Tables 20 to 26, Figure 3 and findings V1 to V6), <code>results/bench-all-sizes.jsonl</code>, <code>results/token-range-mlx.md</code>, <code>src/dinov3_apple/mlx_model.py</code>, <code>mlx_weights.py</code>, <code>memory.py</code>, <code>reference.py</code>, <code>bench.py</code>, <code>scripts/make_reference.py</code>, <code>scripts/token_range_table.py</code>, <code>tests/parity_checks.py</code>, <code>tests/conftest.py</code>, <code>tests/test_streamed_reference.py</code>, <code>tests/test_reference.py</code>, <code>GLOSSARY.md</code> ("Shard", "Outer parts", "Streamed reference"), and <code>tests/fixtures/generated/parity/memory-checks.log</code> and <code>tests/fixtures/generated/reference/runs.jsonl</code> (not in git).</li>
+    <li>Repo files: <code>specs/05-all-sizes/explore.html</code> (Table 1, findings 5, 8 and 9, Tables 6, 7, 12 to 14, Figure 2), <code>specs/05-all-sizes/plan.html</code> (Tables 1 to 5, 7, 10, 12, 14, 16, 17, 19 and 20, Sections 3.5, 3.8 and 9), <code>specs/05-all-sizes/verify.html</code> (Tables 3 to 10 and 13 to 18, findings F1 to F4, F10, F11, F17, F18 and F20, Section 6; Section 12 with Tables 20 to 26, Figure 3 and findings V1 to V6), <code>results/bench-all-sizes.jsonl</code>, <code>results/token-range-mlx.md</code>, <code>src/dinov3_mlx/mlx_model.py</code>, <code>mlx_weights.py</code>, <code>memory.py</code>, <code>reference.py</code>, <code>bench.py</code>, <code>scripts/make_reference.py</code>, <code>scripts/token_range_table.py</code>, <code>tests/parity_checks.py</code>, <code>tests/conftest.py</code>, <code>tests/test_streamed_reference.py</code>, <code>tests/test_reference.py</code>, <code>GLOSSARY.md</code> ("Shard", "Outer parts", "Streamed reference"), and <code>tests/fixtures/generated/parity/memory-checks.log</code> and <code>tests/fixtures/generated/reference/runs.jsonl</code> (not in git).</li>
     <li>The <code>config.json</code> files and the safetensors headers of the six model sizes in the Hugging Face cache, read on 2026-11-07 without a tensor load.</li>
     <li>ADR 0003 (the parity thresholds), ADR 0004 (the baseline row), ADR 0005 (fp32 on <code>mlx</code> with TF32 off) in <code>docs/adr/</code>.</li>
     <li>Explainers: <a href="04-1-patch-embedding.html">04-1</a> (the key map and the Step 4 loader), <a href="04-2-rope.html">04-2</a> (RoPE), <a href="04-5-mlp.html">04-5</a> (<code>run_mlx</code> and the first speed result).</li>

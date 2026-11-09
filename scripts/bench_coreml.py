@@ -39,7 +39,7 @@ from pathlib import Path
 
 import numpy as np
 
-from dinov3_apple.bench import (
+from dinov3_mlx.bench import (
     MAIN_MODEL_SIZES,
     PRIORITY,
     BenchConfig,
@@ -48,14 +48,14 @@ from dinov3_apple.bench import (
     result_line,
     run_worker_subprocess,
 )
-from dinov3_apple.gpu_lock import HEAVY_JOB_PATTERN, LOCK_REGISTRY, heavy_job, other_heavy_jobs
-from dinov3_apple.machine import (
+from dinov3_mlx.gpu_lock import HEAVY_JOB_PATTERN, LOCK_REGISTRY, heavy_job, other_heavy_jobs
+from dinov3_mlx.machine import (
     MachineState,
     MachineStateError,
     check_machine_state,
     read_machine_state,
 )
-from dinov3_apple.memory import GB, available_memory_bytes, send_checks_to
+from dinov3_mlx.memory import GB, available_memory_bytes, send_checks_to
 
 REPO_ROOT = Path(__file__).parents[1]
 RESULTS = REPO_ROOT / "results" / "coreml-6d.jsonl"
@@ -316,7 +316,7 @@ def streams_plan(
 
 def spec_need(spec: Spec) -> int:
     """Return the memory need of one worker."""
-    from dinov3_apple.coreml import convert_need_bytes
+    from dinov3_mlx.coreml import convert_need_bytes
 
     backend = spec["backend"]
     if backend == "deferred":
@@ -564,8 +564,8 @@ def run_streams_case(spec: Spec, bench_dir: Path) -> dict:
 
 def _stream_loop(step: Callable[[], object], spec: Spec) -> dict:
     """Warm up, write the ready file, wait for the start time, count batches for STREAM_SECONDS."""
-    from dinov3_apple.bench import WARM_UP
-    from dinov3_apple.coreml import _time_calls
+    from dinov3_mlx.bench import WARM_UP
+    from dinov3_mlx.coreml import _time_calls
 
     _time_calls(step, WARM_UP)
     Path(spec["ready_file"]).write_text("ready")
@@ -587,12 +587,12 @@ def _stream_loop(step: Callable[[], object], spec: Spec) -> dict:
 
 def stream_worker(spec: Spec) -> dict:
     """One side of the two-stream run, in its own process."""
-    from dinov3_apple.bench import make_batch
-    from dinov3_apple.stored import read_inputs
+    from dinov3_mlx.bench import make_batch
+    from dinov3_mlx.stored import read_inputs
 
     side = spec["stream_side"]
     if side == "ne":
-        from dinov3_apple.coreml import load_package, package_path
+        from dinov3_mlx.coreml import load_package, package_path
 
         batch_size = spec["ne_batch_size"]
         form = spec.get("ne_batch_form") or "package"
@@ -609,9 +609,9 @@ def stream_worker(spec: Spec) -> dict:
     else:
         import mlx.core as mx
 
-        from dinov3_apple.mlx_bench import time_batch_mlx
-        from dinov3_apple.mlx_model import compile_backbone
-        from dinov3_apple.mlx_weights import load_mlx_backbone
+        from dinov3_mlx.mlx_bench import time_batch_mlx
+        from dinov3_mlx.mlx_model import compile_backbone
+        from dinov3_mlx.mlx_weights import load_mlx_backbone
 
         batch_size = spec["batch_size"]
         mode = mlx_mode(spec["model_size"], spec["side"], batch_size)
@@ -642,13 +642,13 @@ def worker_main(spec_json: str) -> None:
         if backend == "streams":
             result = stream_worker(spec)
         elif backend == "convert":
-            from dinov3_apple.coreml import convert_backbone
+            from dinov3_mlx.coreml import convert_backbone
 
             result = {"status": "done", "reason": ""} | convert_backbone(
                 spec["model_size"], spec["side"], spec["batch_size"], spec["rewrite"]
             )
         elif backend == "plan":
-            from dinov3_apple.coreml import (
+            from dinov3_mlx.coreml import (
                 compiled_path,
                 compute_plan_report,
                 package_path,
@@ -660,7 +660,7 @@ def worker_main(spec_json: str) -> None:
             result = {"status": "done", "reason": "", "package": path.name}
             result |= compute_plan_report(compiled_path(path), "CPU_AND_NE")
         elif backend == "mlx":
-            from dinov3_apple.mlx_bench import run_mlx_worker
+            from dinov3_mlx.mlx_bench import run_mlx_worker
 
             result = run_mlx_worker(
                 spec_config(spec),
@@ -668,7 +668,7 @@ def worker_main(spec_json: str) -> None:
                 run_id=spec.get("run_id"),
             )
         else:
-            from dinov3_apple.coreml import run_coreml
+            from dinov3_mlx.coreml import run_coreml
 
             result = run_coreml(
                 spec["model_size"],
@@ -721,7 +721,7 @@ def _parity_text(parity: dict | None) -> str:
 def _current(line: dict) -> bool:
     """True for a line of the current rewrite version, the plain graph or a line without a
     package (mlx, deferred). The lines of an old rewrite version stay in the results file."""
-    from dinov3_apple.coreml import REWRITE_VERSION
+    from dinov3_mlx.coreml import REWRITE_VERSION
 
     package = line.get("package") or ""
     return not package or "-plain-" in package or f"-{REWRITE_VERSION}-" in package
@@ -772,7 +772,7 @@ def _size_name(line: dict) -> str:
 
 def table_text(lines: list[dict]) -> str:
     """Return the Markdown text of results/coreml-table.md."""
-    from dinov3_apple.speedup import pass_verdict, spread_between_runs
+    from dinov3_mlx.speedup import pass_verdict, spread_between_runs
 
     out = [
         "# Core ML on the Neural Engine: rewrite ne3",

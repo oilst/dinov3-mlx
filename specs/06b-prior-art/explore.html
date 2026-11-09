@@ -54,7 +54,7 @@ a { color: var(--accent); }
   <ul>
     <li>The parity thresholds of ADR 0003 and the paired measurement of ADR 0004: each row of another repo runs in the same session as a row of our compiled forward pass, in alternation.</li>
     <li>The run rules of <code>CLAUDE.md</code>: one heavy job at a time through the GPU lock, a memory check before each load, <code>mx.set_memory_limit</code>.</li>
-    <li>The rules for third-party code: each clone or download in its own folder outside the repo (<code>~/.cache/dinov3-apple/prior-art/</code>), with its own venv; no third-party package in <code>pyproject.toml</code> or <code>uv.lock</code>; Python with <code>-I</code>; no pickle file from a third party; read each file before it runs.</li>
+    <li>The rules for third-party code: each clone or download in its own folder outside the repo (<code>~/.cache/dinov3-mlx/prior-art/</code>), with its own venv; no third-party package in <code>pyproject.toml</code> or <code>uv.lock</code>; Python with <code>-I</code>; no pickle file from a third party; read each file before it runs.</li>
     <li>Step 6c makes our own Core ML conversion. Step 6b measures only Core ML exports that other people made.</li>
     <li>New code goes into new files. ADR numbers 0012 and 0013 are for Step 6b.</li>
   </ul>
@@ -108,7 +108,7 @@ a { color: var(--accent); }
   <p class="caption"><b>Table 2.</b> The changes of each design. The bf16 RoPE of C1 and C2 applies in every dtype, also in fp32: the rotation rounds q and k to bf16 in each block.</p>
 
   <h3>2.3 Core ML probes</h3>
-  <p>Each probe loads one export, runs the 3 test images at its input resolution (parity against our reference files) and then 10 timed batches. The image-input exports C7 and C8 ran two ways: "image" rounds the stored pixels to an 8-bit RGB image, as a user does; "spec-array" changes the image input in the spec to a FLOAT32 multiArray and gives the 0..255 values without rounding. The package on disk does not change. Log: <code>~/.cache/dinov3-apple/prior-art/probes/logs/probes.jsonl</code>.</p>
+  <p>Each probe loads one export, runs the 3 test images at its input resolution (parity against our reference files) and then 10 timed batches. The image-input exports C7 and C8 ran two ways: "image" rounds the stored pixels to an 8-bit RGB image, as a user does; "spec-array" changes the image input in the spec to a FLOAT32 multiArray and gives the 0..255 values without rounding. The package on disk does not change. Log: <code>~/.cache/dinov3-mlx/prior-art/probes/logs/probes.jsonl</code>.</p>
   <div class="table-wrap">
     <table>
       <thead><tr><th>Export</th><th>Input</th><th>Compute units</th><th>Batch size</th><th>img/s (10 batches)</th><th>Patch mean</th><th>Patch 1st percentile</th><th>Frame</th></tr></thead>
@@ -308,13 +308,13 @@ a { color: var(--accent); }
     <table>
       <thead><tr><th>Option</th><th>Layout</th><th>For</th><th>Against</th></tr></thead>
       <tbody>
-        <tr><td>A. Our package in <code>venv-coreml</code></td><td>The worker imports <code>dinov3_apple</code></td><td>One code path</td><td>Installs our package and its pinned tree into a third-party venv; two copies of the code</td></tr>
-        <tr><td class="rec">B. A standalone worker</td><td><code>scripts/prior_art_coreml_worker.py</code> needs only the standard library, NumPy, safetensors, coremltools and Pillow. It runs in <code>venv-coreml</code> with <code>-I</code> and writes the batch times as a JSON line and the outputs of the 3 test images as a safetensors file. The driver <code>scripts/bench_prior_art.py</code> (repo environment) computes the parity with <code>dinov3_apple.parity</code> and writes <code>results/prior-art.jsonl</code></td><td>No third-party package in the repo environment. One parity code path</td><td>The worker repeats the small batch code of <code>bench.py</code></td></tr>
+        <tr><td>A. Our package in <code>venv-coreml</code></td><td>The worker imports <code>dinov3_mlx</code></td><td>One code path</td><td>Installs our package and its pinned tree into a third-party venv; two copies of the code</td></tr>
+        <tr><td class="rec">B. A standalone worker</td><td><code>scripts/prior_art_coreml_worker.py</code> needs only the standard library, NumPy, safetensors, coremltools and Pillow. It runs in <code>venv-coreml</code> with <code>-I</code> and writes the batch times as a JSON line and the outputs of the 3 test images as a safetensors file. The driver <code>scripts/bench_prior_art.py</code> (repo environment) computes the parity with <code>dinov3_mlx.parity</code> and writes <code>results/prior-art.jsonl</code></td><td>No third-party package in the repo environment. One parity code path</td><td>The worker repeats the small batch code of <code>bench.py</code></td></tr>
         <tr><td>C. coremltools in <code>pyproject.toml</code></td><td>The worker runs in the repo environment</td><td>Simple</td><td>Against the rules of this step</td></tr>
       </tbody>
     </table>
   </div>
-  <p class="caption"><b>Table 13.</b> Trade-offs of D9. New files: <code>src/dinov3_apple/prior_art.py</code> (candidates, port-change variants, pair plan, rows), <code>scripts/bench_prior_art.py</code>, <code>scripts/prior_art_coreml_worker.py</code>, <code>scripts/prior_art_port_worker.py</code> (gated), <code>results/prior-art.jsonl</code>, <code>results/prior-art-table.md</code>. No shared module changes.</p>
+  <p class="caption"><b>Table 13.</b> Trade-offs of D9. New files: <code>src/dinov3_mlx/prior_art.py</code> (candidates, port-change variants, pair plan, rows), <code>scripts/bench_prior_art.py</code>, <code>scripts/prior_art_coreml_worker.py</code>, <code>scripts/prior_art_port_worker.py</code> (gated), <code>results/prior-art.jsonl</code>, <code>results/prior-art-table.md</code>. No shared module changes.</p>
   <div class="box"><p><b>Recommendation: Option B.</b> Decided by the agent: the user asked the agent to decide (night of 2026-11-07).</p></div>
 </section>
 
@@ -359,7 +359,7 @@ a { color: var(--accent); }
 <section id="questions">
   <h2>6 Questions for the user</h2>
   <ol>
-    <li><b>Q1.</b> The permission system of the agent sessions refuses to run the Python ports C1 (mlx-image) and C2 (mlx_dinov3). Do you want their rows? If yes, allow the run of <code>~/.cache/dinov3-apple/prior-art/venv-mlx/bin/python -I</code> with the probe and worker scripts, then start job J5 (about 35 min). If no, their rows keep the reason "blocked", and the variants of D8 give the cost of their changes. The user decides.</li>
+    <li><b>Q1.</b> The permission system of the agent sessions refuses to run the Python ports C1 (mlx-image) and C2 (mlx_dinov3). Do you want their rows? If yes, allow the run of <code>~/.cache/dinov3-mlx/prior-art/venv-mlx/bin/python -I</code> with the probe and worker scripts, then start job J5 (about 35 min). If no, their rows keep the reason "blocked", and the variants of D8 give the cost of their changes. The user decides.</li>
   </ol>
 </section>
 
@@ -386,8 +386,8 @@ a { color: var(--accent); }
     <li>huggingface.co/rinpatch/dinov3-coreml, commit 5ea0dea (2026-09-16): <code>README.md</code>, <code>convert.py</code>, <code>SHA256SUMS</code>, the validation file.</li>
     <li>github.com/VimalMollyn/dinov2-coreml, commit 6306a84 (2026-09-27): <code>dinov3_vits16_518_fp16.mlpackage</code>, <code>dinov2_small_14_registers_518_fp16.mlpackage</code>, <code>convert_coreml.py</code>, <code>convert_coreml_dinov3_new.py</code>.</li>
     <li>Pipelines: huggingface.co/mlx-community/sam-3d-body-dinov3-bf16, github.com/xocialize/mlx-trellis2-swift, github.com/lyonsno/pixal3d-mlx, github.com/mnmly/mlx-swift-INSID3 (descriptions only).</li>
-    <li>Probe scripts and logs, outside the repo: <code>~/.cache/dinov3-apple/prior-art/probes/</code> (<code>probe_coreml.py</code>, <code>probe_ours.py</code>, <code>inspect_coreml.py</code>, <code>logs/probes.jsonl</code>, <code>logs/pair-check.jsonl</code>, <code>logs/pair-check2.jsonl</code>, <code>logs/inspect_coreml.log</code>). Environments: <code>venv-coreml</code> (Python 3.12.14, coremltools 9.0, NumPy 2.5.4, Pillow 13.0.0), <code>venv-mlx</code> (mlx 0.32.4).</li>
-    <li>This repo: <code>results/speedup-table.md</code>, <code>results/speed-matrix.jsonl</code>, ADR 0003 to 0008, <code>specs/01-scope/explore.html</code>, <code>docs/learn/01-prior-ports.html</code>, <code>src/dinov3_apple/mlx_model.py</code>, <code>src/dinov3_apple/speedup.py</code>.</li>
+    <li>Probe scripts and logs, outside the repo: <code>~/.cache/dinov3-mlx/prior-art/probes/</code> (<code>probe_coreml.py</code>, <code>probe_ours.py</code>, <code>inspect_coreml.py</code>, <code>logs/probes.jsonl</code>, <code>logs/pair-check.jsonl</code>, <code>logs/pair-check2.jsonl</code>, <code>logs/inspect_coreml.log</code>). Environments: <code>venv-coreml</code> (Python 3.12.14, coremltools 9.0, NumPy 2.5.4, Pillow 13.0.0), <code>venv-mlx</code> (mlx 0.32.4).</li>
+    <li>This repo: <code>results/speedup-table.md</code>, <code>results/speed-matrix.jsonl</code>, ADR 0003 to 0008, <code>specs/01-scope/explore.html</code>, <code>docs/learn/01-prior-ports.html</code>, <code>src/dinov3_mlx/mlx_model.py</code>, <code>src/dinov3_mlx/speedup.py</code>.</li>
   </ul>
 </section>
 </main>

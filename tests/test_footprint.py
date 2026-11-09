@@ -3,7 +3,7 @@ import os
 import pytest
 import torch
 
-from dinov3_apple.footprint import read_footprint
+from dinov3_mlx.footprint import read_footprint
 
 MB = 10**6
 

@@ -17,8 +17,8 @@ from collections import defaultdict
 from datetime import date
 from pathlib import Path
 
-from dinov3_apple.hub import MODEL_IDS
-from dinov3_apple.parity import EXPECTED_FP16_OVERFLOW, THRESHOLDS
+from dinov3_mlx.hub import MODEL_IDS
+from dinov3_mlx.parity import EXPECTED_FP16_OVERFLOW, THRESHOLDS
 
 REPO_ROOT = Path(__file__).parents[1]
 PARITY_DIR = REPO_ROOT / "tests" / "fixtures" / "generated" / "parity"
@@ -316,7 +316,7 @@ def write_table(
         thresholds,
         "",
         (
-            "Table 3. Thresholds of `src/dinov3_apple/parity.py`. On 2026-11-06 the user gave "
+            "Table 3. Thresholds of `src/dinov3_mlx/parity.py`. On 2026-11-06 the user gave "
             "bf16 its own row: bf16 activations give lower parity on torch-mps and on "
             "torch-cpu alike."
         ),

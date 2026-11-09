@@ -80,7 +80,7 @@ a { color: var(--accent); }
     <table>
       <thead><tr><th>Name</th><th class="num">Lines</th><th>Job</th><th>Tests</th><th>Section</th></tr></thead>
       <tbody>
-        <tr class="group"><td colspan="5"><code>src/dinov3_apple/mlx_model.py</code></td></tr>
+        <tr class="group"><td colspan="5"><code>src/dinov3_mlx/mlx_model.py</code></td></tr>
         <tr><td><code>compile_backbone(model)</code> (new)</td><td class="num">500–522</td><td>Returns <code>forward(pixels)</code>. The function reads the RoPE tables of the patch grid in Python and calls one <code>mx.compile</code> function. The weights enter the trace as implicit inputs (<code>inputs=model.state</code>), the RoPE tables as arguments.</td><td>T34, T35, T36, T37, T40, W1</td><td>4</td></tr>
         <tr><td><code>MlxBackbone.forward_with_rope(pixels, cos, sin)</code> (new)</td><td class="num">480–489</td><td>The forward pass with the RoPE tables as arguments. The eager and the compiled forward pass both call it.</td><td>T34, T37</td><td>3</td></tr>
         <tr><td><code>MlxBackbone.__call__(pixels)</code> (changed)</td><td class="num">491–497</td><td>The eager forward pass. It reads the RoPE tables from the RoPE cache and calls <code>forward_with_rope</code>.</td><td>T34, the eager tests of Steps 4 and 5</td><td>3</td></tr>
@@ -95,7 +95,7 @@ a { color: var(--accent); }
       </tbody>
     </table>
   </div>
-  <p class="caption"><b>Table 1.</b> The Step 6 code that this page explains: the column "Step 6 code" of row 06-1 in Table 5 of <code>specs/06-speed/plan.html</code>. The test numbers are those of Section 6 of the plan. C2 is a change ratio (Section 10), not a test. Two other changes in <code>mlx_model.py</code> touch only docstrings: <code>Attention.__call__</code> (lines 337–348) now names the table shapes (5 + N, 2, head_dim / 2), and the class docstring of <code>MlxBackbone</code> (lines 455–461) names the <code>RopeCache</code>. The changed <code>linear_parameter_names</code> and the new <code>quantized_weight_names</code> (lines 525–548) belong to <a href="06-3-quantized-weights.html">06-3</a>. The callers of <code>compile_backbone</code> are the benchmark worker (<code>src/dinov3_apple/mlx_bench.py</code>, line 182), <code>change_forms</code> (line 352) and <code>run_profile_worker</code> (line 516) of the same file, <code>scripts/cross_check.py</code> (line 183) and the backbone slot of the tests (<code>tests/conftest.py</code>, line 164).</p>
+  <p class="caption"><b>Table 1.</b> The Step 6 code that this page explains: the column "Step 6 code" of row 06-1 in Table 5 of <code>specs/06-speed/plan.html</code>. The test numbers are those of Section 6 of the plan. C2 is a change ratio (Section 10), not a test. Two other changes in <code>mlx_model.py</code> touch only docstrings: <code>Attention.__call__</code> (lines 337–348) now names the table shapes (5 + N, 2, head_dim / 2), and the class docstring of <code>MlxBackbone</code> (lines 455–461) names the <code>RopeCache</code>. The changed <code>linear_parameter_names</code> and the new <code>quantized_weight_names</code> (lines 525–548) belong to <a href="06-3-quantized-weights.html">06-3</a>. The callers of <code>compile_backbone</code> are the benchmark worker (<code>src/dinov3_mlx/mlx_bench.py</code>, line 182), <code>change_forms</code> (line 352) and <code>run_profile_worker</code> (line 516) of the same file, <code>scripts/cross_check.py</code> (line 183) and the backbone slot of the tests (<code>tests/conftest.py</code>, line 164).</p>
 </section>
 
 <section id="picture">
@@ -195,7 +195,7 @@ a { color: var(--accent); }
 
 <section id="one-path">
   <h2>3 One code path for eager and compiled</h2>
-  <pre><code># src/dinov3_apple/mlx_model.py, lines 471 to 497 (shortened: lines 472 and 473 of MlxBackbone.__init__ are left out)
+  <pre><code># src/dinov3_mlx/mlx_model.py, lines 471 to 497 (shortened: lines 472 and 473 of MlxBackbone.__init__ are left out)
         self.rope_cache = RopeCache(config.head_dim, config.rope_theta)
 
     def rope(self, grid_h: int, grid_w: int) -&gt; tuple[mx.array, mx.array]:
@@ -233,7 +233,7 @@ a { color: var(--accent); }
   <h2>4 compile_backbone and the trace</h2>
 
   <h3>4.1 The code</h3>
-  <pre><code># src/dinov3_apple/mlx_model.py, lines 500 to 522
+  <pre><code># src/dinov3_mlx/mlx_model.py, lines 500 to 522
 def compile_backbone(model: MlxBackbone) -&gt; Callable[[mx.array], mx.array]:
     """Return the compiled forward pass of one backbone (D1 of specs/06-speed/plan.html).
 
@@ -348,7 +348,7 @@ def compile_backbone(model: MlxBackbone) -&gt; Callable[[mx.array], mx.array]:
       </tbody>
     </table>
   </div>
-  <p class="caption"><b>Table 3.</b> The first compiled call of each benchmark worker, before <code>mx.eval</code>: median [min–max] of the field <code>compile_trace_s</code> over the compiled <code>mlx</code> rows without quantized weights in <code>results/speed-matrix.jsonl</code> (267 rows; 12 to 18 rows per cell, over the input resolutions 224, 448 and 512 px and the dtype modes). For an even count the median is the mean of the two middle values. Each worker runs in its own subprocess, so its first call always makes a new trace. The timed span starts before <code>mx.array(batch)</code> (<code>mlx_bench.py</code>, lines 186–188), so it also holds the copy of the NumPy pixels. It also holds the first call of <code>RopeCache.tables</code> for the patch grid of the worker (<code>rope_tables</code> and <code>rope_layout</code> in NumPy). The blocks: <code>MODEL_SHAPES</code> of <code>src/dinov3_apple/flops.py</code>.</p>
+  <p class="caption"><b>Table 3.</b> The first compiled call of each benchmark worker, before <code>mx.eval</code>: median [min–max] of the field <code>compile_trace_s</code> over the compiled <code>mlx</code> rows without quantized weights in <code>results/speed-matrix.jsonl</code> (267 rows; 12 to 18 rows per cell, over the input resolutions 224, 448 and 512 px and the dtype modes). For an even count the median is the mean of the two middle values. Each worker runs in its own subprocess, so its first call always makes a new trace. The timed span starts before <code>mx.array(batch)</code> (<code>mlx_bench.py</code>, lines 186–188), so it also holds the copy of the NumPy pixels. It also holds the first call of <code>RopeCache.tables</code> for the patch grid of the worker (<code>rope_tables</code> and <code>rope_layout</code> in NumPy). The blocks: <code>MODEL_SHAPES</code> of <code>src/dinov3_mlx/flops.py</code>.</p>
   <ul>
     <li>The first compiled call costs 1.8 to 13.4 ms over all 267 rows. It grows with the number of blocks: at batch size 1 from 2.0 to 2.2 ms (12 blocks) to 5.9 ms (40 blocks). It also grows with the batch size. The trace itself does not depend on the batch size, so the growth probably comes from the copy of the pixels. No result file separates the parts.</li>
     <li>A replay costs much less. At P1 the compiled call before <code>mx.eval</code> took 0.124 to 0.138 ms, and the call to the end of <code>mx.eval</code> took 3.75 to 3.83 ms: a host share of 3.3 to 3.6 % (<code>results/speed-profile-p1.jsonl</code>, field <code>host</code>, four rows). The gap between two calls was 0.001 to 0.002 ms. In this loop the GPU waits only during the compiled call, because <code>mx.eval</code> starts the GPU work after the call. So Python costs 3.3 to 3.6 % of the time at P1.</li>
@@ -359,7 +359,7 @@ def compile_backbone(model: MlxBackbone) -&gt; Callable[[mx.array], mx.array]:
 
 <section id="fusion">
   <h2>5 Fused kernels and fusion barriers</h2>
-  <p>A fused kernel is one GPU kernel for a chain of element-wise operations. Without fusion, each operation reads its full input tensor from memory and writes its full output tensor. With fusion, the chain reads its inputs once and writes its output once. The values between the operations stay in GPU registers. At P2 the feed-forward hidden values of one block are 8 × 1,029 × 5,120 = 42,147,840 values (T = 1,029 tokens at 512 px, Table 4 of the plan; ff = 5,120 for ViT-H+/16 in <code>MODEL_SHAPES</code> of <code>src/dinov3_apple/flops.py</code>). In fp32 that is 168.6 MB. A cast of 256 M fp32 values to fp16 takes 3.14 ms (514 GB/s, probe, Table 7 of <code>explore.html</code>). So each avoided memory pass saves time at P2.</p>
+  <p>A fused kernel is one GPU kernel for a chain of element-wise operations. Without fusion, each operation reads its full input tensor from memory and writes its full output tensor. With fusion, the chain reads its inputs once and writes its output once. The values between the operations stay in GPU registers. At P2 the feed-forward hidden values of one block are 8 × 1,029 × 5,120 = 42,147,840 values (T = 1,029 tokens at 512 px, Table 4 of the plan; ff = 5,120 for ViT-H+/16 in <code>MODEL_SHAPES</code> of <code>src/dinov3_mlx/flops.py</code>). In fp32 that is 168.6 MB. A cast of 256 M fp32 values to fp16 takes 3.14 ms (514 GB/s, probe, Table 7 of <code>explore.html</code>). So each avoided memory pass saves time at P2.</p>
   <p>Some operations stop a fusion. They are fusion barriers: <code>mx.fast.layer_norm</code>, a matmul, the SDPA, slice and concatenate. A barrier stays its own kernel, and an element-wise chain before a barrier cannot fuse with an element-wise chain after it.</p>
   <div class="table-wrap">
     <table class="first-nowrap">
@@ -466,7 +466,7 @@ def apply_rope_step5(x: mx.array, cos: mx.array, sin: mx.array) -&gt; mx.array:
     </svg></div>
     <figcaption><b>Figure 3.</b> The concat-free rotation for one token in one head of ViT-S/16 (head_dim 64). Dark teal: the first half x1, light teal: the second half x2. Here the colors mark the halves, not the y and x angles of Figure 3 of 04-2. <code>rope_tables</code> tiles the angles (<code>np.tile(angles, 2)</code>), so both rows of <code>cos2</code> hold the same values. Only row 0 of <code>sin2</code> carries the minus sign of <code>rotate_half</code>. Times: Table 5. Kernel counts: option R1 of D2 and the kernel counts of Section 2.2 of <code>explore.html</code>.</figcaption>
   </figure>
-  <pre><code># src/dinov3_apple/mlx_model.py, lines 181 to 219
+  <pre><code># src/dinov3_mlx/mlx_model.py, lines 181 to 219
 def rope_layout(cos: np.ndarray, sin: np.ndarray) -&gt; tuple[np.ndarray, np.ndarray]:
     """Return the RoPE tables in the layout of the concat-free rotation (D2 of
     specs/06-speed/plan.html).
@@ -520,7 +520,7 @@ def apply_rope(x: mx.array, cos2: mx.array, sin2: mx.array) -&gt; mx.array:
 
 <section id="cache">
   <h2>7 The RoPE cache outside the module tree</h2>
-  <pre><code># src/dinov3_apple/mlx_model.py, lines 222 to 245
+  <pre><code># src/dinov3_mlx/mlx_model.py, lines 222 to 245
 class RopeCache:
     """The RoPE tables of each patch grid, in the layout of apply_rope (A3 of
     specs/06-speed/plan.html).
@@ -559,7 +559,7 @@ class RopeCache:
   <h2>8 run_mlx and mlx_embeddings</h2>
 
   <h3>8.1 run_mlx: the parity tests run the compiled forward pass</h3>
-  <pre><code># src/dinov3_apple/mlx_model.py, lines 551 to 580 (shortened: the docstring, lines 557 to 574, is left out)
+  <pre><code># src/dinov3_mlx/mlx_model.py, lines 551 to 580 (shortened: the docstring, lines 557 to 574, is left out)
 def run_mlx(
     model: MlxBackbone,
     pixels: np.ndarray,
@@ -580,7 +580,7 @@ def run_mlx(
   </ul>
 
   <h3>8.2 mlx_embeddings: fp16 patch embeddings on the host</h3>
-  <pre><code># src/dinov3_apple/mlx_model.py, lines 583 to 611
+  <pre><code># src/dinov3_mlx/mlx_model.py, lines 583 to 611
 def patch_dtype(dtype_mode: str, patch_fp32: bool = False) -&gt; mx.Dtype:
     """Return the host dtype of the patch embeddings of one dtype mode (D13 of
     specs/06-speed/plan.html): fp16 in the four fp16 and bf16 dtype modes, else fp32."""
@@ -849,7 +849,7 @@ def mlx_embeddings(
 <section id="sources">
   <h2>12 Sources</h2>
   <ul>
-    <li>Repo code at commit <code>2567808</code>: <code>src/dinov3_apple/mlx_model.py</code> (<code>rope_tables</code>, <code>rope_layout</code>, <code>apply_rope</code>, <code>RopeCache</code>, <code>Attention</code>, <code>Block</code>, <code>MlxBackbone</code>, <code>compile_backbone</code>, <code>run_mlx</code>, <code>patch_dtype</code>, <code>mlx_embeddings</code>), <code>src/dinov3_apple/mlx_bench.py</code> (<code>time_batch_mlx</code>, <code>run_mlx_worker</code> lines 182–188, <code>_apply_rope_step5</code>, <code>_Step5Rope</code>, <code>change_forms</code> line 352, <code>run_change_worker</code>, <code>_count_kernels</code>, <code>run_profile_worker</code> line 516), <code>src/dinov3_apple/flops.py</code> (<code>MODEL_SHAPES</code>). The Step 5 code: commit <code>11a45b1</code>.</li>
+    <li>Repo code at commit <code>2567808</code>: <code>src/dinov3_mlx/mlx_model.py</code> (<code>rope_tables</code>, <code>rope_layout</code>, <code>apply_rope</code>, <code>RopeCache</code>, <code>Attention</code>, <code>Block</code>, <code>MlxBackbone</code>, <code>compile_backbone</code>, <code>run_mlx</code>, <code>patch_dtype</code>, <code>mlx_embeddings</code>), <code>src/dinov3_mlx/mlx_bench.py</code> (<code>time_batch_mlx</code>, <code>run_mlx_worker</code> lines 182–188, <code>_apply_rope_step5</code>, <code>_Step5Rope</code>, <code>change_forms</code> line 352, <code>run_change_worker</code>, <code>_count_kernels</code>, <code>run_profile_worker</code> line 516), <code>src/dinov3_mlx/flops.py</code> (<code>MODEL_SHAPES</code>). The Step 5 code: commit <code>11a45b1</code>.</li>
     <li>Tests: <code>tests/rope_oracle.py</code> (<code>rotate_half</code>, <code>apply_rope_step5</code>), <code>tests/test_mlx_rope.py</code> (T37, T38, T39), <code>tests/test_mlx_parts.py</code> (T34 with <code>CPU_COMPILE_TOLERANCE</code> and <code>CPU_FAULT_BOUND</code>, T35, T36, T40, T55), <code>tests/test_mlx_weights.py</code> (T41), <code>tests/test_mlx_parity.py</code> (W1, W4), <code>tests/conftest.py</code> (the backbone slot, <code>mlx_forward</code>).</li>
     <li>Result files: <code>results/speed-changes.jsonl</code> (C1, C2, C3 and C4 rows: <code>ratio</code>, <code>throughput</code>, <code>frame_equal</code>, <code>patches_equal</code>, <code>compile_trace_s</code>, <code>first_call_s</code>, <code>mlx_timed_peak_bytes</code>, <code>machine</code>), <code>results/speed-matrix.jsonl</code> (<code>compile_trace_s</code> of the compiled <code>mlx</code> rows), <code>results/speed-profile-p1.jsonl</code> (<code>host</code>, <code>kernels</code>), <code>results/speed-pairs.jsonl</code> through Table 7 of <code>results/speedup-table.md</code>, <code>results/speedup-table.md</code> (Tables 1, 4 and 7), <code>results/parity-mlx.md</code> (Tables 6 and 8).</li>
     <li>Spec files: <code>specs/06-speed/plan.html</code> (Tables 4, 5, 6 and 10, Sections 2, 3.4, 3.17 (R56) and 3.19, Figure 1, Table 23, AC6), <code>specs/06-speed/explore.html</code> (Sections 2.2 and 2.3 with Tables 5 to 7; D1, D2, D3, D4; risks R35, R36, R37, R43, R48 in Table 38), <code>specs/05-all-sizes/verify.html</code> (Table 7, R30 before compile).</li>

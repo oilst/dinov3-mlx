@@ -86,11 +86,11 @@ a { color: var(--accent); }
     <table>
       <thead><tr><th>File</th><th>New or changed public names</th><th>Job</th></tr></thead>
       <tbody>
-        <tr><td><code>src/dinov3_apple/mlx_model.py</code></td><td>New: <code>MlxDtypeMode</code>, <code>SwiGLU</code>, <code>MLP.activation</code>, <code>MLP.hidden</code>, <code>Block.attention_branch</code>, <code>Block.ff_hidden</code>, <code>linear_parameter_names</code>, <code>TokenRange</code>, <code>run_mlx_token_range</code>. Changed: <code>MLX_DTYPE_MODES</code> (five keys, pairs of dtypes), <code>Embeddings</code>, <code>Block</code>, <code>MlxBackbone</code> (argument <code>dtype_mode</code>), <code>run_mlx</code> (mode check), <code>run_mlx_hidden_states</code></td><td>SwiGLU (D1), the dtype flow of each mode (D2) and the token range (D6). No torch import.</td></tr>
-        <tr><td><code>src/dinov3_apple/mlx_weights.py</code></td><td>New: <code>LoadReport</code>. Changed: <code>block_parameter_names</code> (union), <code>mlx_weights</code> (pops, casts by parameter, a generator), <code>required_mlx_load_bytes</code> (bytes of the matmul dtype), <code>load_mlx_backbone</code></td><td>The key map for all six model sizes, the load of one tensor at a time and the load report (D5). No torch import. <code>load_weights</code> cannot take a generator: in strict mode it calls <code>dict()</code> on its argument and then <code>len()</code>. So each caller gives <code>list(mlx_weights(...))</code> to <code>load_weights</code> (Table 8).</td></tr>
-        <tr><td><code>src/dinov3_apple/memory.py</code></td><td>New: <code>NO_FP32_WEIGHTS</code>, <code>RunRuleError</code>, <code>check_run_rule</code>, <code>record_load_peak</code></td><td>The run rule of <code>CLAUDE.md</code> for ViT-7B/16 as code, shared by both loaders (D4 step 1, D5 step 1). One log line for the load peak of each <code>mlx</code> load. No torch, no mlx import.</td></tr>
-        <tr><td><code>src/dinov3_apple/parity.py</code></td><td>New: <code>FP16_OVERFLOW</code>, <code>EXPECTED_FP16_OVERFLOW</code></td><td>The list of expected failures with evidence (D3, M2). The tests and <code>scripts/parity_table.py</code> read the same list.</td></tr>
-        <tr><td><code>src/dinov3_apple/reference.py</code></td><td>Changed: <code>load_torch_backbone</code>. Path D4-Y only: <code>run_torch_streamed</code> and its helpers <code>ShardIndex</code> and <code>OuterParts</code></td><td>The guard against a torch load of ViT-7B/16 with fp32 weights. After the user's yes: the streamed reference (Section 3.8).</td></tr>
+        <tr><td><code>src/dinov3_mlx/mlx_model.py</code></td><td>New: <code>MlxDtypeMode</code>, <code>SwiGLU</code>, <code>MLP.activation</code>, <code>MLP.hidden</code>, <code>Block.attention_branch</code>, <code>Block.ff_hidden</code>, <code>linear_parameter_names</code>, <code>TokenRange</code>, <code>run_mlx_token_range</code>. Changed: <code>MLX_DTYPE_MODES</code> (five keys, pairs of dtypes), <code>Embeddings</code>, <code>Block</code>, <code>MlxBackbone</code> (argument <code>dtype_mode</code>), <code>run_mlx</code> (mode check), <code>run_mlx_hidden_states</code></td><td>SwiGLU (D1), the dtype flow of each mode (D2) and the token range (D6). No torch import.</td></tr>
+        <tr><td><code>src/dinov3_mlx/mlx_weights.py</code></td><td>New: <code>LoadReport</code>. Changed: <code>block_parameter_names</code> (union), <code>mlx_weights</code> (pops, casts by parameter, a generator), <code>required_mlx_load_bytes</code> (bytes of the matmul dtype), <code>load_mlx_backbone</code></td><td>The key map for all six model sizes, the load of one tensor at a time and the load report (D5). No torch import. <code>load_weights</code> cannot take a generator: in strict mode it calls <code>dict()</code> on its argument and then <code>len()</code>. So each caller gives <code>list(mlx_weights(...))</code> to <code>load_weights</code> (Table 8).</td></tr>
+        <tr><td><code>src/dinov3_mlx/memory.py</code></td><td>New: <code>NO_FP32_WEIGHTS</code>, <code>RunRuleError</code>, <code>check_run_rule</code>, <code>record_load_peak</code></td><td>The run rule of <code>CLAUDE.md</code> for ViT-7B/16 as code, shared by both loaders (D4 step 1, D5 step 1). One log line for the load peak of each <code>mlx</code> load. No torch, no mlx import.</td></tr>
+        <tr><td><code>src/dinov3_mlx/parity.py</code></td><td>New: <code>FP16_OVERFLOW</code>, <code>EXPECTED_FP16_OVERFLOW</code></td><td>The list of expected failures with evidence (D3, M2). The tests and <code>scripts/parity_table.py</code> read the same list.</td></tr>
+        <tr><td><code>src/dinov3_mlx/reference.py</code></td><td>Changed: <code>load_torch_backbone</code>. Path D4-Y only: <code>run_torch_streamed</code> and its helpers <code>ShardIndex</code> and <code>OuterParts</code></td><td>The guard against a torch load of ViT-7B/16 with fp32 weights. After the user's yes: the streamed reference (Section 3.8).</td></tr>
         <tr><td><code>scripts/make_reference.py</code></td><td>(changed)</td><td><code>run_all</code> calls <code>check_run_rule(model_size, 4, label)</code> as the first statement of each loop pass, before <code>parameter_count</code> and before the memory check. It records a skip with the reason. The skip line has no <code>fp32_weight_bytes</code>. Path D4-Y only: options <code>--streamed</code> and <code>--check</code> (the check against the five stored files).</td></tr>
         <tr><td><code>scripts/cross_check.py</code> (new)</td><td>&ndash;</td><td>Path D4-N diagnostic (D4 Option C) and the bf16 diagnostic of R23. A torch worker stores its tokens, then a separate <code>mlx</code> worker compares. Options <code>--model-size</code>, <code>--dtype-mode</code>, <code>--torch-device {mps,cpu}</code>, <code>--configs</code>, <code>--dry-run</code>. Report only. The torch worker runs with <code>PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.8</code> and <code>PYTORCH_MPS_LOW_WATERMARK_RATIO=0.6</code>. The <code>mlx</code> worker runs with <code>MLX_ENABLE_TF32=0</code> and imports no torch. Each worker calls <code>send_checks_to</code> before its load. The driver replays the memory-check and load-peak lines into its log.</td></tr>
         <tr><td><code>scripts/bench_mlx_port.py</code></td><td>(changed)</td><td>Options <code>--priority {P1,P2}</code> and <code>--dtype-modes</code>. P1 keeps the Step 4 run. P2 runs the paired check of Section 7 in the five dtype modes. Each priority has its own default results file and batch folder: P1 → <code>results/bench-mlx-port.jsonl</code> and <code>tests/fixtures/generated/bench/mlx-port/</code>; P2 → <code>results/bench-all-sizes.jsonl</code> and <code>tests/fixtures/generated/bench/all-sizes/</code>. <code>bench_dir_of</code> maps each default results file to its folder. Another results file keeps the folder <code>&lt;stem&gt;-batches</code> next to it. The mlx worker moves bf16 output to the host as a view of uint16. <code>run_mlx_worker</code> reads the report with <code>getattr(model, "load_report", None)</code> and writes null load-report fields without it.</td></tr>
@@ -536,7 +536,7 @@ a { color: var(--accent); }
 <section id="code">
   <h2>5 Key code</h2>
   <p>These snippets show the shape of the code. The build can change the details. It must keep the public names, the dtype of each part (Table 3), the order of the actions of <code>load_mlx_backbone</code> (Section 3.5) and the rule of <code>check_finite</code>.</p>
-  <pre><code># src/dinov3_apple/mlx_model.py
+  <pre><code># src/dinov3_mlx/mlx_model.py
 @dataclass(frozen=True)
 class MlxDtypeMode:
     """The two dtypes of one dtype mode of mlx (D2).
@@ -631,7 +631,7 @@ def linear_parameter_names(model: nn.Module) -&gt; frozenset[str]:
         if isinstance(module, nn.Linear)
         for leaf in module.parameters()
     )</code></pre>
-  <pre><code># src/dinov3_apple/memory.py
+  <pre><code># src/dinov3_mlx/memory.py
 # CLAUDE.md, run rules: ViT-7B/16 runs in fp16, bf16 or with quantized weights. In fp32 its
 # weights alone need about 27 GB.
 NO_FP32_WEIGHTS = frozenset({"ViT-7B/16"})
@@ -654,12 +654,12 @@ def check_run_rule(model_size: str, bytes_per_weight: int, label: str) -&gt; Non
         )
 
 
-# src/dinov3_apple/reference.py, load_torch_backbone: D4 step 1, in every case
+# src/dinov3_mlx/reference.py, load_torch_backbone: D4 step 1, in every case
 dtype = DTYPE_MODES[dtype_mode].weights
 label = f"{model_size} torch-{device} {dtype_mode}"
 check_run_rule(model_size, dtype.itemsize, label)
 check_free_memory(required_load_bytes(model_size, dtype, ratio), label)</code></pre>
-  <pre><code># src/dinov3_apple/mlx_weights.py
+  <pre><code># src/dinov3_mlx/mlx_weights.py
 @cache
 def block_parameter_names() -&gt; frozenset[str]:
     """Return the parameter names of an MLP block and of a SwiGLU block, both with all biases.
@@ -735,7 +735,7 @@ def load_mlx_backbone(
     )
     record_load_peak(label, model.load_report.peak_bytes, model.load_report.cache_bytes)
     return model</code></pre>
-  <pre><code># src/dinov3_apple/mlx_model.py
+  <pre><code># src/dinov3_mlx/mlx_model.py
 def run_mlx_token_range(model: MlxBackbone, pixels: np.ndarray) -&gt; TokenRange:
     """Run image 0 block by block and keep only the largest absolute values (D6). Report only.
 
@@ -769,7 +769,7 @@ def run_mlx(model: MlxBackbone, pixels: np.ndarray, dtype_mode: str) -&gt; np.nd
     tokens = model(mx.array(pixels)).astype(mx.float32)     # the model casts the fp32 pixels
     mx.eval(tokens)
     return np.array(tokens)</code></pre>
-  <pre><code># src/dinov3_apple/parity.py
+  <pre><code># src/dinov3_mlx/parity.py
 FP16_OVERFLOW = (
     "fp16 overflow: a register token is above 65,504 (Table 3 of specs/05-all-sizes/explore.html)"
 )
@@ -808,7 +808,7 @@ def run_rule_skip(model_size: str, dtype_mode: str, backend: str) -&gt; str | No
     except RunRuleError as error:
         return str(error)
     return None</code></pre>
-  <pre><code># src/dinov3_apple/reference.py: path D4-Y only, after the user's own yes
+  <pre><code># src/dinov3_mlx/reference.py: path D4-Y only, after the user's own yes
 @torch.inference_mode()
 def run_torch_streamed(
     model_size: str, pixels: Mapping[str, np.ndarray], hidden_config: str | None

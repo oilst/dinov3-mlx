@@ -18,7 +18,7 @@ MODEL_IDS: dict[str, str] = {
 }
 
 # The converted weights of scripts/convert_meta_checkpoint.py. Only a fallback.
-CONVERTED_DIR = Path.home() / ".cache" / "dinov3-apple" / "converted"
+CONVERTED_DIR = Path.home() / ".cache" / "dinov3-mlx" / "converted"
 
 # The files that a backbone needs. ViT-7B/16 has six shards and an index.
 WEIGHT_PATTERNS: list[str] = ["config.json", "*.safetensors", "model.safetensors.index.json"]

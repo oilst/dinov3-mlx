@@ -16,7 +16,7 @@ import torch
 import torch.nn.functional as F
 from PIL import Image
 
-from dinov3_apple.stored import IMAGENET_MEAN_VALUES, IMAGENET_STD_VALUES, own_aspect_size
+from dinov3_mlx.stored import IMAGENET_MEAN_VALUES, IMAGENET_STD_VALUES, own_aspect_size
 
 # own_aspect_size moved to stored.py, which imports no torch (Step 4). This module re-exports it.
 __all__ = [

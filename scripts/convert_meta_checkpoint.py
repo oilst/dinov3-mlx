@@ -3,7 +3,7 @@
 """Convert a local Meta DINOv3 checkpoint (.pth) into a Hugging Face model folder.
 
 Use this script only while the gated Hugging Face repos are not available. The output goes to
-~/.cache/dinov3-apple/converted/<Hugging Face id>, not into the Hugging Face cache.
+~/.cache/dinov3-mlx/converted/<Hugging Face id>, not into the Hugging Face cache.
 """
 
 import argparse
@@ -18,7 +18,7 @@ import torch.nn.functional as F
 from PIL import Image
 from transformers import DINOv3ViTConfig, DINOv3ViTModel
 
-from dinov3_apple.hub import CONVERTED_DIR, MODEL_IDS
+from dinov3_mlx.hub import CONVERTED_DIR, MODEL_IDS
 
 TEST_IMAGE_URL = "http://images.cocodataset.org/val2017/000000039769.jpg"
 TEST_IMAGE = (

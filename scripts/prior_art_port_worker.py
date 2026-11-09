@@ -4,7 +4,7 @@ D2 of specs/06b-prior-art/explore.html).
 The driver scripts/bench_prior_art.py starts this file only with --allow-third-party-python, the
 user's yes to question Q1. It runs in the port venv with -I:
 
-    ~/.cache/dinov3-apple/prior-art/venv-mlx/bin/python -I prior_art_port_worker.py '<spec>'
+    ~/.cache/dinov3-mlx/prior-art/venv-mlx/bin/python -I prior_art_port_worker.py '<spec>'
 
 It imports the standard library, NumPy, safetensors and mlx; the code of the candidate (mlxim of
 C1, dinov3 of C2) comes from the clone that the spec names, inside the functions. It imports no

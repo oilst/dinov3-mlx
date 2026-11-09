@@ -12,8 +12,8 @@ from small_model import GRIDS, SMALL_CONFIG, SMALL_CONFIGS
 from transformers import DINOv3ViTConfig
 from transformers.models.dinov3_vit.modeling_dinov3_vit import DINOv3ViTRopePositionEmbedding
 
-from dinov3_apple.mlx_model import rope_tables
-from dinov3_apple.outputs import NUM_PREFIX_TOKENS, PATCH_SIZE
+from dinov3_mlx.mlx_model import rope_tables
+from dinov3_mlx.outputs import NUM_PREFIX_TOKENS, PATCH_SIZE
 
 pytestmark = pytest.mark.mlx
 
@@ -136,7 +136,7 @@ def test_concat_free_rope_equals_the_step5_form(
     in the transposed layout of Attention.qkv, as in the forward pass."""
     from rope_oracle import apply_rope_step5
 
-    from dinov3_apple.mlx_model import apply_rope, rope_layout
+    from dinov3_mlx.mlx_model import apply_rope, rope_layout
 
     cos, sin = rope_tables(*grid, head_dim, THETA)
     cos2, sin2 = rope_layout(cos, sin)
@@ -177,7 +177,7 @@ def test_compiled_forward_traces_once_per_shape(monkeypatch: pytest.MonkeyPatch)
     shapes."""
     from small_model import small_hf_model, small_mlx_model, small_pixels
 
-    from dinov3_apple.mlx_model import MlxBackbone, compile_backbone
+    from dinov3_mlx.mlx_model import MlxBackbone, compile_backbone
 
     model = small_mlx_model(small_hf_model(seed=0))
     traces: list[tuple[int, ...]] = []

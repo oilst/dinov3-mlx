@@ -80,7 +80,7 @@ a { color: var(--accent); }
       </tbody>
     </table>
   </div>
-  <p class="caption"><b>Table 2.</b> Weights for each model size (AC6). The converted folders are in <code>~/.cache/dinov3-apple/converted/facebook/</code>. Each converted file has exactly the byte count of the Hub file.</p>
+  <p class="caption"><b>Table 2.</b> Weights for each model size (AC6). The converted folders are in <code>~/.cache/dinov3-mlx/converted/facebook/</code>. Each converted file has exactly the byte count of the Hub file.</p>
   <p>Evidence that the two conversions are "checked", without a model load:</p>
   <ul>
     <li><code>convert_meta_checkpoint.py</code> saves the folder only after <code>check_outputs</code> passes (lines 207 to 210). So a folder exists only after a passed output check.</li>
@@ -115,7 +115,7 @@ a { color: var(--accent); }
 
 <section id="commands">
   <h2>10 Commands</h2>
-  <p>The verifier ran these commands in <code>~/Documents/Development/dinov3-apple</code>. The shell had an unrelated <code>VIRTUAL_ENV</code>. uv ignored it with a warning.</p>
+  <p>The verifier ran these commands in <code>~/Documents/Development/dinov3-mlx</code>. The shell had an unrelated <code>VIRTUAL_ENV</code>. uv ignored it with a warning.</p>
   <pre><code>uv --version
 uv sync --locked
 uv run python -c "import sys, mlx.core as mx, torch, transformers; print(sys.version, mx.__version__, torch.__version__, transformers.__version__)"
@@ -128,15 +128,15 @@ uv run ruff format --check
 uv run python -c "
 from huggingface_hub import try_to_load_from_cache
 from huggingface_hub.constants import HF_HUB_CACHE
-from dinov3_apple.hub import MODEL_IDS
+from dinov3_mlx.hub import MODEL_IDS
 print('cache', HF_HUB_CACHE)
 for s, i in MODEL_IDS.items():
     print(s, i, try_to_load_from_cache(i, 'config.json'))
 "
 ls -la ~/.cache/huggingface/hub | grep -i dinov3
-find ~/.cache/dinov3-apple/converted -type f -exec stat -f '%z %N' {} \;
+find ~/.cache/dinov3-mlx/converted -type f -exec stat -f '%z %N' {} \;
 ls -la ~/.cache/torch/hub/checkpoints | grep -i dinov3
-cat ~/.cache/dinov3-apple/converted/facebook/*/config.json
+cat ~/.cache/dinov3-mlx/converted/facebook/*/config.json
 # Read only the JSON header of each converted model.safetensors (8-byte length, then the header).
 python3 -c "import json,struct,sys; f=open(sys.argv[1],'rb'); n=struct.unpack('&lt;Q',f.read(8))[0]; h=json.loads(f.read(n)); ..." MODEL.safetensors
 shasum -a 256 ~/.cache/torch/hub/checkpoints/dinov3_vits16_pretrain_lvd1689m-08c60483.pth

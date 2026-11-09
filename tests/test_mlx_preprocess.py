@@ -8,9 +8,9 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-from dinov3_apple import mlx_preprocess, stored
-from dinov3_apple.mlx_model import TF32ModeError
-from dinov3_apple.preprocess import load_image
+from dinov3_mlx import mlx_preprocess, stored
+from dinov3_mlx.mlx_model import TF32ModeError
+from dinov3_mlx.preprocess import load_image
 
 pytestmark = pytest.mark.mlx
 
@@ -63,7 +63,7 @@ def test_preprocess_frames_refuses_tf32(monkeypatch: pytest.MonkeyPatch) -> None
 
 def test_imagenet_constants_have_one_source() -> None:
     """D12: preprocess.py builds its torch tensors from the NumPy values of stored.py."""
-    from dinov3_apple import preprocess
+    from dinov3_mlx import preprocess
 
     assert stored.IMAGENET_MEAN_VALUES.dtype == stored.IMAGENET_STD_VALUES.dtype == np.float32
     assert np.array_equal(preprocess.IMAGENET_MEAN.numpy(), stored.IMAGENET_MEAN_VALUES)
@@ -86,8 +86,8 @@ def test_preprocess_frames_parity(
     12 of 12 configurations; the values go next to the values on the stored pixels."""
     from parity_checks import assert_thresholds, record_skip
 
-    from dinov3_apple.mlx_model import run_mlx
-    from dinov3_apple.parity import measure_parity
+    from dinov3_mlx.mlx_model import run_mlx
+    from dinov3_mlx.parity import measure_parity
 
     key = ("preprocess-mlx", model_size, dtype_mode, "all")
     with record_skip(record, *key, backend="mlx"):

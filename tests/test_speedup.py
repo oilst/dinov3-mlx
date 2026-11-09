@@ -3,8 +3,8 @@
 
 import pytest
 
-from dinov3_apple import speedup
-from dinov3_apple.speedup import (
+from dinov3_mlx import speedup
+from dinov3_mlx.speedup import (
     compile_check,
     pass_verdict,
     single_verdict,

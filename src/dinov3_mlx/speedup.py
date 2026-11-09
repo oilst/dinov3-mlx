@@ -8,7 +8,7 @@ alone would drop one of two lines with the same key on two backends. No torch, n
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 
-from dinov3_apple.bench import (
+from dinov3_mlx.bench import (
     BATCH_SIZES,
     DTYPE_OF_MODE,
     OUTPUTS,
@@ -16,8 +16,8 @@ from dinov3_apple.bench import (
     SIDES,
     line_key,
 )
-from dinov3_apple.hub import MODEL_IDS
-from dinov3_apple.memory import NO_FP32_WEIGHTS
+from dinov3_mlx.hub import MODEL_IDS
+from dinov3_mlx.memory import NO_FP32_WEIGHTS
 
 NOISE = 0.03  # the spread inside one arm of the probe paired-noise
 MODEL_SIZES = list(MODEL_IDS)

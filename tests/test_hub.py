@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from huggingface_hub import try_to_load_from_cache
 
-from dinov3_apple.hub import MODEL_IDS, InsufficientDiskError, check_free_disk
+from dinov3_mlx.hub import MODEL_IDS, InsufficientDiskError, check_free_disk
 
 TECH_STACK = Path(__file__).parents[1] / "tech-stack.md"
 

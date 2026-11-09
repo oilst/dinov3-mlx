@@ -82,7 +82,7 @@ a { color: var(--accent); }
     <table>
       <thead><tr><th>Name</th><th>File, lines</th><th>Job</th><th>Tests (numbers of the plan)</th><th>Section</th></tr></thead>
       <tbody>
-        <tr class="group"><td colspan="5"><code>src/dinov3_apple/bench.py</code></td></tr>
+        <tr class="group"><td colspan="5"><code>src/dinov3_mlx/bench.py</code></td></tr>
         <tr><td><code>QUANTIZED_MODEL_SIZES</code>, <code>QUANTIZED_MODES</code> (new)</td><td class="num">59–60</td><td>The model sizes with quantized rows (ViT-H+/16, ViT-7B/16) and the two dtype modes that load quantized weights (fp16-autocast, bf16-autocast).</td><td>T21 <code>test_matrix_plan_pairs_each_configuration</code></td><td>8.1</td></tr>
         <tr><td><code>BenchConfig.bits</code> (new field), <code>BenchConfig.key</code> (changed)</td><td class="num">121, 124–136</td><td>None, 8 or 4. Part of the key, before <code>repeat</code> (D22).</td><td>T15 <code>test_bench_config_key_has_bits</code></td><td>8.1</td></tr>
         <tr><td><code>line_key(line)</code> (changed)</td><td class="num">146–157</td><td>Returns the key of one JSON line. A line without <code>bits</code> reads as None.</td><td>T15</td><td>8.1</td></tr>
@@ -94,7 +94,7 @@ a { color: var(--accent); }
         <tr><td><code>PAIR_FIELDS</code> (new)</td><td class="num">479–487</td><td>The pairing fields of a Step 6 line. No code reads it (Section 8.4).</td><td>–</td><td>8.4</td></tr>
         <tr><td><code>MLX_FIELDS</code> (new)</td><td class="num">489–504</td><td>The fields of an <code>mlx</code> worker of Step 6, on top of <code>LINE_FIELDS</code>.</td><td>T30 <code>test_mlx_worker_records_versions_and_compile_fields</code></td><td>8.4</td></tr>
         <tr><td><code>result_line(..., backend)</code> (changed)</td><td class="num">550–580</td><td>Returns one JSON line. The backend is an argument; before Step 6 every line said "torch-mps".</td><td>T20 <code>test_result_line_takes_the_backend</code></td><td>8.4</td></tr>
-        <tr class="group"><td colspan="5"><code>src/dinov3_apple/mlx_bench.py</code> (new module; the functions come from <code>scripts/bench_mlx_port.py</code> and <code>tests/test_mlx_parts.py</code>)</td></tr>
+        <tr class="group"><td colspan="5"><code>src/dinov3_mlx/mlx_bench.py</code> (new module; the functions come from <code>scripts/bench_mlx_port.py</code> and <code>tests/test_mlx_parts.py</code>)</td></tr>
         <tr><td><code>output_transfer(frame, patches)</code></td><td class="num">49–60</td><td>Returns how an output moved to the host: "native", "view-uint16" or "fp16-patches".</td><td>T56 <code>test_time_batch_mlx_gives_fp16_patches</code></td><td>8.3</td></tr>
         <tr><td><code>host_to_fp32(host)</code></td><td class="num">63–67</td><td>Returns fp32 values of a host output. It reads the bf16 bits (uint16) of the Step 5 lines.</td><td>T56</td><td>8.3</td></tr>
         <tr><td><code>time_batch_mlx(forward, batch, dtype_mode, patch_fp32)</code></td><td class="num">70–101</td><td>Runs one batch host to host. Returns the device time, the frame time and the patch time.</td><td>T56</td><td>8.3</td></tr>
@@ -104,7 +104,7 @@ a { color: var(--accent); }
         <tr><td><code>run_profile_worker(config, bench_dir)</code> (not in Table 5)</td><td class="num">500–603</td><td>The P1 profile: host share, part times, kernel counts, throughput at batch sizes 8 and 32.</td><td><code>test_profile_worker_parts</code></td><td>7</td></tr>
         <tr><td><code>run_token_range_worker(config, pixels)</code> (not in Table 5)</td><td class="num">606–629</td><td>Returns the largest value of the token range above 512 px.</td><td>–</td><td>3</td></tr>
         <tr><td><code>phase</code>, <code>batch_file_name</code>, <code>change_forms</code>, <code>run_change_worker</code> (not in Table 5)</td><td class="num">104–114, 125–133, 327–360, 363–457</td><td>The loop of one time budget, the name of the per-batch file, and the forms and the worker of the change ratios (<a href="06-1-compiled-forward-pass.html">06-1</a>).</td><td><code>test_change_worker_forms</code></td><td>8.3</td></tr>
-        <tr class="group"><td colspan="5"><code>src/dinov3_apple/speedup.py</code> (new module)</td></tr>
+        <tr class="group"><td colspan="5"><code>src/dinov3_mlx/speedup.py</code> (new module)</td></tr>
         <tr><td><code>NOISE</code></td><td class="num">22</td><td>0.03: the spread inside one arm of the probe paired-noise.</td><td>T26 <code>test_pass_rule</code></td><td>9.1</td></tr>
         <tr><td><code>pass_verdict(run_medians, pooled_median)</code></td><td class="num">37–46</td><td>The verdict of D21 at P1 and P2, with the mark "inside the noise" for a pooled median within 1 ± 0.03 (since the fix of V5, 2026-11-09).</td><td>T26</td><td>9.1</td></tr>
         <tr><td><code>single_verdict(ratio)</code></td><td class="num">49–53</td><td>The verdict of D21 outside P1 and P2, with the mark "inside the noise".</td><td>T26</td><td>9.1</td></tr>
@@ -116,7 +116,7 @@ a { color: var(--accent); }
         <tr><td><code>_parity_text(parity)</code> (private, not in Table 5)</td><td class="num">176–182</td><td>Returns the parity of one line as text: "frame …, patch mean …, patch 1st percentile …" with 6 significant digits, or "no parity". <code>_quantized_rows</code> (line 213) writes it into the reason of each quantized row that is not valid.</td><td>T27</td><td>9.2</td></tr>
         <tr><td><code>matrix_cells(lines)</code>, <code>autocast_over_cast(lines)</code> (not in Table 5)</td><td class="num">280–290, 385–408</td><td>The 324 cells of the matrix section; autocast / cast on <code>mlx</code> (C3, R30).</td><td>T27 <code>test_speedup_table_covers_every_configuration</code></td><td>9.2</td></tr>
         <tr><td><code>compile_check(matrix_lines, step3_lines)</code></td><td class="num">411–444</td><td>Lists each group whose compiled <code>torch-mps</code> row is below the Step 3 eager median.</td><td>T28 <code>test_compile_check_lists_slow_compile_rows</code></td><td>9.3</td></tr>
-        <tr class="group"><td colspan="5"><code>src/dinov3_apple/gpu_lock.py</code> (new module)</td></tr>
+        <tr class="group"><td colspan="5"><code>src/dinov3_mlx/gpu_lock.py</code> (new module)</td></tr>
         <tr><td><code>HEAVY_JOB_PATTERN</code></td><td class="num">39–42</td><td>The regular expression of the command lines of heavy jobs.</td><td>T1 <code>test_heavy_job_pattern_matches_the_job_names</code></td><td>10</td></tr>
         <tr><td><code>LOCK_PATH</code>, <code>LOCK_REGISTRY</code>, <code>LOCK_ENV</code> (and <code>LOG_PATH</code>, <code>POLL_S</code>)</td><td class="num">43–47</td><td>The lock file, the registry folder, the environment variable of the holder, the lock log and the poll time.</td><td>T2 to T6</td><td>10</td></tr>
         <tr><td><code>GpuLockTimeoutError</code></td><td class="num">50–51</td><td>A wait that takes longer than its time limit.</td><td>T7 <code>test_heavy_job_timeout_ends_a_wait</code></td><td>10</td></tr>
@@ -136,7 +136,7 @@ a { color: var(--accent); }
 <section id="terms">
   <h2>2 Two terms of the cost</h2>
   <p>One square image of side s pixels gives T = 5 + (s / 16)² tokens: 1 CLS token, 4 register tokens and (s / 16)² patch tokens. <code>part_flops</code> of Step 3 counts the FLOPs of one block for B images:</p>
-  <pre><code># src/dinov3_apple/flops.py, lines 73 to 81
+  <pre><code># src/dinov3_mlx/flops.py, lines 73 to 81
     bt, d, f = batch_size * num_tokens, shape.dim, shape.ff
     ff_in_matrices = 2 if shape.gated else 1
     flops = dict.fromkeys(PART_NAMES, 0)
@@ -386,7 +386,7 @@ a { color: var(--accent); }
     <li><b>The record.</b> Each line records the versions of <code>VERSIONED_PACKAGES</code> and the field <code>mlx_architecture</code> (D19). Step 6 adds "mlx-metal", an indirect dependency of mlx (0.32.4 in <code>uv.lock</code>). All Step 6 lines record mlx 0.32.4, mlx-metal 0.32.4 and macOS 26.5.2.</li>
     <li><b>The fingerprint test.</b> The report-only test T57 (<code>test_mlx_sdpa_nax_fingerprint</code>) measures the share of fp16 and bf16 SDPA outputs that differ from the float64 result rounded once. The probe nax-record gave 54.5 % (fp16) and 12.6 % (bf16) with the Neural Accelerators on, and 0.21 % and 0.023 % with them off (Section 3.7 of the plan). The NAX kernels use relaxed precision. A new MLX version that changes this shows in the next default session.</li>
   </ul>
-  <pre><code># src/dinov3_apple/machine.py, line 17
+  <pre><code># src/dinov3_mlx/machine.py, line 17
 VERSIONED_PACKAGES = [&quot;torch&quot;, &quot;transformers&quot;, &quot;mlx&quot;, &quot;mlx-metal&quot;, &quot;numpy&quot;, &quot;safetensors&quot;]</code></pre>
 </section>
 
@@ -503,7 +503,7 @@ VERSIONED_PACKAGES = [&quot;torch&quot;, &quot;transformers&quot;, &quot;mlx&quo
 <section id="profile">
   <h2>7 The P1 profile</h2>
   <p>At P1 (ViT-S/16, 224 px, batch size 8, frame embedding) <code>mlx</code> is slower than <code>torch.compile</code> in fp16 and bf16: the speedup is 0.867 and 0.878 (Section 9). The plan asked for one profile of the compiled forward pass at P1 (Table 12 of the plan, R49). <code>run_profile_worker</code> measures four things in one process for each dtype mode:</p>
-  <pre><code># src/dinov3_apple/mlx_bench.py, lines 519 to 538
+  <pre><code># src/dinov3_mlx/mlx_bench.py, lines 519 to 538
     for _ in range(5):
         mx.eval(forward(batch))
     call_s, eval_s, gap_s = [], [], []
@@ -673,12 +673,12 @@ VERSIONED_PACKAGES = [&quot;torch&quot;, &quot;transformers&quot;, &quot;mlx&quo
   </figure>
 
   <h3>8.1 The key of a configuration, the modes and the compile rows</h3>
-  <pre><code># src/dinov3_apple/bench.py, lines 57 to 60
+  <pre><code># src/dinov3_mlx/bench.py, lines 57 to 60
 # Quantized weights (D14 to D16 of specs/06-speed/plan.html): the model sizes of the quantized rows
 # and the dtype modes that load quantized weights.
 QUANTIZED_MODEL_SIZES = [&quot;ViT-H+/16&quot;, &quot;ViT-7B/16&quot;]
 QUANTIZED_MODES = [&quot;fp16-autocast&quot;, &quot;bf16-autocast&quot;]</code></pre>
-  <pre><code># src/dinov3_apple/bench.py, lines 98 to 157
+  <pre><code># src/dinov3_mlx/bench.py, lines 98 to 157
 @dataclass(frozen=True)
 class BenchConfig:
     &quot;&quot;&quot;One configuration of the benchmark matrix. The output is not part of it (D3).
@@ -745,7 +745,7 @@ def line_key(line: dict) -&gt; tuple:
     <li><b>Line 155.</b> <code>line.get("bits")</code> reads the 273 + 30 + 12 committed lines of Steps 3 to 5 as unquantized. The key still has no backend. So a reader of paired lines keys each line by run, group, round, backend and key, never by <code>latest_lines</code> alone (Section 3.15 of the plan).</li>
     <li><b><code>QUANTIZED_MODEL_SIZES</code> and <code>QUANTIZED_MODES</code>.</b> The driver adds 4 quantized workers (8 and 4 bits × fp16-autocast and bf16-autocast) to each group of ViT-H+/16 and ViT-7B/16. <code>speedup.py</code> uses <code>QUANTIZED_MODES</code> to find the quantized rows of a cell. <a href="06-3-quantized-weights.html">06-3</a> explains why only these two dtype modes load quantized weights.</li>
   </ul>
-  <pre><code># src/dinov3_apple/bench.py, lines 168 to 217
+  <pre><code># src/dinov3_mlx/bench.py, lines 168 to 217
 def _modes(model_size: str, backend: str = &quot;torch-mps&quot;) -&gt; list[str]:
     &quot;&quot;&quot;Return the dtype modes of one model size on one backend.
 
@@ -802,7 +802,7 @@ def bench_configurations(
   </ul>
 
   <h3>8.2 The memory need of each backend</h3>
-  <pre><code># src/dinov3_apple/bench.py, lines 277 to 297
+  <pre><code># src/dinov3_mlx/bench.py, lines 277 to 297
 def quantized_weight_bytes(model_size: str, bits: int, parameters: int | None = None) -&gt; int:
     &quot;&quot;&quot;Return the bytes of the weights of one model size with quantized block weights (Table 9 of
     specs/06-speed/plan.html).
@@ -828,7 +828,7 @@ def quantized_weight_bytes(model_size: str, bits: int, parameters: int | None = 
     <li><b>The formula.</b> Each block weight takes bits / 8 bytes plus one 2-byte scale and one 2-byte offset for each group of 64 weights: (8 · bits + 4) / 64 bytes. All other parameters take 2 bytes. The block weights are L · (4 D² + 3 D F) for SwiGLU and L · (4 D² + 2 D F) for the MLP. The loader keeps the layer norms, LayerScale and the prefix tokens in fp32, so the value leaves out at most 2.0 MB.</li>
     <li><b>Values.</b> ViT-H+/16: 894,753,280 B at 8 bits and 475,322,880 B at 4 bits. ViT-7B/16: 7,140,614,144 B and 3,785,170,944 B (Table 9 of the plan; T17 pins them).</li>
   </ul>
-  <pre><code># src/dinov3_apple/bench.py, lines 300 to 302 and 323 to 336 (shortened: the docstring is left out)
+  <pre><code># src/dinov3_mlx/bench.py, lines 300 to 302 and 323 to 336 (shortened: the docstring is left out)
 def required_bench_bytes(
     config: BenchConfig, activation_factor: float = ACTIVATION_FACTOR, backend: str = &quot;torch-mps&quot;
 ) -&gt; int:
@@ -855,7 +855,7 @@ def required_bench_bytes(
   </ul>
 
   <h3>8.3 The mlx worker</h3>
-  <pre><code># src/dinov3_apple/mlx_bench.py, lines 49 to 67
+  <pre><code># src/dinov3_mlx/mlx_bench.py, lines 49 to 67
 def output_transfer(frame: np.ndarray, patches: np.ndarray) -&gt; str:
     &quot;&quot;&quot;Return how an output moved to the host.
 
@@ -875,7 +875,7 @@ def host_to_fp32(host: np.ndarray) -&gt; np.ndarray:
     if host.dtype != np.uint16:
         return host
     return (host.astype(np.uint32) &lt;&lt; 16).view(np.float32)</code></pre>
-  <pre><code># src/dinov3_apple/mlx_bench.py, lines 70 to 101
+  <pre><code># src/dinov3_mlx/mlx_bench.py, lines 70 to 101
 def time_batch_mlx(
     forward: Forward, batch: np.ndarray, dtype_mode: str, patch_fp32: bool = False
 ) -&gt; tuple[tuple[float, float, float], np.ndarray, np.ndarray]:
@@ -897,7 +897,7 @@ def time_batch_mlx(
     &quot;&quot;&quot;
     import mlx.core as mx
 
-    from dinov3_apple.mlx_model import patch_dtype
+    from dinov3_mlx.mlx_model import patch_dtype
 
     t0 = time.perf_counter()
     tokens = forward(mx.array(batch))
@@ -913,18 +913,18 @@ def time_batch_mlx(
     <li><b>Lines 97 to 100: the outputs.</b> The frame embeddings move to the host in fp32. The patch embeddings move in fp16 in the four fp16 and bf16 dtype modes (D13, <code>patch_dtype</code>). NumPy has no bf16, so the bf16 modes also move fp16. The patch time leaves out the copy of the frame embeddings: (t1 − t0) + (t3 − t2).</li>
     <li><b><code>output_transfer</code> and <code>host_to_fp32</code>.</b> Step 5 moved bf16 values as uint16 bits ("view-uint16"). Step 6 moves fp16 patch embeddings ("fp16-patches"). <code>host_to_fp32</code> still reads the old bits: it shifts each 16-bit value into the high half of a 32-bit word. All Step 6 lines of <code>mlx</code> benchmark workers (kind "bench", status "done") in the four fp16 and bf16 dtype modes record "fp16-patches". The change, profile and token-range lines have no value.</li>
   </ul>
-  <pre><code># src/dinov3_apple/mlx_bench.py, lines 117 to 122
+  <pre><code># src/dinov3_mlx/mlx_bench.py, lines 117 to 122
 def load_report_fields(load_report: object | None) -&gt; dict[str, int | None]:
     &quot;&quot;&quot;Return the fields of the load report of an mlx worker, or null fields without a report.&quot;&quot;&quot;
     return {
         f&quot;load_report_{name}&quot;: getattr(load_report, name, None)
         for name in (&quot;need_bytes&quot;, &quot;peak_bytes&quot;, &quot;cache_bytes&quot;, &quot;footprint_bytes&quot;)
     }</code></pre>
-  <pre><code># src/dinov3_apple/mlx_bench.py, lines 168 to 216
+  <pre><code># src/dinov3_mlx/mlx_bench.py, lines 168 to 216
     import mlx.core as mx
 
-    from dinov3_apple import mlx_weights
-    from dinov3_apple.mlx_model import compile_backbone, patch_dtype
+    from dinov3_mlx import mlx_weights
+    from dinov3_mlx.mlx_model import compile_backbone, patch_dtype
 
     start_time = datetime.now(UTC).isoformat(timespec=&quot;seconds&quot;)
     base = read_footprint()
@@ -981,7 +981,7 @@ def load_report_fields(load_report: object | None) -&gt; dict[str, int | None]:
   </ul>
 
   <h3>8.4 The fields of a result line</h3>
-  <pre><code># src/dinov3_apple/bench.py, lines 478 to 504
+  <pre><code># src/dinov3_mlx/bench.py, lines 478 to 504
 # The pairing fields of a Step 6 line (Table 8 of specs/06-speed/plan.html), from the driver.
 PAIR_FIELDS = [
     &quot;run_id&quot;,
@@ -1009,7 +1009,7 @@ MLX_FIELDS = [
     &quot;load_report_cache_bytes&quot;,
     &quot;load_report_footprint_bytes&quot;,
 ]</code></pre>
-  <pre><code># src/dinov3_apple/bench.py, lines 550 to 580
+  <pre><code># src/dinov3_mlx/bench.py, lines 550 to 580
 def result_line(
     config: BenchConfig,
     worker: dict,
@@ -1048,13 +1048,13 @@ def result_line(
     <li><b><code>result_line(..., backend)</code>, line 573.</b> Before Step 6 the line was <code>{"backend": "torch-mps"}</code> for every line. The driver <code>bench_mlx_port.py</code> set the backend of its <code>mlx</code> lines afterwards. Now the caller gives it.</li>
     <li><b>F17: the load footprint peak.</b> The old field <code>load_peak_bytes</code> held the lifetime maximum of the process footprint, not the load peak of the glossary. Step 6 renames it to <code>load_footprint_peak_bytes</code> in <code>LINE_FIELDS</code>, in <code>torch_bench.run_worker</code> and in the <code>mlx</code> worker. <code>baseline_table.py</code> reads both names, so the old lines keep their values (T13).</li>
   </ul>
-  <pre><code># src/dinov3_apple/torch_bench.py, lines 131 to 133
+  <pre><code># src/dinov3_mlx/torch_bench.py, lines 131 to 133
     if config.compile:
         model = torch.compile(model)
     load_peak = read_footprint().lifetime_max_bytes  # the load footprint peak (F17)</code></pre>
 
   <h3>8.5 The parts of one block</h3>
-  <pre><code># src/dinov3_apple/mlx_bench.py, lines 259 to 294
+  <pre><code># src/dinov3_mlx/mlx_bench.py, lines 259 to 294
 def mlx_block_parts(block: &quot;Block&quot;) -&gt; dict[str, Callable[..., tuple[&quot;mx.array&quot;, ...]]]:
     &quot;&quot;&quot;Return the 11 parts of one MLX block, with the names, inputs and outputs of block_parts.
 
@@ -1063,7 +1063,7 @@ def mlx_block_parts(block: &quot;Block&quot;) -&gt; dict[str, Callable[..., tupl
     &quot;&quot;&quot;
     import mlx.core as mx
 
-    from dinov3_apple import mlx_model
+    from dinov3_mlx import mlx_model
 
     attention, mlp = block.attention, block.mlp
 
@@ -1104,7 +1104,7 @@ def mlx_block_parts(block: &quot;Block&quot;) -&gt; dict[str, Callable[..., tupl
   <p>The speedup of one configuration is the throughput of <code>mlx</code> divided by the throughput of the baseline row. ADR 0004 picks, on each side, the fastest valid row of each dtype and output. ADR 0009 widens it: the <code>torch-mps</code> side runs <code>torch.compile</code> in every valid dtype mode, in a paired group with the <code>mlx</code> workers. So each speedup divides by a row of the same session and power state, a few minutes apart.</p>
 
   <h3>9.1 The pass rule at P1 and P2</h3>
-  <pre><code># src/dinov3_apple/speedup.py, lines 22 to 58
+  <pre><code># src/dinov3_mlx/speedup.py, lines 22 to 58
 NOISE = 0.03  # the spread inside one arm of the probe paired-noise
 MODEL_SIZES = list(MODEL_IDS)
 DTYPES = [&quot;fp32&quot;, &quot;fp16&quot;, &quot;bf16&quot;]
@@ -1148,7 +1148,7 @@ def spread_between_runs(run_medians: list[float]) -&gt; float:
     <li><b><code>single_verdict</code>.</b> Outside P1 and P2 one paired group gives one ratio. The verdict is its sign against 1. A ratio within 1 ± <code>NOISE</code> (inclusive) gets the mark "inside the noise". The probe paired-noise measured a spread of 1.6 % (<code>torch-mps</code>) and 3.0 % (<code>mlx</code>) inside one arm (Section 2 of <code>explore.html</code>).</li>
     <li><b><code>spread_between_runs</code>.</b> (largest run median − smallest run median) / smallest run median.</li>
   </ul>
-  <pre><code># src/dinov3_apple/speedup.py, lines 351 to 364
+  <pre><code># src/dinov3_mlx/speedup.py, lines 351 to 364
                 pick = {}
                 for line in mlx + torch:
                     mode = mlx_mode if line[&quot;backend&quot;] == &quot;mlx&quot; else torch_mode
@@ -1303,7 +1303,7 @@ def spread_between_runs(run_medians: list[float]) -&gt; float:
   <p>Table 10 shows why the pairing matters. At P2 the raw throughput of each backend fell from run 1 to run 2, with a spread between runs of 8.3 to 20.9 %. The spread between runs of the paired ratio is only 0.4 to 4.1 %. Step 5 measured a spread between runs on different days of about 20 % (F2 of <code>specs/05-all-sizes/verify.html</code>) against a noise of 1.6 to 3.0 % inside one session (probe paired-noise). Here the raw throughput shows the large term, and the pairing removes most of it. One round can still leave the noise band: the P1 fp32 ratio of round 1 of run 2 is 0.977, against 1.020 to 1.082 in the other 9 rounds.</p>
 
   <h3>9.2 The matrix</h3>
-  <pre><code># src/dinov3_apple/speedup.py, lines 133 to 173
+  <pre><code># src/dinov3_mlx/speedup.py, lines 133 to 173
 def _fastest(lines: list[dict], output: str) -&gt; dict | None:
     usable = [line for line in lines if _usable(line)]
     return max(usable, key=lambda line: _ips(line, output)) if usable else None
@@ -1345,7 +1345,7 @@ def _row(
         verdict=single_verdict(ratio),
         mark=best_torch.get(&quot;mark&quot;, &quot;&quot;),
     )</code></pre>
-  <pre><code># src/dinov3_apple/speedup.py, lines 263 to 277
+  <pre><code># src/dinov3_mlx/speedup.py, lines 263 to 277
 def speedup_rows(lines: list[dict]) -&gt; list[SpeedupRow]:
     &quot;&quot;&quot;Return the main rows and the quantized rows of each cell that has a line.
 
@@ -1392,7 +1392,7 @@ def speedup_rows(lines: list[dict]) -&gt; list[SpeedupRow]:
   <p class="caption"><b>Table 11.</b> The verdicts of the 324 cells of the matrix section (section 2 of <code>results/speedup-table.md</code>; our count). Each model size has 9 cells (3 input resolutions × 3 batch sizes) × 2 outputs for each dtype. "Inside the noise": the paired ratio lies within 1 ± 0.03. The count of the quantized section (section 3) is the subject of <a href="06-3-quantized-weights.html">06-3</a>.</p>
   <p>The pattern of Table 11 follows from Sections 4 and 6. In fp16 and bf16, ViT-S/16 and ViT-S+/16 are above 1 only at 224 px and batch size 1 (1.355 to 1.475), where the fixed cost of each <code>torch-mps</code> forward pass counts most. At larger batches <code>torch.compile</code> wins (down to 0.801). For the large model sizes both backends reach the same GPU limit, and the verdicts split. In fp32, <code>mlx</code> is above 1 in 62 of 90 cells. In fp16 and bf16 it is above 1 in 78 of 216 cells. 36 of the 140 cells above 1 and 22 of the 166 cells not above 1 lie inside the noise.</p>
   <h3>9.3 The compile check</h3>
-  <pre><code># src/dinov3_apple/speedup.py, lines 411 to 444
+  <pre><code># src/dinov3_mlx/speedup.py, lines 411 to 444
 def compile_check(
     matrix_lines: list[dict], step3_lines: list[dict]
 ) -&gt; list[tuple[str, int, int, str]]:
@@ -1451,7 +1451,7 @@ def compile_check(
 
 <section id="lock">
   <h2>10 The GPU lock</h2>
-  <p>In Step 5, light jobs of other agents ran during timing runs (F14). The wait loop of Step 5 (Section 13 of <code>specs/05-all-sizes/verify.html</code>) protected only the agent that ran it. Step 6 makes the run rule code: every entry point takes the GPU lock. The entry points are <code>tests/conftest.py</code> (from <code>pytest_sessionstart</code> to <code>pytest_sessionfinish</code>) and <code>main</code> of <code>bench_speed.py</code>, <code>bench_mlx_port.py</code>, <code>benchmark.py</code>, <code>cross_check.py</code>, <code>make_reference.py</code> and <code>profile_block.py</code>. A light GPU job runs through the command line <code>uv run python -m dinov3_apple.gpu_lock -- &lt;command&gt;</code> (<code>CLAUDE.md</code>, run rules).</p>
+  <p>In Step 5, light jobs of other agents ran during timing runs (F14). The wait loop of Step 5 (Section 13 of <code>specs/05-all-sizes/verify.html</code>) protected only the agent that ran it. Step 6 makes the run rule code: every entry point takes the GPU lock. The entry points are <code>tests/conftest.py</code> (from <code>pytest_sessionstart</code> to <code>pytest_sessionfinish</code>) and <code>main</code> of <code>bench_speed.py</code>, <code>bench_mlx_port.py</code>, <code>benchmark.py</code>, <code>cross_check.py</code>, <code>make_reference.py</code> and <code>profile_block.py</code>. A light GPU job runs through the command line <code>uv run python -m dinov3_mlx.gpu_lock -- &lt;command&gt;</code> (<code>CLAUDE.md</code>, run rules).</p>
   <figure>
     <div class="fig"><svg viewBox="0 0 960 480" role="img" aria-labelledby="fig6-title" font-family="-apple-system, Helvetica Neue, Arial, sans-serif">
       <title id="fig6-title">The actions of heavy_job: registry entry, flock, wait for jobs outside the lock, hold, end</title>
@@ -1522,20 +1522,20 @@ def compile_check(
       <g font-size="11.5" fill="#111414">
         <text x="34" y="382"><tspan font-weight="600">other_heavy_jobs leaves out:</tspan> the own process and its ancestors (for example uv run); the processes of the own process group</text>
         <text x="34" y="400">(a shell pipeline); each registered process that still runs, its ancestors and its child processes at all depths. A dead registry entry counts as absent.</text>
-        <text x="34" y="422"><tspan font-weight="600">HEAVY_JOB_PATTERN:</tspan> [b]in/pytest | [s]cripts/bench | [c]ross_check\.py | [m]ake_reference\.py | [p]rofile_block\.py | [d]inov3_apple\.gpu_lock</text>
+        <text x="34" y="422"><tspan font-weight="600">HEAVY_JOB_PATTERN:</tspan> [b]in/pytest | [s]cripts/bench | [c]ross_check\.py | [m]ake_reference\.py | [p]rofile_block\.py | [d]inov3_mlx\.gpu_lock</text>
         <text x="34" y="444">macOS releases a flock when its process ends, so a crash leaves no stale lock. The lock file, the registry and the lock log lie outside the repo.</text>
       </g>
     </svg></div>
     <figcaption><b>Figure 6.</b> The actions of <code>heavy_job</code>. The flock comes first and sets the order of the lock-aware jobs. Only the holder of the flock waits for jobs outside the lock. A waiter in the registry never counts as a job outside the lock, so two waiters never wait for each other (T5). The holder writes its process id into <code>LOCK_ENV</code>, so its workers and its pytest children run at once (T4).</figcaption>
   </figure>
-  <pre><code># src/dinov3_apple/gpu_lock.py, lines 37 to 51
+  <pre><code># src/dinov3_mlx/gpu_lock.py, lines 37 to 51
 # The pattern of the wait loop of Step 5 plus the command line of this module. The brackets keep a
 # pgrep of the pattern from a match with its own command line.
 HEAVY_JOB_PATTERN = (
     r&quot;[b]in/pytest|[s]cripts/bench|[c]ross_check\.py|[m]ake_reference\.py|[p]rofile_block\.py&quot;
-    r&quot;|[d]inov3_apple\.gpu_lock&quot;
+    r&quot;|[d]inov3_mlx\.gpu_lock&quot;
 )
-LOCK_PATH = Path.home() / &quot;.cache&quot; / &quot;dinov3-apple&quot; / &quot;gpu.lock&quot;
+LOCK_PATH = Path.home() / &quot;.cache&quot; / &quot;dinov3-mlx&quot; / &quot;gpu.lock&quot;
 LOCK_REGISTRY = LOCK_PATH.parent / &quot;gpu-lock.d&quot;  # one file for each lock-aware process
 LOG_PATH = LOCK_PATH.parent / &quot;gpu-lock.log&quot;
 LOCK_ENV = &quot;DINOV3_GPU_LOCK&quot;  # the process id of the holder; its child processes inherit it
@@ -1545,10 +1545,10 @@ POLL_S = 20.0
 class GpuLockTimeoutError(TimeoutError):
     &quot;&quot;&quot;A wait for the GPU lock took longer than its time limit.&quot;&quot;&quot;</code></pre>
   <ul>
-    <li><b>The brackets in <code>HEAVY_JOB_PATTERN</code>.</b> <code>[b]in/pytest</code> matches "bin/pytest" but not its own text "[b]in/pytest". So a <code>pgrep</code> of the pattern does not find its own command line. The pattern is the pattern of the Step 5 wait loop plus <code>[d]inov3_apple\.gpu_lock</code>, the command line of light jobs.</li>
+    <li><b>The brackets in <code>HEAVY_JOB_PATTERN</code>.</b> <code>[b]in/pytest</code> matches "bin/pytest" but not its own text "[b]in/pytest". So a <code>pgrep</code> of the pattern does not find its own command line. The pattern is the pattern of the Step 5 wait loop plus <code>[d]inov3_mlx\.gpu_lock</code>, the command line of light jobs.</li>
     <li><b><code>LOCK_PATH</code></b> lies in the cache folder of the user, outside the repo. So all worktrees share one lock.</li>
   </ul>
-  <pre><code># src/dinov3_apple/gpu_lock.py, lines 117 to 144
+  <pre><code># src/dinov3_mlx/gpu_lock.py, lines 117 to 144
 def other_heavy_jobs(pattern: str = HEAVY_JOB_PATTERN, registry: Path = LOCK_REGISTRY) -&gt; list[str]:
     &quot;&quot;&quot;Return the command lines of the heavy jobs outside the GPU lock.
 
@@ -1582,7 +1582,7 @@ def other_heavy_jobs(pattern: str = HEAVY_JOB_PATTERN, registry: Path = LOCK_REG
     <li><b>Why leave out the registered processes.</b> Two lock-aware waiters both match the pattern. If each waited for all matching processes before the flock, they would wait for each other for ever. The registry marks them as lock-aware; the flock sets their order.</li>
     <li><b>Why leave out the own process group (line 143).</b> A shell pipeline such as <code>uv run pytest | tee log</code> starts its commands in one process group. They are not ancestors of each other.</li>
   </ul>
-  <pre><code># src/dinov3_apple/gpu_lock.py, lines 201 to 245
+  <pre><code># src/dinov3_mlx/gpu_lock.py, lines 201 to 245
     if _holds_lock_of_ancestor():
         yield
         return
@@ -1634,7 +1634,7 @@ def other_heavy_jobs(pattern: str = HEAVY_JOB_PATTERN, registry: Path = LOCK_REG
     <li><b>Lines 230 to 234.</b> First the flock, then the wait for jobs outside the lock. The order is the reason why two waiters never block each other.</li>
     <li><b>Lines 237 to 245.</b> The <code>finally</code> blocks release the lock in reverse order, also after an error of the job.</li>
   </ul>
-  <pre><code># src/dinov3_apple/gpu_lock.py, lines 267 to 287
+  <pre><code># src/dinov3_mlx/gpu_lock.py, lines 267 to 287
     args = parser.parse_args(argv)
     command = args.command[1:] if args.command[:1] == [&quot;--&quot;] else args.command
     if not command:
@@ -1682,7 +1682,7 @@ def other_heavy_jobs(pattern: str = HEAVY_JOB_PATTERN, registry: Path = LOCK_REG
 <section id="sources">
   <h2>12 Sources</h2>
   <ul>
-    <li>Repo code at commit <code>2567808</code>: <code>src/dinov3_apple/bench.py</code>, <code>src/dinov3_apple/mlx_bench.py</code>, <code>src/dinov3_apple/speedup.py</code>, <code>src/dinov3_apple/gpu_lock.py</code>, <code>src/dinov3_apple/machine.py</code> (line 17), <code>src/dinov3_apple/torch_bench.py</code> (lines 131 to 133, 180), <code>src/dinov3_apple/flops.py</code> (<code>part_flops</code>, <code>image_flops</code>, <code>MODEL_SHAPES</code>), <code>src/dinov3_apple/mlx_model.py</code> (<code>patch_dtype</code>), <code>scripts/bench_speed.py</code> (<code>PAIR_KEYS</code>, <code>run_specs</code>, <code>main</code>, <code>_rotate</code>, <code>pairs_plan</code>), <code>scripts/speedup_table.py</code> (the sweep median), <code>scripts/baseline_table.py</code> (<code>load_footprint_peak</code>). Commit <code>11a45b1</code> for the code before the build.</li>
+    <li>Repo code at commit <code>2567808</code>: <code>src/dinov3_mlx/bench.py</code>, <code>src/dinov3_mlx/mlx_bench.py</code>, <code>src/dinov3_mlx/speedup.py</code>, <code>src/dinov3_mlx/gpu_lock.py</code>, <code>src/dinov3_mlx/machine.py</code> (line 17), <code>src/dinov3_mlx/torch_bench.py</code> (lines 131 to 133, 180), <code>src/dinov3_mlx/flops.py</code> (<code>part_flops</code>, <code>image_flops</code>, <code>MODEL_SHAPES</code>), <code>src/dinov3_mlx/mlx_model.py</code> (<code>patch_dtype</code>), <code>scripts/bench_speed.py</code> (<code>PAIR_KEYS</code>, <code>run_specs</code>, <code>main</code>, <code>_rotate</code>, <code>pairs_plan</code>), <code>scripts/speedup_table.py</code> (the sweep median), <code>scripts/baseline_table.py</code> (<code>load_footprint_peak</code>). Commit <code>11a45b1</code> for the code before the build.</li>
     <li>Tests: <code>tests/test_bench.py</code> (T12, T15 to T20), <code>tests/test_bench_speed.py</code> (T9, T21 to T24), <code>tests/test_speedup.py</code> (T25 to T28), <code>tests/test_gpu_lock.py</code> (T1 to T8), <code>tests/test_machine.py</code> (T31), <code>tests/test_mlx_environment.py</code> (T29, T30, T56, <code>test_change_worker_forms</code>, <code>test_profile_worker_parts</code>), <code>tests/test_mlx_parts.py</code> (<code>test_mlx_block_part</code>, T57 <code>test_mlx_sdpa_nax_fingerprint</code>), <code>tests/test_torch_bench.py</code>, <code>tests/test_baseline_table.py</code> (T13).</li>
     <li>Spec files: <code>specs/06-speed/plan.html</code> (Tables 1, 4, 5, 6, 8, 9, 11, 12, 13 and 15; Sections 2, 3.3 to 3.15 and 3.19), <code>specs/06-speed/explore.html</code> (Sections 2 and 2.4 with Tables 7 and 8; Section 2.5 with Figure 3 and Table 9; the probes sdpa, highres, batch-knee, torch-compile-offp, paired-noise, nax-record and nax-ab), <code>specs/05-all-sizes/verify.html</code> (F2, F14, F17).</li>
     <li>Result files: <code>results/speed-matrix.jsonl</code> (594 lines: the matrix, the gate J13, the follow-up groups), <code>results/speed-learn.jsonl</code> (22 lines: 768 and 1024 px, the token range, the Neural Accelerators on and off), <code>results/speed-sweep.jsonl</code> (22 lines), <code>results/speed-pairs.jsonl</code> (200 lines: two paired runs), <code>results/speed-profile-p1.jsonl</code> (4 lines), <code>results/speed-changes.jsonl</code> (99 lines: no C7), <code>results/speedup-table.md</code> (sections 1, 2, 4, 5, 7 and 8), <code>results/baseline-torch-mps.jsonl</code> (the Step 3 eager rows of Section 9.3), <code>results/block-profile-torch-mps.jsonl</code> (through Table 8 of the speedup table).</li>

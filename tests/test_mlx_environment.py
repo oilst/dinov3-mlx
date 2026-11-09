@@ -20,11 +20,11 @@ import pytest
 from fakes import fail_load
 from small_model import small_hf_model, small_mlx_model, small_pixels
 
-from dinov3_apple import mlx_weights, preprocess, reference, stored
-from dinov3_apple.bench import DTYPE_MODE_NAMES, BenchConfig, TimeBudget
-from dinov3_apple.hub import MODEL_IDS
-from dinov3_apple.mlx_model import MlxBackbone, run_mlx, tf32_enabled
-from dinov3_apple.outputs import NUM_PREFIX_TOKENS
+from dinov3_mlx import mlx_weights, preprocess, reference, stored
+from dinov3_mlx.bench import DTYPE_MODE_NAMES, BenchConfig, TimeBudget
+from dinov3_mlx.hub import MODEL_IDS
+from dinov3_mlx.mlx_model import MlxBackbone, run_mlx, tf32_enabled
+from dinov3_mlx.outputs import NUM_PREFIX_TOKENS
 
 pytestmark = pytest.mark.mlx
 
@@ -93,9 +93,9 @@ def test_mlx_modules_do_not_import_torch() -> None:
     """T54: no torch import in the mlx modules and in the Step 6 modules."""
     code = (
         "import sys\n"
-        "import dinov3_apple.stored, dinov3_apple.mlx_model, dinov3_apple.mlx_weights\n"
-        "import dinov3_apple.memory, dinov3_apple.mlx_preprocess, dinov3_apple.mlx_bench\n"
-        "import dinov3_apple.speedup, dinov3_apple.gpu_lock\n"
+        "import dinov3_mlx.stored, dinov3_mlx.mlx_model, dinov3_mlx.mlx_weights\n"
+        "import dinov3_mlx.memory, dinov3_mlx.mlx_preprocess, dinov3_mlx.mlx_bench\n"
+        "import dinov3_mlx.speedup, dinov3_mlx.gpu_lock\n"
         "print(sorted(name for name in ('torch', 'transformers') if name in sys.modules))\n"
     )
     result = subprocess.run(
@@ -210,7 +210,7 @@ def test_mlx_worker_raises_the_limit_to_the_bench_need(
     """T29 (D8): the worker loads with the load need as the MLX limit, then raises the limit to
     the benchmark need of mlx. The batch file name has the model slug, bits, the compile flag and
     the run id. The small model has the width 384 of ViT-S+/16 and needs no gated weights."""
-    from dinov3_apple import bench, mlx_bench
+    from dinov3_mlx import bench, mlx_bench
 
     if not stored.INPUTS_FILE.exists():
         pytest.skip(f"{stored.INPUTS_FILE.name} is missing. Run scripts/make_reference.py.")
@@ -247,7 +247,7 @@ def test_mlx_worker_records_versions_and_compile_fields(
 ) -> None:
     """T30 (D19, R38, R42): the compile trace, the architecture, the versions, the value of
     MLX_DISABLE_COMPILE, the MLX cache and the MLX peak of the timed batches."""
-    from dinov3_apple import bench, mlx_bench
+    from dinov3_mlx import bench, mlx_bench
 
     if not stored.INPUTS_FILE.exists():
         pytest.skip(f"{stored.INPUTS_FILE.name} is missing. Run scripts/make_reference.py.")
@@ -311,8 +311,8 @@ WORKER_UNTIL_THE_CHECK = """
 from typing import NoReturn
 
 import bench_mlx_port
-from dinov3_apple import mlx_weights
-from dinov3_apple.hub import WeightsNotFoundError
+from dinov3_mlx import mlx_weights
+from dinov3_mlx.hub import WeightsNotFoundError
 
 
 def stop(model_size: str) -> NoReturn:
@@ -356,13 +356,13 @@ def test_mlx_worker_memory_check_reaches_the_driver_log(
 
     monkeypatch.setattr(subprocess, "run", run)
     # The record must not reach memory-checks.log of the test session.
-    monkeypatch.setattr(logging.getLogger("dinov3_apple.memory"), "handlers", [])
+    monkeypatch.setattr(logging.getLogger("dinov3_mlx.memory"), "handlers", [])
     with caplog.at_level(logging.INFO):
         result = bench_mlx_port.run_worker(config, "mlx", False, tmp_path)
     assert json.loads(commands[0][-1])["bench_dir"] == str(tmp_path)
     assert result["status"] == "error"
     assert "stop after the memory check" in result["reason"]
-    records = [record for record in caplog.records if record.name == "dinov3_apple.memory"]
+    records = [record for record in caplog.records if record.name == "dinov3_mlx.memory"]
     assert len(records) == 1
     assert re.fullmatch(
         r"memory check: ViT-S/16 mlx fp32: needs 0\.0 GB, \d+\.\d GB available, ok",
@@ -371,7 +371,7 @@ def test_mlx_worker_memory_check_reaches_the_driver_log(
     assert start <= records[0].created <= end
     line = logging.Formatter(bench_mlx_port.LOG_FORMAT).format(records[0])
     assert re.fullmatch(
-        r"\d{4}-\d\d-\d\d \d\d:\d\d:\d\d,\d{3} dinov3_apple\.memory memory check: .+ ok", line
+        r"\d{4}-\d\d-\d\d \d\d:\d\d:\d\d,\d{3} dinov3_mlx\.memory memory check: .+ ok", line
     )
 
 
@@ -431,8 +431,8 @@ def test_bench_p2_worker_plan(
     )
     assert (config.side, config.batch_size, config.repeat) == (512, 8, 1)
     # The needs read the headers of ViT-H+/16. The test gives the count, so it reads no file.
-    monkeypatch.setattr("dinov3_apple.bench._parameter_count", lambda model_size: 840_592_640)
-    monkeypatch.setattr("dinov3_apple.mlx_weights.load_mlx_backbone", fail_load)
+    monkeypatch.setattr("dinov3_mlx.bench._parameter_count", lambda model_size: 840_592_640)
+    monkeypatch.setattr("dinov3_mlx.mlx_weights.load_mlx_backbone", fail_load)
     bench_mlx_port.dry_run(plan, "P2")
     lines = capsys.readouterr().out.strip().splitlines()
     workers = [line for line in lines if "ViT-H+/16" in line]
@@ -450,8 +450,8 @@ def test_bench_p2_worker_plan(
 def test_time_batch_mlx_gives_fp16_patches() -> None:
     """T56 (D13): in bf16-cast the frame embeddings are fp32 and the patch embeddings fp16; the
     values equal run_mlx cast to fp16. In fp32 both stay fp32."""
-    from dinov3_apple import mlx_bench
-    from dinov3_apple.mlx_model import compile_backbone
+    from dinov3_mlx import mlx_bench
+    from dinov3_mlx.mlx_model import compile_backbone
 
     model = small_mlx_model(small_hf_model(seed=0), "bf16-cast")
     batch = small_pixels((2, 3, 224, 224))
@@ -481,7 +481,7 @@ def test_change_worker_forms(
 ) -> None:
     """R56 and T22: the forms of one change run in one process and give the same tokens; each
     round gives one ratio. A small model, so the test needs no gated weights."""
-    from dinov3_apple import mlx_bench
+    from dinov3_mlx import mlx_bench
 
     if not stored.INPUTS_FILE.exists():
         pytest.skip(f"{stored.INPUTS_FILE.name} is missing. Run scripts/make_reference.py.")
@@ -498,8 +498,8 @@ def test_change_worker_forms(
 def test_profile_worker_parts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Table 12 of specs/06-speed/plan.html: the profile worker gives the host share, the 11
     parts of block 1, the kernel counts and the throughput at batch sizes 8 and 32."""
-    from dinov3_apple import mlx_bench
-    from dinov3_apple.flops import PART_NAMES
+    from dinov3_mlx import mlx_bench
+    from dinov3_mlx.flops import PART_NAMES
 
     if not stored.INPUTS_FILE.exists():
         pytest.skip(f"{stored.INPUTS_FILE.name} is missing. Run scripts/make_reference.py.")

@@ -30,10 +30,10 @@ from transformers.models.dinov3_vit.modeling_dinov3_vit import (
     DINOv3ViTRopePositionEmbedding,
 )
 
-from dinov3_apple.hub import parameter_count, weights_dir
-from dinov3_apple.memory import LOAD_RATIO, check_free_memory, check_run_rule, load_bytes
-from dinov3_apple.parity import TEST_IMAGES
-from dinov3_apple.stored import (
+from dinov3_mlx.hub import parameter_count, weights_dir
+from dinov3_mlx.memory import LOAD_RATIO, check_free_memory, check_run_rule, load_bytes
+from dinov3_mlx.parity import TEST_IMAGES
+from dinov3_mlx.stored import (
     HIDDEN_STATES_CONFIG,
     IMAGES_DIR,
     INPUTS_FILE,

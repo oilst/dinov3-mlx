@@ -1,6 +1,6 @@
 import numpy as np
 
-from dinov3_apple.outputs import NUM_PREFIX_TOKENS, split_tokens
+from dinov3_mlx.outputs import NUM_PREFIX_TOKENS, split_tokens
 
 
 def test_split_tokens_drops_register_tokens() -> None:

@@ -18,7 +18,7 @@ import torch.nn.functional as F
 from transformers import DINOv3ViTModel
 from transformers.models.dinov3_vit.modeling_dinov3_vit import DINOv3ViTLayer, apply_rotary_pos_emb
 
-from dinov3_apple.reference import DTYPE_MODES
+from dinov3_mlx.reference import DTYPE_MODES
 
 
 @dataclass(frozen=True)

@@ -22,7 +22,7 @@ IMAGES_DIR = Path(__file__).parents[1] / "tests" / "fixtures" / "images"
 COMMONS_API = "https://commons.wikimedia.org/w/api.php"
 COMMONS_PAGE = "https://commons.wikimedia.org/wiki/File:"
 # A generic User-Agent. It names the tool and no person.
-USER_AGENT = "dinov3-apple-test-images/0.1 (scripts/make_test_images.py)"
+USER_AGENT = "dinov3-mlx-test-images/0.1 (scripts/make_test_images.py)"
 LONG_SIDE = 1024
 JPEG_QUALITY = 92
 MAX_TOTAL_BYTES = 1_000_000

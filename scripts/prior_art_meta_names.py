@@ -8,10 +8,10 @@ convert_meta_checkpoint.py backwards, one fused qkv matmul with a zero k bias, a
 embedding weight in the OHWI layout of the MLX Conv2d. The RoPE periods and the k-bias mask are
 not in the file; the port worker keeps the values of the port for them.
 
-Output: ~/.cache/dinov3-apple/prior-art/weights/ours-meta-names/<slug>.safetensors.
+Output: ~/.cache/dinov3-mlx/prior-art/weights/ours-meta-names/<slug>.safetensors.
 
 Usage:
-    uv run python -m dinov3_apple.gpu_lock -- uv run python scripts/prior_art_meta_names.py ViT-H+/16
+    uv run python -m dinov3_mlx.gpu_lock -- uv run python scripts/prior_art_meta_names.py ViT-H+/16
 """
 
 import argparse
@@ -22,9 +22,9 @@ import numpy as np
 from safetensors import safe_open
 from safetensors.numpy import save_file
 
-from dinov3_apple.hub import weights_dir
-from dinov3_apple.prior_art import PRIOR_ART_DIR
-from dinov3_apple.stored import model_slug
+from dinov3_mlx.hub import weights_dir
+from dinov3_mlx.prior_art import PRIOR_ART_DIR
+from dinov3_mlx.stored import model_slug
 
 OUT_DIR = PRIOR_ART_DIR / "weights" / "ours-meta-names"
 # The Hugging Face names (without "model.") to the Meta names: KEY_RENAMES of

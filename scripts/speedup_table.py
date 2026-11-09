@@ -1,7 +1,7 @@
 """Write results/speedup-table.md from the Step 6 result files (Table 13 of
 specs/06-speed/plan.html).
 
-The functions of src/dinov3_apple/speedup.py do the work: ADR 0004 on both sides, the pass rule
+The functions of src/dinov3_mlx/speedup.py do the work: ADR 0004 on both sides, the pass rule
 of D21 and the compile check. A reader of paired lines keys each line with its backend.
 
 Usage:
@@ -17,10 +17,10 @@ from pathlib import Path
 
 import numpy as np
 
-from dinov3_apple.bench import DTYPE_MODE_NAMES
-from dinov3_apple.flops import PART_NAMES
-from dinov3_apple.hub import MODEL_IDS
-from dinov3_apple.speedup import (
+from dinov3_mlx.bench import DTYPE_MODE_NAMES
+from dinov3_mlx.flops import PART_NAMES
+from dinov3_mlx.hub import MODEL_IDS
+from dinov3_mlx.speedup import (
     NOISE,
     autocast_over_cast,
     compile_check,

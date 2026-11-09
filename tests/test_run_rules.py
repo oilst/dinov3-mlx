@@ -13,10 +13,10 @@ import pytest
 from fakes import VIT7B16_PARAMETER_COUNT, fail_if_called
 from parity_checks import check_finite, run_rule_skip
 
-from dinov3_apple.hub import MODEL_IDS
-from dinov3_apple.memory import InsufficientMemoryError, RunRuleError
-from dinov3_apple.parity import EXPECTED_FP16_OVERFLOW, FP16_OVERFLOW, THRESHOLDS
-from dinov3_apple.reference import load_torch_backbone
+from dinov3_mlx.hub import MODEL_IDS
+from dinov3_mlx.memory import InsufficientMemoryError, RunRuleError
+from dinov3_mlx.parity import EXPECTED_FP16_OVERFLOW, FP16_OVERFLOW, THRESHOLDS
+from dinov3_mlx.reference import load_torch_backbone
 
 # The torch dtype modes with fp32 weights: the run rule refuses ViT-7B/16 in each of them.
 FP32_WEIGHT_MODES = ["fp32", "fp16-autocast", "bf16-autocast"]
@@ -30,22 +30,20 @@ def test_load_torch_backbone_refuses_7b_fp32_weights(
     """T11: ViT-7B/16 with fp32 weights stops before the memory check; bf16-cast passes the guard
     and stops at the memory check."""
     # The lines of a monkeypatched memory check must not reach memory-checks.log of the session.
-    monkeypatch.setattr(logging.getLogger("dinov3_apple.memory"), "handlers", [])
-    monkeypatch.setattr("dinov3_apple.reference.parameter_count", fail_if_called("parameter_count"))
+    monkeypatch.setattr(logging.getLogger("dinov3_mlx.memory"), "handlers", [])
+    monkeypatch.setattr("dinov3_mlx.reference.parameter_count", fail_if_called("parameter_count"))
+    monkeypatch.setattr("dinov3_mlx.memory.available_memory_bytes", fail_if_called("memory check"))
     monkeypatch.setattr(
-        "dinov3_apple.memory.available_memory_bytes", fail_if_called("memory check")
-    )
-    monkeypatch.setattr(
-        "dinov3_apple.reference.DINOv3ViTModel.from_pretrained", fail_if_called("from_pretrained")
+        "dinov3_mlx.reference.DINOv3ViTModel.from_pretrained", fail_if_called("from_pretrained")
     )
     if dtype_mode in FP32_WEIGHT_MODES:
         with pytest.raises(RunRuleError, match="ViT-7B/16"):
             load_torch_backbone("ViT-7B/16", device, dtype_mode)
         return
     monkeypatch.setattr(
-        "dinov3_apple.reference.parameter_count", lambda model_size: VIT7B16_PARAMETER_COUNT
+        "dinov3_mlx.reference.parameter_count", lambda model_size: VIT7B16_PARAMETER_COUNT
     )
-    monkeypatch.setattr("dinov3_apple.memory.available_memory_bytes", lambda: 0)
+    monkeypatch.setattr("dinov3_mlx.memory.available_memory_bytes", lambda: 0)
     with pytest.raises(InsufficientMemoryError, match="needs 20.1 GB"):
         load_torch_backbone("ViT-7B/16", device, dtype_mode)
 
@@ -147,11 +145,9 @@ def test_backbone_slot_skips_a_run_rule_error(
 ) -> None:
     """T15: the backbone slot skips ViT-7B/16 in fp32 on mlx with the run-rule reason, before any
     file read and without a memory-check line."""
-    monkeypatch.setattr(
-        "dinov3_apple.mlx_weights.parameter_count", fail_if_called("parameter_count")
-    )
-    monkeypatch.setattr("dinov3_apple.mlx_weights.weights_dir", fail_if_called("weights_dir"))
-    caplog.set_level(logging.INFO, logger="dinov3_apple.memory")
+    monkeypatch.setattr("dinov3_mlx.mlx_weights.parameter_count", fail_if_called("parameter_count"))
+    monkeypatch.setattr("dinov3_mlx.mlx_weights.weights_dir", fail_if_called("weights_dir"))
+    caplog.set_level(logging.INFO, logger="dinov3_mlx.memory")
     with pytest.raises(pytest.skip.Exception, match="CLAUDE.md run rules"):
         backbone(model_size, "mlx", dtype_mode)
-    assert [r for r in caplog.records if r.name == "dinov3_apple.memory"] == []
+    assert [r for r in caplog.records if r.name == "dinov3_mlx.memory"] == []

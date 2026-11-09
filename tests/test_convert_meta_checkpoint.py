@@ -14,7 +14,7 @@ from huggingface_hub import try_to_load_from_cache
 from safetensors import safe_open
 from under_test import SLOW
 
-from dinov3_apple.hub import MODEL_IDS
+from dinov3_mlx.hub import MODEL_IDS
 
 
 def test_convert_state_dict_splits_qkv_and_renames_keys() -> None:

@@ -12,8 +12,8 @@ from pathlib import Path
 
 import pytest
 
-from dinov3_apple import bench
-from dinov3_apple.bench import DTYPE_MODE_NAMES
+from dinov3_mlx import bench
+from dinov3_mlx.bench import DTYPE_MODE_NAMES
 
 REPO_ROOT = Path(__file__).parents[1]
 # The parameter counts of the safetensors headers, with the mask token.
@@ -165,7 +165,7 @@ def test_pairs_plan_rotates_five_rounds(counts: None) -> None:
 DRY_RUN = """
 import sys
 import bench_speed
-from dinov3_apple import bench
+from dinov3_mlx import bench
 
 bench._parameter_count = {counts}.__getitem__
 for argv in {commands}:
@@ -210,7 +210,7 @@ def test_bench_speed_dry_run_imports_no_backend() -> None:
     assert lines[-1] == "[]"
     totals = [int(line.split()[0]) for line in lines if line.endswith(" workers")]
     assert totals == [98, 576, 100, 22, 22, 2, 1]
-    code = "import sys, dinov3_apple.mlx_bench; print('mlx.core' in sys.modules)"
+    code = "import sys, dinov3_mlx.mlx_bench; print('mlx.core' in sys.modules)"
     result = subprocess.run(
         [sys.executable, "-c", code], check=False, capture_output=True, text=True
     )
@@ -285,8 +285,8 @@ WORKER_UNTIL_THE_CHECK = """
 from typing import NoReturn
 
 import bench_speed
-from dinov3_apple import mlx_weights, reference
-from dinov3_apple.hub import WeightsNotFoundError
+from dinov3_mlx import mlx_weights, reference
+from dinov3_mlx.hub import WeightsNotFoundError
 
 
 def stop(model_size: str) -> NoReturn:
@@ -327,9 +327,9 @@ def test_bench_speed_worker_memory_check_reaches_the_driver_log(
     label = "ViT-S/16 mlx fp" if backend == "mlx" else "ViT-S/16 torch-mps fp"
     assert "memory check: " + label in worker.stderr, worker.stderr
     monkeypatch.setattr(subprocess, "run", lambda command, **kwargs: worker)
-    monkeypatch.setattr(logging.getLogger("dinov3_apple.memory"), "handlers", [])
+    monkeypatch.setattr(logging.getLogger("dinov3_mlx.memory"), "handlers", [])
     with caplog.at_level(logging.INFO):
         result = bench_speed.run_worker(spec, tmp_path)
     assert result["status"] == "error"
-    records = [r for r in caplog.records if r.name == "dinov3_apple.memory"]
+    records = [r for r in caplog.records if r.name == "dinov3_mlx.memory"]
     assert len(records) == 1 and label in records[0].getMessage()

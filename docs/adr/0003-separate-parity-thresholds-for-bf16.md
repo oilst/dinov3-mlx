@@ -8,7 +8,7 @@ The parity tests use one threshold set for each dtype. fp16 and bf16 have differ
 | fp16, cast mode and autocast mode | ≥ 0.999 | ≥ 0.999 | ≥ 0.99 |
 | bf16, cast mode and autocast mode | ≥ 0.998 | ≥ 0.995 | ≥ 0.96 |
 
-The patch minimum is report only. The thresholds hold for every backend and model size (`THRESHOLDS` in `src/dinov3_apple/parity.py`).
+The patch minimum is report only. The thresholds hold for every backend and model size (`THRESHOLDS` in `src/dinov3_mlx/parity.py`).
 
 Step 2 first proposed one set for fp16 and bf16 together (0.999, 0.999 and 0.99). On `torch-mps`, 5 bf16 configurations failed it: the worst values were frame 0.998365, patch mean 0.995177 and patch 1st percentile 0.968878. A probe showed that `torch-cpu` in bf16 gives the same values, so the cause is bf16 arithmetic, not the backend. ViT-H+/16 at 224 px is sensitive to its input: in fp32, a rounding of only the input pixels to bf16 gives a patch 1st percentile of 0.9925. The bf16 set takes the worst measured values, rounded down. fp16 passes the first proposal with margin (worst frame 0.999986, patch 1st percentile 0.999781), so it keeps it.
 

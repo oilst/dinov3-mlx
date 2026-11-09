@@ -65,7 +65,7 @@ a { color: var(--accent); }
 
 <section id="why">
   <h2>1 Why this explainer</h2>
-  <p>The backbone takes normalized fp32 pixels with shape (B, 3, H, W). Up to Step 5, only <code>preprocess.py</code> made these pixels. It runs in torch, in fp64, on the CPU, one image at a time. An <code>mlx</code> user then needs torch only for the preprocessing. Step 6 adds a second path: <code>preprocess_frames</code> in <code>src/dinov3_apple/mlx_preprocess.py</code>. It takes a batch of uint8 RGB frames and makes the pixels on the GPU with MLX. It imports no torch (decision D12, option c of <code>specs/06-speed/explore.html</code>).</p>
+  <p>The backbone takes normalized fp32 pixels with shape (B, 3, H, W). Up to Step 5, only <code>preprocess.py</code> made these pixels. It runs in torch, in fp64, on the CPU, one image at a time. An <code>mlx</code> user then needs torch only for the preprocessing. Step 6 adds a second path: <code>preprocess_frames</code> in <code>src/dinov3_mlx/mlx_preprocess.py</code>. It takes a batch of uint8 RGB frames and makes the pixels on the GPU with MLX. It imports no torch (decision D12, option c of <code>specs/06-speed/explore.html</code>).</p>
   <p>The core of the new path is the separable resize: two matmuls with fixed weight matrices, one for the rows and one for the columns. NumPy computes the weights in fp64 with the antialias rule of torch. This page explains that rule, the code and the measurements. It also explains the fp16 patch embeddings of decision D13, because they are the other end of the same data path: D12 changes what enters the backbone, D13 changes what leaves it.</p>
   <p>This page covers the row <code>06-4-preprocessing.html</code> of Table 5 of <code>specs/06-speed/plan.html</code>: <code>resize_weights</code>, <code>preprocess_frames</code>, <code>IMAGENET_MEAN_VALUES</code> and <code>IMAGENET_STD_VALUES</code>. Table 1 lists them. It adds the private helper <code>_resize_matrices</code> and the new public function <code>patch_dtype</code> of <code>mlx_model.py</code>. Table 6 of the plan does not list <code>patch_dtype</code>. The build added it for the fp16 output. <a href="06-1-compiled-forward-pass.html">06-1</a> explains <code>mlx_embeddings</code> in the compiled forward pass. This page quotes it only for its output dtype.</p>
   <p>The line numbers are those of commit <code>2567808</code>. The last change to <code>mlx_preprocess.py</code>, <code>stored.py</code>, <code>preprocess.py</code> and <code>mlx_model.py</code> is commit <code>6ef6c81</code>, so both commits give the same lines. Each code quote is an exact copy, or the text marks it as "shortened".</p>
@@ -81,16 +81,16 @@ a { color: var(--accent); }
     <table>
       <thead><tr><th>Function or name</th><th class="num">Lines</th><th>What it does</th><th>Tests</th><th>Section</th></tr></thead>
       <tbody>
-        <tr class="group"><td colspan="5"><code>src/dinov3_apple/mlx_preprocess.py</code> (new)</td></tr>
+        <tr class="group"><td colspan="5"><code>src/dinov3_mlx/mlx_preprocess.py</code> (new)</td></tr>
         <tr><td><code>resize_weights(n_in, n_out)</code> (new)</td><td class="num">19–39</td><td>Returns the (n_out, n_in) fp64 weights of the bilinear antialiased resize of torch along one axis. Each row sums to 1. <code>functools.cache</code> keeps each result.</td><td>T51</td><td>3, 4.1</td></tr>
         <tr><td><code>_resize_matrices(h, w, size)</code> (new, private)</td><td class="num">42–47</td><td>Casts the two weight matrices of one size pair to fp32 MLX arrays: rows (H, h) and columns (w, W). <code>functools.cache</code> keeps them.</td><td>Through T52</td><td>4.2</td></tr>
         <tr><td><code>preprocess_frames(frames, size)</code> (new)</td><td class="num">50–73</td><td>Makes normalized fp32 pixels (B, 3, H, W) on the GPU from uint8 RGB frames (B, h, w, 3). Raises <code>TF32ModeError</code> when TF32 is on.</td><td>T52, T53, T54, W5, C6</td><td>2, 4.3, 6, 8</td></tr>
-        <tr class="group"><td colspan="5"><code>src/dinov3_apple/stored.py</code> (changed)</td></tr>
+        <tr class="group"><td colspan="5"><code>src/dinov3_mlx/stored.py</code> (changed)</td></tr>
         <tr><td><code>IMAGENET_MEAN_VALUES</code>, <code>IMAGENET_STD_VALUES</code> (new)</td><td class="num">27–30</td><td>The ImageNet mean and standard deviation as NumPy fp32 arrays. Both preprocessing paths read them.</td><td><code>test_imagenet_constants_have_one_source</code></td><td>4.4</td></tr>
-        <tr class="group"><td colspan="5"><code>src/dinov3_apple/preprocess.py</code> (changed)</td></tr>
+        <tr class="group"><td colspan="5"><code>src/dinov3_mlx/preprocess.py</code> (changed)</td></tr>
         <tr><td><code>IMAGENET_MEAN</code>, <code>IMAGENET_STD</code> (changed)</td><td class="num">31–32</td><td>The torch tensors of the CPU path. They now come from the NumPy constants of <code>stored.py</code>.</td><td><code>test_imagenet_constants_have_one_source</code></td><td>4.4</td></tr>
         <tr><td><code>preprocess(image, size)</code> (no change)</td><td class="num">42–57</td><td>The CPU path: torch, fp64, one image. It made the stored pixels in Step 2.</td><td>Step 2 tests</td><td>4.5</td></tr>
-        <tr class="group"><td colspan="5"><code>src/dinov3_apple/mlx_model.py</code> (changed)</td></tr>
+        <tr class="group"><td colspan="5"><code>src/dinov3_mlx/mlx_model.py</code> (changed)</td></tr>
         <tr><td><code>patch_dtype(dtype_mode, patch_fp32)</code> (new)</td><td class="num">583–587</td><td>Returns fp16 for the patch embeddings in the four fp16 and bf16 dtype modes, else fp32. <code>patch_fp32=True</code> gives fp32 in every dtype mode.</td><td>T55, T56, W4</td><td>7</td></tr>
         <tr><td><code>mlx_embeddings(tokens, dtype_mode, patch_fp32)</code> (new)</td><td class="num">590–611</td><td>Returns the frame embeddings in fp32 and the patch embeddings in the dtype of <code>patch_dtype</code>. <a href="06-1-compiled-forward-pass.html">06-1</a> explains it.</td><td>T55, W4</td><td>7</td></tr>
         <tr class="group"><td colspan="5"><code>scripts/bench_speed.py</code> (new)</td></tr>
@@ -341,7 +341,7 @@ a { color: var(--accent); }
   <h2>4 The code</h2>
 
   <h3>4.1 resize_weights</h3>
-  <pre><code># src/dinov3_apple/mlx_preprocess.py, lines 19 to 39
+  <pre><code># src/dinov3_mlx/mlx_preprocess.py, lines 19 to 39
 @cache
 def resize_weights(n_in: int, n_out: int) -&gt; np.ndarray:
     """Return the (n_out, n_in) fp64 weights of the bilinear antialiased resize of torch.
@@ -374,7 +374,7 @@ def resize_weights(n_in: int, n_out: int) -&gt; np.ndarray:
   </ul>
 
   <h3>4.2 _resize_matrices</h3>
-  <pre><code># src/dinov3_apple/mlx_preprocess.py, lines 42 to 47
+  <pre><code># src/dinov3_mlx/mlx_preprocess.py, lines 42 to 47
 @cache
 def _resize_matrices(h: int, w: int, size: tuple[int, int]) -&gt; tuple[mx.array, mx.array]:
     """The fp32 matrices of the rows (H, h) and of the columns (w, W) of one size pair."""
@@ -389,7 +389,7 @@ def _resize_matrices(h: int, w: int, size: tuple[int, int]) -&gt; tuple[mx.array
   </ul>
 
   <h3>4.3 preprocess_frames</h3>
-  <pre><code># src/dinov3_apple/mlx_preprocess.py, lines 50 to 73
+  <pre><code># src/dinov3_mlx/mlx_preprocess.py, lines 50 to 73
 def preprocess_frames(frames: np.ndarray, size: tuple[int, int]) -&gt; mx.array:
     """Return normalized fp32 pixels (B, 3, H, W) from uint8 RGB frames (B, h, w, 3).
 
@@ -425,13 +425,13 @@ def preprocess_frames(frames: np.ndarray, size: tuple[int, int]) -&gt; mx.array:
   </ul>
 
   <h3>4.4 The ImageNet constants: one source</h3>
-  <pre><code># src/dinov3_apple/stored.py, lines 27 to 30
+  <pre><code># src/dinov3_mlx/stored.py, lines 27 to 30
 # The ImageNet mean and standard deviation of the normalization, fp32. preprocess.py (torch) and
 # mlx_preprocess.py (MLX) take them from here (D12 of specs/06-speed/plan.html).
 IMAGENET_MEAN_VALUES = np.array([0.485, 0.456, 0.406], dtype=np.float32)
 IMAGENET_STD_VALUES = np.array([0.229, 0.224, 0.225], dtype=np.float32)
 
-# src/dinov3_apple/preprocess.py, lines 31 and 32
+# src/dinov3_mlx/preprocess.py, lines 31 and 32
 IMAGENET_MEAN = torch.from_numpy(IMAGENET_MEAN_VALUES.copy())
 IMAGENET_STD = torch.from_numpy(IMAGENET_STD_VALUES.copy())</code></pre>
   <ul>
@@ -442,7 +442,7 @@ IMAGENET_STD = torch.from_numpy(IMAGENET_STD_VALUES.copy())</code></pre>
   </ul>
 
   <h3>4.5 The CPU path for comparison</h3>
-  <pre><code># src/dinov3_apple/preprocess.py, lines 42 to 57, shortened: the docstring is left out
+  <pre><code># src/dinov3_mlx/preprocess.py, lines 42 to 57, shortened: the docstring is left out
 def preprocess(image: np.ndarray, size: tuple[int, int]) -&gt; torch.Tensor:
     pixels = torch.from_numpy(image).permute(2, 0, 1).unsqueeze(0).to(torch.float64) / 255.0
     resized = F.interpolate(pixels, size=size, mode="bilinear", antialias=True)
@@ -481,7 +481,7 @@ def preprocess(image: np.ndarray, size: tuple[int, int]) -&gt; torch.Tensor:
   <h2>6 Why TF32 must be off</h2>
   <p>MLX turns TF32 on by default. With TF32, an fp32 matmul rounds its inputs to a 10-bit mantissa. ADR 0005 gives the size of the effect: for one fp32 matmul against NumPy float64, the TF32 probe of Step 4 gave a largest difference of 7.8e-7 with TF32 off and 7.2e-4 with TF32 on. The T52 target for the pixels is 2e-6. A resize with TF32 on would miss it by far.</p>
   <p>ADR 0005 turns TF32 off for the fp32 dtype mode of the backbone. Step 6 adds a second reason. The two resize matmuls of line 70 run in fp32 in every dtype mode, because the pixels are always fp32: the backbone casts them later. So <code>preprocess_frames</code> refuses to run when TF32 is on, also in bf16-cast, where the backbone itself runs no fp32 matmul. T53 checks the refusal with a monkeypatched <code>tf32_enabled</code>.</p>
-  <pre><code># src/dinov3_apple/mlx_model.py, lines 64 to 81, shortened: the docstring is left out
+  <pre><code># src/dinov3_mlx/mlx_model.py, lines 64 to 81, shortened: the docstring is left out
 def tf32_enabled(environ: Mapping[str, str] | None = None) -&gt; bool:
     value = (os.environ if environ is None else environ).get("MLX_ENABLE_TF32")
     if value is None:
@@ -499,14 +499,14 @@ def tf32_enabled(environ: Mapping[str, str] | None = None) -&gt; bool:
 <section id="fp16">
   <h2>7 The fp16 patch embeddings</h2>
   <p>Decision D13 changes the output side. In the four fp16 and bf16 dtype modes, the patch embeddings reach the host in fp16. This page calls these four modes the half dtype modes. The frame embeddings stay fp32. The fp32 dtype mode gives fp32 for both. A caller who wants fp32 patch embeddings in a half dtype mode sets <code>patch_fp32=True</code>. So fp16 is the default of the half dtype modes, and fp32 is the opt-in (option B of Table 27 of <code>explore.html</code>; the recommendation of its Section 3.13 adds "a parameter for an fp32 output").</p>
-  <pre><code># src/dinov3_apple/mlx_model.py, lines 583 to 587
+  <pre><code># src/dinov3_mlx/mlx_model.py, lines 583 to 587
 def patch_dtype(dtype_mode: str, patch_fp32: bool = False) -&gt; mx.Dtype:
     """Return the host dtype of the patch embeddings of one dtype mode (D13 of
     specs/06-speed/plan.html): fp16 in the four fp16 and bf16 dtype modes, else fp32."""
     half = MLX_DTYPE_MODES[dtype_mode].matmul != mx.float32
     return mx.float16 if half and not patch_fp32 else mx.float32
 
-# src/dinov3_apple/mlx_model.py, lines 608 to 611 (the body of mlx_embeddings)
+# src/dinov3_mlx/mlx_model.py, lines 608 to 611 (the body of mlx_embeddings)
     frame = tokens[:, 0].astype(mx.float32)
     patches = tokens[:, NUM_PREFIX_TOKENS:].astype(patch_dtype(dtype_mode, patch_fp32))
     mx.eval(frame, patches)
@@ -701,7 +701,7 @@ def patch_dtype(dtype_mode: str, patch_fp32: bool = False) -&gt; mx.Dtype:
 <section id="sources">
   <h2>11 Sources</h2>
   <ul>
-    <li>Repo code, commit <code>2567808</code>: <code>src/dinov3_apple/mlx_preprocess.py</code> (lines 1 to 73), <code>src/dinov3_apple/stored.py</code> (lines 27 to 30), <code>src/dinov3_apple/preprocess.py</code> (lines 1 to 10 for the module docstring, 31 and 32, 42 to 57), <code>src/dinov3_apple/mlx_model.py</code> (<code>TF32ModeError</code> and <code>tf32_enabled</code>, lines 60 to 81; <code>patch_dtype</code>, lines 583 to 587; <code>mlx_embeddings</code>, lines 590 to 611), <code>src/dinov3_apple/mlx_bench.py</code> (<code>time_batch_mlx</code>, lines 70 to 101; <code>run_change_worker</code>, lines 398 to 401 for <code>frame_equal</code> and <code>patches_equal</code>), <code>scripts/bench_speed.py</code> (<code>learn_plan</code>, lines 375 to 384; <code>preprocess_plan</code>, lines 418 to 421; <code>worker_env</code>, lines 438 to 447; <code>_learn_batch</code>, lines 736 to 749; <code>worker_main</code>, lines 766 to 801; <code>run_preprocess_worker</code>, lines 805 to 858). Commit <code>11a45b1</code> for the constants of <code>preprocess.py</code> before Step 6.</li>
+    <li>Repo code, commit <code>2567808</code>: <code>src/dinov3_mlx/mlx_preprocess.py</code> (lines 1 to 73), <code>src/dinov3_mlx/stored.py</code> (lines 27 to 30), <code>src/dinov3_mlx/preprocess.py</code> (lines 1 to 10 for the module docstring, 31 and 32, 42 to 57), <code>src/dinov3_mlx/mlx_model.py</code> (<code>TF32ModeError</code> and <code>tf32_enabled</code>, lines 60 to 81; <code>patch_dtype</code>, lines 583 to 587; <code>mlx_embeddings</code>, lines 590 to 611), <code>src/dinov3_mlx/mlx_bench.py</code> (<code>time_batch_mlx</code>, lines 70 to 101; <code>run_change_worker</code>, lines 398 to 401 for <code>frame_equal</code> and <code>patches_equal</code>), <code>scripts/bench_speed.py</code> (<code>learn_plan</code>, lines 375 to 384; <code>preprocess_plan</code>, lines 418 to 421; <code>worker_env</code>, lines 438 to 447; <code>_learn_batch</code>, lines 736 to 749; <code>worker_main</code>, lines 766 to 801; <code>run_preprocess_worker</code>, lines 805 to 858). Commit <code>11a45b1</code> for the constants of <code>preprocess.py</code> before Step 6.</li>
     <li>Tests: <code>tests/test_mlx_preprocess.py</code> (T51 to T53, W5, <code>test_imagenet_constants_have_one_source</code>), <code>tests/test_mlx_parts.py</code> (T55), <code>tests/test_mlx_environment.py</code> (T54, T56), <code>tests/test_mlx_parity.py</code> (W4, <code>FP16_EXTRA_LOSS</code> and its comment).</li>
     <li>Spec files: <code>specs/06-speed/plan.html</code> (Table 5, Table 6, Section 3.6, Section 3.19, Section 3.20, Tables 18, 19, 21 and 23, AC6, AC14, AC15), <code>specs/06-speed/explore.html</code> (Section 2.7 with Table 13; Section 3.12 with Table 26, D12; Section 3.13 with Table 27, D13), <code>specs/02-reference/explore.html</code> (Section 3.1 with Table 3; Section 3.3 for the order of the Hugging Face image processor).</li>
     <li>Decision record: <code>docs/adr/0005-fp32-on-mlx-runs-with-tf32-off.md</code> (the TF32 probe values 7.8e-7 and 7.2e-4).</li>

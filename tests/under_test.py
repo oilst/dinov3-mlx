@@ -6,7 +6,7 @@ specs/05-all-sizes/explore.html).
 
 import os
 
-from dinov3_apple.hub import MODEL_IDS
+from dinov3_mlx.hub import MODEL_IDS
 
 DEFAULT_MODEL_SIZES = ["ViT-S/16", "ViT-B/16"]
 SLOW = os.environ.get("DINOV3_SLOW") == "1"

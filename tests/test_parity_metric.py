@@ -1,8 +1,8 @@
 import numpy as np
 import pytest
 
-from dinov3_apple.outputs import NUM_PREFIX_TOKENS
-from dinov3_apple.parity import THRESHOLDS, measure_parity
+from dinov3_mlx.outputs import NUM_PREFIX_TOKENS
+from dinov3_mlx.parity import THRESHOLDS, measure_parity
 
 
 def test_measure_parity_worked_example() -> None:

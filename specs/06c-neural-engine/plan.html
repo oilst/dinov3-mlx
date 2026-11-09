@@ -61,7 +61,7 @@ a { color: var(--accent); }
     <table>
       <thead><tr><th>File</th><th>Content</th><th>New or changed</th></tr></thead>
       <tbody>
-        <tr><td><code>src/dinov3_apple/coreml.py</code></td><td><code>patch_coremltools_cast</code> (the <code>_cast</code> patch), <code>ne_attention</code>, <code>residual_scale</code>, <code>rewrite_for_neural_engine</code>, <code>package_path</code>, <code>convert_backbone</code>, <code>load_package</code>, <code>run_coreml</code>, <code>compute_plan_report</code>. Imports coremltools inside the functions that need it</td><td>New</td></tr>
+        <tr><td><code>src/dinov3_mlx/coreml.py</code></td><td><code>patch_coremltools_cast</code> (the <code>_cast</code> patch), <code>ne_attention</code>, <code>residual_scale</code>, <code>rewrite_for_neural_engine</code>, <code>package_path</code>, <code>convert_backbone</code>, <code>load_package</code>, <code>run_coreml</code>, <code>compute_plan_report</code>. Imports coremltools inside the functions that need it</td><td>New</td></tr>
         <tr><td><code>scripts/bench_coreml.py</code></td><td>The driver: subcommands <code>convert</code>, <code>parity</code>, <code>matrix</code>, <code>pairs</code>, <code>streams</code>, <code>table</code>; the worker entry points <code>coreml-worker</code> and <code>stream-worker</code></td><td>New</td></tr>
         <tr><td><code>tests/test_coreml.py</code></td><td>T1 to T12 (Section 6). <code>pytest.importorskip("coremltools")</code>; the tests with gated weights need <code>DINOV3_SLOW=1</code>, as in <code>tests/test_prior_art.py</code></td><td>New</td></tr>
         <tr><td><code>results/coreml.jsonl</code>, <code>results/coreml-table.md</code></td><td>The result lines and the table of Step 6c</td><td>New</td></tr>
@@ -82,7 +82,7 @@ a { color: var(--accent); }
 
   <h3>3.3 Conversion and packages</h3>
   <p><code>convert_backbone(model_size, side, batch_size)</code>: the run rule, a memory check (the fp32 torch load plus 2 times the fp32 weights for the trace and the MIL program; ViT-H+/16 at 512 px batch size 8 reached a footprint of 6.37 GB), <code>load_torch_backbone(model_size, "cpu", "fp32")</code>, the rewrite, <code>torch.jit.trace</code> with a zero batch, <code>ct.convert</code> (ML Program, <code>compute_precision=ct.precision.FLOAT16</code>, <code>minimum_deployment_target=ct.target.macOS15</code>, input <code>pixels</code> fp32 (B, 3, H, W), output <code>tokens</code> fp32 (B, 5 + N, D)), save, then <code>ct.models.utils.compile_model</code> to an <code>.mlmodelc</code> next to it. One JSON line records the trace time, the conversion time, the save time, the compile time, the package size, the op counts and the lifetime peak of the process footprint.</p>
-  <p>The package path: <code>~/.cache/dinov3-apple/coreml/&lt;slug&gt;-&lt;side&gt;-b&lt;batch&gt;-ne-s256-r&lt;r&gt;-ct9.0.mlpackage</code>, for example <code>vits16-224-b8-ne-s256-r1-ct9.0.mlpackage</code>. A rewrite or a coremltools change gives a new name, so a stale package never serves a new configuration.</p>
+  <p>The package path: <code>~/.cache/dinov3-mlx/coreml/&lt;slug&gt;-&lt;side&gt;-b&lt;batch&gt;-ne-s256-r&lt;r&gt;-ct9.0.mlpackage</code>, for example <code>vits16-224-b8-ne-s256-r1-ct9.0.mlpackage</code>. A rewrite or a coremltools change gives a new name, so a stale package never serves a new configuration.</p>
   <div class="table-wrap">
     <table>
       <thead><tr><th>Use</th><th>Input resolutions</th><th>Batch sizes</th><th>Packages</th></tr></thead>
@@ -121,7 +121,7 @@ a { color: var(--accent); }
   <p><code>bench_coreml.py streams</code> starts two worker processes: a Core ML worker on CPU_AND_NE and an <code>mlx</code> worker with the compiled forward pass. Each loads and warms up, then writes a ready file and waits. When both files exist, the parent writes a start time 2 s ahead. Each worker counts its batches from the start time for 10 s and reports its throughput. The cases of one round: <code>ne</code> alone, <code>mlx</code> alone, both. The order rotates over 3 rounds. The <code>mlx</code> side runs the batch size of the configuration; the Neural Engine side runs the faster of batch size 1 and 8 of the same model size and input resolution in the matrix (probe: 540 against 452 img/s at 224 px). The stream ratio is (Neural Engine + <code>mlx</code>, both) / (<code>mlx</code> alone), with the median over the rounds. The probe gave 2,458 against 2,040 img/s at P1 (1.20).</p>
 
   <h3>3.7 Jobs and machine time</h3>
-  <p>All jobs run through the GPU lock, one group at a time: <code>uv run python -m dinov3_apple.gpu_lock -- uv run --group coreml python scripts/bench_coreml.py &lt;subcommand&gt;</code>. Each worker runs in its own subprocess after a memory check. The times scale from the probes and from Step 6 (486 workers in 2 h 58 min, about 22 s each).</p>
+  <p>All jobs run through the GPU lock, one group at a time: <code>uv run python -m dinov3_mlx.gpu_lock -- uv run --group coreml python scripts/bench_coreml.py &lt;subcommand&gt;</code>. Each worker runs in its own subprocess after a memory check. The times scale from the probes and from Step 6 (486 workers in 2 h 58 min, about 22 s each).</p>
   <div class="table-wrap">
     <table>
       <thead><tr><th>Job</th><th>Content</th><th>Workers</th><th>Basis of the estimate</th><th>Estimate</th></tr></thead>
@@ -150,7 +150,7 @@ a { color: var(--accent); }
         <rect x="196" y="20" width="170" height="52" rx="5" fill="#f5f8f7" stroke="#057379"/><text x="281" y="42" text-anchor="middle">rewrite_for_neural_engine</text><text x="281" y="60" text-anchor="middle">s = 256, r = 1 or 8</text>
         <rect x="396" y="20" width="150" height="52" rx="5" fill="#f5f8f7" stroke="#4a5655"/><text x="471" y="42" text-anchor="middle">torch.jit.trace</text><text x="471" y="60" text-anchor="middle">fixed shape</text>
         <rect x="576" y="20" width="170" height="52" rx="5" fill="#f5f8f7" stroke="#4a5655"/><text x="661" y="42" text-anchor="middle">ct.convert, fp16</text><text x="661" y="60" text-anchor="middle">_cast patch, macOS 15</text>
-        <rect x="776" y="20" width="170" height="52" rx="5" fill="#f5f8f7" stroke="#4a5655"/><text x="861" y="42" text-anchor="middle">.mlpackage, .mlmodelc</text><text x="861" y="60" text-anchor="middle">~/.cache/dinov3-apple/coreml</text>
+        <rect x="776" y="20" width="170" height="52" rx="5" fill="#f5f8f7" stroke="#4a5655"/><text x="861" y="42" text-anchor="middle">.mlpackage, .mlmodelc</text><text x="861" y="60" text-anchor="middle">~/.cache/dinov3-mlx/coreml</text>
         <line x1="166" y1="46" x2="194" y2="46" stroke="#111414" marker-end="url(#b)"/>
         <line x1="366" y1="46" x2="394" y2="46" stroke="#111414" marker-end="url(#b)"/>
         <line x1="546" y1="46" x2="574" y2="46" stroke="#111414" marker-end="url(#b)"/>

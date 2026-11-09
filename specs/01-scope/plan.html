@@ -56,7 +56,7 @@ a { color: var(--accent); }
 <section id="design">
   <h2>3 Design</h2>
   <h3>3.1 Python project</h3>
-  <p>We create the project with <code>uv init --lib</code>: a <code>src/</code> layout, the package <code>dinov3_apple</code> (a working name until the user decides R2), Python 3.12. uv installs Python 3.12, because this Mac has no Python 3.12 yet. We pin each dependency to one version with <code>==</code> and commit <code>uv.lock</code>.</p>
+  <p>We create the project with <code>uv init --lib</code>: a <code>src/</code> layout, the package <code>dinov3_mlx</code> (a working name until the user decides R2), Python 3.12. uv installs Python 3.12, because this Mac has no Python 3.12 yet. We pin each dependency to one version with <code>==</code> and commit <code>uv.lock</code>.</p>
   <div class="table-wrap">
     <table>
       <thead><tr><th>Package</th><th>Version</th><th>Group</th><th>Used for</th></tr></thead>
@@ -76,7 +76,7 @@ a { color: var(--accent); }
   <p>Later steps add packages (for example PEFT in Step 8). Pillow came in Step 1 for Section 3.3 when they need them.</p>
 
   <h3>3.2 Weights</h3>
-  <p>The module <code>dinov3_apple/hub.py</code> holds the six Hugging Face ids of <code>tech-stack.md</code> and two functions: one checks the free disk, one downloads one model size. The script <code>scripts/download_weights.py</code> calls them for each model size, one at a time, from the smallest to the largest. It downloads only <code>config.json</code>, the safetensors files and the safetensors index. The weights go into the Hugging Face cache, outside the repo.</p>
+  <p>The module <code>dinov3_mlx/hub.py</code> holds the six Hugging Face ids of <code>tech-stack.md</code> and two functions: one checks the free disk, one downloads one model size. The script <code>scripts/download_weights.py</code> calls them for each model size, one at a time, from the smallest to the largest. It downloads only <code>config.json</code>, the safetensors files and the safetensors index. The weights go into the Hugging Face cache, outside the repo.</p>
   <div class="table-wrap">
     <table>
       <thead><tr><th>Model size</th><th>Parameters</th><th>Files</th><th>Size (fp32)</th></tr></thead>
@@ -99,7 +99,7 @@ a { color: var(--accent); }
     <li>It checks the SHA-256 of the checkpoint against the 8 hex digits in the file name.</li>
     <li>It renames the keys, splits each <code>qkv</code> weight into q, k and v, and loads the result into <code>DINOv3ViTModel</code> with <code>strict=True</code>.</li>
     <li>It compares the first 5 values of the frame embedding and of the first patch embedding of one COCO image with the values of the Hugging Face converter (tolerance 1e-3).</li>
-    <li>It saves the folder to <code>~/.cache/dinov3-apple/converted/&lt;Hugging Face id&gt;</code>. It does not write into the Hugging Face cache, so that the real downloads stay clean.</li>
+    <li>It saves the folder to <code>~/.cache/dinov3-mlx/converted/&lt;Hugging Face id&gt;</code>. It does not write into the Hugging Face cache, so that the real downloads stay clean.</li>
   </ol>
   <p>When the access comes, test 9 compares each converted tensor with the downloaded tensor.</p>
 </section>
@@ -149,10 +149,10 @@ a { color: var(--accent); }
 <section id="code">
   <h2>5 Key code</h2>
   <pre><code># Create the project (run once).
-uv init --lib --name dinov3-apple --python 3.12
+uv init --lib --name dinov3-mlx --python 3.12
 uv add mlx==0.32.4 torch==2.15.0 transformers==5.22.1 safetensors==0.8.0 huggingface_hub==2.4.0 pillow==13.0.0
 uv add --dev pytest==9.2.0 ruff==0.17.4</code></pre>
-  <pre><code># src/dinov3_apple/hub.py (shape of the code, not final)
+  <pre><code># src/dinov3_mlx/hub.py (shape of the code, not final)
 MODEL_IDS: dict[str, str] = {
     "vits16": "facebook/dinov3-vits16-pretrain-lvd1689m",
     # ... the other five model sizes of tech-stack.md
@@ -220,7 +220,7 @@ def download(model_id: str) -&gt; Path:
     <li>The copyright holder in <code>LICENSE</code>: "Ueli Peter" or the company. The user decides.</li>
     <li>The token works since 2026-11-06. The access request to the six gated repos waits for the review of Meta.</li>
     <li>The legal check of ADR 0002 before Step 7. The user names who does it.</li>
-    <li>The repo name and the package name (R2). The working names are <code>dinov3-apple</code> and <code>dinov3_apple</code>. The user decides before Step 7.</li>
+    <li>The repo name and the package name (R2). The working names are <code>dinov3-mlx</code> and <code>dinov3_mlx</code>. The user decides before Step 7.</li>
   </ul>
 </section>
 </main>

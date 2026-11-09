@@ -16,7 +16,7 @@ MLX_ENABLE_TF32=0 (D7). The torch-mps worker is the eager worker of Step 3 with 
 watermarks 0.8 and 0.6.
 
 Each worker sends the memory check and the load peak of its model load to the driver, and the
-driver writes them to driver.log. Since Step 6 the mlx worker comes from dinov3_apple.mlx_bench:
+driver writes them to driver.log. Since Step 6 the mlx worker comes from dinov3_mlx.mlx_bench:
 the frame embeddings move to the host in fp32, the patch embeddings in fp16 in the four fp16 and
 bf16 dtype modes (D13 of specs/06-speed/plan.html). The driver takes the GPU lock.
 
@@ -44,7 +44,7 @@ from collections.abc import Mapping
 from dataclasses import asdict
 from pathlib import Path
 
-from dinov3_apple.bench import (
+from dinov3_mlx.bench import (
     DTYPE_MODE_NAMES,
     PRIORITY,
     BenchConfig,
@@ -52,19 +52,19 @@ from dinov3_apple.bench import (
     result_line,
     run_worker_subprocess,
 )
-from dinov3_apple.gpu_lock import heavy_job
-from dinov3_apple.machine import (
+from dinov3_mlx.gpu_lock import heavy_job
+from dinov3_mlx.machine import (
     MachineStateError,
     check_machine_state,
     read_machine_state,
 )
-from dinov3_apple.memory import (
+from dinov3_mlx.memory import (
     GB,
     InsufficientMemoryError,
     available_memory_bytes,
     send_checks_to,
 )
-from dinov3_apple.mlx_bench import (  # noqa: F401 (the tests of Steps 4 and 5 import them here)
+from dinov3_mlx.mlx_bench import (  # noqa: F401 (the tests of Steps 4 and 5 import them here)
     host_to_fp32,
     load_report_fields,
     output_transfer,
@@ -202,7 +202,7 @@ def worker_main(spec_json: str) -> None:
         if backend == "mlx":
             result = run_mlx_worker(config, bench_dir=bench_dir / "mlx")
         else:
-            from dinov3_apple.torch_bench import run_worker as run_torch_worker
+            from dinov3_mlx.torch_bench import run_worker as run_torch_worker
 
             result = run_torch_worker(config, bench_dir=bench_dir / "torch-mps")
             result |= {"mlx_peak_bytes": None, "mlx_memory_limit_bytes": None, "tf32": None}

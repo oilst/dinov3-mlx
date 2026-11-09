@@ -8,7 +8,7 @@ from pathlib import Path
 from huggingface_hub import HfApi
 from huggingface_hub.constants import HF_HUB_CACHE
 
-from dinov3_apple.hub import MODEL_IDS, WEIGHT_PATTERNS, check_free_disk, download
+from dinov3_mlx.hub import MODEL_IDS, WEIGHT_PATTERNS, check_free_disk, download
 
 KEEP_FREE_BYTES = 50 * 10**9
 

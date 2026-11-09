@@ -98,12 +98,12 @@ a { color: var(--accent); }
     <table>
       <thead><tr><th>File</th><th>New public names</th><th>Job</th></tr></thead>
       <tbody>
-        <tr><td><code>src/dinov3_apple/hub.py</code></td><td><code>CONVERTED_DIR</code>, <code>WeightsNotFoundError</code>, <code>weights_dir</code></td><td>Find the weights of one model size: Hugging Face cache first, converted folder second.</td></tr>
-        <tr><td><code>src/dinov3_apple/memory.py</code></td><td><code>InsufficientMemoryError</code>, <code>available_memory_bytes</code>, <code>check_free_memory</code></td><td>Read the free memory from <code>vm_stat</code> and stop a model load that does not fit. Step 3 reuses it.</td></tr>
-        <tr><td><code>src/dinov3_apple/preprocess.py</code></td><td><code>IMAGENET_MEAN</code>, <code>IMAGENET_STD</code>, <code>own_aspect_size</code>, <code>load_image</code>, <code>preprocess</code></td><td>Image file to normalized fp32 pixel tensor (D2).</td></tr>
-        <tr><td><code>src/dinov3_apple/outputs.py</code></td><td><code>NUM_PREFIX_TOKENS</code>, <code>split_tokens</code></td><td>Token sequence to frame embedding and patch embeddings. The register tokens are dropped.</td></tr>
-        <tr><td><code>src/dinov3_apple/parity.py</code></td><td><code>Parity</code>, <code>THRESHOLDS</code>, <code>measure_parity</code></td><td>Cosine parity of frame and patch embeddings. NumPy only, so <code>mlx</code> uses it too.</td></tr>
-        <tr><td><code>src/dinov3_apple/reference.py</code></td><td><code>DTYPE_MODES</code>, <code>configurations</code>, <code>load_torch_backbone</code>, <code>run_torch</code>, <code>read_inputs</code>, <code>read_reference</code></td><td>The configurations of Table 2, the <code>torch-cpu</code> and <code>torch-mps</code> runs in each dtype mode, and the reading of the stored files.</td></tr>
+        <tr><td><code>src/dinov3_mlx/hub.py</code></td><td><code>CONVERTED_DIR</code>, <code>WeightsNotFoundError</code>, <code>weights_dir</code></td><td>Find the weights of one model size: Hugging Face cache first, converted folder second.</td></tr>
+        <tr><td><code>src/dinov3_mlx/memory.py</code></td><td><code>InsufficientMemoryError</code>, <code>available_memory_bytes</code>, <code>check_free_memory</code></td><td>Read the free memory from <code>vm_stat</code> and stop a model load that does not fit. Step 3 reuses it.</td></tr>
+        <tr><td><code>src/dinov3_mlx/preprocess.py</code></td><td><code>IMAGENET_MEAN</code>, <code>IMAGENET_STD</code>, <code>own_aspect_size</code>, <code>load_image</code>, <code>preprocess</code></td><td>Image file to normalized fp32 pixel tensor (D2).</td></tr>
+        <tr><td><code>src/dinov3_mlx/outputs.py</code></td><td><code>NUM_PREFIX_TOKENS</code>, <code>split_tokens</code></td><td>Token sequence to frame embedding and patch embeddings. The register tokens are dropped.</td></tr>
+        <tr><td><code>src/dinov3_mlx/parity.py</code></td><td><code>Parity</code>, <code>THRESHOLDS</code>, <code>measure_parity</code></td><td>Cosine parity of frame and patch embeddings. NumPy only, so <code>mlx</code> uses it too.</td></tr>
+        <tr><td><code>src/dinov3_mlx/reference.py</code></td><td><code>DTYPE_MODES</code>, <code>configurations</code>, <code>load_torch_backbone</code>, <code>run_torch</code>, <code>read_inputs</code>, <code>read_reference</code></td><td>The configurations of Table 2, the <code>torch-cpu</code> and <code>torch-mps</code> runs in each dtype mode, and the reading of the stored files.</td></tr>
         <tr><td><code>scripts/make_test_images.py</code></td><td>&ndash;</td><td>Section 3.1.</td></tr>
         <tr><td><code>scripts/make_reference.py</code></td><td>&ndash;</td><td>Write <code>inputs.safetensors</code>, then one reference file for each model size, each model size in its own subprocess (Section 3.5).</td></tr>
         <tr><td><code>scripts/parity_table.py</code></td><td>&ndash;</td><td>Turn the parity results of the tests into <code>results/parity-torch-mps.md</code>.</td></tr>
@@ -250,7 +250,7 @@ a { color: var(--accent); }
 <section id="code">
   <h2>5 Key code</h2>
   <p>These snippets show the shape of the code. The build can change the details.</p>
-  <pre><code># src/dinov3_apple/hub.py
+  <pre><code># src/dinov3_mlx/hub.py
 def weights_dir(model_size: str) -&gt; Path:
     """Return the folder with config.json and the safetensors files of one model size.
 
@@ -267,7 +267,7 @@ def weights_dir(model_size: str) -&gt; Path:
     if (converted / "config.json").exists() and any(converted.glob("*.safetensors")):
         return converted
     raise WeightsNotFoundError(f"{model_size}: not in the Hugging Face cache or in {converted}")</code></pre>
-  <pre><code># src/dinov3_apple/preprocess.py
+  <pre><code># src/dinov3_mlx/preprocess.py
 def preprocess(image: np.ndarray, size: tuple[int, int]) -&gt; torch.Tensor:
     """Return a normalized (1, 3, H, W) fp32 tensor from an (h, w, 3) uint8 RGB image.
 
@@ -280,7 +280,7 @@ def preprocess(image: np.ndarray, size: tuple[int, int]) -&gt; torch.Tensor:
 
 def own_aspect_size(height: int, width: int, short_side: int = 224) -&gt; tuple[int, int]:
     """Keep the aspect ratio: the short side becomes short_side, the long side a multiple of 16."""</code></pre>
-  <pre><code># src/dinov3_apple/parity.py (NumPy only)
+  <pre><code># src/dinov3_mlx/parity.py (NumPy only)
 @dataclass(frozen=True)
 class Parity:
     frame: float

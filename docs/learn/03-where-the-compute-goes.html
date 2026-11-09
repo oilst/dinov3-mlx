@@ -74,7 +74,7 @@ a { color: var(--accent); }
     <li><b>Throughput against FLOPs.</b> The throughput of a configuration times the FLOPs of one image gives the reached TFLOP/s (Section 7). A low value shows a fixed cost, for example ViT-S/16 at batch size 1.</li>
   </ol>
   <p>Sections 5, 8 and 9 explain how Step 3 measures: the host-to-host time of one batch, the time budget, the process footprint, the memory need, the noise of this Mac and the rule for the baseline row. Section 10 annotates the code. Section 11 lists the surprises.</p>
-  <p>All measured values come from the committed results files <code>results/baseline-torch-mps.md</code> and <code>results/block-profile-torch-mps.md</code> and their JSON lines. The verifier measured them on the 94 W power adapter on 2026-11-06, from 22:43 to 01:00 local time (Section 14 of <code>specs/03-baseline/verify.html</code>). These results replace the first results, which ran on a 30 W adapter (Section 9.1). The machine is an Apple M5 Max with 64 GiB unified memory, macOS 26.5.2, torch 2.15.0 and transformers 5.22.1 with SDPA attention. The FLOP counts come from <code>src/dinov3_apple/flops.py</code>. For this page, nobody loaded a model or ran a benchmark: the numbers come from the committed files.</p>
+  <p>All measured values come from the committed results files <code>results/baseline-torch-mps.md</code> and <code>results/block-profile-torch-mps.md</code> and their JSON lines. The verifier measured them on the 94 W power adapter on 2026-11-06, from 22:43 to 01:00 local time (Section 14 of <code>specs/03-baseline/verify.html</code>). These results replace the first results, which ran on a 30 W adapter (Section 9.1). The machine is an Apple M5 Max with 64 GiB unified memory, macOS 26.5.2, torch 2.15.0 and transformers 5.22.1 with SDPA attention. The FLOP counts come from <code>src/dinov3_mlx/flops.py</code>. For this page, nobody loaded a model or ran a benchmark: the numbers come from the committed files.</p>
   <div class="table-wrap">
     <table>
       <thead><tr><th>Run</th><th>Model sizes</th><th>Dtype modes</th><th>Input resolutions</th><th>Batch sizes</th><th>Configurations</th><th>Result on 94 W</th></tr></thead>
@@ -92,7 +92,7 @@ a { color: var(--accent); }
 
 <section id="parts">
   <h2>2 The parts of one block</h2>
-  <p>A block has two branches. The attention branch mixes information between the tokens. The feed-forward branch transforms each token alone. Each branch starts with a layer norm and ends with LayerScale and a residual add. <code>block_parts</code> in <code>src/dinov3_apple/block_profile.py</code> splits block 1 of the Hugging Face backbone into 11 parts. It uses the Hugging Face modules and functions (Figure 1, Table 2). A test runs the 11 parts in order and compares the result with the output of the block. On <code>torch-cpu</code> in fp32 the largest difference is 0.0 for ViT-S/16 and ViT-S+/16 (AC11).</p>
+  <p>A block has two branches. The attention branch mixes information between the tokens. The feed-forward branch transforms each token alone. Each branch starts with a layer norm and ends with LayerScale and a residual add. <code>block_parts</code> in <code>src/dinov3_mlx/block_profile.py</code> splits block 1 of the Hugging Face backbone into 11 parts. It uses the Hugging Face modules and functions (Figure 1, Table 2). A test runs the 11 parts in order and compares the result with the output of the block. On <code>torch-cpu</code> in fp32 the largest difference is 0.0 for ViT-S/16 and ViT-S+/16 (AC11).</p>
   <figure>
     <div class="fig"><svg viewBox="0 0 960 380" role="img" aria-labelledby="fig1-title" font-family="-apple-system, Helvetica Neue, Arial, sans-serif">
       <title id="fig1-title">The 11 parts of one block in two rows: the attention branch and the feed-forward branch, with the residual connections</title>
@@ -299,7 +299,7 @@ k = torch.cat((k_prefix_tokens, k_patches), dim=-2)</code></pre>
     <li>Start one worker subprocess with the MPS watermarks 0.8 and 0.6.</li>
     <li>Write one JSON line with the result, the machine state and the versions.</li>
   </ol>
-  <p>The worker runs <code>run_worker</code> of <code>src/dinov3_apple/torch_bench.py</code>. It loads the backbone, times the first batch, checks the validity of the first output, runs the warm-up batches and the timed batches, and reads the process footprint. Only one worker runs at a time. So the lifetime maximum of the footprint belongs to one configuration, and no other job uses the GPU.</p>
+  <p>The worker runs <code>run_worker</code> of <code>src/dinov3_mlx/torch_bench.py</code>. It loads the backbone, times the first batch, checks the validity of the first output, runs the warm-up batches and the timed batches, and reads the process footprint. Only one worker runs at a time. So the lifetime maximum of the footprint belongs to one configuration, and no other job uses the GPU.</p>
 
   <h3>5.2 Host to host: <code>time_batch</code></h3>
   <p>A user of the backbone starts with pixels on the host and needs the output on the host. So <code>time_batch</code> times one batch from host to host (D3). The forward pass runs once for the two outputs. The copy of the frame embeddings and the copy of the patch embeddings have separate times, so one worker gives the throughput of both outputs.</p>
@@ -1146,7 +1146,7 @@ a = 2 bytes in cast mode, 4 bytes otherwise; activation factor 1.0</code></pre>
 
 <section id="code">
   <h2>10 The code of Step 3</h2>
-  <p>Step 3 adds six modules to <code>src/dinov3_apple/</code> and adds names to three modules of Step 2: <code>hub.py</code>, <code>memory.py</code> and <code>parity.py</code> (Section 10.7). <code>bench.py</code> and <code>flops.py</code> do not import torch, so the <code>mlx</code> harness of Step 6 can use them without the memory of torch in its process footprint. A test checks this (<code>test_bench_module_does_not_import_torch</code>).</p>
+  <p>Step 3 adds six modules to <code>src/dinov3_mlx/</code> and adds names to three modules of Step 2: <code>hub.py</code>, <code>memory.py</code> and <code>parity.py</code> (Section 10.7). <code>bench.py</code> and <code>flops.py</code> do not import torch, so the <code>mlx</code> harness of Step 6 can use them without the memory of torch in its process footprint. A test checks this (<code>test_bench_module_does_not_import_torch</code>).</p>
 
   <h3>10.1 <code>flops.py</code>: FLOPs and bytes, pure Python</h3>
   <ul>
@@ -1315,7 +1315,7 @@ if state.adapter_watts is not None and state.adapter_watts < MIN_ADAPTER_WATTS:
   <ul>
     <li>Repo files: <code>specs/03-baseline/explore.html</code>, <code>specs/03-baseline/plan.html</code> (Sections 2, 3 and Table 6), <code>specs/03-baseline/verify.html</code> (Sections 5, 6, 9, 13 and 14), <code>docs/adr/0004-baseline-row-median-of-runs-with-compile-rows.md</code>, <code>GLOSSARY.md</code>, <code>docs/learn/02-tokens-and-outputs.html</code>.</li>
     <li>Results: <code>results/baseline-torch-mps.md</code>, <code>results/baseline-torch-mps.jsonl</code>, <code>results/block-profile-torch-mps.md</code> and <code>results/block-profile-torch-mps.jsonl</code>, 94 W re-measurement of 2026-11-06.</li>
-    <li>Code: <code>src/dinov3_apple/flops.py</code>, <code>block_profile.py</code>, <code>bench.py</code>, <code>torch_bench.py</code>, <code>footprint.py</code>, <code>machine.py</code>, <code>hub.py</code>, <code>memory.py</code>, <code>parity.py</code>; <code>scripts/benchmark.py</code>, <code>scripts/profile_block.py</code>, <code>scripts/baseline_table.py</code>.</li>
+    <li>Code: <code>src/dinov3_mlx/flops.py</code>, <code>block_profile.py</code>, <code>bench.py</code>, <code>torch_bench.py</code>, <code>footprint.py</code>, <code>machine.py</code>, <code>hub.py</code>, <code>memory.py</code>, <code>parity.py</code>; <code>scripts/benchmark.py</code>, <code>scripts/profile_block.py</code>, <code>scripts/baseline_table.py</code>.</li>
     <li>Hugging Face transformers 5.22.1: <code>models/dinov3_vit/modeling_dinov3_vit.py</code> (<code>apply_rotary_pos_emb</code>, <code>rotate_half</code>), Apache-2.0. <a href="https://github.com/huggingface/transformers">github.com/huggingface/transformers</a>.</li>
     <li>DINOv3 paper: Siméoni et al., arXiv 2508.10104 (August 2025). <a href="https://arxiv.org/abs/2508.10104">arxiv.org/abs/2508.10104</a>.</li>
     <li>RoPE: Su et al., "RoFormer: Enhanced Transformer with Rotary Position Embedding", arXiv 2104.09864. <a href="https://arxiv.org/abs/2104.09864">arxiv.org/abs/2104.09864</a>.</li>

@@ -3,14 +3,14 @@
 
 The driver scripts/bench_prior_art.py starts this file in the Core ML venv with -I:
 
-    ~/.cache/dinov3-apple/prior-art/venv-coreml/bin/python -I prior_art_coreml_worker.py '<spec>'
+    ~/.cache/dinov3-mlx/prior-art/venv-coreml/bin/python -I prior_art_coreml_worker.py '<spec>'
 
 It imports only the standard library, NumPy, safetensors, coremltools and Pillow; coremltools and
 Pillow only inside the functions. It imports no module of the repo, so it repeats the small batch
 code of bench.py (keep_going). It reads the stored pixels (safetensors) and writes:
 
 - one safetensors file with the outputs of the 3 test images at batch size 1 (the driver computes
-  the parity with dinov3_apple.parity), and
+  the parity with dinov3_mlx.parity), and
 - one JSON line on stdout with the batch times.
 
 The spec (JSON) has the fields: package, input ("spec-array", "array" or "image"), units,

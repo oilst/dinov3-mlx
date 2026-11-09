@@ -79,7 +79,7 @@ a { color: var(--accent); }
   <ol>
     <li><b>Only D and FF change the shapes.</b> All model sizes use the same tensor names. ViT-S+/16, ViT-H+/16 and ViT-7B/16 add <code>layer.N.mlp.gate_proj.weight</code> (FF, D) and <code>layer.N.mlp.gate_proj.bias</code> (FF). ViT-7B/16 has no <code>q_proj.bias</code> and no <code>v_proj.bias</code>. Its head dimension is 128, so its RoPE has 32 frequencies, not 16 (D1).</li>
     <li><b>The SwiGLU formula.</b> <code>DINOv3ViTGatedMLP.forward</code> in transformers 5.22.1 computes <code>down_proj(act_fn(gate_proj(x)) * up_proj(x))</code>. Only <code>gate_proj</code> gets the activation. <code>act_fn</code> is SiLU: silu(z) = z · sigmoid(z), <code>nn.silu</code> in MLX. <code>gate_proj</code>, <code>up_proj</code> and <code>down_proj</code> each have a bias (D1).</li>
-    <li><b>The port stops at SwiGLU.</b> <code>Block</code> raises <code>NotImplementedError</code> for a gated config, and <code>MLP</code> raises it for <code>hidden_act</code> "silu" (<code>src/dinov3_apple/mlx_model.py</code>). <code>block_parameter_names</code> builds a probe block without a gate, so <code>map_key</code> raises <code>UnknownWeightError</code> for <code>gate_proj</code>. The hook "the key map already accepts mlp.gate_proj" in Table 5 of <code>specs/04-mlx-port/plan.html</code> is stale since the F4 fix (D1).</li>
+    <li><b>The port stops at SwiGLU.</b> <code>Block</code> raises <code>NotImplementedError</code> for a gated config, and <code>MLP</code> raises it for <code>hidden_act</code> "silu" (<code>src/dinov3_mlx/mlx_model.py</code>). <code>block_parameter_names</code> builds a probe block without a gate, so <code>map_key</code> raises <code>UnknownWeightError</code> for <code>gate_proj</code>. The hook "the key map already accepts mlp.gate_proj" in Table 5 of <code>specs/04-mlx-port/plan.html</code> is stale since the F4 fix (D1).</li>
     <li><b>One dtype for each mode.</b> <code>MLX_DTYPE_MODES</code> maps each mode to one dtype. It cannot express fp16 or bf16 matmuls with an fp32 residual stream (D2).</li>
     <li><b>The official precision is bf16 autocast with RoPE in fp32.</b> The official eval code runs <code>torch.autocast</code> with bf16 on fp32 weights. Every hub backbone sets <code>pos_embed_rope_dtype="fp32"</code>. The backbone path of the official code never uses fp16. The Hugging Face code casts the RoPE tables to the dtype of the pixels. So in cast mode on <code>torch-mps</code>, the rotation runs in fp16 or bf16 (D2).</li>
     <li><b>The MLX kernels.</b> The matmul kernels accumulate in fp32 and round once. The SDPA kernel computes the scores, the softmax and P · V in fp32 (<b>Note after Verify (2026-11-07):</b> measured on this Mac (Apple M5 Max, mlx 0.32.4), the half kernel does not compute in fp32 inside. For half inputs, head dimension 64 or 128 and more than 8 tokens, it uses the option <code>relaxed_precision</code>: about 11 bits of internal precision, no fp32 P · V. See finding F3 of <code>verify.html</code> and ADR 0007.) The layer norm accumulates in fp32 and rounds twice. <code>nn.silu</code> and <code>nn.gelu</code> round after each operation (D2).</li>
@@ -270,7 +270,7 @@ a { color: var(--accent); }
       <li>A fused gate and up matmul is a Step 6 question, with the fused q, k, v projections.</li>
     </ul>
   </div>
-  <pre><code># src/dinov3_apple/mlx_model.py (shape of the code, not final)
+  <pre><code># src/dinov3_mlx/mlx_model.py (shape of the code, not final)
 class SwiGLU(nn.Module):
     """The feed-forward network of ViT-S+/16, ViT-H+/16 and ViT-7B/16."""
 
@@ -359,7 +359,7 @@ self.mlp = SwiGLU(config) if config.gated else MLP(config)</code></pre>
       <li>ViT-7B/16 on <code>mlx</code> can run the four fp16 and bf16 dtype modes, also the autocast modes, because its weights are in half precision.</li>
     </ul>
   </div>
-  <pre><code># src/dinov3_apple/mlx_model.py (shape of the code, not final)
+  <pre><code># src/dinov3_mlx/mlx_model.py (shape of the code, not final)
 @dataclass(frozen=True)
 class MlxDtypeMode:
     matmul: mx.Dtype  # weights and inputs of the matmuls, SDPA
@@ -599,7 +599,7 @@ def check_finite(tokens: np.ndarray, model_size: str, dtype_mode: str, note: Cal
     </ol>
     <p>Option D stays a Step 6 question, together with the quantized weights.</p>
   </div>
-  <pre><code># src/dinov3_apple/mlx_weights.py (shape of the code, not final)
+  <pre><code># src/dinov3_mlx/mlx_weights.py (shape of the code, not final)
 pairs = []
 for name in list(tensors):
     array = tensors.pop(name)                       # drop the reference to the lazy fp32 source
@@ -811,7 +811,7 @@ mx.clear_cache()                                    # the freed fp32 buffers lea
     <li>Earlier specs: <code>specs/02-reference/verify.html</code> (Table 9, finding F2), <code>specs/03-baseline/verify.html</code>, <code>specs/04-mlx-port/explore.html</code> (Table 18), <code>specs/04-mlx-port/plan.html</code> (Table 5) and <code>specs/04-mlx-port/verify.html</code> (F1, F4, F8, F11).</li>
     <li>Explainers: <code>docs/learn/02-tokens-and-outputs.html</code> (Figure 2, Tables 2 and 5, Section 6) and <code>docs/learn/04-5-mlp.html</code>. ADR 0003, ADR 0005 and ADR 0006 in <code>docs/adr/</code>.</li>
     <li>Results: <code>results/parity-torch-mps.md</code>, <code>results/baseline-torch-mps.md</code>, <code>results/parity-mlx.md</code>, and the generated logs <code>tests/fixtures/generated/parity/torch-mps.jsonl</code>, <code>tests/fixtures/generated/parity/memory-checks.log</code> and <code>tests/fixtures/generated/reference/runs.jsonl</code> (git ignores them).</li>
-    <li>Code of this repo: <code>src/dinov3_apple/mlx_model.py</code>, <code>mlx_weights.py</code>, <code>reference.py</code>, <code>memory.py</code>, <code>bench.py</code>, <code>parity.py</code>, <code>hub.py</code>; <code>scripts/make_reference.py</code>; <code>tests/test_mlx_parity.py</code>, <code>test_torch_mps_parity.py</code>, <code>test_reference.py</code>, <code>parity_checks.py</code>, <code>under_test.py</code>, <code>small_model.py</code>, <code>conftest.py</code>.</li>
+    <li>Code of this repo: <code>src/dinov3_mlx/mlx_model.py</code>, <code>mlx_weights.py</code>, <code>reference.py</code>, <code>memory.py</code>, <code>bench.py</code>, <code>parity.py</code>, <code>hub.py</code>; <code>scripts/make_reference.py</code>; <code>tests/test_mlx_parity.py</code>, <code>test_torch_mps_parity.py</code>, <code>test_reference.py</code>, <code>parity_checks.py</code>, <code>under_test.py</code>, <code>small_model.py</code>, <code>conftest.py</code>.</li>
     <li>Hugging Face transformers 5.22.1, Apache-2.0: <a href="https://github.com/huggingface/transformers/blob/main/src/transformers/models/dinov3_vit/modeling_dinov3_vit.py">modeling_dinov3_vit.py</a> (<code>DINOv3ViTGatedMLP</code>, <code>DINOv3ViTLayer</code>, the RoPE tables), <a href="https://github.com/huggingface/transformers/blob/main/src/transformers/models/dinov3_vit/configuration_dinov3_vit.py">configuration_dinov3_vit.py</a>, <a href="https://github.com/huggingface/transformers/blob/main/src/transformers/activations.py">activations.py</a> and <a href="https://github.com/huggingface/transformers/blob/main/src/transformers/conversion_mapping.py">conversion_mapping.py</a>. We read release 5.22.1; the main branch can differ.</li>
     <li>Weights (gated repos), <code>config.json</code> and the safetensors headers only: <a href="https://huggingface.co/facebook/dinov3-vits16-pretrain-lvd1689m">dinov3-vits16</a>, <a href="https://huggingface.co/facebook/dinov3-vits16plus-pretrain-lvd1689m">dinov3-vits16plus</a>, <a href="https://huggingface.co/facebook/dinov3-vitb16-pretrain-lvd1689m">dinov3-vitb16</a>, <a href="https://huggingface.co/facebook/dinov3-vitl16-pretrain-lvd1689m">dinov3-vitl16</a>, <a href="https://huggingface.co/facebook/dinov3-vith16plus-pretrain-lvd1689m">dinov3-vith16plus</a> and <a href="https://huggingface.co/facebook/dinov3-vit7b16-pretrain-lvd1689m">dinov3-vit7b16</a> (with <code>model.safetensors.index.json</code>).</li>
     <li>Official DINOv3 code, read to check facts only (ADR 0002): <a href="https://github.com/facebookresearch/dinov3">github.com/facebookresearch/dinov3</a>, files <code>dinov3/hub/backbones.py</code> (<code>pos_embed_rope_dtype</code>), <code>dinov3/layers/rope_position_encoding.py</code>, <code>dinov3/eval/setup.py</code> (<code>get_autocast_dtype</code>) and the train configs (<code>param_dtype: bf16</code>).</li>

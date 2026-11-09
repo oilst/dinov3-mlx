@@ -11,18 +11,18 @@ import pytest
 from mlx.utils import tree_flatten
 from safetensors import safe_open
 
-from dinov3_apple.bench import bytes_per_weight, quantized_weight_bytes
-from dinov3_apple.hub import parameter_count, weights_dir
-from dinov3_apple.memory import LOAD_RATIO, RunRuleError, check_run_rule
-from dinov3_apple.mlx_model import (
+from dinov3_mlx.bench import bytes_per_weight, quantized_weight_bytes
+from dinov3_mlx.hub import parameter_count, weights_dir
+from dinov3_mlx.memory import LOAD_RATIO, RunRuleError, check_run_rule
+from dinov3_mlx.mlx_model import (
     MLX_DTYPE_MODES,
     MlxBackbone,
     linear_parameter_names,
     quantized_weight_names,
 )
-from dinov3_apple.mlx_weights import map_key
-from dinov3_apple.parity import EXPECTED_FP16_OVERFLOW, FP16_OVERFLOW, THRESHOLDS, Parity
-from dinov3_apple.stored import configurations
+from dinov3_mlx.mlx_weights import map_key
+from dinov3_mlx.parity import EXPECTED_FP16_OVERFLOW, FP16_OVERFLOW, THRESHOLDS, Parity
+from dinov3_mlx.stored import configurations
 
 CONFIG_IDS = [config.id for config in configurations()]
 # The batch of 8: the three images at 224 x 224 px, repeated.

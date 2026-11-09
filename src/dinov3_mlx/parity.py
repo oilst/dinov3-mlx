@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from dinov3_apple.outputs import NUM_PREFIX_TOKENS
+from dinov3_mlx.outputs import NUM_PREFIX_TOKENS
 
 # The test images in tests/fixtures/images/, in the order of a benchmark batch.
 TEST_IMAGES = ["iss-kibo-lab", "forest", "iss-conference"]

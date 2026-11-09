@@ -1,6 +1,6 @@
 # Baseline row: the fastest valid dtype mode, each with the median of its runs, compile rows included
 
-A speedup divides the throughput of `mlx` by the throughput of the baseline. The baseline row of one model size, input resolution, batch size, output and dtype comes from `baseline_rows` in `src/dinov3_apple/bench.py`:
+A speedup divides the throughput of `mlx` by the throughput of the baseline. The baseline row of one model size, input resolution, batch size, output and dtype comes from `baseline_rows` in `src/dinov3_mlx/bench.py`:
 
 1. Take the result lines of the dtype modes of that dtype: fp32 → fp32; fp16 → fp16-cast and fp16-autocast; bf16 → bf16-cast and bf16-autocast. Compile rows count as their own configuration.
 2. Drop the lines with status "skipped", "deferred" or "error", and the lines with `"valid": false`.

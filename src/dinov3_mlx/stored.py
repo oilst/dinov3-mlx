@@ -14,9 +14,9 @@ import numpy as np
 from PIL import Image
 from safetensors import safe_open
 
-from dinov3_apple.hub import MODEL_IDS
-from dinov3_apple.outputs import PATCH_SIZE
-from dinov3_apple.parity import TEST_IMAGES
+from dinov3_mlx.hub import MODEL_IDS
+from dinov3_mlx.outputs import PATCH_SIZE
+from dinov3_mlx.parity import TEST_IMAGES
 
 REPO_ROOT = Path(__file__).parents[2]
 IMAGES_DIR = REPO_ROOT / "tests" / "fixtures" / "images"

@@ -12,7 +12,7 @@ import subprocess
 from dataclasses import dataclass, field
 from importlib.metadata import PackageNotFoundError, version
 
-from dinov3_apple.memory import available_memory_bytes
+from dinov3_mlx.memory import available_memory_bytes
 
 VERSIONED_PACKAGES = ["torch", "transformers", "mlx", "mlx-metal", "numpy", "safetensors"]
 

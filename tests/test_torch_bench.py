@@ -3,11 +3,11 @@ from pathlib import Path
 import pytest
 import torch
 
-from dinov3_apple.bench import LINE_FIELDS, BenchConfig, TimeBudget, result_line
-from dinov3_apple.hub import WeightsNotFoundError
-from dinov3_apple.machine import read_machine_state
-from dinov3_apple.memory import InsufficientMemoryError
-from dinov3_apple.reference import INPUTS_FILE, reference_path
+from dinov3_mlx.bench import LINE_FIELDS, BenchConfig, TimeBudget, result_line
+from dinov3_mlx.hub import WeightsNotFoundError
+from dinov3_mlx.machine import read_machine_state
+from dinov3_mlx.memory import InsufficientMemoryError
+from dinov3_mlx.reference import INPUTS_FILE, reference_path
 
 pytestmark = pytest.mark.skipif(not torch.backends.mps.is_available(), reason="no torch-mps")
 
@@ -15,7 +15,7 @@ SHORT = TimeBudget(min_batches=3, min_seconds=0.0)
 
 
 def test_worker_writes_all_fields(tmp_path: Path) -> None:
-    from dinov3_apple.torch_bench import run_worker
+    from dinov3_mlx.torch_bench import run_worker
 
     if not INPUTS_FILE.exists() or not reference_path("ViT-S/16").exists():
         pytest.skip("stored pixels or the ViT-S/16 reference file are missing")
@@ -47,7 +47,7 @@ def test_worker_writes_all_fields(tmp_path: Path) -> None:
 
 
 def test_worker_refuses_fp32_weights_for_7b() -> None:
-    from dinov3_apple.torch_bench import run_worker
+    from dinov3_mlx.torch_bench import run_worker
 
     with pytest.raises(ValueError, match="ViT-7B/16"):
         run_worker(BenchConfig("B4", "ViT-7B/16", "fp16-autocast", 224, 1))

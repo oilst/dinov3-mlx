@@ -175,7 +175,7 @@ a { color: var(--accent); }
   </div>
   <p class="caption"><b>Table 1.</b> The weights of the MLP in ViT-S/16. <code>nn.Linear</code> of MLX keeps the layout (out, in) of the file, so the key map passes these tensors without a change (<a href="04-1-patch-embedding.html">04-1</a>). The hidden width F = 1,536 is 4 × the embedding dimension D = 384.</p>
   <p>The MLX code has the names and the structure of <code>DINOv3ViTMLP</code> of Hugging Face (lines 353 to 364 of <code>modeling_dinov3_vit.py</code>):</p>
-  <pre><code># src/dinov3_apple/mlx_model.py, lines 283 to 296
+  <pre><code># src/dinov3_mlx/mlx_model.py, lines 283 to 296
 class MLP(nn.Module):
     """The feed-forward network of ViT-S/16, ViT-B/16 and ViT-L/16: up_proj, exact GELU,
     down_proj."""
@@ -413,7 +413,7 @@ tanh form:         GELU(x) ≈ 0.5 · x · (1 + tanh(√(2/π) · (x + 0.044715 
     </svg></div>
     <figcaption><b>Figure 3.</b> The two run functions at 224 px. Top: <code>run_mlx</code> gives all tokens after the final layer norm, with the contract of <code>run_torch</code> of Step 2. <code>split_tokens</code> of Step 2 cuts the two outputs from them. Bottom: <code>run_mlx_hidden_states</code> runs image 0 only. It keeps the token sequence after the embeddings (state 0) and after each block. It has the contract of <code>run_torch_hidden_states</code>: L + 1 = 13 states, without the final layer norm, as <code>output_hidden_states</code> of Hugging Face.</figcaption>
   </figure>
-  <pre><code># src/dinov3_apple/mlx_model.py, lines 343 to 350 (MlxBackbone.__call__)
+  <pre><code># src/dinov3_mlx/mlx_model.py, lines 343 to 350 (MlxBackbone.__call__)
 x = self.embeddings(pixels)                                       # (B, 5 + N, D)
 p = self.config.patch_size
 cos, sin = self.rope(pixels.shape[2] // p, pixels.shape[3] // p)  # one table pair per grid (04-2)
@@ -596,7 +596,7 @@ return np.array(hidden)</code></pre>
   <p class="note">Step 5 built SwiGLU. <a href="05-1-swiglu.html">05-1 SwiGLU and one rounding</a> explains the class <code>SwiGLU</code>, the new methods <code>MLP.activation</code>, <code>MLP.hidden</code> and <code>Block.ff_hidden</code>, and the union of <code>block_parameter_names</code>. This section keeps the state of Step 4.</p>
   <p>ViT-S/16, ViT-B/16 and ViT-L/16 have the MLP of this page. ViT-S+/16, ViT-H+/16 and ViT-7B/16 have SwiGLU, a gated feed-forward network: <code>down_proj(silu(gate_proj(x)) * up_proj(x))</code> (<code>DINOv3ViTGatedMLP</code>, lines 367 to 380 of <code>modeling_dinov3_vit.py</code>). It has three matrices instead of two. For ViT-S+/16, <code>gate_proj</code> and <code>up_proj</code> have the shape (1536, 384), and <code>down_proj</code> has the shape (384, 1536). So at the same hidden width, SwiGLU has 1.5 times the FLOPs of the MLP.</p>
   <p>Step 4 stops at SwiGLU on purpose, with a message:</p>
-  <pre><code># src/dinov3_apple/mlx_model.py, lines 305 and 306 (Block.__init__)
+  <pre><code># src/dinov3_mlx/mlx_model.py, lines 305 and 306 (Block.__init__)
 if config.gated:                                   # use_gated_mlp of config.json
     raise NotImplementedError("SwiGLU comes in Step 5")</code></pre>
   <p>The hooks for Step 5 are in place. <code>MlxConfig</code> reads <code>use_gated_mlp</code> into <code>gated</code>, and it reads <code>hidden_act</code> (lines 87, 88, 113 and 114). <code>Block</code> builds its feed-forward network from the config. So Step 5 replaces the two lines above with a SwiGLU class that has the names <code>gate_proj</code>, <code>up_proj</code> and <code>down_proj</code>. Today the test <code>test_mlx_config_from_hf</code> (T5) checks the <code>NotImplementedError</code>.</p>
@@ -607,7 +607,7 @@ if config.gated:                                   # use_gated_mlp of config.jso
   <h2>9 The code of this page</h2>
   <div class="table-wrap">
     <table>
-      <thead><tr><th>Name in <code>src/dinov3_apple/mlx_model.py</code></th><th class="num">Lines</th><th>Job</th><th>Section</th></tr></thead>
+      <thead><tr><th>Name in <code>src/dinov3_mlx/mlx_model.py</code></th><th class="num">Lines</th><th>Job</th><th>Section</th></tr></thead>
       <tbody>
         <tr><td><code>MLX_DTYPE_MODES</code></td><td class="num">25 to 26</td><td>The dtype modes of <code>mlx</code>: only "fp32" in Step 4</td><td>5</td></tr>
         <tr><td><code>MLP</code></td><td class="num">283 to 296</td><td>up_proj, exact GELU, down_proj</td><td>2, 3</td></tr>
@@ -644,7 +644,7 @@ if config.gated:                                   # use_gated_mlp of config.jso
     <li>Hendrycks and Gimpel, "Gaussian Error Linear Units (GELUs)", arXiv 1606.08415 (2016).</li>
     <li>Shazeer, "GLU Variants Improve Transformer", arXiv 2002.05202 (2020): SwiGLU.</li>
     <li>DINOv3 paper: Siméoni et al., arXiv 2508.10104 (August 2025).</li>
-    <li>Repo files: <code>specs/04-mlx-port/plan.html</code> (Tables 1, 6, 7, 9 and 11), <code>specs/04-mlx-port/explore.html</code> (R15), <code>src/dinov3_apple/mlx_model.py</code>, <code>src/dinov3_apple/mlx_weights.py</code>, <code>tests/test_mlx_parts.py</code>, <code>tests/test_mlx_parity.py</code>, <code>tests/test_mlx_weights.py</code>, <code>results/parity-mlx.md</code>, <code>results/bench-mlx-port.jsonl</code>, <code>results/baseline-torch-mps.md</code>, <code>docs/learn/03-where-the-compute-goes.html</code> (Tables 4 and 7), and <code>tests/fixtures/generated/mlx/report.jsonl</code> (not in git).</li>
+    <li>Repo files: <code>specs/04-mlx-port/plan.html</code> (Tables 1, 6, 7, 9 and 11), <code>specs/04-mlx-port/explore.html</code> (R15), <code>src/dinov3_mlx/mlx_model.py</code>, <code>src/dinov3_mlx/mlx_weights.py</code>, <code>tests/test_mlx_parts.py</code>, <code>tests/test_mlx_parity.py</code>, <code>tests/test_mlx_weights.py</code>, <code>results/parity-mlx.md</code>, <code>results/bench-mlx-port.jsonl</code>, <code>results/baseline-torch-mps.md</code>, <code>docs/learn/03-where-the-compute-goes.html</code> (Tables 4 and 7), and <code>tests/fixtures/generated/mlx/report.jsonl</code> (not in git).</li>
     <li>NumPy computations of the agent for this page: the GELU curves of Figure 2, the FLOP counts of Table 3 and the estimate of Section 3.1.</li>
   </ul>
 </section>

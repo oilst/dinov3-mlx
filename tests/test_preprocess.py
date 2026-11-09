@@ -4,14 +4,14 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from dinov3_apple.preprocess import (
+from dinov3_mlx.preprocess import (
     IMAGENET_MEAN,
     IMAGENET_STD,
     load_image,
     own_aspect_size,
     preprocess,
 )
-from dinov3_apple.reference import INPUTS_FILE, Configuration, configurations, read_inputs
+from dinov3_mlx.reference import INPUTS_FILE, Configuration, configurations, read_inputs
 
 IMAGES_DIR = Path(__file__).parent / "fixtures" / "images"
 

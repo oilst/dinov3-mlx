@@ -63,7 +63,7 @@ a { color: var(--accent); }
     <table>
       <thead><tr><th>File</th><th>Environment</th><th>Content</th></tr></thead>
       <tbody>
-        <tr><td><code>src/dinov3_apple/prior_art.py</code> (new)</td><td>repo</td><td><code>PRIOR_ART_DIR</code>; <code>CANDIDATES</code> (C1 to C9: name, kind, license, commit, verdict, reason); <code>EXPORTS</code> (E1 to E7: candidate, model size, input resolution, precision, package path, input kind, outputs, family, our dtype mode); the port-change variants (Section 3.3); <code>export_parity</code>; the pair plans; <code>prior_art_rows</code> and <code>variant_rows</code></td></tr>
+        <tr><td><code>src/dinov3_mlx/prior_art.py</code> (new)</td><td>repo</td><td><code>PRIOR_ART_DIR</code>; <code>CANDIDATES</code> (C1 to C9: name, kind, license, commit, verdict, reason); <code>EXPORTS</code> (E1 to E7: candidate, model size, input resolution, precision, package path, input kind, outputs, family, our dtype mode); the port-change variants (Section 3.3); <code>export_parity</code>; the pair plans; <code>prior_art_rows</code> and <code>variant_rows</code></td></tr>
         <tr><td><code>scripts/bench_prior_art.py</code> (new)</td><td>repo</td><td>The driver: subcommands <code>coreml</code> (J1, J2), <code>variants</code> (J3, J4), <code>ports</code> (J5, gated), <code>table</code>; the worker entry points of ours and of the variants. One GPU lock in <code>main</code>; a memory check before each worker; <code>other_heavy_jobs_seen</code> before and after each worker; <code>--dry-run</code> prints the plan and imports no backend</td></tr>
         <tr><td><code>scripts/prior_art_coreml_worker.py</code> (new)</td><td><code>venv-coreml</code>, <code>-I</code></td><td>Loads one export, predicts the 3 test images, times the batches; writes one JSON line and one safetensors file of outputs. Imports only the standard library, NumPy, safetensors, coremltools and Pillow; coremltools and Pillow only inside functions</td></tr>
         <tr><td><code>scripts/prior_art_port_worker.py</code> (new)</td><td><code>venv-mlx</code>, <code>-I</code></td><td>The worker of C1 and C2 (gated, D2). Same output contract as the Core ML worker</td></tr>
@@ -74,7 +74,7 @@ a { color: var(--accent); }
     </table>
   </div>
   <p class="caption"><b>Table 1.</b> Files. No shared module changes: <code>prior_art.py</code> uses <code>mlx_model</code>, <code>mlx_weights</code>, <code>mlx_bench</code>, <code>bench</code>, <code>parity</code>, <code>speedup</code>, <code>stored</code>, <code>memory</code>, <code>gpu_lock</code> and <code>machine</code> through their public functions. Step 6c works on its own Core ML files.</p>
-  <p>Outside the repo, from the Explore (hand-over note <code>step6b-explore-handover.md</code>): <code>~/.cache/dinov3-apple/prior-art/</code> with <code>venv-coreml</code> (coremltools 9.0, NumPy 2.5.4, safetensors, Pillow 13.0.0), <code>venv-mlx</code> (mlx 0.32.4), the clones of C1 to C3 at their commits, the Core ML files under <code>coreml/</code>, the C1 weights under <code>weights/mlx-vision/</code>, and the probe scripts and logs under <code>probes/</code>. <code>PRIOR_ART_DIR</code> points there; the environment variable <code>DINOV3_PRIOR_ART_DIR</code> can change it.</p>
+  <p>Outside the repo, from the Explore (hand-over note <code>step6b-explore-handover.md</code>): <code>~/.cache/dinov3-mlx/prior-art/</code> with <code>venv-coreml</code> (coremltools 9.0, NumPy 2.5.4, safetensors, Pillow 13.0.0), <code>venv-mlx</code> (mlx 0.32.4), the clones of C1 to C3 at their commits, the Core ML files under <code>coreml/</code>, the C1 weights under <code>weights/mlx-vision/</code>, and the probe scripts and logs under <code>probes/</code>. <code>PRIOR_ART_DIR</code> points there; the environment variable <code>DINOV3_PRIOR_ART_DIR</code> can change it.</p>
 
   <h3>3.2 The exports and the cells</h3>
   <div class="table-wrap">
@@ -122,7 +122,7 @@ a { color: var(--accent); }
       </tbody>
     </table>
   </div>
-  <p class="caption"><b>Table 4.</b> Jobs. Every job starts through the GPU lock: <code>uv run python -m dinov3_apple.gpu_lock -- uv run python scripts/bench_prior_art.py ...</code>. A third-party worker starts as <code>&lt;venv&gt;/bin/python -I &lt;worker&gt; '&lt;spec JSON&gt;'</code> from the driver, inside the lock.</p>
+  <p class="caption"><b>Table 4.</b> Jobs. Every job starts through the GPU lock: <code>uv run python -m dinov3_mlx.gpu_lock -- uv run python scripts/bench_prior_art.py ...</code>. A third-party worker starts as <code>&lt;venv&gt;/bin/python -I &lt;worker&gt; '&lt;spec JSON&gt;'</code> from the driver, inside the lock.</p>
 
   <h3>3.5 Workers and result lines</h3>
   <ul>
@@ -213,7 +213,7 @@ def time_predict(model, inputs: list[dict], warm_up: dict, timed: dict) -&gt; li
     call = (lambda: model.predict(inputs[0])) if len(inputs) == 1 else (lambda: model.predict(inputs))
     run_phase(call, warm_up)  # the rules of keep_going in bench.py, copied: no repo import
     return run_phase(call, timed)</code></pre>
-  <pre><code># src/dinov3_apple/prior_art.py: the RoPE of C1 and C2 (V1), as the port computes it
+  <pre><code># src/dinov3_mlx/prior_art.py: the RoPE of C1 and C2 (V1), as the port computes it
 def port_rope_tables(grid_h: int, grid_w: int, head_dim: int, base: float) -&gt; tuple[mx.array, mx.array]:
     """Return (cos, sin), each (Hp · Wp, head_dim) in bf16, with the steps of the Meta-based ports.
 
@@ -241,7 +241,7 @@ class Bf16RotationAttention(Attention):
         q, k = (port_rotate(t.astype(mx.bfloat16), cos, sin).astype(t.dtype) for t in (q, k))
         a = mx.fast.scaled_dot_product_attention(q, k, v, scale=self.scale, mask=None)
         return self.output(a)</code></pre>
-  <pre><code># src/dinov3_apple/prior_art.py: one row of the Core ML pairs (D6)
+  <pre><code># src/dinov3_mlx/prior_art.py: one row of the Core ML pairs (D6)
 def cell_row(ours: list[dict], export: list[dict]) -&gt; PriorArtRow:
     by_round = {line["round"]: line for line in ours if line["status"] == "done"}
     ratios = [
@@ -269,7 +269,7 @@ def cell_row(ours: list[dict], export: list[dict]) -&gt; PriorArtRow:
     <li><code>test_unfused_attention_matches_sdpa</code> (T9): on the small model in fp32, V4 differs from V0 by at most 1e-5; in fp16-cast by at most the fp16 fault bound of Step 6 (0.03).</li>
     <li><code>test_bf16_rotation_rounds_prefix_tokens</code> (T10): <code>Bf16RotationAttention</code> on the small model differs from V0 by more than 0; the q of a prefix token is the bf16 value of the V0 q.</li>
     <li><code>test_eight_bit_pixels</code> (T11): the round trip moves each pixel by at most 0.5 / 255 / std of its channel; pixels on the 8-bit grid stay the same.</li>
-    <li><code>test_workers_are_standalone_and_safe</code> (T12): an AST scan of the two worker files: imports only from the standard library, numpy, safetensors, coremltools, PIL (Core ML worker) or mlx (port worker); no <code>dinov3_apple</code>; no <code>pickle</code>, <code>torch.load</code>, <code>subprocess</code> with a shell, <code>eval</code> or <code>exec</code>. <code>pyproject.toml</code> and <code>uv.lock</code> name no coremltools, mlxim or mlx-image.</li>
+    <li><code>test_workers_are_standalone_and_safe</code> (T12): an AST scan of the two worker files: imports only from the standard library, numpy, safetensors, coremltools, PIL (Core ML worker) or mlx (port worker); no <code>dinov3_mlx</code>; no <code>pickle</code>, <code>torch.load</code>, <code>subprocess</code> with a shell, <code>eval</code> or <code>exec</code>. <code>pyproject.toml</code> and <code>uv.lock</code> name no coremltools, mlxim or mlx-image.</li>
     <li><code>test_ports_subcommand_is_gated</code> (T13, default session): without <code>--allow-third-party-python</code>, <code>ports</code> writes 8 lines with the status "blocked" and the command, and starts no subprocess (a fake runner).</li>
     <li><code>test_driver_env_and_command</code> (T14): the worker of ours gets <code>MLX_ENABLE_TF32=0</code>; a third-party worker gets the venv interpreter and <code>-I</code>; a missing venv stops the driver before the lock.</li>
     <li><code>test_coreml_worker_end_to_end</code> (T15, slow, skip without <code>venv-coreml</code>): E1 at batch size 1 with a 1 s budget: status "done", 3 outputs, patch parity of the 3 test images ≥ 0.9999 (fp32 thresholds).</li>
@@ -334,7 +334,7 @@ def cell_row(ours: list[dict], export: list[dict]) -&gt; PriorArtRow:
 <section id="open">
   <h2>9 Open questions</h2>
   <ul>
-    <li><b>Q1</b> (the user decides): run the Python ports C1 and C2 (third-party code, with the rules of Section 3.8)? Yes: the user allows the run of <code>~/.cache/dinov3-apple/prior-art/venv-mlx/bin/python -I</code> with the port worker, then job J5 runs (about 35 min). No: the 8 port rows keep the status "blocked", and the variants V1 to V5 give the cost of the port changes.</li>
+    <li><b>Q1</b> (the user decides): run the Python ports C1 and C2 (third-party code, with the rules of Section 3.8)? Yes: the user allows the run of <code>~/.cache/dinov3-mlx/prior-art/venv-mlx/bin/python -I</code> with the port worker, then job J5 runs (about 35 min). No: the 8 port rows keep the status "blocked", and the variants V1 to V5 give the cost of the port changes.</li>
     <li>The Step 6c sessions get the Core ML facts of the Explore (Neural Engine parity of the FP16 exports, spec-array input) through the shared notes folder. Step 6c decides what to use.</li>
   </ul>
 </section>

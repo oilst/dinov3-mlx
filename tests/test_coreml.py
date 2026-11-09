@@ -24,11 +24,11 @@ from small_model import small_hf_model, small_pixels
 from transformers.models.dinov3_vit.modeling_dinov3_vit import eager_attention_forward
 from under_test import SLOW
 
-from dinov3_apple import coreml
-from dinov3_apple.machine import MachineState
-from dinov3_apple.memory import RunRuleError
-from dinov3_apple.parity import TEST_IMAGES, THRESHOLDS, measure_parity
-from dinov3_apple.stored import read_inputs, read_reference
+from dinov3_mlx import coreml
+from dinov3_mlx.machine import MachineState
+from dinov3_mlx.memory import RunRuleError
+from dinov3_mlx.parity import TEST_IMAGES, THRESHOLDS, measure_parity
+from dinov3_mlx.stored import read_inputs, read_reference
 
 slow = pytest.mark.skipif(not SLOW, reason="slow session: DINOV3_SLOW=1")
 ORIGINAL_CAST = torch_ops._cast
@@ -309,7 +309,7 @@ def test_disk_check_skips_a_worker(tmp_path: Path) -> None:
     """Below DISK_WORKER_BYTES free disk a worker does not start; its line says "disk"."""
     import bench_coreml
 
-    from dinov3_apple.memory import GB
+    from dinov3_mlx.memory import GB
 
     def runner(spec: dict, bench_dir: Path) -> dict:
         raise AssertionError("the worker must not start")
@@ -329,18 +329,18 @@ def test_line_reason_has_no_local_folders() -> None:
     home folder as ~ (a public repo)."""
     import bench_coreml
 
-    from dinov3_apple.stored import REPO_ROOT
+    from dinov3_mlx.stored import REPO_ROOT
 
     spec = bench_coreml.coreml_spec("convert", "convert", "ViT-S/16", 224, 1, rewrite=False)
     reason = (
         f"exit code 1: {REPO_ROOT}/.venv/lib/a.py:82: SyntaxWarning\n"
-        f"Error: Destination path '{Path.home()}/.cache/dinov3-apple/coreml/b.mlmodelc' exists"
+        f"Error: Destination path '{Path.home()}/.cache/dinov3-mlx/coreml/b.mlmodelc' exists"
     )
     machine = MachineState("AC Power", "off", "", 0, "Apple M5 Max", 0)
     line = bench_coreml.spec_line(spec, {"status": "error", "reason": reason}, 1, 2, machine)
     assert line["reason"] == (
         "exit code 1: .venv/lib/a.py:82: SyntaxWarning\n"
-        "Error: Destination path '~/.cache/dinov3-apple/coreml/b.mlmodelc' exists"
+        "Error: Destination path '~/.cache/dinov3-mlx/coreml/b.mlmodelc' exists"
     )
 
 
@@ -587,7 +587,7 @@ def _token_cosines(expected: np.ndarray, tokens: np.ndarray) -> np.ndarray:
 def test_embeddings_part_on_neural_engine(tmp_path: Path) -> None:
     """T16: the ne3 embeddings of ViT-S/16 at 448 px are right on CPU_AND_NE, with the concat on
     the Neural Engine. A new macOS or Core ML release that changes the concat fault shows here."""
-    from dinov3_apple.reference import load_torch_backbone
+    from dinov3_mlx.reference import load_torch_backbone
 
     embeddings = load_torch_backbone("ViT-S/16", "cpu", "fp32").embeddings
     shape = (1, 3, 448, 448)

@@ -15,9 +15,9 @@ import pytest
 from parity_checks import CONFIG_IDS, load_peak_lower_bound, load_peak_target, record_skip
 from under_test import SLOW
 
-from dinov3_apple.memory import GB
-from dinov3_apple.mlx_model import MlxBackbone, run_mlx
-from dinov3_apple.parity import THRESHOLDS, Parity, measure_parity
+from dinov3_mlx.memory import GB
+from dinov3_mlx.mlx_model import MlxBackbone, run_mlx
+from dinov3_mlx.parity import THRESHOLDS, Parity, measure_parity
 
 pytestmark = pytest.mark.mlx
 
@@ -121,7 +121,7 @@ def test_quantized_load_peak(
 ) -> None:
     """W3 (F1, Table 9): the load report of a quantized load: lower bound ≤ load peak ≤ target,
     cache 0 bytes, the need of Table 9."""
-    from dinov3_apple.mlx_weights import required_mlx_load_bytes
+    from dinov3_mlx.mlx_weights import required_mlx_load_bytes
 
     key = ("quantized-load", model_size, dtype_mode, "load")
     with record_skip(record, *key, backend=BACKEND):

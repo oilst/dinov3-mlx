@@ -7,7 +7,7 @@ specs/03-baseline/plan.html). Their cost is memory traffic, which part_bytes est
 
 from dataclasses import dataclass
 
-from dinov3_apple.outputs import NUM_PREFIX_TOKENS, PATCH_SIZE
+from dinov3_mlx.outputs import NUM_PREFIX_TOKENS, PATCH_SIZE
 
 # The parts of one block, in the order of the forward pass (Table 6 of the plan).
 PART_NAMES = [

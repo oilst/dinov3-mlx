@@ -18,17 +18,17 @@ import mlx.core as mx
 from mlx import nn
 from mlx.utils import tree_flatten, tree_map
 
-from dinov3_apple.bench import QUANTIZED_MODES, quantized_weight_bytes
-from dinov3_apple.footprint import read_footprint
-from dinov3_apple.hub import parameter_count, weights_dir
-from dinov3_apple.memory import (
+from dinov3_mlx.bench import QUANTIZED_MODES, quantized_weight_bytes
+from dinov3_mlx.footprint import read_footprint
+from dinov3_mlx.hub import parameter_count, weights_dir
+from dinov3_mlx.memory import (
     LOAD_RATIO,
     check_free_memory,
     check_run_rule,
     load_bytes,
     record_load_peak,
 )
-from dinov3_apple.mlx_model import (
+from dinov3_mlx.mlx_model import (
     MLX_DTYPE_MODES,
     Block,
     MlxBackbone,

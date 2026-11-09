@@ -26,11 +26,11 @@ import numpy as np
 import pytest
 import torch
 
-from dinov3_apple.gpu_lock import heavy_job
-from dinov3_apple.hub import MODEL_IDS, WeightsNotFoundError
-from dinov3_apple.memory import GB, InsufficientMemoryError, RunRuleError
-from dinov3_apple.parity import Parity
-from dinov3_apple.reference import (
+from dinov3_mlx.gpu_lock import heavy_job
+from dinov3_mlx.hub import MODEL_IDS, WeightsNotFoundError
+from dinov3_mlx.memory import GB, InsufficientMemoryError, RunRuleError
+from dinov3_mlx.parity import Parity
+from dinov3_mlx.reference import (
     INPUTS_FILE,
     load_torch_backbone,
     read_inputs,
@@ -117,8 +117,8 @@ class _BackboneSlot:
         self.forward: Callable[[Any], Any] | None = None
         self.handler = logging.FileHandler(MEMORY_LOG)
         self.handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
-        logging.getLogger("dinov3_apple.memory").addHandler(self.handler)
-        logging.getLogger("dinov3_apple.memory").setLevel(logging.INFO)
+        logging.getLogger("dinov3_mlx.memory").addHandler(self.handler)
+        logging.getLogger("dinov3_mlx.memory").setLevel(logging.INFO)
 
     def free(self) -> None:
         self.forward = None  # first the function, then the model (R36)
@@ -134,7 +134,7 @@ class _BackboneSlot:
             self.free()
             try:
                 if device == "mlx":
-                    from dinov3_apple.mlx_weights import load_mlx_backbone
+                    from dinov3_mlx.mlx_weights import load_mlx_backbone
 
                     if os.environ.get("DINOV3_MLX_DEVICE") == "cpu":
                         mx.set_default_device(mx.cpu)
@@ -159,7 +159,7 @@ class _BackboneSlot:
         if model is None or model is not self.model:
             raise ValueError("the model is not the model of the backbone slot")
         if self.forward is None:
-            from dinov3_apple.mlx_model import compile_backbone
+            from dinov3_mlx.mlx_model import compile_backbone
 
             self.forward = compile_backbone(model)
         return self.forward
@@ -195,7 +195,7 @@ def backbone_slot() -> Iterator[_BackboneSlot]:
     slot = _BackboneSlot()
     yield slot
     slot.free()
-    logging.getLogger("dinov3_apple.memory").removeHandler(slot.handler)
+    logging.getLogger("dinov3_mlx.memory").removeHandler(slot.handler)
 
 
 @pytest.fixture(scope="session")

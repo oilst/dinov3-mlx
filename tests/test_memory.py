@@ -3,7 +3,7 @@ import os
 
 import pytest
 
-from dinov3_apple.memory import InsufficientMemoryError, available_memory_bytes, check_free_memory
+from dinov3_mlx.memory import InsufficientMemoryError, available_memory_bytes, check_free_memory
 
 
 @pytest.fixture(autouse=True)
@@ -13,7 +13,7 @@ def _no_memory_log(monkeypatch: pytest.MonkeyPatch) -> None:
     The backbone slot can attach its file handler before these tests run (F12 of
     specs/05-all-sizes/verify.html).
     """
-    monkeypatch.setattr(logging.getLogger("dinov3_apple.memory"), "handlers", [])
+    monkeypatch.setattr(logging.getLogger("dinov3_mlx.memory"), "handlers", [])
 
 
 def test_available_memory_is_positive_and_below_total() -> None:

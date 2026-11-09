@@ -792,7 +792,7 @@ a { color: var(--accent); }
   <p>Twenty-three decisions have real options. Each subsection gives the question, the options with their trade-offs, the evidence and one recommendation. D1 to D6 are about the compiled forward pass. D7 to D11 are about the measurement. D12 and D13 are about the inputs and the outputs. D14 to D18 are about quantized weights. D19 is about the Neural Accelerators. D20 to D23 complete the measurement: the denominator of a speedup outside P1 and P2, the pass rule of a speedup, the key of a quantized row and the time budget. Section 5 lists the chosen options.</p>
 
   <h3>3.1 D1: The compiled forward pass</h3>
-  <p>Question: which part of <code>src/dinov3_apple/mlx_model.py</code> does Step 6 compile, how does the compiled function get the weights, and who holds it?</p>
+  <p>Question: which part of <code>src/dinov3_mlx/mlx_model.py</code> does Step 6 compile, how does the compiled function get the weights, and who holds it?</p>
   <div class="table-wrap">
     <table>
       <thead><tr><th>Option</th><th>What changes</th><th>For</th><th>Against</th></tr></thead>
@@ -1168,7 +1168,7 @@ a { color: var(--accent); }
       </tbody>
     </table>
   </div>
-  <p class="caption"><b>Table 36.</b> Trade-offs of D22. Evidence: <code>src/dinov3_apple/bench.py</code>.</p>
+  <p class="caption"><b>Table 36.</b> Trade-offs of D22. Evidence: <code>src/dinov3_mlx/bench.py</code>.</p>
   <div class="box">
     <p><b>Recommendation: Option a.</b> The ADR 0004 selection on the <code>mlx</code> side takes only unquantized rows. Each quantized row gets its own speedup row next to the unquantized row of the same dtype mode. The memory check and the MLX limit of a quantized worker use the quantized bytes (D8).</p>
   </div>
@@ -1353,7 +1353,7 @@ a { color: var(--accent); }
     <li>ADRs in <code>docs/adr/</code>: 0003 (thresholds), 0004 (baseline row), 0005 (TF32 off), 0006 (RoPE tables), 0007 (<code>mlx</code> autocast weights), 0008 (ViT-7B/16 fp32 weights).</li>
     <li>Earlier specs: <code>specs/03-baseline/verify.html</code> (B4); <code>specs/04-mlx-port/explore.html</code> (Tables 6 and 7) and <code>verify.html</code> (F1, F5, F6, F8, Section 5.2); <code>specs/05-all-sizes/explore.html</code> (structure, R30, Table 3) and <code>verify.html</code> (Tables 6 to 8, F1 to F3, F14, F15, F17, Section 12: V1, V2).</li>
     <li>Results: <code>results/baseline-torch-mps.md</code> and <code>.jsonl</code>, <code>results/bench-mlx-port.jsonl</code>, <code>results/bench-all-sizes.jsonl</code>, <code>results/parity-mlx.md</code>.</li>
-    <li>Code of this repo: <code>src/dinov3_apple/mlx_model.py</code> (<code>apply_rope</code>, <code>rotate_half</code>, <code>MlxBackbone.rope</code>, <code>run_mlx</code>), <code>mlx_weights.py</code>, <code>bench.py</code> (<code>BenchConfig</code>, <code>required_bench_bytes</code>, <code>bytes_per_weight</code>, <code>run_worker_subprocess</code>), <code>flops.py</code> (<code>image_flops</code>), <code>preprocess.py</code>, <code>parity.py</code>; <code>scripts/benchmark.py</code>, <code>scripts/bench_mlx_port.py</code>; <code>tests/conftest.py</code>.</li>
+    <li>Code of this repo: <code>src/dinov3_mlx/mlx_model.py</code> (<code>apply_rope</code>, <code>rotate_half</code>, <code>MlxBackbone.rope</code>, <code>run_mlx</code>), <code>mlx_weights.py</code>, <code>bench.py</code> (<code>BenchConfig</code>, <code>required_bench_bytes</code>, <code>bytes_per_weight</code>, <code>run_worker_subprocess</code>), <code>flops.py</code> (<code>image_flops</code>), <code>preprocess.py</code>, <code>parity.py</code>; <code>scripts/benchmark.py</code>, <code>scripts/bench_mlx_port.py</code>; <code>tests/conftest.py</code>.</li>
     <li>MLX 0.32.4, <a href="https://github.com/ml-explore/mlx">github.com/ml-explore/mlx</a>. Docs: <a href="https://ml-explore.github.io/mlx/build/html/usage/compile.html">Compilation</a>, <a href="https://ml-explore.github.io/mlx/build/html/python/_autosummary/mlx.core.compile.html">mlx.core.compile</a>, <a href="https://ml-explore.github.io/mlx/build/html/python/_autosummary/mlx.core.quantize.html">mlx.core.quantize</a>, <a href="https://ml-explore.github.io/mlx/build/html/python/_autosummary/mlx.core.fast.scaled_dot_product_attention.html">mlx.core.fast.scaled_dot_product_attention</a>. Files of the installed package: <code>mlx/nn/layers/activations.py</code>, <code>linear.py</code>, <code>quantized.py</code>, <code>normalization.py</code>, <code>base.py</code>; <code>steel/gemm/nax.h</code>, <code>steel/attn/nax.h</code>; the kernel names of <code>mlx.metallib</code>; the strings of <code>libmlx.dylib</code>.</li>
     <li>Probes on 2026-11-07, outside the repo: CPU probes of the research agents (graph exports, graph build time, stale trace, reference cycle, <code>shapeless</code>, RoPE forms, weight error of the quantization formats, safetensors header sizes) and 24 GPU probe runs on battery power plus 7 on AC power (Table 4, Section 2.9). Our computations: Figure 3 from <code>flops.image_flops</code>; the needs of Table 22 from <code>required_bench_bytes</code>; the times of Table 40 from the measured times of Steps 3 to 5.</li>
     <li>Siméoni et al., DINOv3, <a href="https://arxiv.org/abs/2508.10104">arXiv 2508.10104</a>.</li>

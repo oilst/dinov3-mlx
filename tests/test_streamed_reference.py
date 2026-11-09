@@ -19,10 +19,10 @@ from safetensors.torch import save_file
 from small_model import save_small_model, small_hf_model, small_pixels
 from transformers import DINOv3ViTModel
 
-import dinov3_apple.reference as torch_reference
-from dinov3_apple.hub import WeightsNotFoundError
-from dinov3_apple.memory import InsufficientMemoryError, load_bytes
-from dinov3_apple.reference import (
+import dinov3_mlx.reference as torch_reference
+from dinov3_mlx.hub import WeightsNotFoundError
+from dinov3_mlx.memory import InsufficientMemoryError, load_bytes
+from dinov3_mlx.reference import (
     STREAMED_ATTN_IMPLEMENTATION,
     OuterParts,
     ShardIndex,
@@ -48,8 +48,8 @@ VIT7B16_STREAMED_NEED = 4_820_818_739
 @pytest.fixture
 def quiet_memory(monkeypatch: pytest.MonkeyPatch) -> None:
     """Let the memory check pass, and keep its lines out of memory-checks.log of the session."""
-    monkeypatch.setattr(logging.getLogger("dinov3_apple.memory"), "handlers", [])
-    monkeypatch.setattr("dinov3_apple.memory.available_memory_bytes", lambda: 10**12)
+    monkeypatch.setattr(logging.getLogger("dinov3_mlx.memory"), "handlers", [])
+    monkeypatch.setattr("dinov3_mlx.memory.available_memory_bytes", lambda: 10**12)
 
 
 def _folder(tmp_path: Path, name: str, files: int = 2, seed: int = 0) -> tuple[Path, dict]:
@@ -62,7 +62,7 @@ def _folder(tmp_path: Path, name: str, files: int = 2, seed: int = 0) -> tuple[P
 
 
 def _use(monkeypatch: pytest.MonkeyPatch, folder: Path) -> None:
-    monkeypatch.setattr("dinov3_apple.reference.weights_dir", lambda model_size: folder)
+    monkeypatch.setattr("dinov3_mlx.reference.weights_dir", lambda model_size: folder)
 
 
 @pytest.mark.parametrize("name", ["vits16", "vits16plus", "vit7b16-shape"])
@@ -239,7 +239,7 @@ def test_streamed_checks_memory_before_any_tensor_read(
     stops the run with InsufficientMemoryError and no tensor read."""
     folder, _ = _folder(tmp_path, "vits16plus")
     _use(monkeypatch, folder)
-    monkeypatch.setattr(logging.getLogger("dinov3_apple.memory"), "handlers", [])
+    monkeypatch.setattr(logging.getLogger("dinov3_mlx.memory"), "handlers", [])
     shards = ShardIndex(folder)
     need = load_bytes(shards.streamed_weight_bytes())
     events: list[str] = []
@@ -256,13 +256,13 @@ def test_streamed_checks_memory_before_any_tensor_read(
 
     monkeypatch.setattr(ShardIndex, "read", read)
     monkeypatch.setattr(torch_reference, "check_free_memory", check)
-    monkeypatch.setattr("dinov3_apple.memory.available_memory_bytes", lambda: 0)
+    monkeypatch.setattr("dinov3_mlx.memory.available_memory_bytes", lambda: 0)
     with pytest.raises(InsufficientMemoryError, match="streamed"):
         run_torch_streamed("ViT-S+/16", PIXELS, HIDDEN_CONFIG)
     assert events == [f"check {need} ViT-S+/16 torch-cpu fp32, streamed: one block at a time"]
 
     events.clear()
-    monkeypatch.setattr("dinov3_apple.memory.available_memory_bytes", lambda: 10**12)
+    monkeypatch.setattr("dinov3_mlx.memory.available_memory_bytes", lambda: 10**12)
     run_torch_streamed("ViT-S+/16", PIXELS, HIDDEN_CONFIG)
     assert events[0].startswith(f"check {need} ")
     assert events.count("read") == 2 + 2  # embeddings and norm, then two blocks

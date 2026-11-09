@@ -1,6 +1,6 @@
 # Compiled torch-mps rows and paired groups for every speedup
 
-This ADR widens ADR 0004 from P1 and P2 to every configuration of the benchmark matrix. The speedup of each configuration comes from `src/dinov3_apple/speedup.py` and `scripts/bench_speed.py`:
+This ADR widens ADR 0004 from P1 and P2 to every configuration of the benchmark matrix. The speedup of each configuration comes from `src/dinov3_mlx/speedup.py` and `scripts/bench_speed.py`:
 
 1. Each model size, input resolution and batch size gets one paired group: the `torch-mps` workers and the `mlx` workers, one after the other, in a rotated order, in one session. Outside P1 and P2 the group has one round.
 2. The `torch-mps` arm runs `torch.compile` in every valid dtype mode. ViT-7B/16 runs only fp16-cast and bf16-cast on `torch-mps`, because its autocast modes need fp32 weights there (ADR 0008).

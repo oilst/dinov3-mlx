@@ -40,11 +40,11 @@ import numpy as np
 from bench_mlx_port import worker_env
 from safetensors import safe_open
 
-from dinov3_apple.bench import DTYPE_MODE_NAMES, bytes_per_weight, run_worker_subprocess
-from dinov3_apple.footprint import read_footprint
-from dinov3_apple.gpu_lock import heavy_job
-from dinov3_apple.hub import MODEL_IDS, parameter_count
-from dinov3_apple.memory import (
+from dinov3_mlx.bench import DTYPE_MODE_NAMES, bytes_per_weight, run_worker_subprocess
+from dinov3_mlx.footprint import read_footprint
+from dinov3_mlx.gpu_lock import heavy_job
+from dinov3_mlx.hub import MODEL_IDS, parameter_count
+from dinov3_mlx.memory import (
     GB,
     RunRuleError,
     available_memory_bytes,
@@ -52,8 +52,8 @@ from dinov3_apple.memory import (
     load_bytes,
     send_checks_to,
 )
-from dinov3_apple.parity import measure_parity
-from dinov3_apple.stored import configurations, model_slug, read_inputs
+from dinov3_mlx.parity import measure_parity
+from dinov3_mlx.stored import configurations, model_slug, read_inputs
 
 REPO_ROOT = Path(__file__).parents[1]
 CROSS_DIR = REPO_ROOT / "tests" / "fixtures" / "generated" / "cross-check"
@@ -143,7 +143,7 @@ def run_torch_worker(spec: dict) -> dict:
     import torch
     from safetensors.numpy import save_file
 
-    from dinov3_apple.reference import load_torch_backbone, run_torch
+    from dinov3_mlx.reference import load_torch_backbone, run_torch
 
     inputs = read_inputs()
     start = time.perf_counter()
@@ -169,8 +169,8 @@ def run_mlx_worker(spec: dict) -> dict:
     and append one cross-check line for each configuration."""
     import mlx.core as mx
 
-    from dinov3_apple.mlx_model import compile_backbone, run_mlx
-    from dinov3_apple.mlx_weights import load_mlx_backbone
+    from dinov3_mlx.mlx_model import compile_backbone, run_mlx
+    from dinov3_mlx.mlx_weights import load_mlx_backbone
 
     model_size, dtype_mode = spec["model_size"], spec["dtype_mode"]
     path = tokens_path(model_size, dtype_mode, spec["torch_device"])
@@ -215,7 +215,7 @@ def run_mlx_worker(spec: dict) -> dict:
 
 def worker_main(backend: str, spec_json: str) -> None:
     """Run one worker in this process and print the result as one JSON line."""
-    from dinov3_apple.memory import InsufficientMemoryError
+    from dinov3_mlx.memory import InsufficientMemoryError
 
     send_checks_to(sys.stderr)
     spec = json.loads(spec_json)

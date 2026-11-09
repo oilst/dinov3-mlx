@@ -217,7 +217,7 @@ angles = angles.flatten(1, 2).tile(2)                           # (H*W, head_dim
 
 <section id="code">
   <h2>8 The code of Step 1</h2>
-  <h3>8.1 <code>src/dinov3_apple/hub.py</code></h3>
+  <h3>8.1 <code>src/dinov3_mlx/hub.py</code></h3>
   <ul>
     <li><code>MODEL_IDS</code> maps each model size to its Hugging Face id. A test compares it with <code>tech-stack.md</code>, so the code and the docs cannot drift apart.</li>
     <li><code>check_free_disk(required_bytes, keep_free_bytes, path)</code> raises <code>InsufficientDiskError</code> when a download would leave less free disk than the limit. The download script keeps 50 GB free.</li>

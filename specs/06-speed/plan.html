@@ -179,16 +179,16 @@ a { color: var(--accent); }
     <table>
       <thead><tr><th>File</th><th>New or changed public names</th><th>Job</th></tr></thead>
       <tbody>
-        <tr><td><code>src/dinov3_apple/mlx_model.py</code></td><td>New: <code>RopeCache</code>, <code>rope_layout</code>, <code>MlxBackbone.forward_with_rope</code>, <code>compile_backbone</code>, <code>quantized_weight_names</code>, <code>mlx_embeddings</code>. Changed: <code>apply_rope</code> (concat-free, tables (T, 2, head_dim / 2)), <code>MlxBackbone.rope</code> (cos2 and sin2 from the <code>RopeCache</code>), <code>MlxBackbone.__call__</code> (through <code>forward_with_rope</code>), <code>run_mlx</code> (argument <code>forward</code>), <code>linear_parameter_names</code> (also <code>nn.QuantizedLinear</code>). Removed: <code>rotate_half</code>; it moves to <code>tests/rope_oracle.py</code>.</td><td>The compiled forward pass (D1, D4), the concat-free RoPE (D2), the fp16 output (D13), the names of quantized parameters (F1). No torch import.</td></tr>
-        <tr><td><code>src/dinov3_apple/mlx_weights.py</code></td><td>New: <code>GROUP_SIZE</code>, <code>QUANTIZED_BITS</code>, <code>block_linear_predicate</code>, <code>placeholder_skeleton</code>. Changed: <code>LoadReport</code> (field <code>bits</code>), <code>required_mlx_load_bytes</code> (argument <code>bits</code>), <code>load_mlx_backbone</code> (arguments <code>bits</code> and <code>group_size</code>)</td><td>The quantized load L2 (D14 to D17) and the guard of R50. No torch import.</td></tr>
-        <tr><td><code>src/dinov3_apple/mlx_preprocess.py</code> (new)</td><td><code>resize_weights</code>, <code>preprocess_frames</code></td><td>Preprocessing in MLX (D12). No torch import.</td></tr>
-        <tr><td><code>src/dinov3_apple/mlx_bench.py</code> (new)</td><td>Moved from <code>scripts/bench_mlx_port.py</code>: <code>time_batch_mlx</code>, <code>run_mlx_worker</code>, <code>output_transfer</code>, <code>host_to_fp32</code>, <code>load_report_fields</code>. Moved from <code>_mlx_parts</code> of <code>tests/test_mlx_parts.py</code>: <code>mlx_block_parts</code> (the P1 profile needs it). Changed: the worker runs the compiled forward pass, raises the MLX limit to the benchmark need, writes the new fields of Table 8, takes <code>bits</code>, and names its per-batch file with <code>bits</code>, the compile flag and the run id</td><td>The <code>mlx</code> worker of all drivers (D1, D7, D8, D13, D19, D22, F17). No torch import. It imports <code>mlx.core</code>, <code>mlx_model</code> and <code>mlx_weights</code> only inside its functions, so a driver that imports <code>mlx_bench</code> imports no mlx (T23). <code>scripts/bench_mlx_port.py</code> imports the moved names again, so the tests of Steps 4 and 5 keep their imports.</td></tr>
-        <tr><td><code>src/dinov3_apple/speedup.py</code> (new)</td><td><code>NOISE</code>, <code>SpeedupRow</code>, <code>speedup_rows</code>, <code>pass_verdict</code>, <code>single_verdict</code>, <code>spread_between_runs</code>, <code>compile_check</code></td><td>The speedup of each configuration by ADR 0004 on both sides, and the pass rule (D21). No torch, no mlx import.</td></tr>
-        <tr><td><code>src/dinov3_apple/gpu_lock.py</code> (new)</td><td><code>HEAVY_JOB_PATTERN</code>, <code>LOCK_PATH</code>, <code>LOCK_REGISTRY</code>, <code>LOCK_ENV</code>, <code>GpuLockTimeoutError</code>, <code>other_heavy_jobs</code>, <code>heavy_job</code> (argument <code>timeout_s</code>), <code>main</code> (command line, option <code>--timeout</code>)</td><td>The GPU lock and the wait loop as code (F14). No torch, no mlx import.</td></tr>
-        <tr><td><code>src/dinov3_apple/bench.py</code></td><td>New: <code>QUANTIZED_MODEL_SIZES</code>, <code>QUANTIZED_MODES</code>, <code>quantized_weight_bytes</code>, <code>PAIR_FIELDS</code>, <code>MLX_FIELDS</code>. Changed: <code>BenchConfig</code> (field <code>bits</code> before <code>repeat</code>, and in the key), <code>line_key</code>, <code>LINE_FIELDS</code>, <code>_modes</code> (argument <code>backend</code>), <code>bench_configurations</code> (compile rows without <code>priority</code>), <code>required_bench_bytes</code> (argument <code>backend</code>), <code>result_line</code> (argument <code>backend</code>)</td><td>The key of a quantized row (D22), the memory need of each backend (D8), the <code>mlx</code> modes of ViT-7B/16 (D23), the compile rows (D9). No torch, no mlx import.</td></tr>
-        <tr><td><code>src/dinov3_apple/machine.py</code></td><td><code>VERSIONED_PACKAGES</code> gets "mlx-metal"</td><td>The version record (D19).</td></tr>
-        <tr><td><code>src/dinov3_apple/torch_bench.py</code></td><td>The field <code>load_footprint_peak_bytes</code></td><td>F17.</td></tr>
-        <tr><td><code>src/dinov3_apple/stored.py</code>, <code>preprocess.py</code></td><td>New in <code>stored.py</code>: <code>IMAGENET_MEAN_VALUES</code>, <code>IMAGENET_STD_VALUES</code> (NumPy, fp32). <code>preprocess.py</code> makes its torch tensors from them</td><td>One source for the normalization constants of both preprocessing paths (D12).</td></tr>
+        <tr><td><code>src/dinov3_mlx/mlx_model.py</code></td><td>New: <code>RopeCache</code>, <code>rope_layout</code>, <code>MlxBackbone.forward_with_rope</code>, <code>compile_backbone</code>, <code>quantized_weight_names</code>, <code>mlx_embeddings</code>. Changed: <code>apply_rope</code> (concat-free, tables (T, 2, head_dim / 2)), <code>MlxBackbone.rope</code> (cos2 and sin2 from the <code>RopeCache</code>), <code>MlxBackbone.__call__</code> (through <code>forward_with_rope</code>), <code>run_mlx</code> (argument <code>forward</code>), <code>linear_parameter_names</code> (also <code>nn.QuantizedLinear</code>). Removed: <code>rotate_half</code>; it moves to <code>tests/rope_oracle.py</code>.</td><td>The compiled forward pass (D1, D4), the concat-free RoPE (D2), the fp16 output (D13), the names of quantized parameters (F1). No torch import.</td></tr>
+        <tr><td><code>src/dinov3_mlx/mlx_weights.py</code></td><td>New: <code>GROUP_SIZE</code>, <code>QUANTIZED_BITS</code>, <code>block_linear_predicate</code>, <code>placeholder_skeleton</code>. Changed: <code>LoadReport</code> (field <code>bits</code>), <code>required_mlx_load_bytes</code> (argument <code>bits</code>), <code>load_mlx_backbone</code> (arguments <code>bits</code> and <code>group_size</code>)</td><td>The quantized load L2 (D14 to D17) and the guard of R50. No torch import.</td></tr>
+        <tr><td><code>src/dinov3_mlx/mlx_preprocess.py</code> (new)</td><td><code>resize_weights</code>, <code>preprocess_frames</code></td><td>Preprocessing in MLX (D12). No torch import.</td></tr>
+        <tr><td><code>src/dinov3_mlx/mlx_bench.py</code> (new)</td><td>Moved from <code>scripts/bench_mlx_port.py</code>: <code>time_batch_mlx</code>, <code>run_mlx_worker</code>, <code>output_transfer</code>, <code>host_to_fp32</code>, <code>load_report_fields</code>. Moved from <code>_mlx_parts</code> of <code>tests/test_mlx_parts.py</code>: <code>mlx_block_parts</code> (the P1 profile needs it). Changed: the worker runs the compiled forward pass, raises the MLX limit to the benchmark need, writes the new fields of Table 8, takes <code>bits</code>, and names its per-batch file with <code>bits</code>, the compile flag and the run id</td><td>The <code>mlx</code> worker of all drivers (D1, D7, D8, D13, D19, D22, F17). No torch import. It imports <code>mlx.core</code>, <code>mlx_model</code> and <code>mlx_weights</code> only inside its functions, so a driver that imports <code>mlx_bench</code> imports no mlx (T23). <code>scripts/bench_mlx_port.py</code> imports the moved names again, so the tests of Steps 4 and 5 keep their imports.</td></tr>
+        <tr><td><code>src/dinov3_mlx/speedup.py</code> (new)</td><td><code>NOISE</code>, <code>SpeedupRow</code>, <code>speedup_rows</code>, <code>pass_verdict</code>, <code>single_verdict</code>, <code>spread_between_runs</code>, <code>compile_check</code></td><td>The speedup of each configuration by ADR 0004 on both sides, and the pass rule (D21). No torch, no mlx import.</td></tr>
+        <tr><td><code>src/dinov3_mlx/gpu_lock.py</code> (new)</td><td><code>HEAVY_JOB_PATTERN</code>, <code>LOCK_PATH</code>, <code>LOCK_REGISTRY</code>, <code>LOCK_ENV</code>, <code>GpuLockTimeoutError</code>, <code>other_heavy_jobs</code>, <code>heavy_job</code> (argument <code>timeout_s</code>), <code>main</code> (command line, option <code>--timeout</code>)</td><td>The GPU lock and the wait loop as code (F14). No torch, no mlx import.</td></tr>
+        <tr><td><code>src/dinov3_mlx/bench.py</code></td><td>New: <code>QUANTIZED_MODEL_SIZES</code>, <code>QUANTIZED_MODES</code>, <code>quantized_weight_bytes</code>, <code>PAIR_FIELDS</code>, <code>MLX_FIELDS</code>. Changed: <code>BenchConfig</code> (field <code>bits</code> before <code>repeat</code>, and in the key), <code>line_key</code>, <code>LINE_FIELDS</code>, <code>_modes</code> (argument <code>backend</code>), <code>bench_configurations</code> (compile rows without <code>priority</code>), <code>required_bench_bytes</code> (argument <code>backend</code>), <code>result_line</code> (argument <code>backend</code>)</td><td>The key of a quantized row (D22), the memory need of each backend (D8), the <code>mlx</code> modes of ViT-7B/16 (D23), the compile rows (D9). No torch, no mlx import.</td></tr>
+        <tr><td><code>src/dinov3_mlx/machine.py</code></td><td><code>VERSIONED_PACKAGES</code> gets "mlx-metal"</td><td>The version record (D19).</td></tr>
+        <tr><td><code>src/dinov3_mlx/torch_bench.py</code></td><td>The field <code>load_footprint_peak_bytes</code></td><td>F17.</td></tr>
+        <tr><td><code>src/dinov3_mlx/stored.py</code>, <code>preprocess.py</code></td><td>New in <code>stored.py</code>: <code>IMAGENET_MEAN_VALUES</code>, <code>IMAGENET_STD_VALUES</code> (NumPy, fp32). <code>preprocess.py</code> makes its torch tensors from them</td><td>One source for the normalization constants of both preprocessing paths (D12).</td></tr>
         <tr><td><code>scripts/bench_speed.py</code> (new)</td><td>Subcommands <code>change</code>, <code>matrix</code>, <code>pairs</code>, <code>sweep</code>, <code>preprocess</code>, <code>learn</code>, <code>profile</code>, each with <code>--dry-run</code></td><td>The driver of all Step 6 benchmarks (Section 7). It takes the GPU lock in <code>main</code>. Its name matches the wait loop (<code>[s]cripts/bench</code>). Before and after each worker it writes the processes that match <code>HEAVY_JOB_PATTERN</code> outside the GPU lock into the field <code>other_heavy_jobs_seen</code> (T9).</td></tr>
         <tr><td><code>scripts/speedup_table.py</code> (new)</td><td>–</td><td>Writes <code>results/speedup-table.md</code> (Table 13).</td></tr>
         <tr><td><code>scripts/bench_mlx_port.py</code>, <code>scripts/benchmark.py</code>, <code>scripts/cross_check.py</code>, <code>scripts/profile_block.py</code>, <code>scripts/make_reference.py</code></td><td>(changed)</td><td>Each takes the GPU lock in <code>main</code>. Each call of <code>required_bench_bytes</code> names its backend. <code>benchmark.py</code>: F6, <code>--compile</code> without <code>--priority</code>, <code>write_deferred</code> by field names. <code>cross_check.py</code>: the compiled forward pass. <code>make_reference.py</code>: V2.</td></tr>
@@ -226,16 +226,16 @@ a { color: var(--accent); }
   <h4>3.3.1 The GPU lock (F14)</h4>
   <p>In Step 5, light jobs of other agents overlapped timing runs. The wait loop of Section 13 of <code>specs/05-all-sizes/verify.html</code> protected only the agent that ran it. Step 6 makes the rule code that every entry point runs.</p>
   <ul>
-    <li><code>heavy_job(label, timeout_s=None)</code> is a context manager with three actions. (1) It writes its process id into the registry <code>LOCK_REGISTRY</code> (<code>~/.cache/dinov3-apple/gpu-lock.d/</code>). The entry marks a lock-aware process. (2) It takes an exclusive <code>fcntl.flock</code> on <code>LOCK_PATH</code> (<code>~/.cache/dinov3-apple/gpu.lock</code>, outside the repo, shared by all worktrees). The flock sets the order of the lock-aware jobs. (3) While it holds the flock, it waits until <code>other_heavy_jobs()</code> finds no process outside the lock. It polls every 20 s in both waits and writes one log line for each wait.</li>
+    <li><code>heavy_job(label, timeout_s=None)</code> is a context manager with three actions. (1) It writes its process id into the registry <code>LOCK_REGISTRY</code> (<code>~/.cache/dinov3-mlx/gpu-lock.d/</code>). The entry marks a lock-aware process. (2) It takes an exclusive <code>fcntl.flock</code> on <code>LOCK_PATH</code> (<code>~/.cache/dinov3-mlx/gpu.lock</code>, outside the repo, shared by all worktrees). The flock sets the order of the lock-aware jobs. (3) While it holds the flock, it waits until <code>other_heavy_jobs()</code> finds no process outside the lock. It polls every 20 s in both waits and writes one log line for each wait.</li>
     <li>A process outside the lock is a process whose command line matches <code>HEAVY_JOB_PATTERN</code> and that is not a registered process, an ancestor or a child of a registered process, the own process or one of its ancestors. A registry entry of a process that no longer runs counts as absent.</li>
     <li>The reason for this order: a process that waits inside <code>heavy_job</code> also matches <code>HEAVY_JOB_PATTERN</code>, and so does its <code>uv run</code> parent. If each waiter waited for all other matching processes before it took the flock, two waiters would wait for each other for ever. With the flock first and the registry, two waiters enter one after the other (T5).</li>
     <li>With <code>timeout_s</code>, a wait that takes longer than <code>timeout_s</code> raises <code>GpuLockTimeoutError</code>. The command line has the option <code>--timeout</code> (R54, T7).</li>
-    <li><code>HEAVY_JOB_PATTERN</code> is the pattern of the Step 5 wait loop plus <code>[d]inov3_apple\.gpu_lock</code>: <code>[b]in/pytest|[s]cripts/bench|[c]ross_check\.py|[m]ake_reference\.py|[p]rofile_block\.py|[d]inov3_apple\.gpu_lock</code>. <code>other_heavy_jobs</code> leaves out its own process and all its ancestors (for example the <code>uv run</code> process), and the registered processes with their ancestors and children.</li>
+    <li><code>HEAVY_JOB_PATTERN</code> is the pattern of the Step 5 wait loop plus <code>[d]inov3_mlx\.gpu_lock</code>: <code>[b]in/pytest|[s]cripts/bench|[c]ross_check\.py|[m]ake_reference\.py|[p]rofile_block\.py|[d]inov3_mlx\.gpu_lock</code>. <code>other_heavy_jobs</code> leaves out its own process and all its ancestors (for example the <code>uv run</code> process), and the registered processes with their ancestors and children.</li>
     <li>The holder writes its process id into the environment variable <code>DINOV3_GPU_LOCK</code>. Its child processes inherit it and enter at once. So a pytest session that starts a driver in a subprocess, or a driver that starts its workers, does not wait for itself.</li>
     <li>macOS releases a <code>flock</code> when its process ends. So a crash leaves no stale lock.</li>
     <li>Entry points: <code>tests/conftest.py</code> (from <code>pytest_sessionstart</code> to <code>pytest_sessionfinish</code>), and <code>main</code> of <code>bench_speed.py</code>, <code>bench_mlx_port.py</code>, <code>benchmark.py</code>, <code>cross_check.py</code>, <code>make_reference.py</code> and <code>profile_block.py</code>. The lock is in <code>main</code>, not in the run functions; T8 calls <code>main(argv)</code> of each script with a fake worker runner and checks the two conftest hooks. A dry run takes no lock.</li>
-    <li>Light GPU work outside these entry points, for example a probe or a one-line check, runs through the command line: <code>uv run python -m dinov3_apple.gpu_lock -- &lt;command&gt;</code>. It waits, takes the lock, runs the command and returns its exit code.</li>
-    <li>The lock log goes to <code>~/.cache/dinov3-apple/gpu-lock.log</code>: label, process id, the start of the wait, the start of the hold and the end (T6). The Verify agent reads it (AC19).</li>
+    <li>Light GPU work outside these entry points, for example a probe or a one-line check, runs through the command line: <code>uv run python -m dinov3_mlx.gpu_lock -- &lt;command&gt;</code>. It waits, takes the lock, runs the command and returns its exit code.</li>
+    <li>The lock log goes to <code>~/.cache/dinov3-mlx/gpu-lock.log</code>: label, process id, the start of the wait, the start of the hold and the end (T6). The Verify agent reads it (AC19).</li>
     <li>The lock cannot stop a job outside the lock that starts during a hold. So the driver records it: before and after each worker, <code>bench_speed.py</code> calls <code>other_heavy_jobs()</code> and writes the result into the field <code>other_heavy_jobs_seen</code> of the line (Table 8, T9). AC19 asks for an empty list in each timed line.</li>
   </ul>
 
@@ -244,7 +244,7 @@ a { color: var(--accent); }
   <ul>
     <li><code>scripts/benchmark.py</code> is the <code>torch-mps</code> matrix of Step 3. Its results file holds the baseline rows of ADR 0004 and the 18 deferred lines. Paired lines of two backends in this file would break <code>latest_lines</code>, whose key has no backend (the trap of <code>results/bench-all-sizes.jsonl</code>: 30 lines, 15 keys).</li>
     <li><code>scripts/bench_mlx_port.py</code> holds the P1 and P2 checks of Steps 4 and 5 and their results files. Its plan function covers only these two configurations.</li>
-    <li>The new driver writes new files (Table 26). It pairs both backends in groups (Section 3.8). The <code>mlx</code> worker moves to <code>src/dinov3_apple/mlx_bench.py</code>, so <code>bench_mlx_port.py</code> and <code>bench_speed.py</code> share it. The <code>torch-mps</code> worker stays <code>torch_bench.run_worker</code>. All workers run through <code>run_worker_subprocess</code>, one subprocess for each configuration.</li>
+    <li>The new driver writes new files (Table 26). It pairs both backends in groups (Section 3.8). The <code>mlx</code> worker moves to <code>src/dinov3_mlx/mlx_bench.py</code>, so <code>bench_mlx_port.py</code> and <code>bench_speed.py</code> share it. The <code>torch-mps</code> worker stays <code>torch_bench.run_worker</code>. All workers run through <code>run_worker_subprocess</code>, one subprocess for each configuration.</li>
     <li>The driver checks the machine state before each worker and stops on battery power or in Low Power Mode, as today (R32). It also stops when <code>MLX_DISABLE_COMPILE</code> is set in its environment, because then the compiled rows would run eager without an error (R42).</li>
   </ul>
 
@@ -465,7 +465,7 @@ a { color: var(--accent); }
   <p class="caption"><b>Table 12.</b> The P1 profile.</p>
 
   <h3>3.15 The speedup table and the pass rule (D21, ADR 0004, ADR 0009)</h3>
-  <p><code>scripts/speedup_table.py</code> reads the result files of Table 26 and writes <code>results/speedup-table.md</code>. The functions of <code>src/dinov3_apple/speedup.py</code> do the work. A reader of paired lines keys each line by (run, group, round, backend, key), never by <code>latest_lines</code> alone, because <code>line_key</code> has no backend.</p>
+  <p><code>scripts/speedup_table.py</code> reads the result files of Table 26 and writes <code>results/speedup-table.md</code>. The functions of <code>src/dinov3_mlx/speedup.py</code> do the work. A reader of paired lines keys each line by (run, group, round, backend, key), never by <code>latest_lines</code> alone, because <code>line_key</code> has no backend.</p>
   <div class="table-wrap">
     <table>
       <thead><tr><th>Section of <code>results/speedup-table.md</code></th><th>Rows</th><th>Columns</th></tr></thead>
@@ -488,7 +488,7 @@ a { color: var(--accent); }
   <h3>3.16 Run rules and the jobs of the build</h3>
   <p>The run rules of <code>CLAUDE.md</code> bind every job:</p>
   <ul>
-    <li>One heavy job at a time. Each job starts after the previous job ends. Each job takes the GPU lock (Section 3.3.1). Light GPU work of the agent, for example a quick check, runs through <code>python -m dinov3_apple.gpu_lock</code>.</li>
+    <li>One heavy job at a time. Each job starts after the previous job ends. Each job takes the GPU lock (Section 3.3.1). Light GPU work of the agent, for example a quick check, runs through <code>python -m dinov3_mlx.gpu_lock</code>.</li>
     <li>A memory check before each model load and before each benchmark worker. A configuration that does not fit gives a skip line with the need and the free memory.</li>
     <li>Each benchmark configuration in its own subprocess. A change-ratio process of C1, C2, C4 or C7 holds the two forms of one configuration (the same model size, dtype mode and <code>bits</code>). C3 and C5 compare configurations, so each of their configurations runs in its own subprocess, in alternation.</li>
     <li><code>mlx</code>: <code>mx.set_memory_limit</code> to the load need for the load, then to the benchmark need (D8). <code>MLX_ENABLE_TF32=0</code>. No torch import in an <code>mlx</code> worker.</li>
@@ -929,7 +929,7 @@ a { color: var(--accent); }
 <section id="code">
   <h2>5 Key code</h2>
   <p>These snippets show the shape of the code. The build can change the details. It must keep the public names of Table 6, the bit equality of the eager and the compiled forward pass, the order of the actions of <code>load_mlx_backbone</code> (Section 3.5) and the pass rule (Section 3.15).</p>
-  <pre><code># src/dinov3_apple/mlx_model.py
+  <pre><code># src/dinov3_mlx/mlx_model.py
 def rope_layout(cos: np.ndarray, sin: np.ndarray) -&gt; tuple[np.ndarray, np.ndarray]:
     """Return the RoPE tables in the layout of the concat-free rotation (D2).
 
@@ -992,7 +992,7 @@ class RopeCache:
     def __len__(self) -&gt; int:
         return len(self._tables)</code></pre>
 
-  <pre><code># src/dinov3_apple/mlx_model.py, class MlxBackbone (changed parts)
+  <pre><code># src/dinov3_mlx/mlx_model.py, class MlxBackbone (changed parts)
     def forward_with_rope(self, pixels: mx.array, cos2: mx.array, sin2: mx.array) -&gt; mx.array:
         """Return all tokens after the final layer norm, (B, 5 + N, D), with the given RoPE tables."""
         x = self.embeddings(pixels)
@@ -1080,7 +1080,7 @@ def mlx_embeddings(
     mx.eval(frame, patches)
     return np.array(frame), np.array(patches)</code></pre>
 
-  <pre><code># src/dinov3_apple/mlx_weights.py
+  <pre><code># src/dinov3_mlx/mlx_weights.py
 GROUP_SIZE = 64
 QUANTIZED_BITS = (8, 4)
 
@@ -1140,7 +1140,7 @@ def placeholder_skeleton(model: nn.Module) -&gt; None:
             pairs.append((key, array))
     model.load_weights(pairs, strict=True)</code></pre>
 
-  <pre><code># src/dinov3_apple/mlx_preprocess.py
+  <pre><code># src/dinov3_mlx/mlx_preprocess.py
 @cache
 def resize_weights(n_in: int, n_out: int) -&gt; np.ndarray:
     """Return the (n_out, n_in) fp64 weights of the bilinear antialiased resize of torch (D12).
@@ -1180,7 +1180,7 @@ def preprocess_frames(frames: np.ndarray, size: tuple[int, int]) -&gt; mx.array:
     std = mx.array(IMAGENET_STD_VALUES).reshape(1, 3, 1, 1)
     return (x - mean) / std</code></pre>
 
-  <pre><code># src/dinov3_apple/bench.py
+  <pre><code># src/dinov3_mlx/bench.py
 @dataclass(frozen=True)
 class BenchConfig:
     """One configuration of the benchmark matrix. The output is not part of it.
@@ -1238,12 +1238,12 @@ def required_bench_bytes(
         activations += 2 * b * shape.heads * t * t * a
     return load_bytes(weights) + round(activation_factor * activations)</code></pre>
 
-  <pre><code># src/dinov3_apple/gpu_lock.py
+  <pre><code># src/dinov3_mlx/gpu_lock.py
 HEAVY_JOB_PATTERN = (
     r"[b]in/pytest|[s]cripts/bench|[c]ross_check\.py|[m]ake_reference\.py|[p]rofile_block\.py"
-    r"|[d]inov3_apple\.gpu_lock"
+    r"|[d]inov3_mlx\.gpu_lock"
 )
-LOCK_PATH = Path.home() / ".cache" / "dinov3-apple" / "gpu.lock"
+LOCK_PATH = Path.home() / ".cache" / "dinov3-mlx" / "gpu.lock"
 LOCK_REGISTRY = LOCK_PATH.parent / "gpu-lock.d"  # one file for each lock-aware process
 LOCK_ENV = "DINOV3_GPU_LOCK"  # the process id of the holder; its child processes inherit it
 
@@ -1295,7 +1295,7 @@ def heavy_job(
     finally:
         entry.unlink(missing_ok=True)</code></pre>
 
-  <pre><code># src/dinov3_apple/speedup.py
+  <pre><code># src/dinov3_mlx/speedup.py
 NOISE = 0.03  # the spread inside one arm of the probe paired-noise
 
 
@@ -1321,10 +1321,10 @@ def single_verdict(ratio: float) -&gt; str:
     verdict = "above 1" if ratio &gt; 1 else "not above 1"
     return f"{verdict}, inside the noise" if abs(ratio - 1) &lt;= NOISE else verdict</code></pre>
 
-  <pre><code># src/dinov3_apple/mlx_bench.py, run_mlx_worker (changed parts)
+  <pre><code># src/dinov3_mlx/mlx_bench.py, run_mlx_worker (changed parts)
     import mlx.core as mx  # inside the function: a driver that imports mlx_bench imports no mlx
-    from dinov3_apple.mlx_model import compile_backbone, mlx_embeddings
-    from dinov3_apple.mlx_weights import load_mlx_backbone
+    from dinov3_mlx.mlx_model import compile_backbone, mlx_embeddings
+    from dinov3_mlx.mlx_weights import load_mlx_backbone
 
     model = load_mlx_backbone(config.model_size, config.dtype_mode, tf32=False, bits=config.bits)
     forward = compile_backbone(model)  # after the last weight change; held here, not on the model
@@ -1369,13 +1369,13 @@ def single_verdict(ratio: float) -&gt; str:
       <thead><tr><th>No.</th><th>Test</th><th>File</th><th>What it checks</th><th>Session</th><th>Red before the build</th></tr></thead>
       <tbody>
         <tr class="group"><td colspan="6">Build step 1: run rules and drivers</td></tr>
-        <tr><td>T1</td><td><code>test_heavy_job_pattern_matches_the_job_names</code></td><td><code>test_gpu_lock.py</code> (new)</td><td><code>HEAVY_JOB_PATTERN</code> matches <code>.venv/bin/pytest</code>, <code>scripts/bench_speed.py</code>, <code>scripts/bench_mlx_port.py</code>, <code>scripts/benchmark.py</code>, <code>scripts/cross_check.py</code>, <code>scripts/make_reference.py</code>, <code>scripts/profile_block.py</code> and <code>-m dinov3_apple.gpu_lock</code>; not <code>ruff check</code> or <code>python -c pass</code></td><td>default</td><td>Module <code>gpu_lock</code> missing</td></tr>
+        <tr><td>T1</td><td><code>test_heavy_job_pattern_matches_the_job_names</code></td><td><code>test_gpu_lock.py</code> (new)</td><td><code>HEAVY_JOB_PATTERN</code> matches <code>.venv/bin/pytest</code>, <code>scripts/bench_speed.py</code>, <code>scripts/bench_mlx_port.py</code>, <code>scripts/benchmark.py</code>, <code>scripts/cross_check.py</code>, <code>scripts/make_reference.py</code>, <code>scripts/profile_block.py</code> and <code>-m dinov3_mlx.gpu_lock</code>; not <code>ruff check</code> or <code>python -c pass</code></td><td>default</td><td>Module <code>gpu_lock</code> missing</td></tr>
         <tr><td>T2</td><td><code>test_heavy_job_waits_for_the_lock_holder</code></td><td><code>test_gpu_lock.py</code></td><td>Subprocess A holds the lock 1.0 s; B starts 0.2 s later (poll 0.05 s). The hold of B starts after the hold of A ends</td><td>default</td><td>Module missing</td></tr>
         <tr><td>T3</td><td><code>test_heavy_job_waits_for_a_matching_process</code></td><td><code>test_gpu_lock.py</code></td><td>A process that matches the test pattern runs 1.0 s. <code>heavy_job</code> enters only after it ends. <code>other_heavy_jobs</code> leaves out the own process and its ancestors</td><td>default</td><td>Module missing</td></tr>
         <tr><td>T4</td><td><code>test_child_of_the_lock_holder_does_not_wait</code></td><td><code>test_gpu_lock.py</code></td><td>With <code>DINOV3_GPU_LOCK</code> set, <code>heavy_job</code> enters in less than 0.1 s while another process holds the lock file</td><td>default</td><td>Module missing</td></tr>
         <tr><td>T5</td><td><code>test_two_waiters_enter_one_after_the_other</code></td><td><code>test_gpu_lock.py</code></td><td>Process A holds the lock 1.0 s. Waiters B and C start together 0.2 s later (poll 0.05 s), each under a parent process whose command line matches the test pattern (as <code>uv run</code> does). Both enter within 5 s, one after the other; no two holds overlap; each registry entry is gone at the end</td><td>default</td><td>Module missing (and with the wait loop before the flock, B and C wait for each other)</td></tr>
         <tr><td>T6</td><td><code>test_heavy_job_writes_the_lock_log</code></td><td><code>test_gpu_lock.py</code></td><td>One wait and one hold write the lines of Section 3.3.1 to a temporary log: label, process id, the start of the wait, the start of the hold and the end, in this order</td><td>default</td><td>Module missing</td></tr>
-        <tr><td>T7</td><td><code>test_heavy_job_timeout_ends_a_wait</code></td><td><code>test_gpu_lock.py</code></td><td>R54: another process holds the lock; <code>heavy_job(timeout_s=0.3)</code> raises <code>GpuLockTimeoutError</code> after 0.3 to 1.0 s and leaves no registry entry; <code>python -m dinov3_apple.gpu_lock --timeout 0.3 -- true</code> exits with a code that is not 0</td><td>default</td><td>Module missing</td></tr>
+        <tr><td>T7</td><td><code>test_heavy_job_timeout_ends_a_wait</code></td><td><code>test_gpu_lock.py</code></td><td>R54: another process holds the lock; <code>heavy_job(timeout_s=0.3)</code> raises <code>GpuLockTimeoutError</code> after 0.3 to 1.0 s and leaves no registry entry; <code>python -m dinov3_mlx.gpu_lock --timeout 0.3 -- true</code> exits with a code that is not 0</td><td>default</td><td>Module missing</td></tr>
         <tr><td>T8</td><td><code>test_drivers_take_the_lock_before_the_first_worker</code></td><td><code>test_gpu_lock.py</code></td><td><code>main(argv)</code> of <code>bench_speed.py</code>, <code>bench_mlx_port.py</code>, <code>benchmark.py</code>, <code>cross_check.py</code>, <code>make_reference.py</code> and <code>profile_block.py</code> with a fake worker runner and a recording <code>heavy_job</code> (monkeypatch): enter before the first worker or model load, exit after the last; a dry run enters no lock. The conftest hooks: <code>pytest_sessionstart</code> enters <code>heavy_job</code>, <code>pytest_sessionfinish</code> exits it</td><td>default</td><td>No entry point calls <code>heavy_job</code></td></tr>
         <tr><td>T9</td><td><code>test_driver_records_other_heavy_jobs</code></td><td><code>test_bench_speed.py</code> (new)</td><td>With a fake worker runner: a process that matches the test pattern and is outside the lock runs during worker 1; the line of worker 1 has its command line in <code>other_heavy_jobs_seen</code>; the line of worker 2 has an empty list</td><td>default</td><td>Script missing</td></tr>
         <tr><td>T10</td><td><code>test_benchmark_worker_memory_check_reaches_the_driver_log</code></td><td><code>test_bench.py</code></td><td>F6: a <code>benchmark.py</code> worker that stops after its memory check; the line reaches <code>driver.log</code> through <code>run_worker_subprocess</code> (the pattern of the <code>mlx</code> test of Step 5)</td><td>default</td><td><code>worker_main</code> has no <code>send_checks_to</code></td></tr>
@@ -1391,7 +1391,7 @@ def single_verdict(ratio: float) -&gt; str:
         <tr><td>T20</td><td><code>test_result_line_takes_the_backend</code></td><td><code>test_bench.py</code></td><td><code>result_line(..., backend="mlx")</code> writes "mlx"</td><td>default</td><td>Hard-coded "torch-mps"</td></tr>
         <tr><td>T21</td><td><code>test_matrix_plan_pairs_each_configuration</code></td><td><code>test_bench_speed.py</code> (new)</td><td>With Step 3 lines made by hand: 54 groups; 10, 14 and 10 workers in a group (Table 11); 576 workers; the <code>torch-mps</code> workers in all five dtype modes (ViT-7B/16: the two cast modes); <code>compile</code> True for every worker; <code>bits</code> only on the quantized workers; the rotation by g; the environments (watermarks, <code>MLX_ENABLE_TF32=0</code>); ViT-7B/16 last</td><td>default</td><td>Script missing</td></tr>
         <tr><td>T22</td><td><code>test_pairs_plan_rotates_five_rounds</code></td><td><code>test_bench_speed.py</code></td><td>50 workers for each priority configuration and run; one <code>mlx</code> and one compiled <code>torch-mps</code> worker of the same dtype mode in each round; the order alternates; <code>run_id</code> in each spec. The change plan: C1, C2 and C4 hold both forms in one process; C3 and C5 give one subprocess for each configuration, in alternation, rotated over 5 rounds</td><td>default</td><td>Script missing</td></tr>
-        <tr><td>T23</td><td><code>test_bench_speed_dry_run_imports_no_backend</code></td><td><code>test_bench_speed.py</code></td><td>The dry run of each subcommand prints its workers and needs; <code>torch</code> and <code>mlx.core</code> stay out of <code>sys.modules</code> (parameter counts monkeypatched, or a skip on <code>WeightsNotFoundError</code>). A subprocess that imports <code>dinov3_apple.mlx_bench</code> leaves <code>mlx.core</code> out of <code>sys.modules</code></td><td>default</td><td>Script missing; <code>mlx_bench</code> missing</td></tr>
+        <tr><td>T23</td><td><code>test_bench_speed_dry_run_imports_no_backend</code></td><td><code>test_bench_speed.py</code></td><td>The dry run of each subcommand prints its workers and needs; <code>torch</code> and <code>mlx.core</code> stay out of <code>sys.modules</code> (parameter counts monkeypatched, or a skip on <code>WeightsNotFoundError</code>). A subprocess that imports <code>dinov3_mlx.mlx_bench</code> leaves <code>mlx.core</code> out of <code>sys.modules</code></td><td>default</td><td>Script missing; <code>mlx_bench</code> missing</td></tr>
         <tr><td>T24</td><td><code>test_bench_speed_refuses_mlx_disable_compile</code></td><td><code>test_bench_speed.py</code></td><td>R42: with <code>MLX_DISABLE_COMPILE=1</code> the driver exits with code 1 and a message; no worker starts</td><td>default</td><td>Script missing</td></tr>
         <tr><td>T25</td><td><code>test_speedup_rows_follow_adr_0004_on_both_sides</code></td><td><code>test_speedup.py</code> (new)</td><td>Lines made by hand: the <code>mlx</code> side takes the fastest valid unquantized mode of the dtype (a faster quantized row and a faster invalid row do not join); the <code>torch-mps</code> side takes the compiled row, or the faster row of a follow-up group; two lines with the same key on two backends both stay</td><td>default</td><td>Module missing</td></tr>
         <tr><td>T26</td><td><code>test_pass_rule</code></td><td><code>test_speedup.py</code></td><td><code>pass_verdict([1.05, 1.02], 1.03)</code> "above 1"; <code>([1.05, 0.98], 1.01)</code> "not above 1"; <code>single_verdict</code>: 1.04 "above 1", 1.02 "above 1, inside the noise", 0.99 "not above 1, inside the noise", 0.90 "not above 1"; <code>spread_between_runs([1.0, 1.2])</code> 0.2; <code>_lower_median([0.98, 0.99, 1.01, 1.02])</code> 0.99, so 10 ratios whose two middle values are 0.99 and 1.01 give a pooled median of 0.99 and "not above 1"</td><td>default</td><td>Module missing</td></tr>
@@ -1600,7 +1600,7 @@ def single_verdict(ratio: float) -&gt; str:
         <tr><td><code>results/speedup-table.md</code></td><td>The speedup table (Table 13), from <code>scripts/speedup_table.py</code></td><td>yes</td></tr>
         <tr><td><code>results/parity-mlx.md</code></td><td>Made again, with sections for the compiled-equal, quantized and fp16-output lines</td><td>yes</td></tr>
         <tr><td><code>tests/fixtures/generated/bench/speed/</code></td><td>The per-batch times of each worker and <code>driver.log</code></td><td>no (git ignores it)</td></tr>
-        <tr><td><code>~/.cache/dinov3-apple/gpu.lock</code>, <code>gpu-lock.log</code></td><td>The GPU lock and its log</td><td>no (outside the repo)</td></tr>
+        <tr><td><code>~/.cache/dinov3-mlx/gpu.lock</code>, <code>gpu-lock.log</code></td><td>The GPU lock and its log</td><td>no (outside the repo)</td></tr>
       </tbody>
     </table>
   </div>
@@ -1668,7 +1668,7 @@ def single_verdict(ratio: float) -&gt; str:
   <h2>9 Open questions</h2>
   <ul>
     <li><b>Approval of this plan.</b> Answered on 2026-11-07: "Approve as proposed". The Plan stage ends with this approval.</li>
-    <li><b>A line for the run rules of <code>CLAUDE.md</code>.</b> Proposal: "Start every GPU job, also a light one, through the GPU lock (<code>uv run python -m dinov3_apple.gpu_lock -- &lt;command&gt;</code>)." Only the user changes <code>CLAUDE.md</code>. Without the line, the lock still holds for every entry point of the repo, but not for an ad-hoc job of another agent. Answered on 2026-11-07: yes, the line is in <code>CLAUDE.md</code>.</li>
+    <li><b>A line for the run rules of <code>CLAUDE.md</code>.</b> Proposal: "Start every GPU job, also a light one, through the GPU lock (<code>uv run python -m dinov3_mlx.gpu_lock -- &lt;command&gt;</code>)." Only the user changes <code>CLAUDE.md</code>. Without the line, the lock still holds for every entry point of the repo, but not for an ad-hoc job of another agent. Answered on 2026-11-07: yes, the line is in <code>CLAUDE.md</code>.</li>
     <li><b>The scope of Verify.</b> Table 28 runs a subset of the benchmarks again (about 1.2 h), not the full matrix (about 6.5 h). If the user wants the full matrix again, Verify takes about 7.3 h: the full matrix plus the jobs of Table 28 without VJ6. Answered on 2026-11-07: the subset of Table 28 (about 1.2 h).</li>
   </ul>
   <p>Files of this stage: the Plan stage writes only this file. On the approval, the agent adds the terms of Section 3.19 to <code>GLOSSARY.md</code> at once. The Close stage writes the ADRs of Table 16 and edits <code>tech-stack.md</code>, <code>docs/plan.html</code> and <code>roadmap.md</code>. <code>mission.md</code> does not change (Table 41 answer 5 of <code>explore.html</code>).</p>
