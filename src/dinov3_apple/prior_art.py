@@ -18,7 +18,6 @@ from dinov3_apple.bench import TIMED, WARM_UP, BenchConfig, TimeBudget
 from dinov3_apple.outputs import NUM_PREFIX_TOKENS
 from dinov3_apple.parity import THRESHOLDS, measure_parity
 from dinov3_apple.speedup import (
-    NOISE,
     _lower_median,
     pass_verdict,
     single_verdict,
@@ -971,17 +970,14 @@ def port_between_runs(run1: list[dict], run2: list[dict]) -> list[dict]:
 
 def _two_runs(first: PriorArtRow, second: PriorArtRow) -> dict:
     """Return the run medians, the pooled lower median of all paired ratios, the spread between
-    the run medians ((largest − smallest) ÷ smallest), pass_verdict with the mark "inside the
-    noise" within 1 ± NOISE, and the ratio count of one cell in two runs."""
+    the run medians ((largest − smallest) ÷ smallest), pass_verdict (with the mark "inside the
+    noise" within 1 ± NOISE) and the ratio count of one cell in two runs."""
     medians = [first.median, second.median]
     pooled = _lower_median(first.ratios + second.ratios)
-    verdict = pass_verdict(medians, pooled)
-    if abs(pooled - 1) <= NOISE:
-        verdict += ", inside the noise"
     return {
         "run_medians": medians,
         "pooled": pooled,
         "spread": spread_between_runs(medians),
-        "verdict": verdict,
+        "verdict": pass_verdict(medians, pooled),
         "n": len(first.ratios) + len(second.ratios),
     }

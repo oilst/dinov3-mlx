@@ -439,9 +439,9 @@ return torch.cat([prefix.expand(pixels.shape[0], -1, -1), patches], dim=1) # one
   <h3>10.4 The guard: no package with the concat fault</h3>
   <pre><code># src/dinov3_apple/coreml.py: _is_constant and constant_concats
 def _is_constant(value):
-    if value.op is not None:                 # a value that an op makes:
-        return value.op.op_type == "const"   #   constant only if the op is "const"
-    return value.val is not None             # a value without an op: constant if it has a value
+    if value.op is not None and value.op.op_type == "const":
+        return True                          # the output of a const op
+    return value.val is not None             # a value with a known value, from any op or none
 
 def constant_concats(mlmodel):
     names = []
@@ -454,7 +454,7 @@ def constant_concats(mlmodel):
 faults = constant_concats(mlmodel)
 if faults:
     raise NeuralEngineGraphError(f"concats with two or more constant inputs (the concat fault): ...")</code></pre>
-  <p class="caption">Code 7. The guard. <code>convert_module</code> writes no package with the concat fault, and each conversion line has the field <code>constant_concats</code> (0 in 25 of 25 lines of J1). Test T15 checks that the Hugging Face form has one such concat and the <code>ne3</code> form none. Test T16 converts only the <code>ne3</code> embeddings of ViT-S/16 at 448 px (a small package) and checks them on CPU_AND_NE, so a new macOS that changes the fault shows at once. A limit (finding V7 of the Step 6d <code>verify.html</code>): a value with <code>val</code> that a non-const op makes does not count as a constant. No current graph has this form.</p>
+  <p class="caption">Code 7. The guard. <code>convert_module</code> writes no package with the concat fault, and each conversion line has the field <code>constant_concats</code> (0 in 25 of 25 lines of J1). Test T15 checks that the Hugging Face form has one such concat and the <code>ne3</code> form none. Test T16 converts only the <code>ne3</code> embeddings of ViT-S/16 at 448 px (a small package) and checks them on CPU_AND_NE, so a new macOS that changes the fault shows at once. Since the fix of finding V7 (Step 6d <code>verify.html</code>), a value with <code>val</code> counts as a constant also when a non-const op makes it, for example a tile that value inference folded. With coremltools 9.0 the prefix is a <code>const</code> op also at batch size 8, and the whole <code>ne3</code> backbone has no flagged concat (T15 at batch sizes 1 and 8).</p>
   <p><code>compute_plan_report</code> now also gives <code>op_devices</code>: the devices of each op type, without the opset prefix (<code>ios18.concat</code> → <code>concat</code>). So the J2 lines show that each concat runs on the Neural Engine.</p>
 
   <h3>10.5 The measured results of Step 6d</h3>

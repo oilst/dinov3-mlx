@@ -209,6 +209,35 @@ def test_package_path_and_line_fields() -> None:
     assert len({cases[0] for cases in schedule}) == 3
 
 
+def test_stream_table_shows_each_round_ratio() -> None:
+    """Finding V6 of specs/06d-neural-engine-fault/verify.html: Table 6 gives the stream ratio of
+    each round next to the median, so the spread inside a run shows."""
+    import bench_coreml
+
+    lines = []
+    rounds = [(1000.0, 1300.0), (1100.0, 1210.0), (900.0, 1260.0)]
+    for round_, (mlx_alone, total) in enumerate(rounds, start=1):
+        common = {
+            "phase": "streams",
+            "status": "done",
+            "group": "P1-b8",
+            "run_id": 1,
+            "ne_batch_size": 8,
+            "ne_batch_form": "batch-api",
+            "round": round_,
+            "model_size": "ViT-S/16",
+            "side": 224,
+        }
+        both = {"ne": {"throughput_ips": 500.0}, "mlx": {"throughput_ips": total - 500.0}}
+        lines += [
+            common | {"case": "ne", "sides": {"ne": {"throughput_ips": 600.0}}},
+            common | {"case": "mlx", "sides": {"mlx": {"throughput_ips": mlx_alone}}},
+            common | {"case": "both", "sides": both, "total_ips": total},
+        ]
+    section = bench_coreml.table_text(lines).split("## 6 ")[1]
+    assert "| 1.300 | 1.300, 1.100, 1.400 | 3 |" in section
+
+
 def _ne_line(model_size: str, side: int, batch_size: int, form: str, ips: float, valid: bool):
     return {
         "phase": "matrix",
@@ -498,13 +527,38 @@ class _Embeddings(torch.nn.Module):
         return self.embeddings(pixels)
 
 
+def _value(op_type: str | None, val: object = None) -> types.SimpleNamespace:
+    op = None if op_type is None else types.SimpleNamespace(op_type=op_type)
+    return types.SimpleNamespace(op=op, val=val)
+
+
+def test_constant_concats_counts_folded_values() -> None:
+    """Finding V7 of specs/06d-neural-engine-fault/verify.html: a value with val counts as a
+    constant also when a non-const op makes it (for example a tile of the prefix at batch size 8
+    that value inference folded); a value without val does not."""
+    folded = _value("tile", np.zeros((8, 1, 4)))
+    patches = _value("transpose")
+    concats = [
+        types.SimpleNamespace(name="hf", op_type="concat", values=[folded, folded, patches]),
+        types.SimpleNamespace(name="ne3", op_type="concat", values=[folded, patches]),
+        types.SimpleNamespace(name="mixed", op_type="concat", values=[_value("const", 1), folded]),
+        types.SimpleNamespace(name="input", op_type="concat", values=[_value(None, 2), patches]),
+        types.SimpleNamespace(name="add", op_type="add", values=[folded, folded]),
+    ]
+    main = types.SimpleNamespace(operations=concats)
+    mlmodel = types.SimpleNamespace(_mil_program=types.SimpleNamespace(functions={"main": main}))
+    assert coreml.constant_concats(mlmodel) == ["hf", "mixed"]
+
+
 @slow
-def test_constant_concats_finds_the_fault(tmp_path: Path) -> None:
-    """T15: the Hugging Face form has one concat with two constant inputs, the ne3 form none.
-    convert_module refuses the Hugging Face form and writes no package."""
+@pytest.mark.parametrize("batch_size", [1, 8])
+def test_constant_concats_finds_the_fault(tmp_path: Path, batch_size: int) -> None:
+    """T15: the Hugging Face form has one concat with two constant inputs, the ne3 form none, at
+    batch size 1 and 8 (finding V7). convert_module refuses the Hugging Face form and writes no
+    package."""
     coreml.patch_coremltools_cast()
     embeddings = small_hf_model(seed=15, name="vits16").embeddings
-    shape = (1, 3, 64, 64)
+    shape = (batch_size, 3, 64, 64)
     found = {}
     for ne3 in (False, True):
         traced = coreml.trace_module(_Embeddings(embeddings, ne3), shape)
@@ -516,6 +570,10 @@ def test_constant_concats_finds_the_fault(tmp_path: Path) -> None:
         coreml.convert_module(_Embeddings(embeddings, ne3=False), shape, path)
     assert not path.exists()
     assert not coreml.compiled_path(path).exists()
+    # The whole ne3 backbone (RoPE, blocks, final norm) has no concat with two constant inputs.
+    backbone = coreml.rewrite_for_neural_engine(small_hf_model(seed=15, name="vits16"), 1)
+    traced = coreml.trace_module(backbone, shape)
+    assert coreml.constant_concats(coreml.convert_traced(traced, shape)) == []
 
 
 def _token_cosines(expected: np.ndarray, tokens: np.ndarray) -> np.ndarray:

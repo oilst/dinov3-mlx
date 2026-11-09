@@ -38,10 +38,12 @@ def pass_verdict(run_medians: list[float], pooled_median: float) -> str:
     """Return the verdict of a speedup at P1 or P2 (D21, option b).
 
     "above 1" only if the pooled median of all paired ratios and the median of each run are above
-    1. Two runs that disagree in sign give "not above 1".
+    1. Two runs that disagree in sign give "not above 1". A pooled median within 1 ± NOISE gets the
+    mark "inside the noise" (Section 3.15 of the plan; finding V5 of verify.html).
     """
     above = pooled_median > 1 and all(median > 1 for median in run_medians)
-    return "above 1" if above else "not above 1"
+    verdict = "above 1" if above else "not above 1"
+    return f"{verdict}, inside the noise" if abs(pooled_median - 1) <= NOISE else verdict
 
 
 def single_verdict(ratio: float) -> str:
@@ -136,11 +138,19 @@ def _fastest(lines: list[dict], output: str) -> dict | None:
 def _row(
     cell: tuple[str, int, int], output: str, dtype: str, mlx: list[dict], torch: list[dict]
 ) -> SpeedupRow:
-    """The main row of one cell, output and dtype from the candidate lines of both sides."""
+    """The main row of one cell, output and dtype from the candidate lines of both sides.
+
+    Both sides come from the group (phase) of the fastest torch-mps row, so the ratio pairs rows
+    of one job (finding V10 of specs/06-speed/verify.html). A group without a usable mlx row of
+    the dtype takes the fastest mlx row of the cell.
+    """
     model_size, side, batch_size = cell
     if dtype == "fp32" and model_size in NO_FP32_WEIGHTS:
         return SpeedupRow(model_size, side, batch_size, output, dtype, reason=NO_FP32_REASON)
-    best_mlx, best_torch = _fastest(mlx, output), _fastest(torch, output)
+    best_torch = _fastest(torch, output)
+    phase = best_torch.get("phase", "matrix") if best_torch else None
+    same_group = [line for line in mlx if line.get("phase", "matrix") == phase]
+    best_mlx = _fastest(same_group, output) or _fastest(mlx, output)
     if best_mlx is None or best_torch is None:
         reasons = [_reasons(side_lines) for side_lines in (mlx, torch)]
         reason = "; ".join(r for r in reasons if r) or "not measured"

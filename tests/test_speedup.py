@@ -75,10 +75,31 @@ def test_speedup_rows_follow_adr_0004_on_both_sides() -> None:
     assert quantized.unquantized_ratio == pytest.approx(5000.0 / 900.0)
 
 
+def test_row_pairs_both_sides_of_one_group() -> None:
+    """Finding V10 of specs/06-speed/verify.html: the ratio takes both sides from the group of the
+    fastest torch-mps row, not the fastest row of each side from two groups. A group without an
+    mlx row of the dtype takes the fastest mlx row of the cell."""
+    lines = [
+        line("mlx", "bf16-cast", 1000.0),
+        line("torch-mps", "bf16-cast", 900.0),
+        line("mlx", "bf16-cast", 800.0, phase="compile-check", group=7),
+        line("torch-mps", "bf16-cast", 950.0, phase="compile-check", group=7),
+        line("mlx", "fp16-cast", 700.0),
+        line("torch-mps", "fp16-cast", 600.0),
+        line("torch-mps", "fp16-cast", 650.0, compile=False, phase="compile-check", group=7),
+    ]
+    rows = {(r.dtype, r.output, r.bits): r for r in speedup_rows(lines)}
+    assert rows[("bf16", "frame", None)].ratio == pytest.approx(800.0 / 950.0)
+    assert rows[("fp16", "frame", None)].ratio == pytest.approx(700.0 / 650.0)
+
+
 def test_pass_rule() -> None:
     """T26 (D21 option b)."""
-    assert pass_verdict([1.05, 1.02], 1.03) == "above 1"
-    assert pass_verdict([1.05, 0.98], 1.01) == "not above 1"
+    assert pass_verdict([1.05, 1.04], 1.04) == "above 1"
+    assert pass_verdict([1.05, 0.98], 1.01) == "not above 1, inside the noise"
+    # Finding V5 of specs/06-speed/verify.html: the pooled median within 1 ± NOISE gets the mark.
+    assert pass_verdict([1.013, 1.018], 1.013) == "above 1, inside the noise"
+    assert pass_verdict([1.05, 0.90], 0.95) == "not above 1"
     assert single_verdict(1.04) == "above 1"
     assert single_verdict(1.02) == "above 1, inside the noise"
     assert single_verdict(0.99) == "not above 1, inside the noise"
@@ -87,7 +108,9 @@ def test_pass_rule() -> None:
     assert speedup._lower_median([0.98, 0.99, 1.01, 1.02]) == 0.99
     ratios = [0.95, 0.96, 0.97, 0.98, 0.99, 1.01, 1.02, 1.03, 1.04, 1.05]
     assert speedup._lower_median(ratios) == 0.99
-    assert pass_verdict([1.01, 1.01], speedup._lower_median(ratios)) == "not above 1"
+    assert pass_verdict([1.01, 1.01], speedup._lower_median(ratios)) == (
+        "not above 1, inside the noise"
+    )
 
 
 def test_pair_rows_take_both_runs() -> None:

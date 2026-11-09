@@ -106,24 +106,24 @@ a { color: var(--accent); }
         <tr><td><code>phase</code>, <code>batch_file_name</code>, <code>change_forms</code>, <code>run_change_worker</code> (not in Table 5)</td><td class="num">104–114, 125–133, 327–360, 363–457</td><td>The loop of one time budget, the name of the per-batch file, and the forms and the worker of the change ratios (<a href="06-1-compiled-forward-pass.html">06-1</a>).</td><td><code>test_change_worker_forms</code></td><td>8.3</td></tr>
         <tr class="group"><td colspan="5"><code>src/dinov3_apple/speedup.py</code> (new module)</td></tr>
         <tr><td><code>NOISE</code></td><td class="num">22</td><td>0.03: the spread inside one arm of the probe paired-noise.</td><td>T26 <code>test_pass_rule</code></td><td>9.1</td></tr>
-        <tr><td><code>pass_verdict(run_medians, pooled_median)</code></td><td class="num">37–44</td><td>The verdict of D21 at P1 and P2.</td><td>T26</td><td>9.1</td></tr>
-        <tr><td><code>single_verdict(ratio)</code></td><td class="num">47–51</td><td>The verdict of D21 outside P1 and P2, with the mark "inside the noise".</td><td>T26</td><td>9.1</td></tr>
-        <tr><td><code>spread_between_runs(run_medians)</code></td><td class="num">54–56</td><td>(largest run median − smallest run median) / smallest run median.</td><td>T26 <code>test_pass_rule</code></td><td>9.1</td></tr>
-        <tr><td><code>PairRow</code>, <code>pair_rows(lines)</code> (not in Table 5)</td><td class="num">283–305, 319–372</td><td>The 12 verdict rows of the paired runs at P1 and P2.</td><td><code>test_pair_rows_take_both_runs</code></td><td>9.1</td></tr>
-        <tr><td><code>SpeedupRow</code></td><td class="num">94–128</td><td>One row of the matrix section or of the quantized section of the speedup table.</td><td>T25, T27</td><td>9.2</td></tr>
-        <tr><td><code>speedup_rows(lines)</code></td><td class="num">253–267</td><td>Applies ADR 0004 on both sides in each cell. Adds the quantized rows next to the main row.</td><td>T25 <code>test_speedup_rows_follow_adr_0004_on_both_sides</code></td><td>9.2</td></tr>
-        <tr><td><code>_quantized_rows(main, mlx)</code> (private, not in Table 5)</td><td class="num">175–229</td><td>Returns the quantized rows of one main row. For each bit width (8, 4) and each quantized dtype mode of the dtype of the main row, it takes the last <code>mlx</code> line of the cell. A line that is not "done" gives a row with its status and reason. A done line gives the ratio to the <code>torch-mps</code> side of the main row and the ratio to the last usable unquantized <code>mlx</code> line of the same dtype mode. A line that is not valid gets the verdict "not valid". <code>_cell_rows</code> (line 249) calls it when the cell has quantized rows.</td><td>T25, T27</td><td>9.2</td></tr>
-        <tr><td><code>_parity_text(parity)</code> (private, not in Table 5)</td><td class="num">166–172</td><td>Returns the parity of one line as text: "frame …, patch mean …, patch 1st percentile …" with 6 significant digits, or "no parity". <code>_quantized_rows</code> (line 213) writes it into the reason of each quantized row that is not valid.</td><td>T27</td><td>9.2</td></tr>
-        <tr><td><code>matrix_cells(lines)</code>, <code>autocast_over_cast(lines)</code> (not in Table 5)</td><td class="num">270–280, 375–398</td><td>The 324 cells of the matrix section; autocast / cast on <code>mlx</code> (C3, R30).</td><td>T27 <code>test_speedup_table_covers_every_configuration</code></td><td>9.2</td></tr>
-        <tr><td><code>compile_check(matrix_lines, step3_lines)</code></td><td class="num">401–434</td><td>Lists each group whose compiled <code>torch-mps</code> row is below the Step 3 eager median.</td><td>T28 <code>test_compile_check_lists_slow_compile_rows</code></td><td>9.3</td></tr>
+        <tr><td><code>pass_verdict(run_medians, pooled_median)</code></td><td class="num">37–46</td><td>The verdict of D21 at P1 and P2, with the mark "inside the noise" for a pooled median within 1 ± 0.03 (since the fix of V5, 2026-11-09).</td><td>T26</td><td>9.1</td></tr>
+        <tr><td><code>single_verdict(ratio)</code></td><td class="num">49–53</td><td>The verdict of D21 outside P1 and P2, with the mark "inside the noise".</td><td>T26</td><td>9.1</td></tr>
+        <tr><td><code>spread_between_runs(run_medians)</code></td><td class="num">56–58</td><td>(largest run median − smallest run median) / smallest run median.</td><td>T26 <code>test_pass_rule</code></td><td>9.1</td></tr>
+        <tr><td><code>PairRow</code>, <code>pair_rows(lines)</code> (not in Table 5)</td><td class="num">293–315, 329–382</td><td>The 12 verdict rows of the paired runs at P1 and P2.</td><td><code>test_pair_rows_take_both_runs</code></td><td>9.1</td></tr>
+        <tr><td><code>SpeedupRow</code></td><td class="num">96–130</td><td>One row of the matrix section or of the quantized section of the speedup table.</td><td>T25, T27</td><td>9.2</td></tr>
+        <tr><td><code>speedup_rows(lines)</code></td><td class="num">263–277</td><td>Applies ADR 0004 on both sides in each cell. Adds the quantized rows next to the main row.</td><td>T25 <code>test_speedup_rows_follow_adr_0004_on_both_sides</code></td><td>9.2</td></tr>
+        <tr><td><code>_quantized_rows(main, mlx)</code> (private, not in Table 5)</td><td class="num">185–239</td><td>Returns the quantized rows of one main row. For each bit width (8, 4) and each quantized dtype mode of the dtype of the main row, it takes the last <code>mlx</code> line of the cell. A line that is not "done" gives a row with its status and reason. A done line gives the ratio to the <code>torch-mps</code> side of the main row and the ratio to the last usable unquantized <code>mlx</code> line of the same dtype mode. A line that is not valid gets the verdict "not valid". <code>_cell_rows</code> (line 249) calls it when the cell has quantized rows.</td><td>T25, T27</td><td>9.2</td></tr>
+        <tr><td><code>_parity_text(parity)</code> (private, not in Table 5)</td><td class="num">176–182</td><td>Returns the parity of one line as text: "frame …, patch mean …, patch 1st percentile …" with 6 significant digits, or "no parity". <code>_quantized_rows</code> (line 213) writes it into the reason of each quantized row that is not valid.</td><td>T27</td><td>9.2</td></tr>
+        <tr><td><code>matrix_cells(lines)</code>, <code>autocast_over_cast(lines)</code> (not in Table 5)</td><td class="num">280–290, 385–408</td><td>The 324 cells of the matrix section; autocast / cast on <code>mlx</code> (C3, R30).</td><td>T27 <code>test_speedup_table_covers_every_configuration</code></td><td>9.2</td></tr>
+        <tr><td><code>compile_check(matrix_lines, step3_lines)</code></td><td class="num">411–444</td><td>Lists each group whose compiled <code>torch-mps</code> row is below the Step 3 eager median.</td><td>T28 <code>test_compile_check_lists_slow_compile_rows</code></td><td>9.3</td></tr>
         <tr class="group"><td colspan="5"><code>src/dinov3_apple/gpu_lock.py</code> (new module)</td></tr>
         <tr><td><code>HEAVY_JOB_PATTERN</code></td><td class="num">39–42</td><td>The regular expression of the command lines of heavy jobs.</td><td>T1 <code>test_heavy_job_pattern_matches_the_job_names</code></td><td>10</td></tr>
         <tr><td><code>LOCK_PATH</code>, <code>LOCK_REGISTRY</code>, <code>LOCK_ENV</code> (and <code>LOG_PATH</code>, <code>POLL_S</code>)</td><td class="num">43–47</td><td>The lock file, the registry folder, the environment variable of the holder, the lock log and the poll time.</td><td>T2 to T6</td><td>10</td></tr>
         <tr><td><code>GpuLockTimeoutError</code></td><td class="num">50–51</td><td>A wait that takes longer than its time limit.</td><td>T7 <code>test_heavy_job_timeout_ends_a_wait</code></td><td>10</td></tr>
         <tr><td><code>registered_processes</code> (not in Table 5)</td><td class="num">96–114</td><td>Returns the registry entries of processes that still run. Removes the other entries.</td><td>T5 <code>test_two_waiters_enter_one_after_the_other</code></td><td>10</td></tr>
-        <tr><td><code>other_heavy_jobs(pattern, registry)</code></td><td class="num">117–144</td><td>Returns the command lines of the heavy jobs outside the GPU lock.</td><td>T3, T9 <code>test_driver_records_other_heavy_jobs</code></td><td>10</td></tr>
-        <tr><td><code>heavy_job(label, ..., timeout_s, log_path)</code></td><td class="num">171–245</td><td>Holds the GPU lock, then waits until no heavy job outside the lock runs.</td><td>T2 to T7</td><td>10</td></tr>
-        <tr><td><code>main(argv)</code></td><td class="num">248–287</td><td>The command line: runs one command under the GPU lock and returns its exit code.</td><td><code>test_gpu_lock_command_runs_the_command</code>, T7</td><td>10</td></tr>
+        <tr><td><code>other_heavy_jobs(pattern, registry)</code></td><td class="num">117–146</td><td>Returns the command lines of the heavy jobs outside the GPU lock. Since the fix of V16 (2026-11-09) it also leaves out the process group of each registered job, for example the forked subshell of its pipeline.</td><td>T3, T9 <code>test_driver_records_other_heavy_jobs</code></td><td>10</td></tr>
+        <tr><td><code>heavy_job(label, ..., timeout_s, log_path)</code></td><td class="num">173–247</td><td>Holds the GPU lock, then waits until no heavy job outside the lock runs.</td><td>T2 to T7</td><td>10</td></tr>
+        <tr><td><code>main(argv)</code></td><td class="num">250–289</td><td>The command line: runs one command under the GPU lock and returns its exit code.</td><td><code>test_gpu_lock_command_runs_the_command</code>, T7</td><td>10</td></tr>
         <tr class="group"><td colspan="5">Other files</td></tr>
         <tr><td><code>machine.VERSIONED_PACKAGES</code> (changed)</td><td class="num">17</td><td>Adds "mlx-metal" to the versions of each line (D19).</td><td>T31 <code>test_versions_include_mlx_metal</code></td><td>5</td></tr>
         <tr><td>Field <code>load_footprint_peak_bytes</code> of <code>torch_bench.run_worker</code> (renamed)</td><td class="num">133, 180</td><td>The lifetime maximum of the process footprint after the load. It was <code>load_peak_bytes</code> (F17).</td><td>T12, T13, <code>test_worker_writes_all_fields</code></td><td>8.4</td></tr>
@@ -1104,7 +1104,7 @@ def mlx_block_parts(block: &quot;Block&quot;) -&gt; dict[str, Callable[..., tupl
   <p>The speedup of one configuration is the throughput of <code>mlx</code> divided by the throughput of the baseline row. ADR 0004 picks, on each side, the fastest valid row of each dtype and output. ADR 0009 widens it: the <code>torch-mps</code> side runs <code>torch.compile</code> in every valid dtype mode, in a paired group with the <code>mlx</code> workers. So each speedup divides by a row of the same session and power state, a few minutes apart.</p>
 
   <h3>9.1 The pass rule at P1 and P2</h3>
-  <pre><code># src/dinov3_apple/speedup.py, lines 22 to 56
+  <pre><code># src/dinov3_apple/speedup.py, lines 22 to 58
 NOISE = 0.03  # the spread inside one arm of the probe paired-noise
 MODEL_SIZES = list(MODEL_IDS)
 DTYPES = [&quot;fp32&quot;, &quot;fp16&quot;, &quot;bf16&quot;]
@@ -1124,10 +1124,12 @@ def pass_verdict(run_medians: list[float], pooled_median: float) -&gt; str:
     &quot;&quot;&quot;Return the verdict of a speedup at P1 or P2 (D21, option b).
 
     &quot;above 1&quot; only if the pooled median of all paired ratios and the median of each run are above
-    1. Two runs that disagree in sign give &quot;not above 1&quot;.
+    1. Two runs that disagree in sign give &quot;not above 1&quot;. A pooled median within 1 ± NOISE gets the
+    mark &quot;inside the noise&quot; (Section 3.15 of the plan; finding V5 of verify.html).
     &quot;&quot;&quot;
     above = pooled_median &gt; 1 and all(median &gt; 1 for median in run_medians)
-    return &quot;above 1&quot; if above else &quot;not above 1&quot;
+    verdict = &quot;above 1&quot; if above else &quot;not above 1&quot;
+    return f&quot;{verdict}, inside the noise&quot; if abs(pooled_median - 1) &lt;= NOISE else verdict
 
 
 def single_verdict(ratio: float) -&gt; str:
@@ -1146,7 +1148,7 @@ def spread_between_runs(run_medians: list[float]) -&gt; float:
     <li><b><code>single_verdict</code>.</b> Outside P1 and P2 one paired group gives one ratio. The verdict is its sign against 1. A ratio within 1 ± <code>NOISE</code> (inclusive) gets the mark "inside the noise". The probe paired-noise measured a spread of 1.6 % (<code>torch-mps</code>) and 3.0 % (<code>mlx</code>) inside one arm (Section 2 of <code>explore.html</code>).</li>
     <li><b><code>spread_between_runs</code>.</b> (largest run median − smallest run median) / smallest run median.</li>
   </ul>
-  <pre><code># src/dinov3_apple/speedup.py, lines 341 to 354
+  <pre><code># src/dinov3_apple/speedup.py, lines 351 to 364
                 pick = {}
                 for line in mlx + torch:
                     mode = mlx_mode if line[&quot;backend&quot;] == &quot;mlx&quot; else torch_mode
@@ -1301,7 +1303,7 @@ def spread_between_runs(run_medians: list[float]) -&gt; float:
   <p>Table 10 shows why the pairing matters. At P2 the raw throughput of each backend fell from run 1 to run 2, with a spread between runs of 8.3 to 20.9 %. The spread between runs of the paired ratio is only 0.4 to 4.1 %. Step 5 measured a spread between runs on different days of about 20 % (F2 of <code>specs/05-all-sizes/verify.html</code>) against a noise of 1.6 to 3.0 % inside one session (probe paired-noise). Here the raw throughput shows the large term, and the pairing removes most of it. One round can still leave the noise band: the P1 fp32 ratio of round 1 of run 2 is 0.977, against 1.020 to 1.082 in the other 9 rounds.</p>
 
   <h3>9.2 The matrix</h3>
-  <pre><code># src/dinov3_apple/speedup.py, lines 131 to 163
+  <pre><code># src/dinov3_apple/speedup.py, lines 133 to 173
 def _fastest(lines: list[dict], output: str) -&gt; dict | None:
     usable = [line for line in lines if _usable(line)]
     return max(usable, key=lambda line: _ips(line, output)) if usable else None
@@ -1310,11 +1312,19 @@ def _fastest(lines: list[dict], output: str) -&gt; dict | None:
 def _row(
     cell: tuple[str, int, int], output: str, dtype: str, mlx: list[dict], torch: list[dict]
 ) -&gt; SpeedupRow:
-    &quot;&quot;&quot;The main row of one cell, output and dtype from the candidate lines of both sides.&quot;&quot;&quot;
+    &quot;&quot;&quot;The main row of one cell, output and dtype from the candidate lines of both sides.
+
+    Both sides come from the group (phase) of the fastest torch-mps row, so the ratio pairs rows
+    of one job (finding V10 of specs/06-speed/verify.html). A group without a usable mlx row of
+    the dtype takes the fastest mlx row of the cell.
+    &quot;&quot;&quot;
     model_size, side, batch_size = cell
     if dtype == &quot;fp32&quot; and model_size in NO_FP32_WEIGHTS:
         return SpeedupRow(model_size, side, batch_size, output, dtype, reason=NO_FP32_REASON)
-    best_mlx, best_torch = _fastest(mlx, output), _fastest(torch, output)
+    best_torch = _fastest(torch, output)
+    phase = best_torch.get(&quot;phase&quot;, &quot;matrix&quot;) if best_torch else None
+    same_group = [line for line in mlx if line.get(&quot;phase&quot;, &quot;matrix&quot;) == phase]
+    best_mlx = _fastest(same_group, output) or _fastest(mlx, output)
     if best_mlx is None or best_torch is None:
         reasons = [_reasons(side_lines) for side_lines in (mlx, torch)]
         reason = &quot;; &quot;.join(r for r in reasons if r) or &quot;not measured&quot;
@@ -1335,7 +1345,7 @@ def _row(
         verdict=single_verdict(ratio),
         mark=best_torch.get(&quot;mark&quot;, &quot;&quot;),
     )</code></pre>
-  <pre><code># src/dinov3_apple/speedup.py, lines 253 to 267
+  <pre><code># src/dinov3_apple/speedup.py, lines 263 to 277
 def speedup_rows(lines: list[dict]) -&gt; list[SpeedupRow]:
     &quot;&quot;&quot;Return the main rows and the quantized rows of each cell that has a line.
 
@@ -1355,7 +1365,7 @@ def speedup_rows(lines: list[dict]) -&gt; list[SpeedupRow]:
     <li><b>ADR 0004 on both sides.</b> <code>_fastest</code> takes the fastest valid line of each side for one output and one dtype. The <code>mlx</code> side takes only unquantized lines (D22). The <code>torch-mps</code> side can take a compiled or an eager line.</li>
     <li><b>Empty cells.</b> The 18 ViT-7B/16 fp32 cells get the reason "ADR 0008: ViT-7B/16 never loads its fp32 weights" before any search. A cell without a valid line on one side gives the reasons of that side.</li>
     <li><b><code>SpeedupRow</code></b> holds the cell, the output, the dtype, <code>bits</code>, the mode and the throughput of each side, <code>torch_compile</code>, the ratio, the ratio to the unquantized row (quantized rows only), the verdict, the mark, the reason and the parity of image 0.</li>
-    <li><b>The phases.</b> <code>_latest</code> keeps the last line of each (phase, backend, key) of the phases "matrix" and "compile-check". So the gate J13 stays out, and the lines of a follow-up group stand next to the matrix lines of the same cell. <code>_fastest</code> then takes the faster line of the two. In the four follow-up groups of Section 9.3 both sides came from the follow-up group. But a cell can, in principle, mix two sessions.</li>
+    <li><b>The phases.</b> <code>_latest</code> keeps the last line of each (phase, backend, key) of the phases "matrix" and "compile-check". So the gate J13 stays out, and the lines of a follow-up group stand next to the matrix lines of the same cell. <code>_fastest</code> then takes the faster torch-mps line of the two, and since the fix of V10 (2026-11-09) the mlx side comes from the same group. In the four follow-up groups of Section 9.3 both sides came from the follow-up group, so the table did not change. But a cell can, in principle, mix two sessions.</li>
   </ul>
   <div class="table-wrap"><table class="first-nowrap">
 <thead><tr><th>Model size</th><th>Dtype</th><th class="num">Cells</th><th class="num">Above 1</th><th class="num">of them inside the noise</th><th class="num">Not above 1</th><th class="num">of them inside the noise</th><th class="num">Empty</th><th class="num">Paired ratio: min to max</th></tr></thead><tbody>
@@ -1382,7 +1392,7 @@ def speedup_rows(lines: list[dict]) -&gt; list[SpeedupRow]:
   <p class="caption"><b>Table 11.</b> The verdicts of the 324 cells of the matrix section (section 2 of <code>results/speedup-table.md</code>; our count). Each model size has 9 cells (3 input resolutions × 3 batch sizes) × 2 outputs for each dtype. "Inside the noise": the paired ratio lies within 1 ± 0.03. The count of the quantized section (section 3) is the subject of <a href="06-3-quantized-weights.html">06-3</a>.</p>
   <p>The pattern of Table 11 follows from Sections 4 and 6. In fp16 and bf16, ViT-S/16 and ViT-S+/16 are above 1 only at 224 px and batch size 1 (1.355 to 1.475), where the fixed cost of each <code>torch-mps</code> forward pass counts most. At larger batches <code>torch.compile</code> wins (down to 0.801). For the large model sizes both backends reach the same GPU limit, and the verdicts split. In fp32, <code>mlx</code> is above 1 in 62 of 90 cells. In fp16 and bf16 it is above 1 in 78 of 216 cells. 36 of the 140 cells above 1 and 22 of the 166 cells not above 1 lie inside the noise.</p>
   <h3>9.3 The compile check</h3>
-  <pre><code># src/dinov3_apple/speedup.py, lines 401 to 434
+  <pre><code># src/dinov3_apple/speedup.py, lines 411 to 444
 def compile_check(
     matrix_lines: list[dict], step3_lines: list[dict]
 ) -&gt; list[tuple[str, int, int, str]]:

@@ -345,9 +345,13 @@ def _op_counts(mlmodel: Any) -> dict[str, int]:
 
 
 def _is_constant(value: Any) -> bool:
-    """True for a MIL value that a const op makes, or a value with val set and no producing op."""
-    if value.op is not None:
-        return value.op.op_type == "const"
+    """True for a MIL value that a const op makes, or a value with val set by any op or by none.
+
+    Value inference can set val on the output of a non-const op, for example a tile of the prefix
+    at batch size 8 (finding V7 of specs/06d-neural-engine-fault/verify.html).
+    """
+    if value.op is not None and value.op.op_type == "const":
+        return True
     return value.val is not None
 
 

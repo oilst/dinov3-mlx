@@ -193,12 +193,12 @@ Table 5. The paired ratio Core ML / mlx at P1 (ViT-S/16 224 px, frame), P3 (ViT-
 
 ## 6 Two-stream run
 
-| Group | Run | Neural Engine batch size | Neural Engine form | Neural Engine output valid | ne alone img/s | mlx alone img/s | both: ne img/s | both: mlx img/s | both: total img/s | Stream ratio | Rounds |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| P1-b8 | 1 | 8 | batch-api | yes | 677.3 | 1,543.4 | 670.0 | 1,374.1 | 2,044.0 | 1.324 | 3 |
-| P1-b8 | 2 | 8 | batch-api | yes | 676.4 | 1,939.9 | 655.8 | 1,938.5 | 2,583.1 | 1.318 | 3 |
-| P2-b8 | 1 | 8 | batch-api | yes | 2.8 | 19.7 | 2.8 | 18.7 | 21.5 | 1.081 | 3 |
-| P3-b8 | 1 | 8 | batch-api | yes | 65.7 | 233.6 | 64.6 | 198.0 | 263.2 | 1.122 | 3 |
-| P3-b8 | 2 | 8 | batch-api | yes | 65.4 | 246.9 | 55.3 | 238.5 | 292.2 | 1.184 | 3 |
+| Group | Run | Neural Engine batch size | Neural Engine form | Neural Engine output valid | ne alone img/s | mlx alone img/s | both: ne img/s | both: mlx img/s | both: total img/s | Stream ratio | Round ratios | Rounds |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| P1-b8 | 1 | 8 | batch-api | yes | 677.3 | 1,543.4 | 670.0 | 1,374.1 | 2,044.0 | 1.324 | 1.334, 1.324, 1.285 | 3 |
+| P1-b8 | 2 | 8 | batch-api | yes | 676.4 | 1,939.9 | 655.8 | 1,938.5 | 2,583.1 | 1.318 | 1.298, 1.318, 1.426 | 3 |
+| P2-b8 | 1 | 8 | batch-api | yes | 2.8 | 19.7 | 2.8 | 18.7 | 21.5 | 1.081 | 1.131, 1.080, 1.081 | 3 |
+| P3-b8 | 1 | 8 | batch-api | yes | 65.7 | 233.6 | 64.6 | 198.0 | 263.2 | 1.122 | 1.148, 1.122, 1.120 | 3 |
+| P3-b8 | 2 | 8 | batch-api | yes | 65.4 | 246.9 | 55.3 | 238.5 | 292.2 | 1.184 | 1.243, 1.184, 1.162 | 3 |
 
-Table 6. The two-stream run: Core ML on CPU_AND_NE and compiled mlx on the GPU, alone and at the same time, 10 s per case. Stream ratio = (ne + mlx, both) / (mlx alone), median over the rounds. The stream worker checks no output; the column «Neural Engine output valid» comes from the coreml-ne lines of the matrix and the paired runs of the same batch size and form (finding V2 of the Step 6c verify.html).
+Table 6. The two-stream run: Core ML on CPU_AND_NE and compiled mlx on the GPU, alone and at the same time, 10 s per case. Stream ratio = (ne + mlx, both) / (mlx alone), median over the rounds; round ratios: the stream ratio of each round, in round order (finding V6 of the Step 6d verify.html). The stream worker checks no output; the column «Neural Engine output valid» comes from the coreml-ne lines of the matrix and the paired runs of the same batch size and form (finding V2 of the Step 6c verify.html).

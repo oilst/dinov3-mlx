@@ -27,12 +27,12 @@ We considered:
 
 - **Two packages in a chain** (option B): the embeddings on CPU_ONLY, the blocks on CPU_AND_NE. One more call and a token copy for each batch, two loads, and the CPU work can slow the mlx process. Not needed, because option A fixes the fault in one package.
 - **Bound the fault, no fix** (option C): the Neural Engine path stays limited to ViT-S/16 and ViT-S+/16 at 224 px and batch size 1.
-- **The layout of Apple's ml-ane-transformers**: not needed for the parity. It can help the Neural Engine speed at 448 and 512 px (open question Q2 of `explore.html`).
+- **The layout of Apple's ml-ane-transformers**: not needed for the parity. It can help the Neural Engine speed at 448 and 512 px. Q2 of `explore.html` asked for a later step on this speed; the user said no (2026-11-09).
 
 Consequences:
 
 - The fix rests on a fault that we observed, not on a documented rule. A new macOS or coremltools can change the fault; T15 and T16 must run again after each upgrade (ADR 0015 already pins coremltools 9.0).
-- `_is_constant` counts a value as constant only if a `const` op makes it, or if it has a value and no producing op. A constant that a non-const op makes does not count (finding V7 of the Step 6d `verify.html`). No current graph has this form.
+- `_is_constant` counts a value as constant when a `const` op makes it or when it has a value (`val`), also from a non-const op (finding V7 of the Step 6d `verify.html`, fixed on 2026-11-09). With coremltools 9.0 the prefix is a `const` op also at batch size 8, so the old check found the same concats; the whole `ne3` backbone has no flagged concat (T15).
 - Every package of a new shape must be converted again with `ne3`. The first load of a new package compiles it for the Neural Engine and takes up to 118.8 s (ViT-H+/16, 512 px, batch size 8); a cached load takes at most 0.25 s. The bundle cache of Core ML grew by about 17 GB during the parity job of Step 6d.
 - At 224 px the batch API (8 calls of the batch-size-1 package in one `predict`) stays faster than the batch-size-8 package (ViT-S/16: 666 against 494 img/s). At 512 px both forms are equal.
 

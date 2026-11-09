@@ -3,7 +3,7 @@ import logging
 import os
 import subprocess
 import sys
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any
 
@@ -413,9 +413,7 @@ def test_bench_config_key_has_bits() -> None:
     """T15 (D22)."""
     config = BenchConfig("S6", "ViT-H+/16", "bf16-autocast", 512, 8, compile=True, bits=8)
     assert config.key == ("ViT-H+/16", "bf16-autocast", 512, 8, True, 8, 0)
-    assert BenchConfig("B1", *config.key) == BenchConfig(
-        "B1", "ViT-H+/16", "bf16-autocast", 512, 8, True, 8, 0
-    )
+    assert BenchConfig("B1", *config.key) == replace(config, run="B1")  # V15: field order
     old = {
         "model_size": "ViT-S/16",
         "dtype_mode": "fp32",

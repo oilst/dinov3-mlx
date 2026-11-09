@@ -120,7 +120,8 @@ def other_heavy_jobs(pattern: str = HEAVY_JOB_PATTERN, registry: Path = LOCK_REG
     A process outside the lock matches pattern and is none of these: the own process or one of its
     ancestors, a process of the own process group (for example the other commands of the shell
     pipeline that started this job), a registered process, an ancestor or a child of a registered
-    process.
+    process, a process of the process group of a registered process (the forked subshell of its
+    pipeline keeps the command line of the shell; finding V16 of specs/06-speed/verify.html).
 
     Args:
         pattern: The regular expression of the command lines of heavy jobs.
@@ -136,11 +137,12 @@ def other_heavy_jobs(pattern: str = HEAVY_JOB_PATTERN, registry: Path = LOCK_REG
     known = _ancestors(os.getpid(), table) | _descendants(registered, table)
     for pid in registered:
         known |= _ancestors(pid, table)
+    left_out = {own_group} | {groups[pid][1] for pid in registered}
     regex = re.compile(pattern)
     return [
         command
         for pid, (_, command) in sorted(table.items())
-        if pid not in known and groups[pid][1] != own_group and regex.search(command)
+        if pid not in known and groups[pid][1] not in left_out and regex.search(command)
     ]
 
 

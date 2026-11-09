@@ -156,6 +156,26 @@ def test_other_heavy_jobs_leaves_out_own_process_and_ancestors(tmp_path: Path) -
         assert command not in other_heavy_jobs(re.escape(command), tmp_path)
 
 
+def test_other_heavy_jobs_leaves_out_the_group_of_a_registered_job(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Finding V16 of specs/06-speed/verify.html: the forked subshell of a pipeline keeps the
+    command line of its shell and shares the process group of the registered job, so it does not
+    count. A process of another group still counts."""
+    shell = "zsh -c uv run python -m dinov3_apple.gpu_lock -- python scripts/bench_x.py | grep x"
+    table = {
+        900: (1, 900, "zsh"),
+        901: (900, 901, shell),  # the shell of the job: the leader of the job's process group
+        902: (901, 901, "uv run python -m dinov3_apple.gpu_lock -- python scripts/bench_x.py"),
+        903: (901, 901, shell),  # the forked subshell of the pipeline: a sibling of 902
+        950: (1, 950, "python scripts/bench_y.py"),  # a heavy job of another shell
+    }
+    monkeypatch.setattr(gpu_lock, "_process_groups", lambda: table)
+    (tmp_path / "902").touch()
+    found = other_heavy_jobs(r"scripts/bench_", tmp_path)
+    assert found == ["python scripts/bench_y.py"]
+
+
 def test_child_of_the_lock_holder_does_not_wait(tmp_path: Path, token: str) -> None:
     """T4: LOCK_ENV names an ancestor of the child (this test process)."""
     holder = start_waiter(tmp_path, token + "x", 2.0, "A")
@@ -177,7 +197,9 @@ def test_child_of_the_lock_holder_does_not_wait(tmp_path: Path, token: str) -> N
 
 
 def test_two_waiters_enter_one_after_the_other(tmp_path: Path, token: str) -> None:
-    """T5: B and C run under a parent that matches the test pattern, as uv run does."""
+    """T5: B and C run under a parent that matches the test pattern, as uv run does. Each parent
+    has its own session, as two jobs of two shells (finding V14 of specs/06-speed/verify.html):
+    then other_heavy_jobs sees the other parent, and the wait loop before the flock runs."""
     holder = start_waiter(tmp_path, token, 1.0, "A")
     time.sleep(0.2)
     parents = [
@@ -198,6 +220,7 @@ def test_two_waiters_enter_one_after_the_other(tmp_path: Path, token: str) -> No
             stderr=subprocess.PIPE,
             text=True,
             env=child_env(),
+            start_new_session=True,
         )
         for label in ("B", "C")
     ]

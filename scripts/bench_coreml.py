@@ -772,7 +772,7 @@ def _size_name(line: dict) -> str:
 
 def table_text(lines: list[dict]) -> str:
     """Return the Markdown text of results/coreml-table.md."""
-    from dinov3_apple.speedup import NOISE, pass_verdict, spread_between_runs
+    from dinov3_apple.speedup import pass_verdict, spread_between_runs
 
     out = [
         "# Core ML on the Neural Engine: rewrite ne3",
@@ -903,8 +903,7 @@ def table_text(lines: list[dict]) -> str:
             f"| {group} | {backend}{_form_mark(rows[0]['line'])} | "
             f"{', '.join(f'{m:.3f}' for m in medians)} | {pooled:.3f} | "
             f"{f'{spread_between_runs(medians):.3f}' if len(medians) > 1 else '–'} | "
-            f"{pass_verdict(medians, pooled)}"
-            f"{', inside the noise' if abs(pooled - 1) <= NOISE else ''} | "
+            f"{pass_verdict(medians, pooled)} | "
             f"{np.median([r['line'][output]['throughput_ips'] for r in rows]):,.1f} | "
             f"{np.median([r['mlx'][output]['throughput_ips'] for r in rows]):,.1f} | {len(rows)} |"
         )
@@ -922,8 +921,8 @@ def table_text(lines: list[dict]) -> str:
         "",
         "## 6 Two-stream run",
         "",
-        "| Group | Run | Neural Engine batch size | Neural Engine form | Neural Engine output valid | ne alone img/s | mlx alone img/s | both: ne img/s | both: mlx img/s | both: total img/s | Stream ratio | Rounds |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| Group | Run | Neural Engine batch size | Neural Engine form | Neural Engine output valid | ne alone img/s | mlx alone img/s | both: ne img/s | both: mlx img/s | both: total img/s | Stream ratio | Round ratios | Rounds |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     streams: dict[tuple, dict[int, dict[str, dict]]] = {}
     for line in lines:
@@ -946,14 +945,15 @@ def table_text(lines: list[dict]) -> str:
             f"| {group} | {run_id} | {ne_batch} | {form} | {valid} | {np.median(ne_alone):,.1f} | "
             f"{np.median(mlx_alone):,.1f} | {np.median(both_ne):,.1f} | {np.median(both_mlx):,.1f} | "
             f"{np.median([a + b for a, b in zip(both_ne, both_mlx, strict=True)]):,.1f} | "
-            f"{np.median(ratios):.3f} | {len(full)} |"
+            f"{np.median(ratios):.3f} | {', '.join(f'{r:.3f}' for r in ratios)} | {len(full)} |"
         )
     out += [
         "",
         (
             "Table 6. The two-stream run: Core ML on CPU_AND_NE and compiled mlx on the GPU, alone and "
             "at the same time, 10 s per case. Stream ratio = (ne + mlx, both) / (mlx alone), median "
-            "over the rounds. The stream worker checks no output; the column «Neural Engine output "
+            "over the rounds; round ratios: the stream ratio of each round, in round order "
+            "(finding V6 of the Step 6d verify.html). The stream worker checks no output; the column «Neural Engine output "
             "valid» comes from the coreml-ne lines of the matrix and the paired runs of the same "
             "batch size and form (finding V2 of the Step 6c verify.html)."
         ),

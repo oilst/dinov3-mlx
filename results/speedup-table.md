@@ -1,6 +1,6 @@
 # Speedup of mlx against torch-mps
 
-Made by `scripts/speedup_table.py` on 2026-11-07 from the Step 6 result files. Speedup = mlx throughput / torch-mps throughput of a paired run (ADR 0004, ADR 0009). Each side takes the fastest valid row of its dtype and output. A ratio within 1 ± 0.03 gets the mark "inside the noise". For an even number of values the median is the lower of the two middle values.
+Made by `scripts/speedup_table.py` on 2026-11-09 from the Step 6 result files. Speedup = mlx throughput / torch-mps throughput of a paired run (ADR 0004, ADR 0009). Each side takes the fastest valid row of its dtype and output. A ratio within 1 ± 0.03 gets the mark "inside the noise". For an even number of values the median is the lower of the two middle values.
 
 ## 1 P1 and P2: paired runs
 
@@ -16,8 +16,8 @@ Made by `scripts/speedup_table.py` on 2026-11-07 from the Step 6 result files. S
 | P2 | fp32 | patch | fp32 | fp32 (compile) | 1.089 | 1.097 | 1.092 | 0.008 | above 1 | 10 |
 | P2 | fp16 | frame | fp16-cast | fp16-cast (compile) | 1.021 | 1.063 | 1.032 | 0.041 | above 1 | 10 |
 | P2 | fp16 | patch | fp16-cast | fp16-cast (compile) | 1.022 | 1.063 | 1.033 | 0.041 | above 1 | 10 |
-| P2 | bf16 | frame | bf16-autocast | bf16-cast (compile) | 1.013 | 1.018 | 1.013 | 0.004 | above 1 | 10 |
-| P2 | bf16 | patch | bf16-autocast | bf16-cast (compile) | 1.013 | 1.017 | 1.013 | 0.004 | above 1 | 10 |
+| P2 | bf16 | frame | bf16-autocast | bf16-cast (compile) | 1.013 | 1.018 | 1.013 | 0.004 | above 1, inside the noise | 10 |
+| P2 | bf16 | patch | bf16-autocast | bf16-cast (compile) | 1.013 | 1.017 | 1.013 | 0.004 | above 1, inside the noise | 10 |
 
 Table 1. The paired speedup runs at P1 and P2 (D7, D21).
 
