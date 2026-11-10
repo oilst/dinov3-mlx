@@ -473,6 +473,21 @@ The highest compute rate that the matmuls of one shape and dtype reach on the GP
 **Relaxed precision**:
 The option of the NAX matrix operation that lets the hardware compute with less precision. MLX 0.32.4 turns it on in the NAX matmul and attention kernels.
 
+**Arithmetic intensity**:
+The FLOPs of a part divided by the bytes that it reads and writes in memory. Unit: FLOP/B.
+
+**Roofline**:
+A log-log plot of the reached TFLOP/s of each part against its arithmetic intensity, under two roofs: the memory roof and the matmul roof.
+
+**Matmul roof**:
+The highest GPU matmul limit that `scripts/probe_roofs.py` measures for one dtype. A measured value, not the peak of a data sheet.
+
+**Memory roof**:
+The highest GB/s that `scripts/probe_roofs.py` measures with memory-bound kernels.
+
+**Ridge point**:
+The arithmetic intensity where the two roofs meet: matmul roof / memory roof. A part below it is memory-bound, a part above it is compute-bound.
+
 ## Public API
 
 **Public API**:

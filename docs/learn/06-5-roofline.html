@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Roofline of a ViT-H+/16 Block</title>
+<style>
+/* Explainer page. White page, black text, no dark mode. */
+:root { --bg: #ffffff; --fg: #111414; --muted: #4a5655; --rule: #d6dedd; --panel: #f5f8f7; --accent: #057379; --s1: #2a78d6; --s2: #eb6834; color-scheme: light; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif; }
+main { max-width: 62rem; margin: 0 auto; padding: 40px 20px 64px; display: grid; gap: 1.75rem; }
+main > * { min-width: 0; }
+h1 { font-size: 1.9rem; line-height: 1.15; margin: 0; }
+h2 { font-size: 1.3rem; margin: 0; }
+section { display: grid; gap: 0.8rem; }
+p, ul, ol { margin: 0; max-width: 46rem; }
+li + li { margin-top: 0.25rem; }
+code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.86em; }
+pre { margin: 0; background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 0.8rem 1rem; overflow-x: auto; }
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+th, td { text-align: left; vertical-align: top; padding: 0.45rem 0.7rem 0.45rem 0; border-bottom: 1px solid var(--rule); }
+th { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); border-bottom: 1.5px solid var(--fg); }
+th.grp { border-bottom: 1px solid var(--rule); }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+tr.total td { font-weight: 600; border-top: 1.5px solid var(--fg); }
+.caption, figcaption { font-size: 0.88rem; color: var(--muted); }
+figure { margin: 0; display: grid; gap: 0.4rem; }
+.fig { border: 1px solid var(--rule); border-radius: 6px; padding: 0.5rem; overflow-x: auto; }
+.fig svg { display: block; width: 100%; height: auto; min-width: 640px; }
+.note-box { border-left: 3px solid var(--accent); padding: 0.3rem 0 0.3rem 0.9rem; }
+nav ol { columns: 2; }
+a { color: var(--accent); }
+.steps { font-size: 0.92rem; color: var(--muted); }
+.legend { display: flex; flex-wrap: wrap; gap: 0.4rem 1.4rem; font-size: 0.88rem; }
+.legend span { display: inline-flex; align-items: center; gap: 0.4rem; }
+.key { width: 11px; height: 11px; display: inline-block; }
+.key.s1 { background: var(--s1); border-radius: 50%; }
+.key.s2 { background: var(--s2); border-radius: 1.5px; }
+.key.roofk { width: 22px; height: 0; border-top: 2px solid var(--fg); }
+.grid { stroke: var(--rule); stroke-width: 1; }
+.axis { stroke: var(--muted); stroke-width: 1; }
+.tick { fill: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.axt { fill: var(--fg); font-size: 13px; }
+.roof { fill: none; stroke-width: 2; }
+.roof.s1 { stroke: var(--s1); }
+.roof.s2 { stroke: var(--s2); stroke-dasharray: 6 4; }
+.roofl, .lab { fill: var(--fg); font-size: 12.5px; }
+.ridge { stroke: var(--muted); stroke-dasharray: 2 3; }
+.note { fill: var(--muted); font-size: 12px; }
+.zoom { fill: none; stroke: var(--muted); stroke-dasharray: 3 3; }
+.pt { stroke: var(--bg); stroke-width: 2; }
+.pt.s1 { fill: var(--s1); }
+.pt.s2 { fill: var(--s2); }
+.pt:focus { outline: none; stroke: var(--fg); }
+.hit { fill: transparent; }
+#tip { position: fixed; pointer-events: none; background: var(--bg); color: var(--fg); border: 1px solid var(--rule); border-radius: 6px; padding: 0.45rem 0.6rem; font-size: 0.82rem; line-height: 1.4; box-shadow: 0 2px 10px rgba(17, 20, 20, 0.12); font-variant-numeric: tabular-nums; z-index: 5; }
+#tip b { display: block; }
+</style>
+</head>
+<body>
+<main>
+<header>
+  <h1>The Roofline of a ViT-H+/16 Block</h1>
+  <p>Explainer for roadmap Step 6. Date: 2026-11-10.</p>
+  <p class="steps">Step 6 explainers: <a href="06-1-compiled-forward-pass.html">1 Compiled forward pass</a> · <a href="06-2-attention-and-batch-size.html">2 Attention and batch size</a> · <a href="06-3-quantized-weights.html">3 Quantized weights</a> · <a href="06-4-preprocessing.html">4 Preprocessing</a> · 5 Roofline (this page). Step 3: <a href="03-where-the-compute-goes.html">Where the compute goes</a>.</p>
+  <p class="steps">Previous: <a href="06-4-preprocessing.html">06-4 Preprocessing</a></p>
+</header>
+
+<nav>
+  <h2>Contents</h2>
+  <ol>
+    <li><a href="#why">Why this explainer</a></li>
+    <li><a href="#idea">Arithmetic intensity and the roofline</a></li>
+    <li><a href="#roofs">The roofs of this Mac</a></li>
+    <li><a href="#plot">The roofline of one block</a></li>
+    <li><a href="#values">The values of each part</a></li>
+    <li><a href="#fusion">What the roofline says about fusion</a></li>
+    <li><a href="#count">How the page counts FLOPs and bytes</a></li>
+    <li><a href="#measure">How we measured</a></li>
+    <li><a href="#surprises">Surprises</a></li>
+    <li><a href="#sources">Sources</a></li>
+  </ol>
+</nav>
+
+<section id="why">
+  <h2>1 Why this explainer</h2>
+  <p>The speedup table of Step 6 gives the throughput of the compiled MLX port. It does not tell how close each part of a block is to the limits of this Mac. This page puts each part of block 1 of ViT-H+/16 at 512 px (T = 1,029 tokens), batch size 8, on a roofline. The configuration is P2 of <code>specs/06-speed/plan.html</code>, in fp16-cast and bf16-cast. The Mac is an Apple M5 Max with 40 GPU cores and 64 GB.</p>
+</section>
+
+<section id="idea">
+  <h2>2 Arithmetic intensity and the roofline</h2>
+  <p>The arithmetic intensity I of a part is its FLOPs divided by the bytes that it moves between memory and the GPU. Its unit is FLOP/B.</p>
+  <pre>attainable rate = min(matmul roof, memory roof × I)</pre>
+  <p>A part with a low intensity waits for memory: it is memory-bound, and its limit is the slanted roof. A part with a high intensity waits for the arithmetic units: it is compute-bound, and its limit is the flat roof. The ridge point is the intensity where the two roofs meet: matmul roof / memory roof.</p>
+</section>
+
+<section id="roofs">
+  <h2>3 The roofs of this Mac</h2>
+  <p>The matmul roof is 59.3 TFLOP/s in fp16 and 56.3 TFLOP/s in bf16. The memory roof is 528 GB/s. So the ridge point is 112 FLOP/B in fp16. These are the highest rates of <code>scripts/probe_roofs.py</code>, not the peaks of a data sheet (Section 8).</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Dtype</th><th class="num">nn.Linear, in → out</th><th class="num">ms</th><th class="num">TFLOP/s</th></tr></thead>
+    <tbody><tr><td>fp16</td><td class="num">1,280 → 3,840</td><td class="num">1.511</td><td class="num">53.6</td></tr><tr><td>fp16</td><td class="num">1,280 → 1,280</td><td class="num">0.627</td><td class="num">43.0</td></tr><tr><td>fp16</td><td class="num">1,280 → 5,120</td><td class="num">1.917</td><td class="num">56.3</td></tr><tr><td>fp16</td><td class="num">5,120 → 1,280</td><td class="num">1.999</td><td class="num">54.0</td></tr><tr><td>fp16</td><td class="num">1,280 → 10,240</td><td class="num">3.642</td><td class="num">59.3</td></tr><tr><td>fp16</td><td class="num">4,096 → 4,096</td><td class="num">4.667</td><td class="num">59.2</td></tr><tr><td>bf16</td><td class="num">1,280 → 3,840</td><td class="num">1.492</td><td class="num">54.2</td></tr><tr><td>bf16</td><td class="num">1,280 → 1,280</td><td class="num">0.649</td><td class="num">41.6</td></tr><tr><td>bf16</td><td class="num">1,280 → 5,120</td><td class="num">1.917</td><td class="num">56.3</td></tr><tr><td>bf16</td><td class="num">5,120 → 1,280</td><td class="num">2.347</td><td class="num">46.0</td></tr><tr><td>bf16</td><td class="num">1,280 → 10,240</td><td class="num">4.780</td><td class="num">45.1</td></tr><tr><td>bf16</td><td class="num">4,096 → 4,096</td><td class="num">8.101</td><td class="num">34.1</td></tr></tbody>
+  </table></div>
+  <p class="caption">Table 1. Linear probe: one compiled <code>nn.Linear</code> with bias on an input (8, 1,029, in). 1,280 → 1,280 is the shape of q_proj, k_proj, v_proj and o_proj. 1,280 → 5,120 is gate_proj or up_proj, 5,120 → 1,280 is down_proj (ff_out). 1,280 → 3,840 and 1,280 → 10,240 are the fused forms of D6 b: q, k and v in one matmul, and gate and up in one matmul.</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Dtype</th><th class="num">a @ b, m × k × n</th><th class="num">ms</th><th class="num">TFLOP/s</th></tr></thead>
+    <tbody><tr><td>fp32</td><td class="num">2,048 × 2,048 × 2,048</td><td class="num">1.558</td><td class="num">11.0</td></tr><tr><td>fp32</td><td class="num">4,096 × 4,096 × 4,096</td><td class="num">9.532</td><td class="num">14.4</td></tr><tr><td>fp32</td><td class="num">8,192 × 8,192 × 8,192</td><td class="num">121.460</td><td class="num">9.1</td></tr><tr><td>fp32</td><td class="num">8,232 × 1,280 × 3,840</td><td class="num">9.306</td><td class="num">8.7</td></tr><tr><td>fp32</td><td class="num">8,232 × 1,280 × 1,280</td><td class="num">2.021</td><td class="num">13.3</td></tr><tr><td>fp32</td><td class="num">8,232 × 1,280 × 10,240</td><td class="num">15.659</td><td class="num">13.8</td></tr><tr><td>fp32</td><td class="num">8,232 × 5,120 × 1,280</td><td class="num">11.693</td><td class="num">9.2</td></tr><tr><td>fp32</td><td class="num">16,384 × 4,096 × 4,096</td><td class="num">56.911</td><td class="num">9.7</td></tr><tr><td>fp16</td><td class="num">2,048 × 2,048 × 2,048</td><td class="num">0.658</td><td class="num">26.1</td></tr><tr><td>fp16</td><td class="num">4,096 × 4,096 × 4,096</td><td class="num">3.321</td><td class="num">41.4</td></tr><tr><td>fp16</td><td class="num">8,192 × 8,192 × 8,192</td><td class="num">31.544</td><td class="num">34.9</td></tr><tr><td>fp16</td><td class="num">8,232 × 1,280 × 3,840</td><td class="num">2.330</td><td class="num">34.7</td></tr><tr><td>fp16</td><td class="num">8,232 × 1,280 × 1,280</td><td class="num">0.925</td><td class="num">29.1</td></tr><tr><td>fp16</td><td class="num">8,232 × 1,280 × 10,240</td><td class="num">5.422</td><td class="num">39.8</td></tr><tr><td>fp16</td><td class="num">8,232 × 5,120 × 1,280</td><td class="num">3.018</td><td class="num">35.7</td></tr><tr><td>fp16</td><td class="num">16,384 × 4,096 × 4,096</td><td class="num">14.206</td><td class="num">38.7</td></tr><tr><td>bf16</td><td class="num">2,048 × 2,048 × 2,048</td><td class="num">0.904</td><td class="num">19.0</td></tr><tr><td>bf16</td><td class="num">4,096 × 4,096 × 4,096</td><td class="num">3.932</td><td class="num">35.0</td></tr><tr><td>bf16</td><td class="num">8,192 × 8,192 × 8,192</td><td class="num">31.160</td><td class="num">35.3</td></tr><tr><td>bf16</td><td class="num">8,232 × 1,280 × 3,840</td><td class="num">3.024</td><td class="num">26.8</td></tr><tr><td>bf16</td><td class="num">8,232 × 1,280 × 1,280</td><td class="num">1.078</td><td class="num">25.0</td></tr><tr><td>bf16</td><td class="num">8,232 × 1,280 × 10,240</td><td class="num">7.253</td><td class="num">29.8</td></tr><tr><td>bf16</td><td class="num">8,232 × 5,120 × 1,280</td><td class="num">2.946</td><td class="num">36.6</td></tr><tr><td>bf16</td><td class="num">16,384 × 4,096 × 4,096</td><td class="num">15.198</td><td class="num">36.2</td></tr></tbody>
+  </table></div>
+  <p class="caption">Table 2. Plain probe: <code>a @ b</code> with b stored as (k, n). fp32 with TF32 off (ADR 0005).</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Dtype</th><th>Kernel</th><th class="num">Values</th><th class="num">GB/s</th></tr></thead>
+    <tbody><tr><td>fp32</td><td>x * 2 (read and write)</td><td class="num">64 Mi</td><td class="num">451.6</td></tr><tr><td>fp32</td><td>mx.sum (read)</td><td class="num">64 Mi</td><td class="num">360.1</td></tr><tr><td>fp32</td><td>x * 2 (read and write)</td><td class="num">256 Mi</td><td class="num">517.7</td></tr><tr><td>fp32</td><td>mx.sum (read)</td><td class="num">256 Mi</td><td class="num">513.4</td></tr><tr><td>fp32</td><td>x * 2 (read and write)</td><td class="num">512 Mi</td><td class="num">521.0</td></tr><tr><td>fp32</td><td>mx.sum (read)</td><td class="num">512 Mi</td><td class="num">527.7</td></tr><tr><td>fp16</td><td>x * 2 (read and write)</td><td class="num">64 Mi</td><td class="num">351.8</td></tr><tr><td>fp16</td><td>mx.sum (read)</td><td class="num">64 Mi</td><td class="num">324.7</td></tr><tr><td>fp16</td><td>x * 2 (read and write)</td><td class="num">256 Mi</td><td class="num">495.7</td></tr><tr><td>fp16</td><td>mx.sum (read)</td><td class="num">256 Mi</td><td class="num">462.4</td></tr><tr><td>fp16</td><td>x * 2 (read and write)</td><td class="num">512 Mi</td><td class="num">522.4</td></tr><tr><td>fp16</td><td>mx.sum (read)</td><td class="num">512 Mi</td><td class="num">524.6</td></tr></tbody>
+  </table></div>
+  <p class="caption">Table 3. Memory probe. GB/s counts the bytes read plus the bytes written.</p>
+</section>
+
+<section id="plot">
+  <h2>4 The roofline of one block</h2>
+  <figure>
+    <div class="legend" aria-hidden="true"><span><i class="key s1"></i>fp16-cast</span><span><i class="key s2"></i>bf16-cast</span><span><i class="key roofk"></i>roof (solid fp16, dashed bf16)</span></div>
+    <div class="fig"><svg viewBox="0 0 820 500" role="img" aria-label="Roofline of the 11 block parts and block 1"><line x1="70.0" y1="20" x2="70.0" y2="448" class="grid"/><text x="70.0" y="466" class="tick" text-anchor="middle">0.1</text><line x1="233.1" y1="20" x2="233.1" y2="448" class="grid"/><text x="233.1" y="466" class="tick" text-anchor="middle">1</text><line x1="396.1" y1="20" x2="396.1" y2="448" class="grid"/><text x="396.1" y="466" class="tick" text-anchor="middle">10</text><line x1="559.2" y1="20" x2="559.2" y2="448" class="grid"/><text x="559.2" y="466" class="tick" text-anchor="middle">100</text><line x1="722.2" y1="20" x2="722.2" y2="448" class="grid"/><text x="722.2" y="466" class="tick" text-anchor="middle">1000</text><line x1="70" y1="448.0" x2="800" y2="448.0" class="grid"/><text x="62" y="452.0" class="tick" text-anchor="end">0.01</text><line x1="70" y1="341.0" x2="800" y2="341.0" class="grid"/><text x="62" y="345.0" class="tick" text-anchor="end">0.1</text><line x1="70" y1="234.0" x2="800" y2="234.0" class="grid"/><text x="62" y="238.0" class="tick" text-anchor="end">1</text><line x1="70" y1="127.0" x2="800" y2="127.0" class="grid"/><text x="62" y="131.0" class="tick" text-anchor="end">10</text><line x1="70" y1="20.0" x2="800" y2="20.0" class="grid"/><text x="62" y="24.0" class="tick" text-anchor="end">100</text><line x1="70" y1="448" x2="800" y2="448" class="axis"/><line x1="70" y1="20" x2="70" y2="448" class="axis"/><text x="435.0" y="490" class="axt" text-anchor="middle">Arithmetic intensity (FLOP per byte moved, log scale)</text><text x="16" y="234.0" class="axt" text-anchor="middle" transform="rotate(-90 16 234.0)">Reached TFLOP/s (log scale)</text><path d="M70.0,370.7 L567.4,44.3 L800.0,44.3" class="roof s1"/><path d="M70.0,370.7 L563.7,46.7 L800.0,46.7" class="roof s2"/><line x1="567.4" y1="44.3" x2="567.4" y2="448" class="ridge"/><text x="573.4" y="440" class="note">ridge point 112 FLOP/B (fp16)</text><text x="310.8" y="204.6" class="roofl" transform="rotate(-33.3 310.8 204.6)">memory roof: 528 GB/s</text><text x="796.0" y="36.3" class="roofl" text-anchor="end">matmul roof: fp16 59.3, bf16 56.3 TFLOP/s</text><rect x="643.7" y="39.3" width="88.4" height="39.8" class="zoom"/><text x="732.1" y="97.2" class="lab" text-anchor="end">matmul parts: Figure 2</text><rect x="277.1" y="281.7" width="10.0" height="10.0" rx="1.5" class="pt s2" data-tip="norm1 · bf16-cast|2.00 FLOP/B|0.32 TFLOP/s · 160.8 GB/s|0.262 ms|30.5 % of the roof|FLOPs: estimate" tabindex="0"/><circle cx="282.1" cy="286.7" r="12" class="hit" data-tip="norm1 · bf16-cast|2.00 FLOP/B|0.32 TFLOP/s · 160.8 GB/s|0.262 ms|30.5 % of the roof|FLOPs: estimate"/><rect x="706.5" y="54.1" width="10.0" height="10.0" rx="1.5" class="pt s2" data-tip="qkv_proj · bf16-cast|859.74 FLOP/B|43.07 TFLOP/s · 50.1 GB/s|1.879 ms|76.5 % of the roof" tabindex="0"/><circle cx="711.5" cy="59.1" r="12" class="hit" data-tip="qkv_proj · bf16-cast|859.74 FLOP/B|43.07 TFLOP/s · 50.1 GB/s|1.879 ms|76.5 % of the roof"/><rect x="179.0" y="350.2" width="10.0" height="10.0" rx="1.5" class="pt s2" data-tip="rope · bf16-cast|0.50 FLOP/B|0.07 TFLOP/s · 147.4 GB/s|0.858 ms|27.9 % of the roof|FLOPs: estimate" tabindex="0"/><circle cx="184.0" cy="355.2" r="12" class="hit" data-tip="rope · bf16-cast|0.50 FLOP/B|0.07 TFLOP/s · 147.4 GB/s|0.858 ms|27.9 % of the roof|FLOPs: estimate"/><rect x="670.1" y="63.9" width="10.0" height="10.0" rx="1.5" class="pt s2" data-tip="sdpa · bf16-cast|514.50 FLOP/B|34.91 TFLOP/s · 67.9 GB/s|1.242 ms|62.0 % of the roof" tabindex="0"/><circle cx="675.1" cy="68.9" r="12" class="hit" data-tip="sdpa · bf16-cast|514.50 FLOP/B|34.91 TFLOP/s · 67.9 GB/s|1.242 ms|62.0 % of the roof"/><rect x="680.3" y="63.9" width="10.0" height="10.0" rx="1.5" class="pt s2" data-tip="o_proj · bf16-cast|593.83 FLOP/B|34.89 TFLOP/s · 58.8 GB/s|0.773 ms|62.0 % of the roof" tabindex="0"/><circle cx="685.3" cy="68.9" r="12" class="hit" data-tip="o_proj · bf16-cast|593.83 FLOP/B|34.89 TFLOP/s · 58.8 GB/s|0.773 ms|62.0 % of the roof"/><rect x="150.3" y="357.0" width="10.0" height="10.0" rx="1.5" class="pt s2" data-tip="layer_scale1 · bf16-cast|0.33 FLOP/B|0.06 TFLOP/s · 190.9 GB/s|0.331 ms|36.2 % of the roof|FLOPs: estimate" tabindex="0"/><circle cx="155.3" cy="362.0" r="12" class="hit" data-tip="layer_scale1 · bf16-cast|0.33 FLOP/B|0.06 TFLOP/s · 190.9 GB/s|0.331 ms|36.2 % of the roof|FLOPs: estimate"/><rect x="277.1" y="285.3" width="10.0" height="10.0" rx="1.5" class="pt s2" data-tip="norm2 · bf16-cast|2.00 FLOP/B|0.30 TFLOP/s · 149.0 GB/s|0.283 ms|28.2 % of the roof|FLOPs: estimate" tabindex="0"/><circle cx="282.1" cy="290.3" r="12" class="hit" data-tip="norm2 · bf16-cast|2.00 FLOP/B|0.30 TFLOP/s · 149.0 GB/s|0.283 ms|28.2 % of the roof|FLOPs: estimate"/><rect x="717.2" y="51.2" width="10.0" height="10.0" rx="1.5" class="pt s2" data-tip="ff_in · bf16-cast|999.62 FLOP/B|45.84 TFLOP/s · 45.9 GB/s|4.708 ms|81.4 % of the roof" tabindex="0"/><circle cx="722.2" cy="56.2" r="12" class="hit" data-tip="ff_in · bf16-cast|999.62 FLOP/B|45.84 TFLOP/s · 45.9 GB/s|4.708 ms|81.4 % of the roof"/><rect x="228.1" y="274.7" width="10.0" height="10.0" rx="1.5" class="pt s2" data-tip="activation · bf16-cast|1.00 FLOP/B|0.37 TFLOP/s · 373.9 GB/s|0.676 ms|70.8 % of the roof|FLOPs: estimate" tabindex="0"/><circle cx="233.1" cy="279.7" r="12" class="hit" data-tip="activation · bf16-cast|1.00 FLOP/B|0.37 TFLOP/s · 373.9 GB/s|0.676 ms|70.8 % of the roof|FLOPs: estimate"/><rect x="710.6" y="53.9" width="10.0" height="10.0" rx="1.5" class="pt s2" data-tip="ff_out · bf16-cast|910.71 FLOP/B|43.34 TFLOP/s · 47.6 GB/s|2.490 ms|77.0 % of the roof" tabindex="0"/><circle cx="715.6" cy="58.9" r="12" class="hit" data-tip="ff_out · bf16-cast|910.71 FLOP/B|43.34 TFLOP/s · 47.6 GB/s|2.490 ms|77.0 % of the roof"/><rect x="150.3" y="352.0" width="10.0" height="10.0" rx="1.5" class="pt s2" data-tip="layer_scale2 · bf16-cast|0.33 FLOP/B|0.07 TFLOP/s · 212.6 GB/s|0.297 ms|40.3 % of the roof|FLOPs: estimate" tabindex="0"/><circle cx="155.3" cy="357.0" r="12" class="hit" data-tip="layer_scale2 · bf16-cast|0.33 FLOP/B|0.07 TFLOP/s · 212.6 GB/s|0.297 ms|40.3 % of the roof|FLOPs: estimate"/><rect x="654.8" y="59.5" width="10.0" height="10.0" rx="1.5" class="pt s2" data-tip="block · bf16-cast|414.09 FLOP/B|38.37 TFLOP/s · 92.7 GB/s|12.391 ms|68.2 % of the roof" tabindex="0"/><circle cx="659.8" cy="64.5" r="12" class="hit" data-tip="block · bf16-cast|414.09 FLOP/B|38.37 TFLOP/s · 92.7 GB/s|12.391 ms|68.2 % of the roof"/><circle cx="282.1" cy="283.9" r="3.5" class="pt s1" data-tip="norm1 · fp16-cast|2.00 FLOP/B|0.34 TFLOP/s · 170.9 GB/s|0.247 ms|32.4 % of the roof|FLOPs: estimate" tabindex="0"/><circle cx="282.1" cy="283.9" r="12" class="hit" data-tip="norm1 · fp16-cast|2.00 FLOP/B|0.34 TFLOP/s · 170.9 GB/s|0.247 ms|32.4 % of the roof|FLOPs: estimate"/><circle cx="711.5" cy="59.1" r="3.5" class="pt s1" data-tip="qkv_proj · fp16-cast|859.74 FLOP/B|43.14 TFLOP/s · 50.2 GB/s|1.876 ms|72.8 % of the roof" tabindex="0"/><circle cx="711.5" cy="59.1" r="12" class="hit" data-tip="qkv_proj · fp16-cast|859.74 FLOP/B|43.14 TFLOP/s · 50.2 GB/s|1.876 ms|72.8 % of the roof"/><circle cx="184.0" cy="354.0" r="3.5" class="pt s1" data-tip="rope · fp16-cast|0.50 FLOP/B|0.08 TFLOP/s · 151.3 GB/s|0.836 ms|28.7 % of the roof|FLOPs: estimate" tabindex="0"/><circle cx="184.0" cy="354.0" r="12" class="hit" data-tip="rope · fp16-cast|0.50 FLOP/B|0.08 TFLOP/s · 151.3 GB/s|0.836 ms|28.7 % of the roof|FLOPs: estimate"/><circle cx="675.1" cy="66.8" r="3.5" class="pt s1" data-tip="sdpa · fp16-cast|514.50 FLOP/B|36.52 TFLOP/s · 71.0 GB/s|1.187 ms|61.6 % of the roof" tabindex="0"/><circle cx="675.1" cy="66.8" r="12" class="hit" data-tip="sdpa · fp16-cast|514.50 FLOP/B|36.52 TFLOP/s · 71.0 GB/s|1.187 ms|61.6 % of the roof"/><circle cx="685.3" cy="67.8" r="3.5" class="pt s1" data-tip="o_proj · fp16-cast|593.83 FLOP/B|35.74 TFLOP/s · 60.2 GB/s|0.755 ms|60.3 % of the roof" tabindex="0"/><circle cx="685.3" cy="67.8" r="12" class="hit" data-tip="o_proj · fp16-cast|593.83 FLOP/B|35.74 TFLOP/s · 60.2 GB/s|0.755 ms|60.3 % of the roof"/><circle cx="155.3" cy="363.1" r="3.5" class="pt s1" data-tip="layer_scale1 · fp16-cast|0.33 FLOP/B|0.06 TFLOP/s · 186.4 GB/s|0.339 ms|35.3 % of the roof|FLOPs: estimate" tabindex="0"/><circle cx="155.3" cy="363.1" r="12" class="hit" data-tip="layer_scale1 · fp16-cast|0.33 FLOP/B|0.06 TFLOP/s · 186.4 GB/s|0.339 ms|35.3 % of the roof|FLOPs: estimate"/><circle cx="282.1" cy="285.9" r="3.5" class="pt s1" data-tip="norm2 · fp16-cast|2.00 FLOP/B|0.33 TFLOP/s · 163.6 GB/s|0.258 ms|31.0 % of the roof|FLOPs: estimate" tabindex="0"/><circle cx="282.1" cy="285.9" r="12" class="hit" data-tip="norm2 · fp16-cast|2.00 FLOP/B|0.33 TFLOP/s · 163.6 GB/s|0.258 ms|31.0 % of the roof|FLOPs: estimate"/><circle cx="722.2" cy="51.9" r="3.5" class="pt s1" data-tip="ff_in · fp16-cast|999.62 FLOP/B|50.29 TFLOP/s · 50.3 GB/s|4.291 ms|84.9 % of the roof" tabindex="0"/><circle cx="722.2" cy="51.9" r="12" class="hit" data-tip="ff_in · fp16-cast|999.62 FLOP/B|50.29 TFLOP/s · 50.3 GB/s|4.291 ms|84.9 % of the roof"/><circle cx="233.1" cy="280.2" r="3.5" class="pt s1" data-tip="activation · fp16-cast|1.00 FLOP/B|0.37 TFLOP/s · 370.2 GB/s|0.683 ms|70.1 % of the roof|FLOPs: estimate" tabindex="0"/><circle cx="233.1" cy="280.2" r="12" class="hit" data-tip="activation · fp16-cast|1.00 FLOP/B|0.37 TFLOP/s · 370.2 GB/s|0.683 ms|70.1 % of the roof|FLOPs: estimate"/><circle cx="715.6" cy="55.4" r="3.5" class="pt s1" data-tip="ff_out · fp16-cast|910.71 FLOP/B|46.71 TFLOP/s · 51.3 GB/s|2.310 ms|78.8 % of the roof" tabindex="0"/><circle cx="715.6" cy="55.4" r="12" class="hit" data-tip="ff_out · fp16-cast|910.71 FLOP/B|46.71 TFLOP/s · 51.3 GB/s|2.310 ms|78.8 % of the roof"/><circle cx="155.3" cy="358.0" r="3.5" class="pt s1" data-tip="layer_scale2 · fp16-cast|0.33 FLOP/B|0.07 TFLOP/s · 208.3 GB/s|0.304 ms|39.5 % of the roof|FLOPs: estimate" tabindex="0"/><circle cx="155.3" cy="358.0" r="12" class="hit" data-tip="layer_scale2 · fp16-cast|0.33 FLOP/B|0.07 TFLOP/s · 208.3 GB/s|0.304 ms|39.5 % of the roof|FLOPs: estimate"/><circle cx="659.8" cy="62.8" r="3.5" class="pt s1" data-tip="block · fp16-cast|414.09 FLOP/B|39.84 TFLOP/s · 96.2 GB/s|11.934 ms|67.2 % of the roof" tabindex="0"/><circle cx="659.8" cy="62.8" r="12" class="hit" data-tip="block · fp16-cast|414.09 FLOP/B|39.84 TFLOP/s · 96.2 GB/s|11.934 ms|67.2 % of the roof"/><text x="155.3" y="387.1" class="lab" text-anchor="middle">layer_scale1, layer_scale2</text><text x="192.0" y="342.0" class="lab" text-anchor="start">rope</text><text x="223.1" y="268.2" class="lab" text-anchor="end">activation</text><text x="292.1" y="271.9" class="lab" text-anchor="start">norm1, norm2</text></svg></div>
+    <figcaption>Figure 1. Roofline of block 1 of ViT-H+/16 at 512 px, batch size 8. Each point is one part, timed alone and compiled. The dashed frame shows the region of Figure 2. Move the pointer over a point for its values.</figcaption>
+  </figure>
+  <figure>
+    <div class="fig"><svg viewBox="0 0 820 440" role="img" aria-label="The compute-bound region, enlarged"><line x1="182.5" y1="20" x2="182.5" y2="388" class="grid"/><text x="182.5" y="406" class="tick" text-anchor="middle">400</text><line x1="313.0" y1="20" x2="313.0" y2="388" class="grid"/><text x="313.0" y="406" class="tick" text-anchor="middle">500</text><line x1="419.6" y1="20" x2="419.6" y2="388" class="grid"/><text x="419.6" y="406" class="tick" text-anchor="middle">600</text><line x1="509.7" y1="20" x2="509.7" y2="388" class="grid"/><text x="509.7" y="406" class="tick" text-anchor="middle">700</text><line x1="587.8" y1="20" x2="587.8" y2="388" class="grid"/><text x="587.8" y="406" class="tick" text-anchor="middle">800</text><line x1="656.7" y1="20" x2="656.7" y2="388" class="grid"/><text x="656.7" y="406" class="tick" text-anchor="middle">900</text><line x1="718.3" y1="20" x2="718.3" y2="388" class="grid"/><text x="718.3" y="406" class="tick" text-anchor="middle">1000</text><line x1="70" y1="368.6" x2="800" y2="368.6" class="grid"/><text x="62" y="372.6" class="tick" text-anchor="end">30</text><line x1="70" y1="320.2" x2="800" y2="320.2" class="grid"/><text x="62" y="324.2" class="tick" text-anchor="end">35</text><line x1="70" y1="271.8" x2="800" y2="271.8" class="grid"/><text x="62" y="275.8" class="tick" text-anchor="end">40</text><line x1="70" y1="223.4" x2="800" y2="223.4" class="grid"/><text x="62" y="227.4" class="tick" text-anchor="end">45</text><line x1="70" y1="174.9" x2="800" y2="174.9" class="grid"/><text x="62" y="178.9" class="tick" text-anchor="end">50</text><line x1="70" y1="126.5" x2="800" y2="126.5" class="grid"/><text x="62" y="130.5" class="tick" text-anchor="end">55</text><line x1="70" y1="78.1" x2="800" y2="78.1" class="grid"/><text x="62" y="82.1" class="tick" text-anchor="end">60</text><line x1="70" y1="29.7" x2="800" y2="29.7" class="grid"/><text x="62" y="33.7" class="tick" text-anchor="end">65</text><line x1="70" y1="388" x2="800" y2="388" class="axis"/><line x1="70" y1="20" x2="70" y2="388" class="axis"/><text x="435.0" y="430" class="axt" text-anchor="middle">Arithmetic intensity (FLOP per byte moved, log scale)</text><text x="16" y="204.0" class="axt" text-anchor="middle" transform="rotate(-90 16 204.0)">Reached TFLOP/s (linear scale)</text><line x1="70" y1="85.3" x2="800" y2="85.3" class="roof s1"/><line x1="70" y1="114.0" x2="800" y2="114.0" class="roof s2"/><text x="78" y="78.3" class="roofl">fp16 matmul roof 59.3 TFLOP/s</text><text x="78" y="130.0" class="roofl">bf16 matmul roof 56.3 TFLOP/s</text><rect x="625.2" y="237.3" width="9.5" height="9.5" rx="1.5" class="pt s2" data-tip="qkv_proj · bf16-cast|859.74 FLOP/B|43.07 TFLOP/s · 50.1 GB/s|1.879 ms|76.5 % of the roof" tabindex="0"/><circle cx="629.9" cy="242.1" r="12" class="hit" data-tip="qkv_proj · bf16-cast|859.74 FLOP/B|43.07 TFLOP/s · 50.1 GB/s|1.879 ms|76.5 % of the roof"/><rect x="324.9" y="316.3" width="9.5" height="9.5" rx="1.5" class="pt s2" data-tip="sdpa · bf16-cast|514.50 FLOP/B|34.91 TFLOP/s · 67.9 GB/s|1.242 ms|62.0 % of the roof" tabindex="0"/><circle cx="329.7" cy="321.0" r="12" class="hit" data-tip="sdpa · bf16-cast|514.50 FLOP/B|34.91 TFLOP/s · 67.9 GB/s|1.242 ms|62.0 % of the roof"/><rect x="408.8" y="316.5" width="9.5" height="9.5" rx="1.5" class="pt s2" data-tip="o_proj · bf16-cast|593.83 FLOP/B|34.89 TFLOP/s · 58.8 GB/s|0.773 ms|62.0 % of the roof" tabindex="0"/><circle cx="413.5" cy="321.3" r="12" class="hit" data-tip="o_proj · bf16-cast|593.83 FLOP/B|34.89 TFLOP/s · 58.8 GB/s|0.773 ms|62.0 % of the roof"/><rect x="713.3" y="210.5" width="9.5" height="9.5" rx="1.5" class="pt s2" data-tip="ff_in · bf16-cast|999.62 FLOP/B|45.84 TFLOP/s · 45.9 GB/s|4.708 ms|81.4 % of the roof" tabindex="0"/><circle cx="718.1" cy="215.2" r="12" class="hit" data-tip="ff_in · bf16-cast|999.62 FLOP/B|45.84 TFLOP/s · 45.9 GB/s|4.708 ms|81.4 % of the roof"/><rect x="658.8" y="234.7" width="9.5" height="9.5" rx="1.5" class="pt s2" data-tip="ff_out · bf16-cast|910.71 FLOP/B|43.34 TFLOP/s · 47.6 GB/s|2.490 ms|77.0 % of the roof" tabindex="0"/><circle cx="663.6" cy="239.5" r="12" class="hit" data-tip="ff_out · bf16-cast|910.71 FLOP/B|43.34 TFLOP/s · 47.6 GB/s|2.490 ms|77.0 % of the roof"/><rect x="198.0" y="282.8" width="9.5" height="9.5" rx="1.5" class="pt s2" data-tip="block · bf16-cast|414.09 FLOP/B|38.37 TFLOP/s · 92.7 GB/s|12.391 ms|68.2 % of the roof" tabindex="0"/><circle cx="202.7" cy="287.5" r="12" class="hit" data-tip="block · bf16-cast|414.09 FLOP/B|38.37 TFLOP/s · 92.7 GB/s|12.391 ms|68.2 % of the roof"/><circle cx="629.9" cy="241.4" r="5.5" class="pt s1" data-tip="qkv_proj · fp16-cast|859.74 FLOP/B|43.14 TFLOP/s · 50.2 GB/s|1.876 ms|72.8 % of the roof" tabindex="0"/><circle cx="629.9" cy="241.4" r="12" class="hit" data-tip="qkv_proj · fp16-cast|859.74 FLOP/B|43.14 TFLOP/s · 50.2 GB/s|1.876 ms|72.8 % of the roof"/><circle cx="329.7" cy="305.5" r="5.5" class="pt s1" data-tip="sdpa · fp16-cast|514.50 FLOP/B|36.52 TFLOP/s · 71.0 GB/s|1.187 ms|61.6 % of the roof" tabindex="0"/><circle cx="329.7" cy="305.5" r="12" class="hit" data-tip="sdpa · fp16-cast|514.50 FLOP/B|36.52 TFLOP/s · 71.0 GB/s|1.187 ms|61.6 % of the roof"/><circle cx="413.5" cy="313.0" r="5.5" class="pt s1" data-tip="o_proj · fp16-cast|593.83 FLOP/B|35.74 TFLOP/s · 60.2 GB/s|0.755 ms|60.3 % of the roof" tabindex="0"/><circle cx="413.5" cy="313.0" r="12" class="hit" data-tip="o_proj · fp16-cast|593.83 FLOP/B|35.74 TFLOP/s · 60.2 GB/s|0.755 ms|60.3 % of the roof"/><circle cx="718.1" cy="172.2" r="5.5" class="pt s1" data-tip="ff_in · fp16-cast|999.62 FLOP/B|50.29 TFLOP/s · 50.3 GB/s|4.291 ms|84.9 % of the roof" tabindex="0"/><circle cx="718.1" cy="172.2" r="12" class="hit" data-tip="ff_in · fp16-cast|999.62 FLOP/B|50.29 TFLOP/s · 50.3 GB/s|4.291 ms|84.9 % of the roof"/><circle cx="663.6" cy="206.8" r="5.5" class="pt s1" data-tip="ff_out · fp16-cast|910.71 FLOP/B|46.71 TFLOP/s · 51.3 GB/s|2.310 ms|78.8 % of the roof" tabindex="0"/><circle cx="663.6" cy="206.8" r="12" class="hit" data-tip="ff_out · fp16-cast|910.71 FLOP/B|46.71 TFLOP/s · 51.3 GB/s|2.310 ms|78.8 % of the roof"/><circle cx="202.7" cy="273.3" r="5.5" class="pt s1" data-tip="block · fp16-cast|414.09 FLOP/B|39.84 TFLOP/s · 96.2 GB/s|11.934 ms|67.2 % of the roof" tabindex="0"/><circle cx="202.7" cy="273.3" r="12" class="hit" data-tip="block · fp16-cast|414.09 FLOP/B|39.84 TFLOP/s · 96.2 GB/s|11.934 ms|67.2 % of the roof"/><text x="202.7" y="257.3" class="lab" text-anchor="middle">block 1 (compiled)</text><text x="317.7" y="310.5" class="lab" text-anchor="end">sdpa</text><text x="425.5" y="331.0" class="lab" text-anchor="start">o_proj</text><text x="617.9" y="246.4" class="lab" text-anchor="end">qkv_proj</text><text x="677.6" y="211.8" class="lab" text-anchor="start">ff_out</text><text x="732.1" y="177.2" class="lab" text-anchor="start">ff_in</text></svg></div>
+    <figcaption>Figure 2. The compute-bound region of Figure 1, enlarged, with a linear y axis. The labels are at the fp16-cast points. The bf16-cast point of each part has the same intensity.</figcaption>
+  </figure>
+  <ul>
+    <li>The five matmul parts have an intensity of 514 to 1,000 FLOP/B: 4.6 to 8.9 times the ridge point. They are compute-bound. They reach 60 to 85 % of the matmul roof.</li>
+    <li>The six element-wise parts have an intensity of 0.33 to 2 FLOP/B. They are memory-bound. Timed alone, they reach 28 to 71 % of the memory roof.</li>
+    <li>Block 1 as one compiled function reaches 39.8 TFLOP/s in fp16-cast: 67 % of the fp16 matmul roof. The forward pass gives 20.6 img/s × 1,902 GFLOP per image (<code>flops.image_flops</code>) = 39.3 TFLOP/s.</li>
+    <li>fp16-cast and bf16-cast are almost equal. bf16-cast needs 10 % more time in ff_in and 8 % more time in ff_out.</li>
+  </ul>
+</section>
+
+<section id="values">
+  <h2>5 The values of each part</h2>
+  <div class="table-wrap"><table>
+    <thead>
+      <tr><th rowspan="2">Part</th><th rowspan="2">Kind</th><th rowspan="2" class="num">FLOP/B</th><th colspan="4" class="grp">fp16-cast</th><th colspan="4" class="grp">bf16-cast</th></tr>
+      <tr><th class="num">ms</th><th class="num">TFLOP/s</th><th class="num">GB/s</th><th class="num">of roof</th><th class="num">ms</th><th class="num">TFLOP/s</th><th class="num">GB/s</th><th class="num">of roof</th></tr>
+    </thead>
+    <tbody><tr><td>norm1</td><td>element-wise</td><td class="num">2.00*</td><td class="num">0.247</td><td class="num">0.34</td><td class="num">170.9</td><td class="num">32.4 %</td><td class="num">0.262</td><td class="num">0.32</td><td class="num">160.8</td><td class="num">30.5 %</td></tr><tr><td>qkv_proj</td><td>matmul</td><td class="num">859.74</td><td class="num">1.876</td><td class="num">43.14</td><td class="num">50.2</td><td class="num">72.8 %</td><td class="num">1.879</td><td class="num">43.07</td><td class="num">50.1</td><td class="num">76.5 %</td></tr><tr><td>rope</td><td>element-wise</td><td class="num">0.50*</td><td class="num">0.836</td><td class="num">0.08</td><td class="num">151.3</td><td class="num">28.7 %</td><td class="num">0.858</td><td class="num">0.07</td><td class="num">147.4</td><td class="num">27.9 %</td></tr><tr><td>sdpa</td><td>matmul</td><td class="num">514.50</td><td class="num">1.187</td><td class="num">36.52</td><td class="num">71.0</td><td class="num">61.6 %</td><td class="num">1.242</td><td class="num">34.91</td><td class="num">67.9</td><td class="num">62.0 %</td></tr><tr><td>o_proj</td><td>matmul</td><td class="num">593.83</td><td class="num">0.755</td><td class="num">35.74</td><td class="num">60.2</td><td class="num">60.3 %</td><td class="num">0.773</td><td class="num">34.89</td><td class="num">58.8</td><td class="num">62.0 %</td></tr><tr><td>layer_scale1</td><td>element-wise</td><td class="num">0.33*</td><td class="num">0.339</td><td class="num">0.06</td><td class="num">186.4</td><td class="num">35.3 %</td><td class="num">0.331</td><td class="num">0.06</td><td class="num">190.9</td><td class="num">36.2 %</td></tr><tr><td>norm2</td><td>element-wise</td><td class="num">2.00*</td><td class="num">0.258</td><td class="num">0.33</td><td class="num">163.6</td><td class="num">31.0 %</td><td class="num">0.283</td><td class="num">0.30</td><td class="num">149.0</td><td class="num">28.2 %</td></tr><tr><td>ff_in</td><td>matmul</td><td class="num">999.62</td><td class="num">4.291</td><td class="num">50.29</td><td class="num">50.3</td><td class="num">84.9 %</td><td class="num">4.708</td><td class="num">45.84</td><td class="num">45.9</td><td class="num">81.4 %</td></tr><tr><td>activation</td><td>element-wise</td><td class="num">1.00*</td><td class="num">0.683</td><td class="num">0.37</td><td class="num">370.2</td><td class="num">70.1 %</td><td class="num">0.676</td><td class="num">0.37</td><td class="num">373.9</td><td class="num">70.8 %</td></tr><tr><td>ff_out</td><td>matmul</td><td class="num">910.71</td><td class="num">2.310</td><td class="num">46.71</td><td class="num">51.3</td><td class="num">78.8 %</td><td class="num">2.490</td><td class="num">43.34</td><td class="num">47.6</td><td class="num">77.0 %</td></tr><tr><td>layer_scale2</td><td>element-wise</td><td class="num">0.33*</td><td class="num">0.304</td><td class="num">0.07</td><td class="num">208.3</td><td class="num">39.5 %</td><td class="num">0.297</td><td class="num">0.07</td><td class="num">212.6</td><td class="num">40.3 %</td></tr><tr class="total"><td>block 1</td><td>all parts</td><td class="num">414.09</td><td class="num">11.934</td><td class="num">39.84</td><td class="num">96.2</td><td class="num">67.2 %</td><td class="num">12.391</td><td class="num">38.37</td><td class="num">92.7</td><td class="num">68.2 %</td></tr></tbody>
+  </table></div>
+  <p class="caption">Table 4. Each part of block 1, timed alone (field <code>parts_s</code>), and block 1 as one compiled function (<code>block_s</code>). GB/s = bytes / time. "Of roof" = reached TFLOP/s / attainable rate. * The FLOPs of the element-wise parts are an estimate (Section 7). The 11 part times add up to 13.09 ms in fp16-cast; block 1 takes 11.93 ms, because the compiled block fuses the element-wise chains.</p>
+</section>
+
+<section id="fusion">
+  <h2>6 What the roofline says about fusion</h2>
+  <p>Fusion joins kernels, so that intermediate values stay on the GPU and do not go to memory. Thus fusion helps a memory-bound part. It does not raise the rate of a compute-bound part. The roofline gives an upper limit for each kind of fusion.</p>
+  <ul>
+    <li><b>Element-wise fusion.</b> In fp16-cast the five matmul parts take 10.42 ms. Block 1 takes 11.93 ms. So the layer norms and the fused element-wise kernels take about 1.51 ms inside the block: 13 % of the block time. At the memory roof the element-wise bytes need 1.12 ms. A fusion of these parts into the matmul kernels (an epilogue) can save at most the 13 %. <code>mx.compile</code> already fuses the element-wise chains (<a href="06-1-compiled-forward-pass.html">06-1</a>). The layer norms stay their own kernels. An epilogue fusion needs a custom Metal kernel that is as fast as the matmul kernel of MLX.</li>
+    <li><b>Projection fusion (D6 b).</b> This fusion does not reduce the bytes. It gives fewer and larger matmuls, and on this Mac a larger matmul reaches a higher rate (Table 1). Table 5 gives the estimate at P2.</li>
+    <li><b>The matmul parts.</b> At the fp16 matmul roof the five matmul parts would take 8.02 ms in place of 10.42 ms. This gap is in the matmul and SDPA kernels of MLX, not in the port.</li>
+  </ul>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Dtype mode</th><th class="num">qkv_proj (ms)</th><th class="num">1,280 → 3,840 (ms)</th><th class="num">ff_in (ms)</th><th class="num">1,280 → 10,240 (ms)</th><th class="num">Saved (ms)</th><th class="num">of block 1</th></tr></thead>
+    <tbody><tr><td>fp16-cast</td><td class="num">1.876</td><td class="num">1.511</td><td class="num">4.291</td><td class="num">3.642</td><td class="num">1.014</td><td class="num">8.5 %</td></tr><tr><td>bf16-cast</td><td class="num">1.879</td><td class="num">1.492</td><td class="num">4.708</td><td class="num">4.780</td><td class="num">0.314</td><td class="num">2.5 %</td></tr></tbody>
+  </table></div>
+  <p class="caption">Table 5. Estimate of the projection fusion at P2: the profile time of the part (three or two matmuls) against the probe time of one fused linear layer (Table 1). The two times come from different processes, so the estimate has the noise of two runs. Step 6 measured only 0 to 2 % with compile at 224 px and batch size 1 (D6 of <code>specs/06-speed/explore.html</code>).</p>
+  <p class="note-box">The estimate is 8.5 % of the block time in fp16-cast and 2.5 % in bf16-cast. Only a paired run of both forms at P2 can show the real gain.</p>
+</section>
+
+<section id="count">
+  <h2>7 How the page counts FLOPs and bytes</h2>
+  <ul>
+    <li>The FLOPs of the matmul parts come from <code>flops.part_flops</code>. One multiply-add counts as 2 FLOPs. SDPA counts 4 B T² D.</li>
+    <li>The bytes come from <code>flops.part_bytes</code> with 2 bytes for each value: each part reads its inputs and its weights once and writes its outputs once. A real kernel can move more bytes, so the true intensity can be lower.</li>
+    <li><code>flops.py</code> counts 0 FLOPs for the element-wise parts. A point with 0 FLOPs has no position on a log axis. So <code>roofline_page.elementwise_flops</code> uses an estimate for each value: layer norm 8, RoPE 6 (3 on q and 3 on k), LayerScale with the residual add 2, SwiGLU activation 6. The estimate moves only the six element-wise points. Their GB/s does not change.</li>
+    <li>At batch size 1 the linear layers have a lower intensity: qkv_proj 497, o_proj 395, ff_in 540 and ff_out 513 FLOP/B. They are still above the ridge point. SDPA stays at 514 FLOP/B.</li>
+  </ul>
+</section>
+
+<section id="measure">
+  <h2>8 How we measured</h2>
+  <ul>
+    <li><b>Part times.</b> <code>scripts/bench_speed.py profile --priority P2</code> runs <code>mlx_bench.run_profile_worker</code> in one subprocess for each dtype mode, through the GPU lock, on AC power (<code>results/speed-profile-p2.jsonl</code>). Each part runs alone and compiled: 3 warm-up calls, then the median of 20 calls with one <code>mx.eval</code> after each call.</li>
+    <li><b>The fixed cost of each call.</b> At P1 each part takes at least about 0.17 ms, also the smallest part. So the element-wise times of this page include a fixed cost, and their GB/s values are lower limits.</li>
+    <li><b>Roofs.</b> <code>scripts/probe_roofs.py</code> with <code>MLX_ENABLE_TF32=0</code> (<code>results/roofs.jsonl</code>). The values of this page come from the first form of the probe: two scripts with the same probes. That run did not record the machine state (field <code>note</code>).</li>
+    <li>The plain <code>a @ b</code> reached only 26.1 to 41.4 TFLOP/s in fp16, and 8.7 to 14.4 TFLOP/s in fp32.</li>
+  </ul>
+</section>
+
+<section id="surprises">
+  <h2>9 Surprises</h2>
+  <ul>
+    <li>The first matmul roof came from a square 8,192 matmul. It was lower than the rate of the ff_in part. The linear layout, with the weight stored as (out, in), is faster on this Mac than <code>a @ b</code>. So the roof must come from the same layout as the model.</li>
+    <li>In bf16 the fused 1,280 → 10,240 layer is not faster than two 1,280 → 5,120 layers (Table 1). In fp16 it is.</li>
+    <li>The compiled block is faster than the sum of its parts. A part alone pays a fixed cost and writes its output to memory; inside the block the element-wise chains are fused.</li>
+  </ul>
+</section>
+
+<section id="sources">
+  <h2>10 Sources</h2>
+  <ul>
+    <li><code>scripts/roofline_page.py</code> writes this page from <code>results/speed-profile-p2.jsonl</code> and <code>results/roofs.jsonl</code>.</li>
+    <li><code>scripts/probe_roofs.py</code>: the roof probe. <code>src/dinov3_mlx/flops.py</code>: FLOPs and bytes. <code>src/dinov3_mlx/mlx_bench.py</code>: <code>run_profile_worker</code> and <code>mlx_block_parts</code>.</li>
+    <li>S. Williams, A. Waterman, D. Patterson: <a href="https://doi.org/10.1145/1498765.1498785">Roofline: an insightful visual performance model for multicore architectures</a>, Communications of the ACM 52 (4), 2009.</li>
+  </ul>
+</section>
+</main>
+<div id="tip" hidden></div>
+<script>
+(() => {
+  const tip = document.getElementById("tip");
+  const show = (el, x, y) => {
+    const lines = el.dataset.tip.split("|");
+    tip.replaceChildren();
+    const head = document.createElement("b");
+    head.textContent = lines[0];
+    tip.append(head, ...lines.slice(1).flatMap((t, i) => (i ? [document.createElement("br"), t] : [t])));
+    tip.hidden = false;
+    const w = tip.offsetWidth, h = tip.offsetHeight;
+    tip.style.left = Math.min(x + 14, window.innerWidth - w - 8) + "px";
+    tip.style.top = (y + h + 20 > window.innerHeight ? y - h - 12 : y + 14) + "px";
+  };
+  document.querySelectorAll("[data-tip]").forEach((el) => {
+    el.addEventListener("pointermove", (e) => show(el, e.clientX, e.clientY));
+    el.addEventListener("pointerleave", () => (tip.hidden = true));
+    el.addEventListener("focus", () => { const r = el.getBoundingClientRect(); show(el, r.right, r.top); });
+    el.addEventListener("blur", () => (tip.hidden = true));
+  });
+})();
+</script>
+</body>
+</html>
