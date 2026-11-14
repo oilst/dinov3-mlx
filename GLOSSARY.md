@@ -488,6 +488,22 @@ The highest GB/s that `scripts/probe_roofs.py` measures with memory-bound kernel
 **Ridge point**:
 The arithmetic intensity where the two roofs meet: matmul roof / memory roof. A part below it is memory-bound, a part above it is compute-bound.
 
+**Joined projection**:
+One matmul with the weights of q, k and v (or of gate and up) joined along the output axis. The forward pass joins the weights inside the trace at each call; the parameters keep their names. `set_joined_projections` selects it; the forms of change C7 are R-J (both joins), R-Jqkv and R-Jff.
+_Avoid_: fused projection, fused qkv
+
+**Tile size**:
+The size of the block of the output that one threadgroup of a matmul or attention kernel computes, with the number of simdgroups along each axis: bm, bn, bk, wm, wn for a matmul; bq, bk, wm, wn for attention. MLX selects it from the device and the shape.
+
+**Split-K kernel**:
+An MLX matmul kernel that splits the sum over K into parts and adds the parts at the end. MLX 0.32.4 takes it in fp32 without NAX for one batch with K ≥ max(M, N). Its sum order differs from the regular kernel, so its fp32 output can differ in the last bits.
+
+**Source build**:
+A build of MLX from its source code, outside the repo, in its own venv: `~/.cache/dinov3-mlx/mlx-src/` (ADR 0013). The C1 probe of Step 6e uses it; the package keeps the released MLX.
+
+**Tile override**:
+The patch of the source build that reads a tile size from `DINOV3_PROBE_GEMM_NAX` or `DINOV3_PROBE_SDPA_NAX` at each dispatch. The patch lives next to the clone, not in the repo.
+
 ## Public API
 
 **Public API**:

@@ -322,14 +322,58 @@ class Embeddings(nn.Module):
         return mx.concatenate([prefix.astype(self.dtypes.stream), patches], axis=1)
 
 
+def joined_linear(x: mx.array, weight: mx.array, bias: mx.array | None) -> mx.array:
+    """Return x · weightᵀ + bias with the calls of nn.Linear: mx.addmm with a bias, else a matmul.
+
+    Args:
+        x: The input (..., in).
+        weight: The weights (out, in), the layout of nn.Linear.
+        bias: The bias (out,), or None.
+
+    Returns:
+        The output (..., out).
+    """
+    if bias is None:
+        return x @ weight.T
+    return mx.addmm(bias, x, weight.T)
+
+
+def _joined_bias(layers: list[nn.Linear]) -> mx.array | None:
+    """Return the joined bias of layers: a bias of zeros for a layer without a bias (D3 of
+    specs/06e-kernels/plan.html), or None if no layer has a bias."""
+    if not any("bias" in layer for layer in layers):
+        return None
+    return mx.concatenate(
+        [
+            layer["bias"]
+            if "bias" in layer
+            else mx.zeros(layer.weight.shape[:1], layer.weight.dtype)
+            for layer in layers
+        ]
+    )
+
+
+def _joined(layers: list[nn.Linear], x: mx.array) -> mx.array:
+    """Return the output of layers as one matmul: their weights joined along the output axis
+    inside the trace, at each call (D1 of specs/06e-kernels/plan.html). The parameters stay as
+    they are, so a weight change reaches the output (R35)."""
+    weight = mx.concatenate([layer.weight for layer in layers])
+    return joined_linear(x, weight, _joined_bias(layers))
+
+
 class Attention(nn.Module):
-    """Full attention over all tokens, with RoPE on the queries and keys of the patch tokens."""
+    """Full attention over all tokens, with RoPE on the queries and keys of the patch tokens.
+
+    The plain attribute joined selects the joined projection of q, k and v: one matmul instead of
+    three (D2 of specs/06e-kernels/plan.html). set_joined_projections sets it.
+    """
 
     def __init__(self, config: MlxConfig) -> None:
         super().__init__()
         dim = config.dim
         self.heads = config.heads
         self.scale = config.head_dim**-0.5  # 0.125 for head dimension 64
+        self.joined = False  # a plain attribute: no parameter, nn.quantize keeps it
         self.q_proj = nn.Linear(dim, dim, bias=config.query_bias)
         self.k_proj = nn.Linear(dim, dim, bias=config.key_bias)  # no bias in ViT-S/16
         self.v_proj = nn.Linear(dim, dim, bias=config.value_bias)
@@ -338,9 +382,14 @@ class Attention(nn.Module):
     def qkv(self, x: mx.array) -> tuple[mx.array, mx.array, mx.array]:
         """Return the queries, keys and values (B, heads, T, head_dim) of tokens (B, T, D).
 
-        Head h holds the channels head_dim · h to head_dim · (h + 1) - 1.
+        Head h holds the channels head_dim · h to head_dim · (h + 1) - 1. The joined form gives
+        the same values bit for bit (D5 of specs/06e-kernels/plan.html).
         """
         b, t, _ = x.shape
+        if self.joined:
+            y = _joined([self.q_proj, self.k_proj, self.v_proj], x)
+            y = y.reshape(b, t, 3, self.heads, -1).transpose(2, 0, 3, 1, 4)
+            return y[0], y[1], y[2]
 
         def heads(y: mx.array) -> mx.array:
             return y.reshape(b, t, self.heads, -1).transpose(0, 2, 1, 3)
@@ -409,12 +458,17 @@ class MLP(nn.Module):
 
 class SwiGLU(nn.Module):
     """The feed-forward network of ViT-S+/16, ViT-H+/16 and ViT-7B/16 (D1 of
-    specs/05-all-sizes/explore.html). Three nn.Linear modules with the Hugging Face names."""
+    specs/05-all-sizes/explore.html). Three nn.Linear modules with the Hugging Face names.
+
+    The plain attribute joined selects the joined projection of gate and up: one matmul instead
+    of two (D2 of specs/06e-kernels/plan.html).
+    """
 
     def __init__(self, config: MlxConfig) -> None:
         super().__init__()
         if config.hidden_act != "silu":
             raise NotImplementedError(f"activation {config.hidden_act!r} of SwiGLU")
+        self.joined = False  # a plain attribute: no parameter, nn.quantize keeps it
         self.gate_proj = nn.Linear(config.dim, config.ff, bias=config.mlp_bias)
         self.up_proj = nn.Linear(config.dim, config.ff, bias=config.mlp_bias)
         self.down_proj = nn.Linear(config.ff, config.dim, bias=config.mlp_bias)
@@ -425,7 +479,11 @@ class SwiGLU(nn.Module):
         return product.astype(gate.dtype)
 
     def hidden(self, x: mx.array) -> mx.array:
-        """Return the feed-forward hidden values silu(gate_proj(x)) · up_proj(x)."""
+        """Return the feed-forward hidden values silu(gate_proj(x)) · up_proj(x). The joined form
+        gives the same values bit for bit (D5 of specs/06e-kernels/plan.html)."""
+        if self.joined:
+            gate, up = mx.split(_joined([self.gate_proj, self.up_proj], x), 2, axis=-1)
+            return self.activation(gate, up)
         return self.activation(self.gate_proj(x), self.up_proj(x))
 
     def __call__(self, x: mx.array) -> mx.array:
@@ -538,6 +596,30 @@ def compile_backbone(model: MlxBackbone) -> Callable[[mx.array], mx.array]:
         return traced(pixels, cos, sin)
 
     return forward
+
+
+def set_joined_projections(model: MlxBackbone, qkv: bool, ff: bool) -> None:
+    """Select the joined or the separate projections of each block (D2 of
+    specs/06e-kernels/plan.html).
+
+    A trace reads the flags when it records, so call this function before compile_backbone. A
+    compiled forward pass of an earlier call keeps its form for the shapes that it traced.
+
+    Args:
+        model: A backbone with unquantized block weights.
+        qkv: True for one matmul with the weights of q_proj, k_proj and v_proj.
+        ff: True for one matmul with the weights of gate_proj and up_proj. The MLP model sizes
+            have no gate, so the flag does not apply to them.
+
+    Raises:
+        ValueError: If a join is on and the model has quantized weights (D4).
+    """
+    if (qkv or ff) and quantized_weight_names(model):
+        raise ValueError("joined projections need unquantized weights; the model is quantized (D4)")
+    for block in model.layer:
+        block.attention.joined = qkv
+        if isinstance(block.mlp, SwiGLU):
+            block.mlp.joined = ff
 
 
 def linear_parameter_names(model: nn.Module) -> frozenset[str]:

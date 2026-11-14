@@ -324,13 +324,37 @@ class _Step5Rope:
         mlx_model.apply_rope = self.saved
 
 
+class _JoinedForm:
+    """A context that sets the joined projections of a model for one call and restores the
+    separate form after it (C7 of specs/06e-kernels/plan.html). A trace reads the flags when it
+    records, so each form keeps its own trace."""
+
+    def __init__(self, model: Any, qkv: bool, ff: bool) -> None:
+        self.model, self.qkv, self.ff = model, qkv, ff
+
+    def __enter__(self) -> None:
+        from dinov3_mlx.mlx_model import set_joined_projections
+
+        set_joined_projections(self.model, self.qkv, self.ff)
+
+    def __exit__(self, *args: object) -> None:
+        from dinov3_mlx.mlx_model import set_joined_projections
+
+        set_joined_projections(self.model, False, False)
+
+
+# The joins (qkv, ff) of each form of C7.
+JOINED_FORMS = {"R-J": (True, True), "R-Jqkv": (True, False), "R-Jff": (False, True)}
+
+
 def change_forms(model: Any, forms: list[str], side: int) -> dict[str, tuple[Forward, bool]]:
     """Return the forward function of each form of a change and its patch_fp32 flag.
 
     E: the eager forward pass with the Step 5 RoPE form. A: the compiled forward pass with the
     Step 5 RoPE form (its tables (T, head_dim) as arguments). R: the compiled forward pass of
     compile_backbone (the concat-free RoPE). R-fp32 and R-fp16: R with fp32 or fp16 patch
-    embeddings (C4).
+    embeddings (C4). R-J, R-Jqkv and R-Jff: R with both joins, only the qkv join, or only the
+    gate and up join (C7); each has its own compiled forward pass.
     """
     import mlx.core as mx
 
@@ -350,14 +374,153 @@ def change_forms(model: Any, forms: list[str], side: int) -> dict[str, tuple[For
             return traced5(pixels, cos5, sin5)
 
     compiled = compile_backbone(model)
-    known = {
+
+    def joined(qkv: bool, ff: bool) -> Forward:
+        traced = compile_backbone(model)
+
+        def forward(pixels: mx.array) -> mx.array:
+            with _JoinedForm(model, qkv, ff):  # a trace of a new shape sees the joins
+                return traced(pixels)
+
+        return forward
+
+    known: dict[str, tuple[Forward, bool]] = {
         "E": (eager, False),
         "A": (compiled5, False),
         "R": (compiled, False),
         "R-fp32": (compiled, True),
         "R-fp16": (compiled, False),
     }
+    known |= {
+        form: (joined(*joins), False) for form, joins in JOINED_FORMS.items() if form in forms
+    }
     return {form: known[form] for form in forms}
+
+
+Timer = Callable[..., tuple[tuple[float, float, float], Any, Any]]
+
+
+def run_forms(
+    functions: dict[str, tuple[Forward, bool]],
+    forms: list[str],
+    rounds: int,
+    batch: Any,
+    dtype_mode: str,
+    batch_size: int,
+    warm_up: TimeBudget,
+    timed: TimeBudget,
+    timer: Timer = time_batch_mlx,
+    peak: tuple[Callable[[], None], Callable[[], int]] | None = None,
+) -> dict:
+    """Run the paired rounds of the forms of one change and return the ratio of each form to the
+    first form (A2 of specs/06e-kernels/plan.html).
+
+    Each round runs each form with its own warm-up and its timed batches; the order of the forms
+    rotates by one from round to round.
+
+    Args:
+        functions: The forward function and the patch_fp32 flag of each form (change_forms).
+        forms: The forms. The first form is the base of each ratio.
+        rounds: The number of rounds.
+        batch: The pixels of each batch.
+        dtype_mode: The dtype mode of the backbone.
+        batch_size: The batch size, for the throughput.
+        warm_up: The time budget of the warm-up batches of each form in each round.
+        timed: The time budget of the timed batches of each form in each round.
+        timer: Times one batch: time_batch_mlx, or a stub in the tests.
+        peak: (reset, read) of the MLX peak memory, or None. With it, the MLX peak of the timed
+            batches of each form goes into the field mlx_timed_peak_bytes (B2).
+
+    Returns:
+        throughput (form, output, rounds), form_ratios and form_ratio (median, min, max) of each
+        form after the first, the fields ratios and ratio of the second form, and
+        mlx_timed_peak_bytes (form: the largest peak of the rounds) with peak.
+    """
+    outputs = ("frame", "patch", "device")
+    throughput: dict[str, dict[str, list[float]]] = {
+        form: {output: [] for output in outputs} for form in forms
+    }
+    peaks: dict[str, int] = {}
+    for r in range(rounds):
+        order = forms[r % len(forms) :] + forms[: r % len(forms)]
+        for form in order:
+            forward, patch_fp32 = functions[form]
+
+            def run(forward: Forward = forward, patch_fp32: bool = patch_fp32) -> tuple:
+                return timer(forward, batch, dtype_mode, patch_fp32)[0]
+
+            phase(run, warm_up)
+            if peak:
+                peak[0]()
+            times = phase(run, timed)
+            if peak:
+                peaks[form] = max(peaks.get(form, 0), peak[1]())
+            device, frame_t, patch_t = (list(column) for column in zip(*times, strict=True))
+            for name, values in (("device", device), ("frame", frame_t), ("patch", patch_t)):
+                throughput[form][name].append(summarize(values, batch_size)["throughput_ips"])
+    form_ratios = {
+        form: {
+            output: [
+                new / old
+                for old, new in zip(
+                    throughput[forms[0]][output], throughput[form][output], strict=True
+                )
+            ]
+            for output in outputs
+        }
+        for form in forms[1:]
+    }
+    form_ratio = {
+        form: {
+            output: {
+                "median": float(np.median(values)),
+                "min": float(min(values)),
+                "max": float(max(values)),
+            }
+            for output, values in ratios.items()
+        }
+        for form, ratios in form_ratios.items()
+    }
+    result = {
+        "throughput": throughput,
+        "ratios": form_ratios[forms[1]],
+        "ratio": form_ratio[forms[1]],
+        "form_ratios": form_ratios,
+        "form_ratio": form_ratio,
+    }
+    if peak:
+        result["mlx_timed_peak_bytes"] = peaks
+    return result
+
+
+def first_batch_check(
+    first: dict[str, tuple[np.ndarray, np.ndarray]], forms: list[str]
+) -> dict[str, dict[str, Any]]:
+    """Compare the first batch of each form with the first batch of the first form (R56, D5 of
+    specs/06e-kernels/plan.html).
+
+    Args:
+        first: The frame and the patch embeddings of the first batch of each form, on the host.
+        forms: The forms. The first form is the base.
+
+    Returns:
+        For each form after the first: frame_equal, patches_equal (bit for bit, NaN equals NaN)
+        and the largest absolute differences frame_difference and patch_difference.
+    """
+    base_frame, base_patches = first[forms[0]]
+    checks = {}
+    for form in forms[1:]:
+        frame, patches = first[form]
+        patch_base = base_patches.astype(patches.dtype)
+        checks[form] = {
+            "frame_equal": bool(np.array_equal(base_frame, frame)),
+            "patches_equal": bool(np.array_equal(patch_base, patches, equal_nan=True)),
+            "frame_difference": float(np.nanmax(np.abs(base_frame - frame))),
+            "patch_difference": float(
+                np.nanmax(np.abs(patch_base.astype(np.float32) - patches.astype(np.float32)))
+            ),
+        }
+    return checks
 
 
 def run_change_worker(
@@ -368,16 +531,16 @@ def run_change_worker(
     warm_up: TimeBudget,
     timed: TimeBudget,
 ) -> dict:
-    """Run the forms of one change ratio in one process (C1, C2, C4 of Table 23).
+    """Run the forms of one change ratio in one process (C1, C2, C4 of Table 23, C7 of Step 6e).
 
     Before the timed batches the worker checks that the forms give the same tokens bit for bit
     (R56); a difference stops the process. C4 compares the frame embeddings bit for bit and the
-    patch embeddings after the fp16 cast. Each round runs each form with its own warm-up and its
-    timed batches; the order of the forms rotates from round to round.
+    patch embeddings after the fp16 cast. C7 records each difference and the validity of each
+    form against the reference output instead (D5 of specs/06e-kernels/plan.html), and the MLX
+    peak of the timed batches of each form (B2). run_forms runs the paired rounds.
 
     Returns:
-        The throughput of each form in each round, the ratio of the second form to the first form
-        in each round, its median, minimum and maximum, for the frame and the patch output.
+        The fields of run_forms, the first-batch check, and the run fields.
 
     Raises:
         AssertionError: If the forms differ where Table 23 asks for bit equality.
@@ -393,60 +556,45 @@ def run_change_worker(
     for form, (forward, patch_fp32) in functions.items():
         frame, patches = time_batch_mlx(forward, batch, config.dtype_mode, patch_fp32)[1:]
         first[form] = (frame, patches)
-    base_frame, base_patches = first[forms[0]]
-    other_frame, other_patches = first[forms[1]]
-    frame_equal = bool(np.array_equal(base_frame, other_frame))
-    patches_equal = bool(
-        np.array_equal(base_patches.astype(other_patches.dtype), other_patches, equal_nan=True)
-    )
-    if change != "C4" and not (frame_equal and patches_equal):
+    checks = first_batch_check(first, forms)
+    frame_equal = checks[forms[1]]["frame_equal"]
+    patches_equal = checks[forms[1]]["patches_equal"]
+    extra: dict[str, Any] = {}
+    if change == "C7":
+        reference = reference_tokens(config.model_size, config.side)
+        validity = {}
+        for form, (frame, patches) in first.items():
+            check = check_validity(frame[0], patches[0], reference, config.dtype_mode)
+            validity[form] = {
+                "valid": check.valid,
+                "parity": None if check.parity is None else check.parity.__dict__,
+            }
+        extra = {"first_batch": checks, "validity": validity}
+    elif change != "C4" and not (frame_equal and patches_equal):
         raise AssertionError(f"{change}: the forms {forms} differ on the first batch (R56)")
     if change == "C4" and not frame_equal:
         raise AssertionError("C4: the frame embeddings differ")
-    throughput: dict[str, dict[str, list[float]]] = {
-        form: {"frame": [], "patch": [], "device": []} for form in forms
-    }
-    for r in range(rounds):
-        order = forms[r % len(forms) :] + forms[: r % len(forms)]
-        for form in order:
-            forward, patch_fp32 = functions[form]
-
-            def run(forward: Forward = forward, patch_fp32: bool = patch_fp32) -> tuple:
-                return time_batch_mlx(forward, batch, config.dtype_mode, patch_fp32)[0]
-
-            phase(run, warm_up)
-            times = phase(run, timed)
-            device, frame_t, patch_t = (list(column) for column in zip(*times, strict=True))
-            for name, values in (("device", device), ("frame", frame_t), ("patch", patch_t)):
-                throughput[form][name].append(
-                    summarize(values, config.batch_size)["throughput_ips"]
-                )
-    ratios = {
-        output: [
-            new / old
-            for old, new in zip(
-                throughput[forms[0]][output], throughput[forms[1]][output], strict=True
-            )
-        ]
-        for output in ("frame", "patch", "device")
-    }
-    summary = {
-        output: {
-            "median": float(np.median(values)),
-            "min": float(min(values)),
-            "max": float(max(values)),
-        }
-        for output, values in ratios.items()
-    }
+    del first
+    peak = (mx.reset_peak_memory, mx.get_peak_memory) if change == "C7" else None
+    paired = run_forms(
+        functions,
+        forms,
+        rounds,
+        batch,
+        config.dtype_mode,
+        config.batch_size,
+        warm_up,
+        timed,
+        peak=peak,
+    )
     return {
         "status": "done",
         "reason": "",
         "forms": forms,
-        "throughput": throughput,
-        "ratios": ratios,
-        "ratio": summary,
+        **paired,
         "frame_equal": frame_equal,
         "patches_equal": patches_equal,
+        **extra,
         "rounds": rounds,
         "warm_up_batches": warm_up.min_batches,
         "timed_batches": timed.min_batches,

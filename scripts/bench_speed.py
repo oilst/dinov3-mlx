@@ -1,6 +1,7 @@
 """The driver of all Step 6 benchmarks: change ratios, the paired matrix, the paired runs at P1 and
 P2, the batch-size sweep, the preprocessing row, the Learn data and the P1 profile (Section 7 of
-specs/06-speed/plan.html).
+specs/06-speed/plan.html). Also the change C7 of Step 6e: the joined projections (B1 and B2 of
+specs/06e-kernels/plan.html).
 
 Each worker runs in its own subprocess, one after the other. Before each worker the driver reads
 the machine state, stops on battery power or in Low Power Mode, and checks the free memory
@@ -10,7 +11,8 @@ field other_heavy_jobs_seen (Section 3.3.1). The driver takes the GPU lock in ma
 takes no lock and imports no backend. The driver stops when MLX_DISABLE_COMPILE is set: the
 compiled rows would run eager without an error (R42).
 
-Results: results/speed-{changes,matrix,pairs,sweep,learn,profile-p1}.jsonl. The per-batch files
+Results: results/speed-{changes,matrix,pairs,sweep,learn,profile-p1}.jsonl; C7 alone goes to
+results/speed-joined.jsonl. The per-batch files
 and driver.log of each subcommand: tests/fixtures/generated/bench/speed/<subcommand>/. With
 --results, they go to the folder <stem>-batches/ next to that file.
 
@@ -19,6 +21,7 @@ Usage:
     uv run python scripts/bench_speed.py change --change rope autocast --priority P1 P2
     uv run python scripts/bench_speed.py change --change quantized --priority P2
     uv run python scripts/bench_speed.py change --change fp16-output --priority P1 P2
+    uv run python scripts/bench_speed.py change --change joined --run 1
     uv run python scripts/bench_speed.py preprocess
     uv run python scripts/bench_speed.py profile --priority P1
     uv run python scripts/bench_speed.py pairs --priority P1 P2 --rounds 5 --run 1
@@ -76,6 +79,7 @@ RESULTS = {
     "learn": RESULTS_DIR / "speed-learn.jsonl",
     "profile": RESULTS_DIR / "speed-profile-p1.jsonl",
 }
+JOINED_RESULTS = RESULTS_DIR / "speed-joined.jsonl"
 LOG_FORMAT = "%(asctime)s %(name)s %(message)s"
 RUN = "S6"  # the run of the Step 6 lines; the torch-mps rows of ViT-7B/16 keep "B4" (B4)
 WORKER_TIMEOUT_S = {"mlx": 900, "torch-mps": 3600, "cpu": 900}
@@ -87,7 +91,14 @@ IN_PROCESS_CHANGES = {
     "compile": ("C1", ["E", "A"]),
     "rope": ("C2", ["A", "R"]),
     "fp16-output": ("C4", ["R-fp32", "R-fp16"]),
+    # Step 6e (A2): separate, both joins, only qkv, only gate and up.
+    "joined": ("C7", ["R", "R-J", "R-Jqkv", "R-Jff"]),
 }
+# B1 of specs/06e-kernels/plan.html: the dtype modes of C7 at each priority, and ViT-H+/16 at
+# 512 px with batch size 1. Batch size 1 takes the P1 budget of 20 timed batches: 4 batches of
+# about 50 ms would give a timed phase of 0.2 s.
+JOINED_MODES = {"P1": ["fp32", "fp16-cast", "bf16-cast"], "P2": DTYPE_MODE_NAMES}
+JOINED_EXTRA = [("P2", 1, ["fp16-cast", "bf16-cast"], "change-P1")]
 CHANGES = [*IN_PROCESS_CHANGES, "autocast", "quantized"]
 HALF_MODES = [mode for mode in DTYPE_MODE_NAMES if mode != "fp32"]
 # Table 23: 3 warm-up batches and 20 timed batches at P1, 3 and 4 at P2.
@@ -275,37 +286,57 @@ def pairs_plan(priorities: list[str], rounds: int, run_id: str) -> list[Spec]:
     return specs
 
 
-def change_plan(changes: list[str], priorities: list[str], rounds: int) -> list[Spec]:
-    """Return the processes of the change ratios (Table 23).
+def change_plan(
+    changes: list[str], priorities: list[str], rounds: int, run_id: str | None = None
+) -> list[Spec]:
+    """Return the processes of the change ratios (Table 23, and C7 of Step 6e).
 
-    C1, C2 and C4: one process for each priority configuration and dtype mode, with both forms
-    in it. C3 and C5 compare configurations: one subprocess for each configuration and round, in
-    alternation, rotated over the rounds.
+    C1, C2, C4 and C7: one process for each priority configuration and dtype mode, with all forms
+    in it. C7 also runs ViT-H+/16 at 512 px with batch size 1 (JOINED_EXTRA). C3 and C5 compare
+    configurations: one subprocess for each configuration and round, in alternation, rotated over
+    the rounds.
+
+    Args:
+        changes: Keys of IN_PROCESS_CHANGES, "autocast" or "quantized".
+        priorities: Keys of PRIORITY.
+        rounds: The number of rounds.
+        run_id: The run of a change that runs twice (C7: "1" or "2"), or None.
     """
     specs = []
     for change in changes:
         for priority in priorities:
 
-            def config(mode: str, bits: int | None = None, priority: str = priority) -> BenchConfig:
+            def config(
+                mode: str, bits: int | None = None, priority: str = priority, batch: int = 0
+            ) -> BenchConfig:
                 size, side, batch_size, _ = PRIORITY[priority]
-                return BenchConfig(RUN, size, mode, side, batch_size, True, bits)
+                return BenchConfig(RUN, size, mode, side, batch or batch_size, True, bits)
 
             budget = f"change-{priority}"
             if change in IN_PROCESS_CHANGES:
                 number, forms = IN_PROCESS_CHANGES[change]
-                modes = HALF_MODES if change == "fp16-output" else DTYPE_MODE_NAMES
-                for mode in modes:
+                cells = [(mode, 0, budget) for mode in DTYPE_MODE_NAMES]
+                if change == "fp16-output":
+                    cells = [(mode, 0, budget) for mode in HALF_MODES]
+                if change == "joined":
+                    cells = [(mode, 0, budget) for mode in JOINED_MODES[priority]]
+                    for extra, batch, modes, extra_budget in JOINED_EXTRA:
+                        if extra == priority:
+                            cells += [(mode, batch, extra_budget) for mode in modes]
+                for mode, batch, cell_budget in cells:
+                    fields = {"run_id": run_id} if run_id else {}
                     specs.append(
                         make_spec(
                             "change",
                             "mlx",
-                            config(mode),
-                            budget,
+                            config(mode, batch=batch),
+                            cell_budget,
                             change=number,
                             forms=forms,
                             rounds=rounds,
                             priority=priority,
                             phase="change",
+                            **fields,
                         )
                     )
             elif change == "autocast":
@@ -619,13 +650,15 @@ def bench_dir_of(results: Path, subcommand: str) -> Path:
     """Return the folder of the per-batch files and of driver.log for one results file."""
     if results.resolve() == RESULTS[subcommand].resolve():
         return BENCH_ROOT / subcommand
+    if results.resolve() == JOINED_RESULTS.resolve():
+        return BENCH_ROOT / "joined"
     return results.with_name(f"{results.stem}-batches")
 
 
 def plan_of(args: argparse.Namespace) -> list[Spec]:
     """Return the workers of the subcommand from the command-line options."""
     if args.subcommand == "change":
-        return change_plan(args.change, args.priority, args.rounds)
+        return change_plan(args.change, args.priority, args.rounds, args.run)
     if args.subcommand == "pairs":
         return pairs_plan(args.priority, args.rounds, str(args.run))
     if args.subcommand == "sweep":
@@ -678,6 +711,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     for name, rounds in (("change", 5), ("pairs", 5), ("sweep", 2), ("preprocess", 5)):
         commands[name].add_argument("--rounds", type=int, default=rounds)
     commands["change"].add_argument("--change", nargs="+", choices=CHANGES, required=True)
+    commands["change"].add_argument("--run", help="the run of C7: 1 or 2")
     commands["pairs"].add_argument("--run", type=int, required=True, help="the run: 1 or 2")
     matrix = commands["matrix"]
     matrix.add_argument("--model-sizes", nargs="+", choices=list(MODEL_IDS))
@@ -686,9 +720,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     matrix.add_argument("--only-skipped", action="store_true", help="groups with a skip (J15)")
     matrix.add_argument("--compile-check", action="store_true", help="follow-up groups (J16)")
     matrix.add_argument("--gate-7b", action="store_true", help="the gate of ViT-7B/16 (J13)")
+    argv_list = sys.argv[1:] if argv is None else list(argv)
     args = parser.parse_args(argv)
     if args.worker is None and args.subcommand is None:
         parser.error("give a subcommand")
+    if args.subcommand == "change" and args.change == ["joined"] and "--results" not in argv_list:
+        args.results = JOINED_RESULTS
     return args
 
 

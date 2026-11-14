@@ -163,6 +163,82 @@ def test_pairs_plan_rotates_five_rounds(counts: None) -> None:
     assert len(bench_speed.profile_plan(["P1"])) == 2
 
 
+def test_change_plan_c7(counts: None, capsys: pytest.CaptureFixture[str]) -> None:
+    """T7 of specs/06e-kernels/plan.html: C7 with the four forms at P1 and P2, in the dtype modes
+    of Section 7, and the dry run lists them."""
+    import bench_speed
+
+    specs = bench_speed.change_plan(["joined"], ["P1", "P2"], 5, run_id="1")
+    forms = ["R", "R-J", "R-Jqkv", "R-Jff"]
+    for spec in specs:
+        assert spec["kind"] == "change" and spec["backend"] == "mlx"
+        assert spec["change"] == "C7" and spec["forms"] == forms and spec["rounds"] == 5
+        assert spec["run_id"] == "1" and spec["config"]["compile"]
+    cells = [
+        (
+            s["priority"],
+            s["config"]["model_size"],
+            s["config"]["side"],
+            s["config"]["batch_size"],
+            s["config"]["dtype_mode"],
+        )
+        for s in specs
+    ]
+    assert cells == [
+        ("P1", "ViT-S/16", 224, 8, mode) for mode in ("fp32", "fp16-cast", "bf16-cast")
+    ] + [("P2", "ViT-H+/16", 512, 8, mode) for mode in DTYPE_MODE_NAMES] + [
+        ("P2", "ViT-H+/16", 512, 1, mode) for mode in ("fp16-cast", "bf16-cast")
+    ]
+    budgets = [s["budget"] for s in specs]
+    assert budgets == ["change-P1"] * 3 + ["change-P2"] * 5 + ["change-P1"] * 2
+    args = bench_speed.parse_args(["change", "--change", "joined", "--dry-run"])
+    assert args.results == bench_speed.RESULTS_DIR / "speed-joined.jsonl"
+    bench_speed.main(["change", "--change", "joined", "--dry-run"])
+    out = capsys.readouterr().out
+    assert out.strip().endswith("10 workers")
+    assert out.count("change C7") == 10 and out.count("R-Jqkv") == 10
+    assert bench_speed.bench_dir_of(args.results, "change") == bench_speed.BENCH_ROOT / "joined"
+
+
+def test_joined_table_default_rule() -> None:
+    """D6 of specs/06e-kernels/plan.html: on only at P2 with batch size 8, if the pooled median is
+    at least 1.03 and each run median is above 1."""
+    import joined_table
+
+    assert joined_table.default_rule([1.02, 1.05], 1.035)
+    assert not joined_table.default_rule([0.99, 1.08], 1.04)
+    assert not joined_table.default_rule([1.02, 1.03], 1.025)
+    assert not joined_table.default_rule([1.05], 1.05)
+
+    def line(run: str, batch: int, ratios: list[float]) -> dict:
+        form = {"frame_equal": True, "patches_equal": True}
+        form |= {"frame_difference": 0.0, "patch_difference": 0.0}
+        return {
+            "change": "C7",
+            "status": "done",
+            "run_id": run,
+            "priority": "P2",
+            "model_size": "ViT-H+/16",
+            "side": 512,
+            "batch_size": batch,
+            "dtype_mode": "fp16-cast",
+            "form_ratios": {
+                f: {"patch": ratios, "frame": [1.0] * 5} for f in ("R-J", "R-Jqkv", "R-Jff")
+            },
+            "first_batch": {f: form for f in ("R-J", "R-Jqkv", "R-Jff")},
+            "validity": {f: {"valid": True} for f in ("R-J", "R-Jqkv", "R-Jff")},
+            "mlx_timed_peak_bytes": {"R": 100, "R-J": 150, "R-Jqkv": 120, "R-Jff": 130},
+        }
+
+    lines = [line(run, b, [1.04] * 5) for run in ("1", "2") for b in (8, 1)]
+    rows = joined_table.joined_rows(lines)
+    assert len(rows) == 6
+    assert [r["on"] for r in rows if r["cell"][3] == 8] == [True] * 3
+    assert [r["on"] for r in rows if r["cell"][3] == 1] == [False] * 3
+    assert rows[0]["pooled"] == pytest.approx(1.04) and rows[0]["peak_above_r_bytes"] == 50
+    assert "| P2 | ViT-H+/16 | 512 | 8 | fp16-cast | R-J |" in joined_table.write_table(lines)
+
+
 DRY_RUN = """
 import sys
 import bench_speed
