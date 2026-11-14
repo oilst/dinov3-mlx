@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Step 6e Kernels: Plan</title>
+<style>
+/* Spec page. White page, black text, no dark mode. */
+:root { --bg: #ffffff; --fg: #111414; --muted: #4a5655; --rule: #d6dedd; --panel: #f5f8f7; --accent: #057379; color-scheme: light; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif; }
+main { max-width: 64rem; margin: 0 auto; padding: 40px 20px 64px; display: grid; gap: 1.75rem; }
+main > *, section > * { min-width: 0; }
+h1 { font-size: 1.9rem; line-height: 1.15; margin: 0; }
+h2 { font-size: 1.3rem; margin: 0; }
+h3 { font-size: 1.05rem; margin: 0; }
+section { display: grid; gap: 0.8rem; }
+p, ul, ol { margin: 0; max-width: 46rem; }
+li + li { margin-top: 0.25rem; }
+code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.86em; }
+p code, li code, td code { overflow-wrap: anywhere; }
+pre { margin: 0; background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 0.8rem 1rem; overflow-x: auto; }
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+th, td { text-align: left; vertical-align: top; padding: 0.45rem 0.7rem 0.45rem 0; border-bottom: 1px solid var(--rule); }
+th { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); border-bottom: 1.5px solid var(--fg); }
+td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.caption { font-size: 0.88rem; color: var(--muted); }
+.box { border: 1.5px solid var(--accent); border-radius: 6px; padding: 0.8rem 1rem; display: grid; gap: 0.5rem; }
+figure { margin: 0; display: grid; gap: 0.4rem; }
+.fig { border: 1px solid var(--rule); border-radius: 6px; padding: 0.5rem; overflow-x: auto; }
+.fig svg { display: block; width: 100%; height: auto; min-width: 640px; }
+figcaption { font-size: 0.88rem; color: var(--muted); }
+a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+<header>
+  <h1>Step 6e Kernels: Plan</h1>
+  <p>Roadmap step 6e. Status: approved by the user on 2026-11-11. The approval is also the yes to the source build of C1 (Q1 of Section 9). Date: 2026-11-11.</p>
+  <p>Option picked in <a href="explore.html">explore.html</a>: "A, then C1" (the user, 2026-11-11).</p>
+</header>
+
+<section id="goal">
+  <h2>1 Goal</h2>
+  <p>Step 6e makes the compute-bound parts of a block faster, or shows with numbers that the current form is the best one. Part A joins the projections that read the same input into one matmul: q, k and v, and gate and up. A paired run at P1 and P2 decides whether the compiled path uses the joined form. Part C1 is a probe: a source build of MLX outside the repo measures whether other tile sizes close the gap of the 1,280 → 1,280 matmul, the bf16 1,280 → 10,240 matmul and the attention kernel. Our package keeps the released MLX.</p>
+</section>
+
+<section id="dinov3">
+  <h2>2 DINOv3 topic</h2>
+  <p>The shapes of the matmuls of one block, and how the shape of a matmul changes its rate on the M5 Max. The Learn stage extends <code>docs/learn/06-5-roofline.html</code> with a section on the joined projections and the tile sizes.</p>
+</section>
+
+<section id="design">
+  <h2>3 Design</h2>
+  <h3>3.1 Decisions</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>No.</th><th>Question</th><th>Decision</th><th>Reason</th></tr></thead>
+    <tbody>
+      <tr><td>D1</td><td>Where do the joined weights live?</td><td>Nowhere. The forward pass joins them with <code>mx.concatenate</code> inside the trace, at each call.</td><td>The parameter names, the strict load, <code>set_dtype</code> and <code>nn.quantize</code> stay as they are. The weights stay implicit inputs of the trace, so a later weight change reaches the output (R35). No second copy of 1.15 GB. The cost of the concat: 1.15 GB of reads and writes for each batch at P2, about 2.2 ms at the memory roof, against a batch time of 388 ms (0.6 %). The paired run includes this cost.</td></tr>
+      <tr><td>D2</td><td>How does the port select the form?</td><td>Two plain attributes, not parameters: <code>Attention.joined</code> and <code>SwiGLU.joined</code>. The function <code>set_joined_projections(model, qkv=..., ff=...)</code> sets them on each block. Call it before <code>compile_backbone</code>.</td><td>The same pattern as <code>dtypes</code>: <code>nn.quantize</code> and <code>load_weights</code> do not see a plain attribute. A trace reads the flag when it records, so the eager and the compiled forward pass keep one code path (ADR 0010).</td></tr>
+      <tr><td>D3</td><td>The missing k_proj bias</td><td>The joined qkv matmul adds a bias of zeros for k when q or v have a bias. The joined form uses <code>mx.addmm</code>, as <code>nn.Linear</code> does.</td><td>ViT-H+/16 has a bias on q_proj and v_proj, not on k_proj. Zero plus a value gives the same value, so the outputs stay equal.</td></tr>
+      <tr><td>D4</td><td>Quantized weights</td><td><code>set_joined_projections</code> raises <code>ValueError</code> for a model with <code>nn.QuantizedLinear</code> blocks.</td><td>Packed weights, scales and offsets would need their own join. Quantized weights save memory, not time (ADR 0011).</td></tr>
+      <tr><td>D5</td><td>Equality</td><td>The joined form must give the same tokens bit for bit as the separate form. The C7 worker checks the first batch (R56). If a configuration is not bit equal, the worker records the largest difference, and the parity tests of ADR 0003 decide for that configuration.</td><td>D6 of Step 6 measured bit-equal outputs at 224 px. At 512 px the matmul kernel can pick another tile size for the wider matrix.</td></tr>
+      <tr><td>D6</td><td>The default</td><td>For each dtype mode and each of the two joins (qkv, ff): on if the pooled median of two runs at P2 is ≥ 1.03, and the median of each run is above 1 (pass rule D21 of Step 6); else off. An ADR records the defaults, because they reverse D6 of Step 6.</td><td>Q4 of explore.html. A gain inside the noise does not change the code path of all users.</td></tr>
+      <tr><td>D7</td><td>The C1 setup</td><td>A clone of the MLX repo at tag v0.32.4 in <code>~/.cache/dinov3-mlx/mlx-src/</code>, its own venv, a build from source. Our worker runs there with <code>python -I</code> and imports no module of the repo (ADR 0013). The repo gets numbers only.</td><td>The same rules as the prior-art ports of Step 6b. The build changes no file of <code>pyproject.toml</code> or <code>uv.lock</code>.</td></tr>
+      <tr><td>D8</td><td>The C1 sweep</td><td>First a control: the unchanged source build against the wheel. Then, for each of three targets, at most 12 tile configurations, one build for each.</td><td>A build that is slower than the wheel would make every ratio wrong. 12 builds for each target keep the sweep below about 3 hours.</td></tr>
+    </tbody>
+  </table></div>
+  <p class="caption">Table 1. Decisions of Step 6e.</p>
+
+  <h3>3.2 Part A</h3>
+  <ul>
+    <li><b>A1</b>: <code>Attention.qkv</code> and <code>SwiGLU.hidden</code> get the joined form (Section 5). The MLP model sizes have no gate, so only the qkv join applies to them.</li>
+    <li><b>A2</b>: the change C7 measures four forms in one process: R (separate, the Step 6 form), R-J (both joins), R-Jqkv (only qkv) and R-Jff (only gate and up). So each join gets its own ratio in each dtype mode.</li>
+  </ul>
+  <h3>3.3 Part C1</h3>
+  <ul>
+    <li><b>C1a Control</b>: the wheel and the unchanged source build run the same probe: the six linear shapes of <code>scripts/probe_roofs.py</code> and one SDPA shape (B = 8, 20 heads, T = 1,029, head dimension 64).</li>
+    <li><b>C1b Read</b>: the build agent reads the dispatch code of the matmul and attention kernels of MLX 0.32.4 and lists the tile parameters and where MLX selects them. The plan does not name the files: the agent finds them and records them in the results.</li>
+    <li><b>C1c Sweep</b>: three targets. T1: fp16 1,280 → 1,280 (o_proj, q, k, v), 43.0 TFLOP/s now. T2: bf16 1,280 → 10,240 (joined gate and up), 45.1 TFLOP/s now. T3: the attention kernel at the SDPA shape, 36.5 TFLOP/s now.</li>
+    <li>A gain of C1 goes into the results and into the explainer. A pull request to MLX is Q3 of explore.html: the user decides after C1 and sends it.</li>
+  </ul>
+</section>
+
+<section id="flow">
+  <h2>4 Data flow</h2>
+  <figure>
+    <div class="fig"><svg viewBox="0 0 960 390" role="img" aria-label="Data flow of the joined projections"><rect width="960" height="390" fill="#ffffff"/><defs><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#4a5655"/></marker></defs><g font-family="-apple-system, Helvetica Neue, Arial, sans-serif" font-size="12.5" fill="#111414"><text x="16" y="20" font-weight="600">Attention.qkv, joined form</text><rect x="400" y="30" width="150" height="40" rx="5" fill="#ffffff" stroke="#9aa5a4" stroke-dasharray="4 3"/><text x="475" y="47" text-anchor="middle">concat q, k, v weights</text><text x="475" y="63" text-anchor="middle">(3D, D), in the trace</text><line x1="475" y1="70" x2="475" y2="88" stroke="#4a5655" marker-end="url(#ar)"/><rect x="16" y="90" width="150" height="44" rx="5" fill="#f5f8f7" stroke="#d6dedd"/><text x="91" y="109" text-anchor="middle">tokens after norm1</text><text x="91" y="125" text-anchor="middle">(B, T, D)</text><rect x="400" y="90" width="150" height="44" rx="5" fill="#057379"/><text x="475" y="109" text-anchor="middle" fill="#ffffff">1 matmul (addmm)</text><text x="475" y="125" text-anchor="middle" fill="#ffffff">D → 3D</text><rect x="590" y="90" width="170" height="44" rx="5" fill="#f5f8f7" stroke="#d6dedd"/><text x="675" y="109" text-anchor="middle">reshape (B, T, 3, H, hd)</text><text x="675" y="125" text-anchor="middle">transpose → q, k, v</text><rect x="800" y="90" width="144" height="44" rx="5" fill="#f5f8f7" stroke="#d6dedd"/><text x="872" y="109" text-anchor="middle" fill="#111414">RoPE, SDPA</text><text x="872" y="125" text-anchor="middle" fill="#111414">as in Step 6</text><line x1="166" y1="112" x2="398" y2="112" stroke="#4a5655" marker-end="url(#ar)"/><line x1="550" y1="112" x2="588" y2="112" stroke="#4a5655" marker-end="url(#ar)"/><line x1="760" y1="112" x2="798" y2="112" stroke="#4a5655" marker-end="url(#ar)"/><text x="16" y="156" fill="#4a5655">Separate form (Step 6): q_proj, k_proj, v_proj = 3 matmuls D → D, then 3 reshapes.</text><text x="16" y="186" font-weight="600">SwiGLU.hidden, joined form</text><rect x="400" y="196" width="150" height="40" rx="5" fill="#ffffff" stroke="#9aa5a4" stroke-dasharray="4 3"/><text x="475" y="213" text-anchor="middle">concat gate, up weights</text><text x="475" y="229" text-anchor="middle">(2F, D), in the trace</text><line x1="475" y1="236" x2="475" y2="254" stroke="#4a5655" marker-end="url(#ar)"/><rect x="16" y="256" width="150" height="44" rx="5" fill="#f5f8f7" stroke="#d6dedd"/><text x="91" y="275" text-anchor="middle">tokens after norm2</text><text x="91" y="291" text-anchor="middle">(B, T, D)</text><rect x="400" y="256" width="150" height="44" rx="5" fill="#057379"/><text x="475" y="275" text-anchor="middle" fill="#ffffff">1 matmul (addmm)</text><text x="475" y="291" text-anchor="middle" fill="#ffffff">D → 2F</text><rect x="590" y="256" width="170" height="44" rx="5" fill="#f5f8f7" stroke="#d6dedd"/><text x="675" y="275" text-anchor="middle">split → gate, up</text><text x="675" y="291" text-anchor="middle">silu(gate) · up (fused)</text><rect x="800" y="256" width="144" height="44" rx="5" fill="#057379"/><text x="872" y="275" text-anchor="middle" fill="#ffffff">down_proj</text><text x="872" y="291" text-anchor="middle" fill="#ffffff">F → D</text><line x1="166" y1="278" x2="398" y2="278" stroke="#4a5655" marker-end="url(#ar)"/><line x1="550" y1="278" x2="588" y2="278" stroke="#4a5655" marker-end="url(#ar)"/><line x1="760" y1="278" x2="798" y2="278" stroke="#4a5655" marker-end="url(#ar)"/><text x="16" y="322" fill="#4a5655">Separate form (Step 6): gate_proj, up_proj = 2 matmuls D → F.</text><text x="16" y="362">The weights stay the parameters q_proj.weight, …, up_proj.weight: implicit inputs of the trace.</text><text x="16" y="380">set_joined_projections(model, qkv, ff) sets the plain attributes before compile_backbone.</text></g></svg></div>
+    <figcaption><b>Figure 1.</b> The joined form of part A. Teal: matmul kernels. Dashed: the concat of the weights inside the trace (D1). The joined matmul is wider, so the MLX kernel can reach a higher rate (Table 1 of <code>docs/learn/06-5-roofline.html</code>).</figcaption>
+  </figure>
+  <figure>
+    <div class="fig"><svg viewBox="0 0 960 200" role="img" aria-label="Data flow of the C1 probe">
+      <rect width="960" height="200" fill="#ffffff"/>
+      <defs><marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#4a5655"/></marker></defs>
+      <g font-family="-apple-system, Helvetica Neue, Arial, sans-serif" font-size="12.5" fill="#111414">
+        <rect x="16" y="20" width="200" height="56" rx="5" fill="#f5f8f7" stroke="#d6dedd"/><text x="116" y="42" text-anchor="middle">scripts/probe_kernels.py</text><text x="116" y="60" text-anchor="middle">driver, GPU lock, AC power</text>
+        <rect x="290" y="20" width="250" height="56" rx="5" fill="#ffffff" stroke="#057379"/><text x="415" y="42" text-anchor="middle">repo venv: mlx 0.32.4 wheel</text><text x="415" y="60" text-anchor="middle">worker -I → one JSON line</text>
+        <rect x="290" y="110" width="250" height="56" rx="5" fill="#ffffff" stroke="#e0a336" stroke-width="1.5"/><text x="415" y="132" text-anchor="middle">~/.cache/dinov3-mlx/mlx-src/: source build</text><text x="415" y="150" text-anchor="middle">worker -I → one JSON line, per tile config</text>
+        <rect x="620" y="60" width="160" height="56" rx="5" fill="#f5f8f7" stroke="#d6dedd"/><text x="700" y="82" text-anchor="middle">results/kernels-c1.jsonl</text><text x="700" y="100" text-anchor="middle">rate, cosine</text>
+        <rect x="820" y="60" width="124" height="56" rx="5" fill="#f5f8f7" stroke="#d6dedd"/><text x="882" y="82" text-anchor="middle">kernels-c1.md</text><text x="882" y="100" text-anchor="middle">ratio to wheel</text>
+        <line x1="216" y1="48" x2="288" y2="48" stroke="#4a5655" marker-end="url(#ar2)"/>
+        <path d="M216 62 C250 62 250 138 288 138" fill="none" stroke="#4a5655" marker-end="url(#ar2)"/>
+        <path d="M540 48 C580 48 580 80 618 80" fill="none" stroke="#4a5655" marker-end="url(#ar2)"/>
+        <path d="M540 138 C580 138 580 98 618 98" fill="none" stroke="#4a5655" marker-end="url(#ar2)"/>
+        <line x1="780" y1="88" x2="818" y2="88" stroke="#4a5655" marker-end="url(#ar2)"/>
+        <text x="16" y="190" fill="#4a5655">The worker file is ours, in scripts/, and imports only mlx, numpy and the standard library. No code of the source build enters the repo.</text>
+      </g>
+    </svg></div>
+    <figcaption><b>Figure 2.</b> The C1 probe. The same worker runs in two venvs. Amber: the source build outside the repo (D7).</figcaption>
+  </figure>
+</section>
+
+<section id="code">
+  <h2>5 Key code</h2>
+<pre><code># src/dinov3_mlx/mlx_model.py, Attention (D1 to D3)
+def qkv(self, x: mx.array) -&gt; tuple[mx.array, mx.array, mx.array]:
+    b, t, _ = x.shape
+    if self.joined:
+        weight = mx.concatenate([self.q_proj.weight, self.k_proj.weight, self.v_proj.weight])
+        y = joined_linear(x, weight, self._qkv_bias())  # addmm; a zero k bias (D3)
+        y = y.reshape(b, t, 3, self.heads, -1).transpose(2, 0, 3, 1, 4)
+        return y[0], y[1], y[2]
+    ...  # the separate form of Step 6, unchanged</code></pre>
+<pre><code># src/dinov3_mlx/mlx_model.py, SwiGLU (D1)
+def hidden(self, x: mx.array) -&gt; mx.array:
+    if self.joined:
+        weight = mx.concatenate([self.gate_proj.weight, self.up_proj.weight])
+        gate, up = mx.split(joined_linear(x, weight, self._gate_up_bias()), 2, axis=-1)
+        return self.activation(gate, up)
+    return self.activation(self.gate_proj(x), self.up_proj(x))</code></pre>
+<pre><code># src/dinov3_mlx/mlx_model.py (D2, D4)
+def set_joined_projections(model: MlxBackbone, qkv: bool, ff: bool) -&gt; None:
+    """Select the joined or the separate projections of each block. Call before compile_backbone."""
+    if quantized_weight_names(model):
+        raise ValueError("joined projections need unquantized block weights (D4)")
+    for block in model.layer:
+        block.attention.joined = qkv
+        if isinstance(block.mlp, SwiGLU):
+            block.mlp.joined = ff</code></pre>
+<pre><code># scripts/bench_speed.py (A2): the forms of C7 in one process
+IN_PROCESS_CHANGES["joined"] = ("C7", ["R", "R-J", "R-Jqkv", "R-Jff"])</code></pre>
+</section>
+
+<section id="tests">
+  <h2>6 Tests</h2>
+  <p>Each test is written first and seen red. The tests T1 to T8 need no weights: they use the small models of <code>tests/small_model.py</code>.</p>
+  <ol>
+    <li><code>test_joined_qkv_equals_separate</code> (T1): the small models <code>vits16</code>, <code>vits16plus</code> and <code>vit7b16-shape</code> give the same q, k and v bit for bit in both forms, in the five dtype modes. One case has a k_proj without a bias and a q_proj with a bias (D3).</li>
+    <li><code>test_joined_gate_up_equals_separate</code> (T2): <code>SwiGLU.hidden</code> is bit equal in both forms, in the five dtype modes.</li>
+    <li><code>test_joined_forward_equals_separate</code> (T3): the eager and the compiled forward pass give the same tokens bit for bit with <code>set_joined_projections(model, True, True)</code> and without it.</li>
+    <li><code>test_joined_keeps_parameter_names</code> (T4): <code>model.parameters()</code> has the same keys and shapes after <code>set_joined_projections</code>; <code>load_weights(strict=True)</code> still passes.</li>
+    <li><code>test_joined_refuses_quantized_weights</code> (T5): <code>ValueError</code> for a model after <code>nn.quantize</code> (D4).</li>
+    <li><code>test_joined_follows_a_weight_change</code> (T6): a compiled joined forward pass gives the new output after a weight change (R35).</li>
+    <li><code>test_change_plan_c7</code> (T7): <code>bench_speed.py change --change joined --dry-run</code> lists C7 with the four forms at P1 and P2, in the dtype modes of Section 7.</li>
+    <li><code>test_change_worker_ratio_of_each_form</code> (T8): with four forms, the worker gives the ratio of each form to the first form in each round, and its median (stub forward functions, no GPU).</li>
+    <li><code>test_probe_kernels_worker_imports</code> (T9): the C1 worker file imports only <code>mlx</code>, <code>numpy</code> and the standard library, and calls no <code>subprocess</code>, <code>pickle</code> or <code>torch</code> (ADR 0013, as T12 of Step 6b).</li>
+    <li><code>test_probe_kernels_driver_refuses</code> (T10): the C1 driver refuses to run the source build without <code>--allow-source-build</code>, and refuses a worker path inside the source folder.</li>
+    <li><code>test_kernels_table</code> (T11): the table writer of C1 gives the ratio of each configuration to the wheel, and marks a configuration with cosine &lt; 0.99999 as not valid (fixture lines).</li>
+    <li>The parity tests of Steps 2 and 5 run unchanged. If D6 turns a join on by default, they run the joined form, because the compiled forward pass is the path of the parity tests (ADR 0010).</li>
+  </ol>
+</section>
+
+<section id="benchmarks">
+  <h2>7 Benchmarks</h2>
+  <p>Each benchmark runs through the GPU lock, on AC power, one worker subprocess at a time, after the memory check (run rules of <code>CLAUDE.md</code>).</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>No.</th><th>What</th><th>Configurations</th><th>Protocol</th><th>Output</th></tr></thead>
+    <tbody>
+      <tr><td>B1</td><td>C7: R, R-J, R-Jqkv, R-Jff in one process (A1, A2)</td><td>P2: ViT-H+/16, 512 px, batch size 8, patch embeddings, the five dtype modes. P1: ViT-S/16, 224 px, batch size 8, frame embedding, fp32, fp16-cast, bf16-cast. Also ViT-H+/16 at 512 px, batch size 1, fp16-cast and bf16-cast.</td><td>5 rounds, the forms rotate; two runs at different times (D7 of Step 6). The P1 and P2 time budgets of <code>bench.py</code>.</td><td><code>results/speed-joined.jsonl</code>, <code>results/joined-table.md</code></td></tr>
+      <tr><td>B2</td><td>MLX peak of each form</td><td>The configurations of B1</td><td><code>mx.reset_peak_memory</code> before the timed batches of each form</td><td>Field <code>mlx_timed_peak_bytes</code> of each form in B1</td></tr>
+      <tr><td>B3</td><td>C1a control: source build against the wheel</td><td>The six linear shapes of <code>probe_roofs.py</code> in fp16 and bf16, and the SDPA shape</td><td>5 rounds, the two venvs alternate; median of 20 calls each</td><td><code>results/kernels-c1.jsonl</code></td></tr>
+      <tr><td>B4</td><td>C1c sweep</td><td>T1, T2, T3 (Section 3.3); at most 12 tile configurations for each target</td><td>One build for each configuration; the probe of B3 on the target shape, against the control build</td><td><code>results/kernels-c1.jsonl</code>, <code>results/kernels-c1.md</code></td></tr>
+    </tbody>
+  </table></div>
+  <p class="caption">Table 2. Benchmarks. B1 takes about 20 minutes for each run. B4 takes up to about 3 hours, mostly builds.</p>
+</section>
+
+<section id="criteria">
+  <h2>8 Acceptance criteria</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>No.</th><th>Criterion</th><th>Target</th><th>Checked by</th></tr></thead>
+    <tbody>
+      <tr><td>AC1</td><td>The joined form equals the separate form on the small models, eager and compiled, in the five dtype modes</td><td>bit equal</td><td>T1, T2, T3</td></tr>
+      <tr><td>AC2</td><td>Parameter names, shapes and the strict load do not change; quantized models refuse the joined form</td><td>same keys; ValueError</td><td>T4, T5</td></tr>
+      <tr><td>AC3</td><td>A compiled joined forward pass follows a weight change</td><td>new output equals the eager output</td><td>T6</td></tr>
+      <tr><td>AC4</td><td>B1 first batch: the joined forms equal the separate form at P1 and P2</td><td>bit equal, or a recorded difference and the parity tests of ADR 0003 pass for that configuration</td><td>B1 (R56 check)</td></tr>
+      <tr><td>AC5</td><td>Paired ratio of each joined form to R, for each configuration of B1, two runs</td><td>measured; one row for each configuration and form</td><td>B1, <code>results/joined-table.md</code></td></tr>
+      <tr><td>AC6</td><td>The defaults follow the rule of D6</td><td>a join is on only where the pooled median at P2 ≥ 1.03 and each run &gt; 1</td><td>B1, the ADR of the Close stage</td></tr>
+      <tr><td>AC7</td><td>MLX peak of R-J at P2 against R</td><td>≤ R + 0.10 GB</td><td>B2</td></tr>
+      <tr><td>AC8</td><td>If a default changes: the parity tests pass with the new default</td><td>0 failed in the default session; the slow session for ViT-H+/16 and ViT-7B/16</td><td><code>uv run pytest</code>, <code>DINOV3_SLOW=1</code></td></tr>
+      <tr><td>AC9</td><td>C1a: the unchanged source build has the speed of the wheel</td><td>each shape within ± 3 % (median of 5 rounds)</td><td>B3</td></tr>
+      <tr><td>AC10</td><td>C1c: for each target, the best tile configuration and its ratio to the control build, with valid outputs</td><td>one row for each target; cosine to a NumPy float32 matmul ≥ 0.99999</td><td>B4, <code>results/kernels-c1.md</code></td></tr>
+      <tr><td>AC11</td><td>The C1 setup follows ADR 0013</td><td>worker with <code>-I</code>, outside the repo; no change of <code>pyproject.toml</code> or <code>uv.lock</code></td><td>T9, T10, <code>git diff</code></td></tr>
+      <tr><td>AC12</td><td>Code quality</td><td>ruff format and ruff check clean; 0 failed in <code>uv run pytest</code></td><td>the build session</td></tr>
+      <tr><td>AC13</td><td>Learn: the explainer covers each new function of <code>src/</code></td><td><code>set_joined_projections</code>, the joined <code>qkv</code> and <code>hidden</code>, and the C1 results</td><td><code>docs/learn/06-5-roofline.html</code></td></tr>
+    </tbody>
+  </table></div>
+  <p class="caption">Table 3. Acceptance criteria of Step 6e.</p>
+</section>
+
+<section id="open">
+  <h2>9 Open questions</h2>
+  <ul>
+    <li><b>Q1 (the user): the source build.</b> C1 clones the MLX repo (MIT license) into <code>~/.cache/dinov3-mlx/mlx-src/</code> and builds it in its own venv. Under ADR 0013 this needs your yes. The approval of this plan counts as that yes (Q2 of explore.html).</li>
+    <li><b>Q2 (the user): the Metal Toolchain.</b> The build needs the Metal compiler. On this Mac <code>xcrun metal</code> fails with "missing Metal Toolchain". You install it with <code>xcodebuild -downloadComponent MetalToolchain</code>. It is a download into Xcode, so the agent does not run it. Without it, C1 stops after part A.</li>
+    <li><b>Q3 (the user, after C1): a pull request to MLX.</b> Q3 of explore.html. You decide when the C1 results are in, and you send it.</li>
+    <li><b>Q4 (the user): order.</b> This plan assumes that Step 6e runs before Step 7b and Step 8 (Q5 of explore.html).</li>
+    <li><b>Q5 (the user): the limit 1.03 of D6.</b> Q4 of explore.html. The plan uses 1.03. You can change it with the approval.</li>
+  </ul>
+</section>
+</main>
+</body>
+</html>
