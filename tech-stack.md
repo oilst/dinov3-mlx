@@ -25,7 +25,7 @@ Apple M5 Max, 64 GB unified memory, macOS 26.5.2. All benchmark results in this 
 | Part | Version |
 |---|---|
 | macOS | 26.5.2 (build 25F84) |
-| Python | 3.12.13 (installed by uv) |
+| Python | 3.12.14 (installed by uv) |
 | uv | 0.12.15 |
 | mlx | 0.32.4 |
 | mlx-metal | 0.32.4. An indirect dependency of mlx: it holds `libmlx.dylib` and the Metal kernels. `uv.lock` pins it; `pyproject.toml` does not name it. Since Step 6, `machine.read_versions` records it, so each result line of `mlx` and of `torch-mps` has it (decision D19 of `specs/06-speed/explore.html`). |
