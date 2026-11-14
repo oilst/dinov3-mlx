@@ -30,6 +30,9 @@ Size = int | tuple[int, int]
 Output = np.ndarray | mx.array
 
 BACKENDS = ("mlx",)
+# The quantized weights of the API and their dtype modes (Table 2 of the plan, ADR 0011): 8 bits
+# only, in the two autocast modes. 4 bits are not valid in 72 of 72 rows of Step 6.
+API_BITS = {8: ("fp16-autocast", "bf16-autocast")}
 # The input resolution of the Hugging Face image processor of DINOv3.
 DEFAULT_SIZE = 224
 
@@ -128,10 +131,11 @@ class Embedder:
             backend: "mlx". Step 7b adds "mlx+ne".
 
         Raises:
-            ValueError: For an unknown model size, dtype mode or backend, or a bad batch size.
+            ValueError: For an unknown model size, dtype mode or backend, a bad batch size, or
+                bits other than None or 8 in an autocast mode.
             RunRuleError: For ViT-7B/16 in fp32, before any file read.
+            TF32ModeError: If mlx runs fp32 matmuls with TF32, before the weights.
             WeightsAccessError: If the Hub refuses the download of the weights.
-            TF32ModeError: If mlx runs fp32 matmuls with TF32.
             InsufficientMemoryError: If the load does not fit in the free memory.
         """
         if backend == "mlx+ne":
@@ -144,18 +148,23 @@ class Embedder:
             )
         if batch_size < 1:
             raise ValueError(f"batch_size must be at least 1, not {batch_size}")
+        if bits is not None and (bits not in API_BITS or dtype_mode not in API_BITS[bits]):
+            raise ValueError(
+                f"bits={bits} in {dtype_mode}: use bits=None, or bits=8 in "
+                f"{' or '.join(API_BITS[8])} (4 bits do not pass the parity thresholds)"
+            )
         self.model_size = model_size_of(model_size)
         self.dtype_mode = dtype_mode
         self.batch_size = batch_size
         self.backend = backend
         label = f"{self.model_size} mlx {dtype_mode}"
         check_run_rule(self.model_size, MLX_DTYPE_MODES[dtype_mode].matmul.size, label)
-        ensure_weights(self.model_size)
-        if tf32_active():
+        if tf32_active():  # before the weights, so a user does not download them for nothing
             raise TF32ModeError(
                 "mlx runs fp32 matmuls with TF32: import dinov3_mlx before mlx, or set "
                 "MLX_ENABLE_TF32=0 before the first use of mlx"
             )
+        ensure_weights(self.model_size)
         limit = mx.get_memory_limit()
         try:
             self._model = load_mlx_backbone(self.model_size, dtype_mode, bits=bits)

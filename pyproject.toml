@@ -1,7 +1,7 @@
 [project]
 name = "dinov3-mlx"
 version = "0.1.0"
-description = "Fast DINOv3 frame embeddings, patch embeddings and fine-tuning on Apple silicon with MLX."
+description = "Fast DINOv3 frame embeddings and patch embeddings on Apple silicon with MLX."
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE", "LICENSE-DINOv3.md"]

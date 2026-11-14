@@ -575,11 +575,15 @@ A pytest session without `DINOV3_SLOW`.
 **Slow session**:
 A pytest session with `DINOV3_SLOW=1`.
 
+**Eager pairs**:
+The paired run of compiled `mlx` against eager `torch-mps` at P1 and P2 (`bench_speed.py pairs --torch-eager`, W11 of Step 7): the form of Hugging Face transformers without `torch.compile`.
+
 **Release check**:
 The full default session with the weights, the slow session for the API parity and the fingerprint test on this Mac, before each tag.
 
-**Gate**:
-A step of the release that only the user can do or approve: G1 the legal check, G2 the push to the private repo, G3 the repo goes public.
+**Release gate**:
+A step of the release that only the user can do or approve: G1 the legal check, G2 the push to the private repo, G3 the repo goes public, then the tag and the GitHub release.
+_Avoid_: gate (a Gate is the short job of Step 6)
 
 **CPU stream**:
 The CPU device of MLX (`mx.cpu`). Some tests run the MLX backbone there as a second device; it rounds differently from the GPU.

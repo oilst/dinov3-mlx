@@ -15,7 +15,7 @@ ROOT = Path(__file__).parent.parent
 # letter, so the bracket form of HEAVY_JOB_PATTERN ("[d]inov3_...") also counts.
 OLD_NAMES = ("inov3" + "_apple", "inov3" + "-apple")
 # The files that describe the rename keep the old name.
-RENAME_RECORDS = ("specs/07-release/", "docs/adr/0017-")
+RENAME_RECORDS = ("specs/07-release/", "docs/adr/0018-")
 
 
 def tracked_files() -> list[Path]:
@@ -139,17 +139,14 @@ def test_site_links_resolve(tmp_path: Path) -> None:
 
 # The sections of Section 3.4 of the plan, as level-2 headings of the README.
 README_SECTIONS = [
-    "What it does",
-    "Installation",
-    "Access to the weights",
-    "Usage",
-    "Dtype modes",
-    "Results",
+    "Quick start",
+    "How it compares",
+    "How far from the optimum",
+    "What this repo holds",
+    "Documentation",
     "Limits",
-    "Tested versions",
-    "Tests and benchmarks",
+    "Tests",
     "License",
-    "Pages",
 ]
 
 
@@ -158,7 +155,8 @@ def readme() -> str:
 
 
 def test_readme_sections() -> None:
-    """T13: the README has the sections of Section 3.4 in order and names V2, V4 and V17."""
+    """T13: the README has its sections in order (the short form of 2026-11-14, after Section 3.4)
+    and names V2, V4 and V17."""
     headings = re.findall(r"^## (.+)$", readme(), flags=re.MULTILINE)
     assert headings == README_SECTIONS
     for limit in ("V2", "V4", "V17"):

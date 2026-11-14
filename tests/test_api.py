@@ -298,6 +298,37 @@ def test_embedder_run_rule_before_weights(monkeypatch: pytest.MonkeyPatch) -> No
         api.Embedder("ViT-7B/16", dtype_mode="fp32")
 
 
+def test_embedder_tf32_before_weights(monkeypatch: pytest.MonkeyPatch) -> None:
+    """V8 of the Step 7 verify: the TF32 probe runs before a weight look-up or a download."""
+
+    def no_weights(model_size: str) -> Path:
+        raise AssertionError("no weight look-up before the TF32 probe")
+
+    monkeypatch.setattr(api, "tf32_active", lambda: True)
+    monkeypatch.setattr(api, "ensure_weights", no_weights)
+    with pytest.raises(TF32ModeError):
+        api.Embedder()
+
+
+@pytest.mark.parametrize(
+    ("bits", "dtype_mode"),
+    [(4, "fp16-autocast"), (2, "fp16-autocast"), (8, "fp32"), (8, "bf16-cast")],
+)
+def test_embedder_bits_only_8_in_autocast(
+    bits: int, dtype_mode: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """V1 of the Step 7 verify: bits takes only None and 8, and 8 only in the two autocast modes
+    (Table 2 of the plan; 4 bits are not valid in 72 of 72 rows of Step 6). The check runs before
+    a weight look-up or a download."""
+
+    def no_weights(model_size: str) -> Path:
+        raise AssertionError("no weight look-up before the bits check")
+
+    monkeypatch.setattr(api, "ensure_weights", no_weights)
+    with pytest.raises(ValueError, match="bits"):
+        api.Embedder(dtype_mode=dtype_mode, bits=bits)
+
+
 def gated(*args: object, **kwargs: object) -> None:
     """A fake Hub download that refuses access to a gated repo."""
     import httpx2

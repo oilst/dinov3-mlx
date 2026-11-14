@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Public API</title>
+<style>
+/* Explainer page. White page, black text, no dark mode. */
+:root { --bg: #ffffff; --fg: #111414; --muted: #4a5655; --rule: #d6dedd; --panel: #f5f8f7; --accent: #057379; --warn: #b45309; color-scheme: light; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif; }
+main { max-width: 62rem; margin: 0 auto; padding: 40px 20px 64px; display: grid; gap: 1.75rem; }
+main > * { min-width: 0; }
+h1 { font-size: 1.9rem; line-height: 1.15; margin: 0; }
+h2 { font-size: 1.3rem; margin: 0; }
+section { display: grid; gap: 0.8rem; }
+p, ul, ol { margin: 0; max-width: 46rem; }
+li + li { margin-top: 0.25rem; }
+code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.86em; }
+pre { margin: 0; background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 0.8rem 1rem; overflow-x: auto; }
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+th, td { text-align: left; vertical-align: top; padding: 0.45rem 0.7rem 0.45rem 0; border-bottom: 1px solid var(--rule); }
+th { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); border-bottom: 1.5px solid var(--fg); }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+tr.pick td { font-weight: 600; }
+.caption, figcaption { font-size: 0.88rem; color: var(--muted); }
+figure { margin: 0; display: grid; gap: 0.4rem; }
+.fig { border: 1px solid var(--rule); border-radius: 6px; padding: 0.5rem; overflow-x: auto; }
+.fig svg { display: block; width: 100%; height: auto; min-width: 640px; }
+.note-box { border-left: 3px solid var(--accent); padding: 0.3rem 0 0.3rem 0.9rem; }
+nav ol { columns: 2; }
+a { color: var(--accent); }
+.steps { font-size: 0.92rem; color: var(--muted); }
+.box { fill: var(--panel); stroke: var(--muted); stroke-width: 1; }
+.box.gpu { stroke: var(--accent); stroke-width: 1.5; }
+.box.once { stroke: var(--warn); stroke-dasharray: 4 3; }
+.lab { fill: var(--fg); font-size: 12.5px; }
+.note { fill: var(--muted); font-size: 12px; }
+.flow { stroke: var(--muted); stroke-width: 1.2; fill: none; }
+.headk { fill: var(--muted); }
+.loop { fill: none; stroke: var(--rule); stroke-width: 1.5; stroke-dasharray: 6 4; }
+</style>
+</head>
+<body>
+<main>
+<header>
+  <h1>The Public API</h1>
+  <p>Explainer for roadmap Step 7. Date: 2026-11-14. It follows one video frame through <code>Embedder</code>, from uint8 pixels to the frame embedding and the patch embeddings, and explains every function that Step 7 adds to <code>src/dinov3_mlx/</code>.</p>
+  <p class="steps">Related: <a href="02-tokens-and-outputs.html">02 Tokens and outputs</a> · <a href="06-1-compiled-forward-pass.html">06-1 Compiled forward pass</a> · <a href="06-4-preprocessing.html">06-4 Preprocessing</a>.</p>
+  <p class="steps">Previous: <a href="06c-neural-engine.html">06c Neural Engine</a></p>
+</header>
+
+<nav>
+  <h2>Contents</h2>
+  <ol>
+    <li><a href="#why">Why this explainer</a></li>
+    <li><a href="#picture">One frame through the API</a></li>
+    <li><a href="#constructor">The constructor</a></li>
+    <li><a href="#import">The package import</a></li>
+    <li><a href="#tf32">The TF32 probe</a></li>
+    <li><a href="#pixels">The preprocessing contract</a></li>
+    <li><a href="#loop">The batch loop and the padded last batch</a></li>
+    <li><a href="#split">The token split</a></li>
+    <li><a href="#default">Why fp16-autocast is the default</a></li>
+    <li><a href="#errors">Errors</a></li>
+    <li><a href="#surprises">Surprises</a></li>
+    <li><a href="#sources">Sources</a></li>
+  </ol>
+</nav>
+
+<section id="why">
+  <h2>1 Why this explainer</h2>
+  <p>Steps 2 to 6 built the MLX port and measured it. A user of the package sees only one class: <code>Embedder</code>. This page shows what the class does with a frame, and why. It adds no new part of DINOv3. It connects the parts of the earlier explainers into one path.</p>
+  <pre><code>import numpy as np
+from dinov3_mlx import Embedder
+
+model = Embedder("ViT-S/16")  # fp16-autocast, batch size 8
+frames = np.stack(rgb_frames)  # uint8, (B, h, w, 3)
+frame, patches = model.embed(frames, size=(224, 400))  # (B, 384) fp32, (B, 14, 25, 384) fp16</code></pre>
+</section>
+
+<section id="picture">
+  <h2>2 One frame through the API</h2>
+  <figure>
+    <div class="fig"><svg viewBox="0 0 820 300" role="img" aria-label="The data flow of Embedder.embed">
+      <defs><marker id="head" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L8,4 L0,8 z" class="headk"/></marker></defs>
+      <rect x="10" y="20" width="800" height="50" rx="6" class="box once"/>
+      <text x="410" y="41" class="lab" text-anchor="middle">Constructor, once: checks → run rule → TF32 probe → weights (download on first use) → load → compile</text>
+      <text x="410" y="59" class="note" text-anchor="middle">The memory limit of the process is the same before and after the load</text>
+      <rect x="10" y="88" width="800" height="200" rx="8" class="loop"/>
+      <text x="22" y="106" class="note">For each batch of batch_size frames</text>
+      <rect x="20" y="120" width="150" height="52" rx="5" class="box"/>
+      <text x="95" y="142" class="lab" text-anchor="middle">uint8 frames</text>
+      <text x="95" y="160" class="lab" text-anchor="middle">(B, h, w, 3)</text>
+      <rect x="215" y="120" width="150" height="52" rx="5" class="box"/>
+      <text x="290" y="142" class="lab" text-anchor="middle">as_uint8_batch,</text>
+      <text x="290" y="160" class="lab" text-anchor="middle">pad with zero frames</text>
+      <rect x="410" y="120" width="180" height="52" rx="5" class="box gpu"/>
+      <text x="500" y="142" class="lab" text-anchor="middle">preprocess_frames (GPU)</text>
+      <text x="500" y="160" class="lab" text-anchor="middle">÷ 255, resize, normalize</text>
+      <rect x="635" y="120" width="165" height="52" rx="5" class="box gpu"/>
+      <text x="717" y="142" class="lab" text-anchor="middle">compiled forward</text>
+      <text x="717" y="160" class="lab" text-anchor="middle">pass, one trace per size</text>
+      <line x1="170" y1="146" x2="213" y2="146" class="flow" marker-end="url(#head)"/>
+      <line x1="365" y1="146" x2="408" y2="146" class="flow" marker-end="url(#head)"/>
+      <line x1="590" y1="146" x2="633" y2="146" class="flow" marker-end="url(#head)"/>
+      <rect x="635" y="205" width="165" height="52" rx="5" class="box"/>
+      <text x="717" y="227" class="lab" text-anchor="middle">tokens</text>
+      <text x="717" y="245" class="lab" text-anchor="middle">(B, 1 + 4 + N, D)</text>
+      <line x1="717" y1="172" x2="717" y2="203" class="flow" marker-end="url(#head)"/>
+      <rect x="215" y="200" width="330" height="30" rx="5" class="box"/>
+      <text x="380" y="220" class="lab" text-anchor="middle">token 0 (CLS) → frame embedding (B, D), fp32</text>
+      <rect x="215" y="242" width="330" height="30" rx="5" class="box"/>
+      <text x="380" y="262" class="lab" text-anchor="middle">tokens 5 … → patch embeddings (B, H/16, W/16, D)</text>
+      <line x1="635" y1="226" x2="547" y2="215" class="flow" marker-end="url(#head)"/>
+      <line x1="635" y1="236" x2="547" y2="257" class="flow" marker-end="url(#head)"/>
+      <text x="22" y="228" class="note">The rows of the</text>
+      <text x="22" y="244" class="note">zero frames are</text>
+      <text x="22" y="260" class="note">dropped here</text>
+    </svg></div>
+    <figcaption>Figure 1. The data flow of <code>Embedder.embed</code>. Dashed amber: the constructor runs once. Dashed grey: the loop runs once for each batch. Teal: work on the GPU. The 4 register tokens (tokens 1 to 4) are in no output.</figcaption>
+  </figure>
+</section>
+
+<section id="constructor">
+  <h2>3 The constructor</h2>
+  <pre><code># src/dinov3_mlx/api.py, Embedder.__init__ (shortened)
+if bits is not None and (bits not in API_BITS or dtype_mode not in API_BITS[bits]):
+    raise ValueError(...)  # only bits=8, only in the two autocast modes (ADR 0011)
+self.model_size = model_size_of(model_size)  # "ViT-S/16" or "facebook/dinov3-vits16-…"
+check_run_rule(self.model_size, MLX_DTYPE_MODES[dtype_mode].matmul.size, label)  # before any file read
+if tf32_active():  # Section 5; before the weights, so no download for nothing
+    raise TF32ModeError("… import dinov3_mlx before mlx, or set MLX_ENABLE_TF32=0 …")
+ensure_weights(self.model_size)  # Hugging Face cache, else a download; WeightsAccessError
+limit = mx.get_memory_limit()
+try:
+    self._model = load_mlx_backbone(self.model_size, dtype_mode, bits=bits)
+finally:
+    mx.set_memory_limit(limit)  # the loader sets the need of its load
+self._forward = compile_backbone(self._model)  # ADR 0010: the path of the parity tests</code></pre>
+  <ul>
+    <li>The checks that need no file run first: the backend, the dtype mode, the batch size and <code>bits</code>. <code>bits</code> takes only <code>None</code> or 8, and 8 only in fp16-autocast and bf16-autocast: 4-bit weights do not pass the parity thresholds in any of the 72 rows of Step 6 (ADR 0011).</li>
+    <li><code>model_size_of(name)</code> accepts the model size name or its Hugging Face id, and raises <code>ValueError</code> for another name.</li>
+    <li><code>check_run_rule</code> stops ViT-7B/16 in fp32 before any file read. Its fp32 weights alone need about 27 GB (ADR 0008).</li>
+    <li><code>ensure_weights(model_size)</code> (<code>hub.py</code>) returns the weight folder. If the weights are missing, it downloads them. If the Hub refuses, because the DINOv3 License is not accepted or no token is set, it raises <code>WeightsAccessError</code> with the model page and <code>hf auth login</code>. The download happens only when the user calls the constructor.</li>
+    <li><code>load_mlx_backbone</code> sets an MLX memory limit for its load. That limit stays for the whole process. So the constructor sets the old limit again, also when the load fails.</li>
+    <li><code>compile_backbone</code> gives the compiled forward pass. The parity tests use the same function (ADR 0010), so the API output is the tested output.</li>
+  </ul>
+</section>
+
+<section id="import">
+  <h2>4 The package import</h2>
+  <pre><code># src/dinov3_mlx/__init__.py (shortened)
+os.environ.setdefault("MLX_ENABLE_TF32", "0")  # before the first use of mlx (ADR 0005)
+
+def __getattr__(name: str) -> object:  # PEP 562: a public name loads on first use
+    return getattr(import_module(_MODULES[name]), name)</code></pre>
+  <ul>
+    <li><code>import dinov3_mlx</code> sets <code>MLX_ENABLE_TF32=0</code> if the variable is not set. An explicit value of the user stays.</li>
+    <li>The import loads no mlx and no torch. <code>Embedder</code> and the four error classes load on first use. So a torch process can import a module of the package and gets no mlx, and the API path never imports torch. The core needs five packages: mlx, numpy, safetensors, huggingface-hub and pillow.</li>
+  </ul>
+</section>
+
+<section id="tf32">
+  <h2>5 The TF32 probe</h2>
+  <p>TF32 keeps 10 bits of the mantissa of an fp32 value in a matmul. MLX turns it on by default. The fp32 dtype mode and the resize matmuls of the preprocessing need it off (ADR 0005). MLX reads <code>MLX_ENABLE_TF32</code> once, at its first use. A process that used mlx before <code>import dinov3_mlx</code> can run TF32 while the variable now says 0. So the variable alone does not tell the truth, and the constructor measures it.</p>
+  <pre><code># src/dinov3_mlx/mlx_model.py
+def tf32_active() -> bool:
+    steps = np.arange(64 * 64, dtype=np.float32).reshape(64, 64) % 1000
+    values = (1.0 + steps * 2.0**-20).astype(np.float32)  # needs 20 mantissa bits
+    product = mx.matmul(mx.eye(64, dtype=mx.float32), mx.array(values), stream=mx.gpu)
+    return not np.array_equal(np.array(product), values)  # TF32 rounds them to 1</code></pre>
+  <p>The identity matmul gives the values back exactly in fp32. With TF32 each value 1 + k · 2<sup>−20</sup> loses its low bits. One 64 × 64 matmul costs below 10 ms.</p>
+</section>
+
+<section id="pixels">
+  <h2>6 The preprocessing contract</h2>
+  <p>The API does the work of the Hugging Face image processor of DINOv3, on the GPU (<a href="06-4-preprocessing.html">06-4</a>):</p>
+  <ol>
+    <li>The uint8 frames go to the GPU: a quarter of the bytes of fp32.</li>
+    <li>Divide by 255.</li>
+    <li>Resize to the input resolution (H, W): bilinear, with antialiasing, on float values. Two fp32 matmuls, one for the rows and one for the columns. The resize does not keep the aspect ratio. The default 224 gives 224 × 224 px, as the Hugging Face default.</li>
+    <li>Subtract the ImageNet mean and divide by the ImageNet standard deviation.</li>
+  </ol>
+  <p><code>as_uint8_batch(frames)</code> accepts a uint8 array (B, h, w, 3), or a list of PIL images or uint8 arrays of one size. Another dtype raises <code>TypeError</code>, so float frames cannot enter with another scale. Frames of different sizes raise <code>ValueError</code>. <code>input_resolution(size)</code> accepts an int or (H, W); each side must be a multiple of 16, the patch size.</p>
+</section>
+
+<section id="loop">
+  <h2>7 The batch loop and the padded last batch</h2>
+  <pre><code># src/dinov3_mlx/api.py, Embedder._run (shortened)
+for start in range(0, len(batch), self.batch_size):
+    chunk = batch[start : start + self.batch_size]
+    used = len(chunk)
+    if used &lt; self.batch_size:  # zero frames: the compiled shape stays the same
+        chunk = np.concatenate([chunk, np.zeros((self.batch_size - used, *chunk.shape[1:]), np.uint8)])
+    tokens = self._forward(preprocess_frames(chunk, (height, width)))
+    frame = tokens[:used, 0].astype(mx.float32)  # the rows of the zero frames go
+    patches = tokens[:used, NUM_PREFIX_TOKENS:].astype(dtype).reshape(used, *grid, -1)
+    mx.eval(frame, patches)  # one batch at a time keeps the graph and the memory small</code></pre>
+  <ul>
+    <li><code>mx.compile</code> records one trace for each input shape. A last batch of 5 frames would need a second trace. The zero frames keep one shape, so each input resolution needs one trace only.</li>
+    <li>A frame in a batch does not see the other frames: attention runs inside one frame. So the zero frames do not change the outputs of the real frames. Test T3 checks this: 5 frames at batch size 8 against batch size 5, cosine at least 0.99999.</li>
+    <li>The padded rows cost time. B1 measured the API against the direct path: P1 0.996 and P2 1.009 with full batches, but P1-pad (13 frames, so 3 zero frames) only 0.819 (<code>results/api-table.md</code>). Call the API with a multiple of <code>batch_size</code> frames, or set <code>batch_size</code> to the number of frames.</li>
+  </ul>
+</section>
+
+<section id="split">
+  <h2>8 The token split</h2>
+  <p>After the final layer norm the backbone gives 1 CLS token, 4 register tokens and N = (H/16) · (W/16) patch tokens (<a href="02-tokens-and-outputs.html">02</a>).</p>
+  <ul>
+    <li><b>Frame embedding:</b> token 0, the CLS token, as fp32, shape (B, D). The API does not L2-normalize it. A classifier that needs unit length divides by the norm itself.</li>
+    <li><b>Patch embeddings:</b> tokens 5 to 5 + N − 1, as (B, H/16, W/16, D). They are fp16 in the four fp16 and bf16 dtype modes (<code>patch_dtype</code>), fp32 in fp32 or with <code>patch_fp32=True</code>.</li>
+    <li>The register tokens are in no output.</li>
+    <li><code>embed</code> gives both from one forward pass. <code>embed_frames</code> and <code>embed_patches</code> give one. <code>as_numpy=False</code> keeps the outputs on the GPU as <code>mx.array</code>.</li>
+  </ul>
+</section>
+
+<section id="default">
+  <h2>9 Why fp16-autocast is the default</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Dtype mode</th><th class="num">ViT-S/16, 224 px, b8 (img/s)</th><th class="num">Worst frame</th><th class="num">Worst patch 1st percentile</th><th>Model sizes with finite output</th></tr></thead>
+    <tbody>
+      <tr><td>fp32</td><td class="num">905.6</td><td class="num">1.000000</td><td class="num">1.000000</td><td>5 of 6 (ViT-7B/16: run rule)</td></tr>
+      <tr><td>fp16-cast</td><td class="num">1,772.1</td><td class="num">0.999973</td><td class="num">0.999654</td><td>4 of 6 (fp16 overflow)</td></tr>
+      <tr><td>bf16-cast</td><td class="num">1,893.0</td><td class="num">0.998847</td><td class="num">0.982649</td><td>6 of 6</td></tr>
+      <tr class="pick"><td>fp16-autocast</td><td class="num">1,693.6</td><td class="num">0.999986</td><td class="num">0.999679</td><td>6 of 6</td></tr>
+      <tr><td>bf16-autocast</td><td class="num">1,651.0</td><td class="num">0.998387</td><td class="num">0.983737</td><td>6 of 6</td></tr>
+    </tbody>
+  </table></div>
+  <p class="caption">Table 1. The five dtype modes. Throughput: Table 5 of <code>results/speedup-table.md</code> (compiled mlx, frame output, one round). Parity: the worst value over all model sizes and 12 configurations, Table 1 of <code>results/parity-mlx.md</code>.</p>
+  <ul>
+    <li>fp16-autocast is the only fast dtype mode that gives finite outputs for all six model sizes and passes the fp16 thresholds of ADR 0003. It keeps the residual stream and the layer norms in fp32, so the large token values of ViT-L/16 and ViT-H+/16 do not overflow (<a href="05-3-numeric-range.html">05-3</a>).</li>
+    <li>fp16-cast overflows for ViT-L/16 and ViT-H+/16. bf16-cast is about 12 % faster at ViT-S/16, but its patch embeddings have a lower parity.</li>
+    <li>fp32 is half as fast and cannot run ViT-7B/16.</li>
+  </ul>
+</section>
+
+<section id="errors">
+  <h2>10 Errors</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Error</th><th>When</th><th>What the text says</th></tr></thead>
+    <tbody>
+      <tr><td><code>WeightsAccessError</code></td><td>The Hub refuses the download of a gated repo</td><td>The model page, the DINOv3 License, <code>hf auth login</code></td></tr>
+      <tr><td><code>TF32ModeError</code></td><td>The TF32 probe finds TF32 on</td><td>Import <code>dinov3_mlx</code> before mlx, or set <code>MLX_ENABLE_TF32=0</code></td></tr>
+      <tr><td><code>RunRuleError</code></td><td>ViT-7B/16 in fp32</td><td>The run rule; use a half dtype mode</td></tr>
+      <tr><td><code>InsufficientMemoryError</code></td><td>The load does not fit in the free memory</td><td>The need and the free bytes</td></tr>
+      <tr><td><code>ValueError</code></td><td>Unknown model size, dtype mode or backend; batch size below 1; <code>bits</code> other than None or 8 in an autocast mode; a side not a multiple of 16; frames of different sizes; <code>backend="mlx+ne"</code></td><td>The valid values; Step 7b for the Neural Engine</td></tr>
+      <tr><td><code>TypeError</code></td><td>Frames that are not uint8</td><td>The dtype that came in</td></tr>
+    </tbody>
+  </table></div>
+  <p class="caption">Table 2. The errors of the public API (Table 2 of <code>specs/07-release/plan.html</code>).</p>
+</section>
+
+<section id="surprises">
+  <h2>11 Surprises</h2>
+  <ul>
+    <li>An environment variable is not the state. MLX reads <code>MLX_ENABLE_TF32</code> once. Only a measurement shows if TF32 is on in the running process.</li>
+    <li>The memory limit of one load stays for the whole process. A library must set the limit of its caller again.</li>
+    <li>Three zero frames out of 16 rows cost 18 % of the throughput (P1-pad). The cost of a fixed trace shape is real at small batch sizes.</li>
+    <li>A lazy import is part of the contract. Without it, a torch process that imports one helper of the package loads mlx too.</li>
+  </ul>
+</section>
+
+<section id="sources">
+  <h2>12 Sources</h2>
+  <ul>
+    <li><code>src/dinov3_mlx/api.py</code>: <code>Embedder</code>, <code>as_uint8_batch</code>, <code>input_resolution</code>, <code>model_size_of</code>. <code>src/dinov3_mlx/__init__.py</code>: the lazy import. <code>src/dinov3_mlx/mlx_model.py</code>: <code>tf32_active</code>, <code>compile_backbone</code>, <code>patch_dtype</code>. <code>src/dinov3_mlx/hub.py</code>: <code>ensure_weights</code>, <code>WeightsAccessError</code>. <code>src/dinov3_mlx/mlx_preprocess.py</code>: <code>preprocess_frames</code>.</li>
+    <li><code>specs/07-release/explore.html</code> and <code>plan.html</code>: the decisions D1 to D8, the contract of Table 2 and the tests T1 to T15.</li>
+    <li><code>results/api-table.md</code>: benchmark B1. <code>scripts/bench_api.py</code> writes it.</li>
+    <li>ADR 0003 (parity thresholds), ADR 0005 (TF32 off), ADR 0008 (ViT-7B/16 in fp32), ADR 0010 (the compiled forward pass).</li>
+  </ul>
+</section>
+</main>
+</body>
+</html>
