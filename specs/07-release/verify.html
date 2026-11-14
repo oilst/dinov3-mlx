@@ -1,0 +1,347 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Step 7 Release: Verify</title>
+<style>
+/* Spec page. White page, black text, no dark mode. */
+:root { --bg: #ffffff; --fg: #111414; --muted: #4a5655; --rule: #d6dedd; --panel: #f5f8f7; --accent: #057379; --pass: #1d7a3a; --fail: #b3261e; --partial: #8a5a00; --pending: #4a5655; color-scheme: light; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif; }
+main { max-width: 64rem; margin: 0 auto; padding: 40px 16px 64px; display: grid; gap: 1.75rem; }
+main > *, section > * { min-width: 0; }
+h1 { font-size: 1.9rem; line-height: 1.15; margin: 0; }
+h2 { font-size: 1.3rem; margin: 0; }
+h3 { font-size: 1.05rem; margin: 0; }
+section { display: grid; gap: 0.8rem; min-width: 0; }
+p, ul, ol { margin: 0; max-width: 48rem; }
+li + li { margin-top: 0.25rem; }
+code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.86em; }
+p code, li code, td code { overflow-wrap: anywhere; }
+pre { margin: 0; background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 0.8rem 1rem; overflow-x: auto; }
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 0.92rem; }
+th, td { text-align: left; vertical-align: top; padding: 0.45rem 0.7rem 0.45rem 0; border-bottom: 1px solid var(--rule); }
+th { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); border-bottom: 1.5px solid var(--fg); }
+td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.caption { font-size: 0.88rem; color: var(--muted); }
+.pass { color: var(--pass); font-weight: 600; }
+.fail { color: var(--fail); font-weight: 600; }
+.partial { color: var(--partial); font-weight: 600; }
+.pending { color: var(--pending); font-weight: 600; font-style: italic; }
+a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+<header>
+  <h1>Step 7 Release: Verify</h1>
+  <p>Roadmap step 7. Status: Verify done on 2026-11-14 by a separate agent. Build commits: <code>3975245</code> (W1) to <code>50755d9</code> (W8) on <code>main</code>. The commits <code>7cb74f9</code> and <code>bfbe30f</code> before them add the explore and the plan. The later commits <code>fb5bd7c</code>, <code>cd18c6e</code>, <code>dca5a6e</code> and <code>55f8120</code> (Step 6 roofline, Step 6e) are not part of the build, but the release ships them, so AC10, AC13, AC15 and AC17 also apply to HEAD <code>55f8120</code>. The main session writes the Learn page and the ADRs of the Close at the same time; this page does not judge them. During Verify, the main session changed the working tree: on the user's request, <code>README.md</code> is now a short form, and <code>tests/test_release.py</code> has the new README sections and the allow-list <code>docs/adr/0018-</code>. AC10 and AC17 are judged on this working tree (not committed).</p>
+</header>
+
+<section id="summary">
+  <h2>1 Summary</h2>
+  <p>This page checks the 20 acceptance criteria of <code>plan.html</code> (Section 8, Table 5) against the code, the tests, the result lines, the parity records, the lock log, the history of this repo and the private archive. The agent changed no code and no result file. It ran ruff, the lock check, the test session without weights, the table writer of B1 and the site builder, each after a memory check. It ran no model load, no benchmark and no wheel build. It scanned the history with its own scripts and reports only counts and commit ids.</p>
+  <p><b>Result:</b> 11 rows pass, 4 rows are partial, 0 rows fail, 5 rows are open. Partial: AC1, AC4, AC11 (the slow session of W8 skipped ViT-7B/16, and T5 left no record) and AC17 (4 claims of the short README do not match their sources). Open: AC12 (the user reads the Actions run), AC14 (no full record of the release check; rerun pending), AC18, AC19 and AC20 (after the gates).</p>
+  <ul>
+    <li><b>The API is correct where it was measured.</b> Through <code>Embedder.embed</code>, 60 of 60 measured fp16-autocast rows pass the fp16 thresholds (5 model sizes × 12 configurations). ViT-7B/16 did not run: the memory check gave 17.4 GB available against a need of 20.1 GB (AC1 partial). ViT-S/16 in fp32 and bf16-cast: 24 of 24 rows pass (AC2).</li>
+    <li><b>The overhead of the API is small.</b> The lower medians of B1 are 0.996 (P1) and 1.009 (P2) against the target 0.97. The agent computed them again from <code>results/api-overhead.jsonl</code>; the table writer gives the same table (AC9).</li>
+    <li><b>The public history is clean.</b> 0 hits of the 33 rules of the pattern file and 0 home folder paths in 1,266 objects (101 commits, 443 trees, 722 blobs), also in the 4 commits after the rewrite. A control scan of the archive with the same script finds hits in 121 objects. All 202 addresses are the address of the plan. 97 of 97 subjects equal the archive in order; 95 cited ids in 30 files resolve, 0 name an old commit only; the HEAD trees differ only in the ids and the rules (AC15, AC16).</li>
+    <li><b>The test session without weights is green.</b> 582 passed, 480 skipped, 0 failed in 103.3 s, with an empty home folder (AC13).</li>
+    <li><b>The README.</b> The committed README of HEAD: 91 of 91 numbers match their sources. The short README of the working tree: 50 of 54 numbers and claims match; 4 do not (Section 6.2): the Neural Engine gain «18 to 32 %» (the source gives 8 to 32 %), the P1 range «0.87 to 0.88» (the patch output gives 0.900), «up to 15 % faster» for Core ML FP16 (the source gives 17 %) and «up to 18 %» for a padded batch (one case, not a bound). Both forms show an install line and a site URL that do not exist yet (V3). The short form now names Step 6e and ADR 0017.</li>
+    <li><b>Findings.</b> Section 8 gives 12 findings: 0 high, 3 medium, 9 low; V5 is fixed in the working tree. The most important: the <code>Embedder</code> accepts <code>bits=4</code>, which Step 6 found not valid in 72 of 72 rows (V1).</li>
+  </ul>
+</section>
+
+<section id="method">
+  <h2>2 Method</h2>
+  <p>The agent read <code>CLAUDE.md</code>, <code>GLOSSARY.md</code>, <code>explore.html</code> and <code>plan.html</code> of this folder, <code>src/dinov3_mlx/__init__.py</code>, <code>src/dinov3_mlx/api.py</code>, the parts of <code>hub.py</code>, <code>mlx_model.py</code> and <code>mlx_weights.py</code> that the API calls, the tests <code>tests/test_api.py</code>, <code>tests/test_api_parity.py</code>, <code>tests/test_release.py</code>, <code>tests/test_rewrite_history.py</code> and <code>tests/small_mlx.py</code>, the scripts <code>bench_api.py</code>, <code>make_site.py</code> and <code>rewrite_history.py</code>, the two workflows, <code>pyproject.toml</code>, <code>README.md</code> and the result files that the README cites.</p>
+  <p>Records outside git: <code>~/.cache/dinov3-mlx/gpu-lock.log</code>, <code>~/.cache/dinov3-mlx/release/rewrite-report.json</code>, the pattern file (read and used to scan; no string of it is on this page), the parity records <code>tests/fixtures/generated/parity/mlx.jsonl</code> and <code>tests/fixtures/generated/mlx/report.jsonl</code> of this clone and of the private archive.</p>
+  <p>Machine: Apple M5 Max (<code>applegpu_g17s</code>), 64 GB. Times on this page are UTC. Memory: a training job of another project runs on this Mac (about 17 GB), and the GPU lock does not see it. <code>memory_pressure</code> gave 75 % free before the test session and 64 % free at the end. Every command passed the 15 % rule.</p>
+  <p>Working tree: <code>docs/learn/07-public-api.html</code> is new (the Learn stage; intent-to-add). The site build and T12 of the test session include it. The main session also changed <code>README.md</code> (short form), <code>tests/test_release.py</code>, <code>scripts/bench_speed.py</code> and <code>tests/test_bench_speed.py</code> (a «Step 7 W11» option <code>--torch-eager</code>) during Verify. The test session c2 ran before these changes; c10 ran <code>tests/test_release.py</code> on the changed tree. The test session appends report lines to the files of <code>tests/fixtures/generated/</code>, which git ignores.</p>
+</section>
+
+<section id="criteria">
+  <h2>3 Acceptance criteria</h2>
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>No.</th><th>Criterion</th><th>Target</th><th>Measured</th><th>Evidence</th><th>Result</th></tr></thead>
+    <tbody>
+      <tr><td>AC1</td><td>API parity in the default dtype mode, 6 model sizes × 12 configurations</td><td>72 of 72 rows pass the fp16 thresholds</td><td>Slow session of W8 (2026-11-09 23:44): 60 of 60 measured rows pass, for ViT-S/16, ViT-S+/16, ViT-B/16, ViT-L/16 and ViT-H+/16. Worst values: frame 0.999985 (ViT-S+/16), patch mean 0.999957 (ViT-S+/16), patch 1st percentile 0.999756 (ViT-H+/16). ViT-7B/16: 12 rows skipped by the memory check («needs 20.1 GB, 17.4 GB available»). Default session (23:43): ViT-S/16 12 of 12 pass. T1 checks what the plan says: from the image files through <code>Embedder.embed</code>, against the reference output, with <code>assert_thresholds</code>. It skips without the weights.</td><td><code>tests/test_api_parity.py:90</code>; records with kind <code>api</code> in <code>tests/fixtures/generated/parity/mlx.jsonl</code></td><td><span class="partial">partial</span></td></tr>
+      <tr><td>AC2</td><td>API parity of ViT-S/16 in fp32 and bf16-cast</td><td>24 of 24 rows pass</td><td>24 of 24 pass, in the default session (23:43) and again in the slow session (23:44). fp32: all values 1.000000 to 6 digits. bf16-cast: worst frame 0.999646, patch mean 0.999786, patch 1st percentile 0.999565 (thresholds 0.998, 0.995, 0.96).</td><td><code>tests/test_api_parity.py:100</code>; the same records</td><td><span class="pass">pass</span></td></tr>
+      <tr><td>AC3</td><td>Padded last batch</td><td>cosine ≥ 0.99999; 5 output rows</td><td>T3 passes: 5 frames with batch size 8 against batch size 5 on the small model, 5 rows, frame cosine and patch mean ≥ 0.99999. Runs without weights, so also in CI.</td><td><code>tests/test_api.py:90</code>; Section 9, c2</td><td><span class="pass">pass</span></td></tr>
+      <tr><td>AC4</td><td>The API runs without torch and transformers</td><td>neither module imported; embed works</td><td>T4 passes: a process with an import blocker for torch and transformers imports the package, embeds 3 frames, and imports neither module. T5 (the wheel in a new venv) belongs to the slow session. The lock log shows a run at 23:44 with T5 in its command, but no record of its result.</td><td><code>tests/test_api.py:137</code>, <code>:344</code>; lock log 2026-11-09 23:44:06</td><td><span class="partial">partial</span> (T5: rerun pending, R2)</td></tr>
+      <tr><td>AC5</td><td>TF32 handling</td><td>4 of 4 cases of T6</td><td>4 of 4 pass: (a) the import sets <code>MLX_ENABLE_TF32=0</code> and imports no mlx and no torch; (b) the probe gives True with the variable 1 and False with 0, in two new processes; (c) <code>TF32ModeError</code> with both fix texts; (d) an explicit 1 stays. The probe cost (plan: below 10 ms) has no measurement (V11).</td><td><code>tests/test_api.py:158</code> to <code>:189</code>; <code>mlx_model.py:84</code></td><td><span class="pass">pass</span></td></tr>
+      <tr><td>AC6</td><td>Memory limit</td><td>equal before and after the constructor</td><td>T7 passes. A fake loader sets 123,456,789 bytes; the constructor restores the old limit in a <code>finally</code> block.</td><td><code>tests/test_api.py:192</code>; <code>api.py:159</code> to <code>:163</code></td><td><span class="pass">pass</span></td></tr>
+      <tr><td>AC7</td><td>Input and output contract</td><td>all cases of T8</td><td>All T8 cases pass: array, list of PIL images and list of arrays give equal outputs; float array, float list and bytes raise <code>TypeError</code>; mixed sizes, sides 30 and 100, 4 channels and 0 frames raise <code>ValueError</code>; shapes and dtypes in all 5 dtype modes; <code>patch_fp32</code>; <code>as_numpy=False</code> gives <code>mx.array</code>; the default 224 gives a 14 × 14 grid; the Hugging Face id works; <code>"mlx+ne"</code> raises <code>ValueError</code> that names Step 7b. T8 has no case for <code>bits</code> (V1).</td><td><code>tests/test_api.py:208</code> to <code>:287</code></td><td><span class="pass">pass</span></td></tr>
+      <tr><td>AC8</td><td>Clear error without access to the gated repo</td><td>names the model page, the license and <code>hf auth login</code></td><td>T9 passes: a fake Hub raises <code>GatedRepoError</code>; the text names <code>https://huggingface.co/facebook/dinov3-vits16-pretrain-lvd1689m</code>, «DINOv3 License» and <code>hf auth login</code>. A second test shows 0 downloads on the import of the package and of <code>Embedder</code>.</td><td><code>tests/test_api.py:310</code>, <code>:338</code>; <code>hub.py:115</code></td><td><span class="pass">pass</span></td></tr>
+      <tr><td>AC9</td><td>API overhead</td><td>api ÷ direct ≥ 0.97 at P1 and P2 (lower median of 5)</td><td>P1 0.996, P2 1.009 (recomputed from the round ratios, Section 4). P1-pad 0.819 (report only). Run on 2026-11-09 23:44 to 23:51 at the W8 code, through the GPU lock, one worker for each configuration, rotated forms.</td><td><code>results/api-overhead.jsonl</code>, <code>results/api-table.md</code></td><td><span class="pass">pass</span></td></tr>
+      <tr><td>AC10</td><td>Rename</td><td>0 old names outside the allowed files; cache folder moved; no package converted again</td><td>T10 passes at HEAD. <code>git grep</code> finds the old name in 2 files only: <code>specs/07-release/explore.html</code> (3 lines) and <code>plan.html</code> (2 lines). <code>~/.cache/dinov3-mlx/</code> exists, the old cache folder does not. The two converted packages in <code>converted/facebook/</code> are dated 2026-11-06, before the step. At HEAD the allow-list of T10 named ADR 0017, which is now the ADR of Step 6e; the working tree names <code>docs/adr/0018-</code>, the number of the coming rename ADR (deviation 12). T10 passes on the working tree too (c10). The rename ADR itself: checked after Close.</td><td><code>tests/test_release.py:18</code>, <code>:29</code></td><td><span class="pass">pass</span></td></tr>
+      <tr><td>AC11</td><td>Dependencies</td><td>5 core packages with ranges; the wheel installs and runs without torch</td><td>T11 passes: huggingface-hub, mlx, numpy, pillow, safetensors, each with a lower and an upper bound; torch and transformers only in the extra <code>reference</code> and the dev group; <code>uv lock --check</code> passes (68 packages). The wheel part (T5) has no record (see AC4).</td><td><code>pyproject.toml</code>; <code>tests/test_release.py:62</code></td><td><span class="partial">partial</span> (T5: rerun pending, R2)</td></tr>
+      <tr><td>AC12</td><td>CI on the private repo</td><td>the workflow passes on the pushed head</td><td>The push is done: <code>git ls-remote origin</code> gives <code>refs/heads/main</code> = <code>55f8120</code> and no tag. The agent cannot read the Actions run: <code>gh</code> is not installed and the repo is private. Check point for the user: the mlx tests need a Metal GPU in the runner.</td><td><code>.github/workflows/tests.yml</code></td><td><span class="pending">open: the user reads the Actions run</span></td></tr>
+      <tr><td>AC13</td><td>A new clone without weights on this Mac</td><td>0 failed</td><td>582 passed, 480 skipped, 0 failed in 103.3 s with <code>HOME</code> set to an empty folder and <code>HF_HUB_OFFLINE=1</code>: no model can load. The two tests of explore Table 3 now skip or use a fake state (W4). Limit: the ignored fixture folder of this clone exists, so this run stands in for a new clone; the W8 run of 2026-11-09 23:53 (an empty home, 72 s) left no record. CI (AC12) is the real new-clone check.</td><td>Section 9, c2</td><td><span class="pass">pass</span></td></tr>
+      <tr><td>AC14</td><td>Release check on this Mac</td><td>default session with weights 0 failed; slow T1 and T5 pass; the fingerprint test reports</td><td>Found: the default session ran (lock log 23:42:55 to 23:43:57); the fingerprint test reported at 23:43:10 (fp16 share 0.5445 at head dimension 64, mlx 0.32.4). Not found: the passed and failed counts of the default session, and the T5 result. Slow T1: 60 of 72 rows, ViT-7B/16 skipped (AC1). The commit «release check results» adds only B1. Since W8, Step 6e changed <code>mlx_model.py</code> and <code>mlx_bench.py</code>, so the check does not cover HEAD (V2).</td><td>lock log; <code>tests/fixtures/generated/mlx/report.jsonl</code> of the archive</td><td><span class="pending">open: no full record; rerun pending (R1, R2)</span></td></tr>
+      <tr><td>AC15</td><td>No private string in the public history</td><td>0 hits; all 2 × N addresses; commit count of the old history</td><td>0 objects with a hit of the 33 rules and 0 with a home folder path, over all 1,266 objects of the store and the same 1,266 reachable from all refs (101 commits, 443 trees, 722 blobs). Control: the same script finds 121 objects with hits in the archive. Addresses: 202 of 202 (101 commits × author and committer) are the address of the plan. Commits: 97 rewritten = 97 in the archive; 4 commits after the rewrite. The rewrite report gives 97 commits and 194 addresses. Messages, author and committer fields are part of the commit objects of the scan.</td><td>Section 5; <code>~/.cache/dinov3-mlx/release/rewrite-report.json</code></td><td><span class="pass">pass</span></td></tr>
+      <tr><td>AC16</td><td>Cited commit ids</td><td>each cited id resolves to a commit with the same subject; 0 unresolved; HEAD trees differ only in ids and patterns</td><td>97 of 97 subjects equal the archive, in order. At HEAD, 95 cited ids in 30 of 89 <code>*.html</code> and <code>*.md</code> files resolve to a commit of this repo, each with the subject of the archive commit at the same position; 0 tokens name an archive commit only. Sample of 12 in Table 4. Trees of <code>50755d9</code> and the archive HEAD: 205 files each; 29 files differ, all only in hex ids and in the rules. The rewrite report gives 227 cited ids and 0 unresolved.</td><td>Section 5</td><td><span class="pass">pass</span></td></tr>
+      <tr><td>AC17</td><td>README</td><td>all sections; V2, V4, V17 named; each table names its source; 0 broken links</td><td>Judged on the short README of the working tree (the user's request of 2026-11-14). T13 passes on it (c10): the 8 sections of the new list in order, V2, V4 and V17 named, a «Source:» line with existing result files under each of the 3 tables, 0 broken relative links. The agent checked 54 numbers and claims against their sources: 50 match, 4 do not (Section 6.2, V6). The sections differ from plan Section 3.4: the user's choice (deviation 13). The committed README of HEAD (long form): 91 of 91 numbers match (Section 6.1).</td><td><code>README.md</code> (working tree); <code>tests/test_release.py:141</code> to <code>:191</code></td><td><span class="partial">partial</span> (4 claims, V6)</td></tr>
+      <tr><td>AC18</td><td>Pages</td><td>_site/ with 0 broken links; after G3 the published index opens</td><td>Local part: <code>make_site.py</code> into a temporary folder gives 54 HTML pages and 0 broken relative links or anchors; the index links all 52 pages (plan, explainers, spec pages) and 17 ADRs. T12 passes. Published part: not possible before G3.</td><td><code>scripts/make_site.py</code>; <code>tests/test_release.py:125</code></td><td><span class="pending">open: after G3 (local part passes)</span></td></tr>
+      <tr><td>AC19</td><td>Gates</td><td>G2 and the tag after the user's yes; G1 before G3; G3 by the user</td><td>G2 done on 2026-11-14 (main session record; Section 7). G1, G3, the tag and the release are not done.</td><td>Section 7</td><td><span class="pending">open: after the gates</span></td></tr>
+      <tr><td>AC20</td><td>Release</td><td>tag v0.1.0; a GitHub release with the release check result</td><td>No tag on the remote and none local. No release. The release notes need the record of R1 and R2.</td><td><code>git ls-remote origin</code></td><td><span class="pending">open: after the gates</span></td></tr>
+    </tbody>
+  </table>
+</div>
+  <p class="caption"><b>Table 1.</b> The 20 acceptance criteria. 11 pass, 4 partial, 0 fail, 5 open.</p>
+</section>
+
+<section id="b1">
+  <h2>4 B1 again from the lines</h2>
+  <p>The agent sorted the 5 round ratios of each line and took the third value (the lower median of 5). It took the medians of the api and direct throughputs the same way. All values equal <code>results/api-table.md</code>. The table writer, run into a temporary file, gives the same file except the date in line 3.</p>
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>Configuration</th><th>Model size, px</th><th>Frames per call</th><th>Round ratios (round order)</th><th>Lower median</th><th>api img/s (median)</th><th>direct img/s (median)</th><th>Need / available (GB)</th></tr></thead>
+    <tbody>
+      <tr><td>P1</td><td>ViT-S/16, 224</td><td class="num">8</td><td>1.069, 1.009, 0.996, 0.958, 0.995</td><td class="num">0.996</td><td class="num">1,196.4</td><td class="num">1,192.0</td><td class="num">4.1 / 19.8</td></tr>
+      <tr><td>P2</td><td>ViT-H+/16, 512</td><td class="num">8</td><td>1.009, 0.961, 1.040, 0.960, 1.023</td><td class="num">1.009</td><td class="num">16.6</td><td class="num">16.0</td><td class="num">6.9 / 19.3</td></tr>
+      <tr><td>P1-pad</td><td>ViT-S/16, 224</td><td class="num">13</td><td>0.820, 0.819, 0.814, 0.828, 0.804</td><td class="num">0.819</td><td class="num">743.1</td><td class="num">913.3</td><td class="num">4.1 / 18.3</td></tr>
+    </tbody>
+  </table>
+</div>
+  <p class="caption"><b>Table 2.</b> B1 from <code>results/api-overhead.jsonl</code> (run S7, 2026-11-09 23:46 to 23:51, AC power, no thermal warning, mlx 0.32.4, Python 3.12.13).</p>
+  <ul>
+    <li>The round ratios spread from 0.958 to 1.069 at P1 and from 0.960 to 1.040 at P2. So the noise of one round is about ± 5 %, and the target 0.97 is inside it. The lower medians are clear of the target.</li>
+    <li>At P2 the absolute throughput falls from 18.7 to 14.1 img/s (api) over the 5 rounds. The paired ratio stays near 1. This is the drift of V2 of Step 6.</li>
+    <li>P1-pad: the direct form runs 8 + 5 frames, the API runs 8 + 8 (3 zero frames). The ratio 0.819 is near 13 ÷ 16 = 0.8125, so it is the cost of the padded rows, as the README says.</li>
+    <li>The code of the API path changed after B1 (Step 6e: <code>if self.joined</code> branches in <code>mlx_model.py</code>; the joins are off by default). The compiled graph with the joins off is the same, so the agent asks for no rerun of B1 (R3 is optional).</li>
+  </ul>
+</section>
+
+<section id="history">
+  <h2>5 History checks</h2>
+  <p>The agent wrote two read-only scripts in its scratchpad. The first reads the pattern file with the rules of <code>rewrite_history.read_rules</code> (literal, <code>re:</code> and <code>check:</code> lines) and searches the raw content of each git object for each rule and for the home folder prefix of macOS. It prints counts and object ids only. The second compares the commit list, the subjects and the cited ids with the archive.</p>
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>Check</th><th>This repo</th><th>Archive (control)</th></tr></thead>
+    <tbody>
+      <tr><td>Commits (all refs / HEAD)</td><td class="num">101 / 101</td><td class="num">97 / 97</td></tr>
+      <tr><td>Objects scanned (store; reachable from all refs)</td><td>1,266; 1,266 (101 commits, 443 trees, 722 blobs)</td><td>1,219; 1,219</td></tr>
+      <tr><td>Objects with a hit of a rule (33 rules)</td><td class="num">0</td><td class="num">121 (24 rules hit)</td></tr>
+      <tr><td>Objects with a home folder path</td><td class="num">0</td><td class="num">14</td></tr>
+      <tr><td>Author and committer addresses</td><td>202 of 202 the address of the plan; one name</td><td>two addresses (not named here)</td></tr>
+      <tr><td>Remotes</td><td><code>origin</code> (the private repo, SSH form)</td><td>none</td></tr>
+      <tr><td>Refs</td><td><code>main</code>, <code>step-6-roofline</code>, <code>step-6e-kernels</code> (both in <code>main</code>), <code>origin/main</code>; no tag; no <code>refs/original</code></td><td><code>main</code></td></tr>
+      <tr><td>Subjects of commits 1 to 97, in order</td><td colspan="2">97 of 97 equal</td></tr>
+      <tr><td>Cited ids at HEAD (<code>*.html</code>, <code>*.md</code>)</td><td>95 in 30 files resolve, each to the subject of the archive commit at the same position; 0 name an archive commit only</td><td>–</td></tr>
+      <tr><td>Tree of <code>50755d9</code> against the archive HEAD</td><td colspan="2">205 files each; 29 differ; 0 differ beyond hex ids and the rules</td></tr>
+      <tr><td>The untracked Learn page <code>docs/learn/07-public-api.html</code></td><td>0 rules hit, no home path (checked after Learn)</td><td>–</td></tr>
+    </tbody>
+  </table>
+</div>
+  <p class="caption"><b>Table 3.</b> The history checks of AC15 and AC16. The 4 commits after the rewrite (<code>fb5bd7c</code>, <code>cd18c6e</code>, <code>dca5a6e</code>, <code>55f8120</code>) are in the scan.</p>
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>File</th><th>Cited id</th><th>Subject of the commit</th><th>Archive commit at the same position</th></tr></thead>
+    <tbody>
+      <tr><td><code>specs/05-all-sizes/verify.html</code></td><td><code>7c30a3e</code></td><td>Step 5 build: all model sizes in fp32, fp16 and bf16 on mlx</td><td><code>d55887b</code>, same subject</td></tr>
+      <tr><td><code>docs/learn/06-1-compiled-forward-pass.html</code></td><td><code>11a45b1</code></td><td>Step 6: plan the speed work</td><td><code>7a5d7b8</code>, same subject</td></tr>
+      <tr><td><code>specs/06b-prior-art/verify.html</code></td><td><code>9dcd4fb</code></td><td>Step 6b: fix V11 to V14 of the J5 verify …</td><td><code>3fa8e37</code>, same subject</td></tr>
+      <tr><td><code>specs/06d-neural-engine-fault/verify.html</code></td><td><code>55f4acd</code></td><td>Step 6d: run the compute plans, the matrix, the paired runs …</td><td><code>b2c354e</code>, same subject</td></tr>
+      <tr><td><code>docs/learn/04-2-rope.html</code></td><td><code>c212226</code></td><td>Step 4 build: ViT-S/16 in MLX, key map and fp32 parity</td><td><code>e52c4e0</code>, same subject</td></tr>
+      <tr><td><code>docs/learn/04-4-layerscale.html</code></td><td><code>ea82d58</code></td><td>Step 4: fix Verify findings F1, F4, F5, F6 and F7</td><td><code>f37300a</code>, same subject</td></tr>
+      <tr><td><code>specs/06c-neural-engine/verify.html</code></td><td><code>4457a13</code></td><td>Step 6c: add the Neural Engine terms to the glossary</td><td><code>200cacb</code>, same subject</td></tr>
+      <tr><td><code>docs/learn/05-1-swiglu.html</code></td><td><code>01cc631</code></td><td>Step 5: verify all model sizes on mlx</td><td><code>66eb6a1</code>, same subject</td></tr>
+      <tr><td><code>specs/06-speed/verify.html</code></td><td><code>f4471b1</code></td><td>Step 6b: add the prior-art terms to the glossary</td><td><code>5878d15</code>, same subject</td></tr>
+      <tr><td><code>specs/06c-neural-engine/verify.html</code></td><td><code>e6c5853</code></td><td>Step 6c: ADR 0014 (Neural Engine rewrite) and ADR 0015 …</td><td><code>8b91cf1</code>, same subject</td></tr>
+      <tr><td><code>docs/learn/04-3-attention.html</code></td><td><code>c212226</code></td><td>Step 4 build: ViT-S/16 in MLX, key map and fp32 parity</td><td><code>e52c4e0</code>, same subject</td></tr>
+      <tr><td><code>specs/06b-prior-art/verify.html</code></td><td><code>7c55e05</code></td><td>Step 6: fix the GPU-lock test, write ADRs 0009 to 0011 …</td><td><code>df6c028</code>, same subject</td></tr>
+    </tbody>
+  </table>
+</div>
+  <p class="caption"><b>Table 4.</b> A random sample (seed 7) of 12 of the 95 cited ids.</p>
+</section>
+
+<section id="readme">
+  <h2>6 README against its sources</h2>
+  <h3>6.1 The committed README (HEAD, long form)</h3>
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>README part</th><th>Source</th><th>Numbers checked</th><th>Result</th></tr></thead>
+    <tbody>
+      <tr><td>Dtype modes table</td><td><code>results/speedup-table.md</code> Table 5; <code>results/parity-mlx.md</code> Table 1</td><td>20: the b8 and best 448 px throughputs of ViT-S/16; the worst frame and worst patch 1st percentile of each dtype mode over all model sizes</td><td>All match. «4 of 6» for fp16-cast: ViT-H+/16 gives finite output in 6 of 12 configurations (V6).</td></tr>
+      <tr><td>Parity table</td><td><code>results/parity-mlx.md</code> Table 1</td><td>24: fp32 and three worst values for each model size</td><td>All match. These are values of the direct path, not of the API (V7).</td></tr>
+      <tr><td>Speed against torch-mps</td><td><code>results/speedup-table.md</code> Table 1</td><td>12 pooled medians and 6 verdicts</td><td>All match.</td></tr>
+      <tr><td>API overhead</td><td><code>results/api-table.md</code> Table 1</td><td>3 lower medians</td><td>All match (Section 4).</td></tr>
+      <tr><td>Prior art</td><td><code>results/prior-art-table.md</code> Section 6</td><td>5 pooled ratios; «8 cells»</td><td>All match. 2 of the 8 cells run DINOv2, not DINOv3 (V6).</td></tr>
+      <tr><td>Neural Engine table</td><td><code>results/coreml-6d-table.md</code> Table 6</td><td>15: alone, alone, total and stream ratio of 3 rows</td><td>All match. The table omits P3 run 1 (1.122) and P2 run 1 (1.081) (V6).</td></tr>
+      <tr><td>Limits V2, V4, V17</td><td><code>specs/06-speed/verify.html</code> Tables 15 and 16; ADR 0009</td><td>53 %, 0.027, 10 of 62, 127 of 306, 1 ± 0.06</td><td>All match.</td></tr>
+      <tr><td>Tested versions</td><td><code>uv.lock</code>; the lines of B1</td><td>mlx 0.32.4, numpy 2.5.4, safetensors 0.8.0, huggingface-hub 2.4.0, pillow 13.0.0, torch 2.15.0, transformers 5.22.1, macOS 26.5.2, Python 3.12.13</td><td>All match the lock file and the W8 lines. The venv of this clone runs Python 3.12.14 (V9).</td></tr>
+      <tr><td>Promises</td><td>–</td><td><code>uv add git+…@v0.1.0</code>; <code>oilst.github.io/dinov3-mlx</code>; <code>pyproject.toml</code> description</td><td>The tag and the pages do not exist yet (V3). The description names fine-tuning, which 0.1.0 does not have (V10). <code>backend="mlx+ne"</code> is named as future work of Step 7b: correct.</td></tr>
+      <tr><td>Step 6e</td><td><code>results/joined-table.md</code>; ADR 0017</td><td>–</td><td>Not in the README (V5).</td></tr>
+    </tbody>
+  </table>
+</div>
+  <p class="caption"><b>Table 5.</b> The check of the committed README. 91 numbers in all; 0 numbers differ from their source. The short form of Section 6.2 replaces this README.</p>
+
+  <h3>6.2 The short README (working tree, 2026-11-14)</h3>
+  <p>The short form has three tables (key facts, «How it compares», «How far from the optimum»), each with a «Source:» line. The agent checked each number and each range claim against its source. It computed the FLOPs again with <code>dinov3_mlx.flops.image_flops</code> (9.4 and 1,901.9 GFLOP) and the limits with 60.1 TFLOP/s (6,396 and 31.6 img/s; shares 35.5 % and 61.1 %).</p>
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>README part</th><th>Source</th><th>Checked</th><th>Result</th></tr></thead>
+    <tbody>
+      <tr><td>Headline and key facts</td><td><code>speedup-table.md</code> Tables 1 and 2; <code>parity-mlx.md</code> Table 1; <code>prior-art-table.md</code> Section 6</td><td>1.4 and 1.41 (matrix cell ViT-S/16, 224 px, b1, fp16-autocast: 1.407, one paired round); 1.16 to 1.37 (the 6 DINOv3 cells: 1.162 to 1.366); 0.999986; 12 configurations; 1.07 to 1.09; 0.87 to 1.03; 61 % and 36 %</td><td>All match. 13.5 GB (load peak of ViT-7B/16 in bf16) comes from Step 5 (roadmap row 5), not from a file of the «Source:» line. The parity sentence rests on the direct path (V7).</td></tr>
+      <tr><td>Quick start bullets</td><td><code>speedup-table.md</code> Table 5; <code>api-table.md</code></td><td>output shapes and dtypes; «about 12 % faster» (1,893.0 ÷ 1,693.6 = 1.118 at ViT-S/16, 224 px, b8; 1.093 at 448 px); «up to 18 %»</td><td>Shapes and 12 % match. «up to 18 %»: does not match (row 4 of Table 5b).</td></tr>
+      <tr><td>«How it compares» table</td><td><code>speedup-table.md</code>; <code>prior-art-table.md</code> Sections 2 and 6</td><td>15 numbers: 1.41; 1.07 / 1.09; 0.87 to 0.88 / 1.01 to 1.03; 1.16 to 1.34; 1.17 to 1.37; 1.05 to 1.09 (E1 at b8, 1.534, is out, because the export makes 8 calls); 0.85 to 0.99</td><td>14 match. «0.87 to 0.88» at P1: does not match (row 2 of Table 5b).</td></tr>
+      <tr><td>Bullets under the table</td><td><code>prior-art-table.md</code> Sections 2 and 5; <code>coreml-6d-table.md</code> Table 6</td><td>10 to 24 % (variant V4: 0.764 to 0.897); «up to 15 % faster»; «18 to 32 %»</td><td>10 to 24 % matches. The other two: do not match (rows 1 and 3 of Table 5b).</td></tr>
+      <tr><td>«How far from the optimum»</td><td><code>speedup-table.md</code> Table 6; <code>kernels-c1.md</code> Table 1; <code>flops.image_flops</code></td><td>13 numbers: 60 TFLOP/s, 1,280 → 10,240, 9.4, 1,901.9, about 6,400, about 31.5, 2,271 (b256), 19.3 (b2), 36 %, 61 %</td><td>All match. The measured values are medians of 2 sweep rounds (2,129 to 2,413 and 17.9 to 20.7 img/s), so each share carries about ± 7 % (V4 of Step 6). The sentence «no implementation on this Mac can be faster than the limit» is too strong (V12).</td></tr>
+      <tr><td>Limits</td><td><code>specs/06-speed/verify.html</code>; ADR 0009</td><td>V2 (53 %), V4, V17; one Mac, 64 GB, macOS 26.5.2; 27 GB; the TF32 side effect</td><td>All match.</td></tr>
+      <tr><td>Links and promises</td><td>–</td><td>23 relative links (16 targets); the install line with <code>@v0.1.0</code>; the site URL; <code>backend="mlx+ne"</code> as a later version</td><td>The relative links resolve (T13). The tag and the site do not exist yet (V3). The tested versions moved to <code>tech-stack.md</code> (Python 3.12.13, V9).</td></tr>
+    </tbody>
+  </table>
+</div>
+  <p class="caption"><b>Table 5a.</b> The check of the short README. 54 numbers and claims; 50 match.</p>
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>No.</th><th>README says</th><th>The source says</th><th>Source</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td>Core ML on the Neural Engine, in parallel, «adds 18 to 32 % throughput»</td><td>Stream ratios 1.324 and 1.318 (P1), 1.122 and 1.184 (P3), 1.081 (P2): it adds 8 to 32 %</td><td><code>results/coreml-6d-table.md</code> Table 6</td></tr>
+      <tr><td>2</td><td>torch.compile, fp16 and bf16, P1: «0.87 to 0.88»</td><td>Frame 0.867 and 0.878; patch 0.900 and 0.881: 0.87 to 0.90. The row gives the frame output only and does not say so</td><td><code>results/speedup-table.md</code> Table 1</td></tr>
+      <tr><td>3</td><td>«A Core ML FP16 export can be up to 15 % faster»</td><td>Lowest ratio ours ÷ export 0.852 (E7, DINOv2 at 1,374 tokens): the export is 1 ÷ 0.852 = 1.17 times as fast, so 17 % faster (ours is 15 % slower)</td><td><code>results/prior-art-table.md</code> Section 2</td></tr>
+      <tr><td>4</td><td>«A padded last batch costs up to 18 % of the throughput»</td><td>One case: 13 frames at batch size 8 (3 zero frames of 16 rows) gives 0.819. The cost grows with the number of zero frames; 9 frames at batch size 8 have 7 zero frames of 16 rows</td><td><code>results/api-table.md</code> Table 1</td></tr>
+    </tbody>
+  </table>
+</div>
+  <p class="caption"><b>Table 5b.</b> The claims of the short README that do not match their source (V6).</p>
+</section>
+
+<section id="gates">
+  <h2>7 Gates</h2>
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>Gate</th><th>State on 2026-11-14</th><th>Evidence</th></tr></thead>
+    <tbody>
+      <tr><td>G2: push to the private repo</td><td>Done. The main session pushed <code>main</code> at <code>55f8120</code> over SSH on 2026-11-14. The record of the user's yes is in the main session, not in the repo.</td><td><code>git ls-remote origin</code>: <code>refs/heads/main</code> = <code>55f8120</code>; no other ref</td></tr>
+      <tr><td>CI result of G2 (AC12)</td><td>Open. The user reads the Actions run of <code>55f8120</code>.</td><td>–</td></tr>
+      <tr><td>G1: legal check</td><td>Not done. The user does it before G3.</td><td>–</td></tr>
+      <tr><td>Learn page (for the Learn stage)</td><td>Checked after Learn. The page <code>docs/learn/07-public-api.html</code> names each of the 13 functions and classes that Step 7 added to <code>src/</code>: <code>__getattr__</code>, <code>as_uint8_batch</code>, <code>input_resolution</code>, <code>model_size_of</code>, <code>Embedder</code> with <code>__init__</code>, <code>embed</code>, <code>embed_frames</code>, <code>embed_patches</code> and <code>_run</code>, <code>WeightsAccessError</code>, <code>ensure_weights</code>, <code>tf32_active</code>. The agent did not judge its content. 0 rule hits, no home path.</td><td><code>grep</code> of the page; Section 5</td></tr>
+      <tr><td>G3: repo public</td><td>Not done. GitHub Pages must also be set to the source «GitHub Actions». The pages build skipped on the private push, so the user runs the pages workflow once after G3.</td><td><code>.github/workflows/pages.yml</code> (<code>if: !github.event.repository.private</code>)</td></tr>
+      <tr><td>Tag v0.1.0 and GitHub release</td><td>Not done. After the user's yes.</td><td>no tag local or on the remote</td></tr>
+    </tbody>
+  </table>
+</div>
+  <p class="caption"><b>Table 6.</b> The gates of W10. The Learn page <code>docs/learn/07-public-api.html</code> and the four ADRs of the Close: checked after Learn/Close.</p>
+</section>
+
+<section id="deviations">
+  <h2>8 Deviations and findings</h2>
+  <h3>8.1 Deviations of the build from the plan</h3>
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>No.</th><th>Deviation</th><th>Check</th><th>Result</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td>Section 5.2: <code>__all__</code> exports <code>Embedder</code> and its four errors (<code>InsufficientMemoryError</code>, <code>RunRuleError</code>, <code>TF32ModeError</code>, <code>WeightsAccessError</code>), each loaded on first use.</td><td>T6a: the import loads no mlx and no torch. GLOSSARY «Public API»: «Embedder and its errors».</td><td>Accepted improvement.</td></tr>
+      <tr><td>2</td><td>Section 5.3: no <code>pad_to</code> and <code>to_host</code>; the loop pads inline, evaluates each batch and copies it to the host at once. The grid comes from the patch size of the model.</td><td>T3, T8.</td><td>The plan allows other names. One batch at a time keeps the memory small.</td></tr>
+      <tr><td>3</td><td>Section 3.3: the rewrite also has a message filter, checks home folder paths without a rule, and removes <code>refs/original</code>, the reflog and the remotes of the clone.</td><td>T15 covers each part (3 tests).</td><td>Accepted improvement.</td></tr>
+      <tr><td>4</td><td>Section 3.3: <code>origin</code> has the SSH form of the repo URL, not the https form.</td><td><code>git remote -v</code>.</td><td>No effect; the push of G2 went over SSH.</td></tr>
+      <tr><td>5</td><td>W8: the slow session skipped ViT-7B/16 by the memory check; the build did not run it again.</td><td>Records of 2026-11-09 23:44.</td><td>AC1 partial; R2.</td></tr>
+      <tr><td>6</td><td>W8: the release check left no stored record of the pytest counts or of T5.</td><td>Section 3, AC14.</td><td>V2.</td></tr>
+      <tr><td>7</td><td>B1: the frames are 1280 × 720 px, made from the first test image. The direct form of P1-pad runs 8 + 5 frames without padding.</td><td><code>scripts/bench_api.py:50</code> to <code>:59</code>.</td><td>The plan names no frame size. P1-pad is report only.</td></tr>
+      <tr><td>8</td><td>W5: the CI workflow also writes the stored pixels and builds the site.</td><td><code>.github/workflows/tests.yml</code>.</td><td>No effect; T12 runs in pytest too.</td></tr>
+      <tr><td>9</td><td>W6: the index also links the 17 ADRs. They are <code>*.md</code> files, so the pages show them as plain text.</td><td>Section 9, c7.</td><td>No effect on AC18.</td></tr>
+      <tr><td>10</td><td>Extra tests: <code>test_no_home_folder_path</code>, <code>test_embedder_run_rule_before_weights</code>, <code>test_gated_repo_no_download_on_import</code>, <code>test_bench_api_table</code>, two T15 check cases.</td><td>All pass.</td><td>No effect.</td></tr>
+      <tr><td>11</td><td>Red before green: the commits of W1 to W8 were made within 33 minutes (2026-11-09 23:18 to 23:51). The lock log shows the test runs before them (23:17 to 23:52).</td><td>Lock log.</td><td>Not verifiable; no effect on a result.</td></tr>
+      <tr><td>12</td><td>T10: the allow-list <code>RENAME_RECORDS</code> named <code>docs/adr/0017-</code> at HEAD. ADR 0017 became the ADR of Step 6e, so the step-7 rename ADR gets 0018. The exception let ADR 0017 escape the old-name scan, and <code>test_readme_links_resolve</code> (which uses the same file list) failed on the README link to ADR 0017. The working tree names <code>docs/adr/0018-</code>.</td><td>c10: 8 of 8 tests of <code>tests/test_release.py</code> pass on the working tree.</td><td>Correct fix (part of V4). Not committed.</td></tr>
+      <tr><td>13</td><td>Plan Section 3.4: on the user's request of 2026-11-14 the README is a short form with the sections «Quick start», «How it compares», «How far from the optimum», «What this repo holds», «Documentation», «Limits», «Tests», «License». It drops the dtype mode table, the parity table of each model size, the API overhead table and the Neural Engine table (links only), the tested versions (a link to <code>tech-stack.md</code>) and how to run the benchmarks. T13 has the new section list.</td><td>Section 6.2.</td><td>The user's choice. AC17 judged on the short form.</td></tr>
+      <tr><td>14</td><td>The working tree has a new option <code>--torch-eager</code> of <code>scripts/bench_speed.py pairs</code> and a test named «Step 7 W11». Plan Table 1 has no W11.</td><td>Not run, not judged.</td><td>Needs a plan row or a note before the commit.</td></tr>
+    </tbody>
+  </table>
+</div>
+  <p class="caption"><b>Table 7.</b> The deviations of the build from the plan. Deviations 12 to 14 are in the working tree of 2026-11-14.</p>
+
+  <h3>8.2 Findings</h3>
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>ID</th><th>Severity</th><th>Finding</th><th>Location</th><th>Fix</th></tr></thead>
+    <tbody>
+      <tr><td>V1</td><td>medium</td><td>The <code>Embedder</code> accepts <code>bits=4</code>: it passes <code>bits</code> to <code>load_mlx_backbone</code>, and <code>QUANTIZED_BITS</code> is (8, 4). Step 6 found the 4-bit weights not valid in 72 of 72 rows. Table 2 of the plan names only <code>bits=8</code>. No test of the API covers <code>bits</code>.</td><td><code>src/dinov3_mlx/api.py:118</code>, <code>:161</code>; <code>mlx_weights.py:46</code></td><td>Accept only <code>None</code> and 8 in the constructor, before <code>ensure_weights</code>; raise <code>ValueError</code> otherwise. Add T8 cases for <code>bits=4</code> and for <code>bits=8</code> with fp32.</td></tr>
+      <tr><td>V2</td><td>medium</td><td>The release check of W8 has no full record: no passed and failed counts of the default session, no T5 result; the slow T1 skipped ViT-7B/16. Since W8, Step 6e changed the API path. AC14 and AC20 need a record at the released commit.</td><td>W8; commit <code>50755d9</code></td><td>Run R1 and R2 at HEAD when the Mac is free. Save the summary lines (for example in a section of this page) and use them in the release notes.</td></tr>
+      <tr><td>V3</td><td>medium</td><td>The README promises what does not exist yet: the install line <code>uv add git+…@v0.1.0</code> fails until the tag exists, and the site URL gives 404 until G3 and the Pages setting. <code>pyproject.toml</code> has the same site URL. The short form keeps both.</td><td><code>README.md</code> «Quick start» and «Documentation»</td><td>Tag v0.1.0 at once after G3, in the same session. Before G3, set Pages to «GitHub Actions»; after G3, run the pages workflow and open the URL (AC18).</td></tr>
+      <tr><td>V4</td><td>low</td><td>At HEAD, T10 allowed the old name in <code>docs/adr/0017-</code>, the ADR of Step 6e. Fixed in the working tree: the list names <code>docs/adr/0018-</code> (deviation 12). Still open: the home folder guard <code>test_no_home_folder_path</code> uses the same list and so does not scan <code>specs/07-release/</code> and the rename ADR.</td><td><code>tests/test_release.py:18</code>, <code>:40</code></td><td>Commit the allow-list fix. Let the home folder guard scan all tracked files; only the old-name check needs the exception.</td></tr>
+      <tr><td>V5</td><td>low</td><td>The committed README does not mention Step 6e. Fixed in the working tree: the short form names the joined projections, the tile sizes and ADR 0017 in «How far from the optimum».</td><td><code>README.md</code></td><td>Commit the short form.</td></tr>
+      <tr><td>V6</td><td>low</td><td>4 claims of the short README do not match their source (Table 5b): «18 to 32 %» (source: 8 to 32 %), P1 «0.87 to 0.88» (with the patch output: 0.87 to 0.90), «up to 15 % faster» (source: 17 %), «up to 18 %» for a padded batch (one case, not a bound). Two more statements are not exact: «the same output as the Hugging Face reference» (the outputs pass the parity thresholds; they are not equal), and «fp16-autocast is the only fast mode that is valid for all six model sizes» (bf16-cast and bf16-autocast pass their own bf16 thresholds for all six).</td><td><code>README.md</code> (working tree)</td><td>Write «8 to 32 %» (or name the groups); write «0.87 to 0.90» or «frame output»; write «up to 17 % faster»; write «13 frames at batch size 8 cost 18 %; the cost grows with the number of zero frames»; write «outputs that pass the parity thresholds against the Hugging Face reference»; write «the only mode that passes the fp16 thresholds for all six model sizes».</td></tr>
+      <tr><td>V7</td><td>low</td><td>The parity claim of the key facts («In the default dtype mode, all six model sizes pass the fp16 parity thresholds») rests on the direct path (<code>parity-mlx.md</code>). Through the API, ViT-7B/16 has no measured row.</td><td><code>README.md</code> key facts</td><td>After R2, keep the sentence. Without R2, say that the API rows of ViT-7B/16 did not run.</td></tr>
+      <tr><td>V8</td><td>low</td><td>The constructor runs the TF32 probe after <code>ensure_weights</code>. A user with TF32 on, or with a wrong <code>bits</code> value (V1), first downloads the weights (up to the 13 GB class of ViT-7B/16) and then gets the error.</td><td><code>src/dinov3_mlx/api.py:152</code> to <code>:158</code></td><td>Run <code>tf32_active</code> and the <code>bits</code> check before <code>ensure_weights</code>. Assert the order in T6c with a fake <code>ensure_weights</code> that fails.</td></tr>
+      <tr><td>V9</td><td>low</td><td>The tested versions name Python 3.12.13 (the venv of the archive at W8). The venv of this clone runs Python 3.12.14 (report lines since 2026-11-10). R1 and R2 will run on 3.12.14.</td><td><code>tech-stack.md:28</code> (the short README links it); the committed README «Tested versions»</td><td>Write the versions of the R1 and R2 lines.</td></tr>
+      <tr><td>V10</td><td>low</td><td>The package description says «… and fine-tuning». Version 0.1.0 has no fine-tuning.</td><td><code>pyproject.toml:4</code></td><td>Remove «and fine-tuning» until the step that adds it.</td></tr>
+      <tr><td>V11</td><td>low</td><td>Plan Section 3.2 says the TF32 probe costs below 10 ms. No test and no result line measures it.</td><td><code>src/dinov3_mlx/mlx_model.py:84</code></td><td>Time the probe once in R1 (or in T6b with a wide bound) and write the value in the Learn page.</td></tr>
+      <tr><td>V12</td><td>low</td><td>«How far from the optimum» says «No kernel can do better than this rate, so no implementation on this Mac can be faster than the limit». The rate is the best rate that this repo measured (one <code>nn.Linear</code>, 60.1 TFLOP/s in B3 of Step 6e), not a hardware peak. Step 6e (V3 there) showed that an earlier measured roof (56.3 TFLOP/s) was too low. The measured values of the table are medians of 2 sweep rounds.</td><td><code>README.md</code> «How far from the optimum» (working tree)</td><td>Write «the best matmul rate that we measured; a faster kernel would raise the limit». Give the sweep range or say «about».</td></tr>
+    </tbody>
+  </table>
+</div>
+  <p class="caption"><b>Table 8.</b> The findings. 0 high, 3 medium, 9 low. V5 is fixed in the working tree; V4 is fixed in part.</p>
+  <p>Code check, no finding: the import sets <code>MLX_ENABLE_TF32</code> with <code>setdefault</code> and loads nothing else. The constructor checks the backend, the dtype mode, the batch size and the run rule before any weight look-up (test). <code>ensure_weights</code> maps <code>RepositoryNotFoundError</code> (with its subclass <code>GatedRepoError</code>) and <code>LocalTokenNotFoundError</code> to <code>WeightsAccessError</code>. The probe input 1 + k · 2⁻²⁰ (k &lt; 1,000) has its last bits below the 10-bit mantissa of TF32, so TF32 rounds every value. The constructor takes no GPU lock. T1 puts the register tokens of the reference into the compared sequence; <code>measure_parity</code> uses only the frame row and the patch rows, so they do not change a value.</p>
+</section>
+
+<section id="commands">
+  <h2>9 Commands</h2>
+  <p>Each command ran from the repo root, one at a time, after <code>memory_pressure | tail -1</code>. The two test runs (c2, c10) ran through <code>uv run python -m dinov3_mlx.gpu_lock -- &lt;command&gt;</code>.</p>
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>No.</th><th>Command</th><th>Time (UTC, 2026-11-14)</th><th>Free memory before</th><th>Result</th></tr></thead>
+    <tbody>
+      <tr><td>c1</td><td><code>memory_pressure | tail -1</code></td><td>15:55</td><td>75 %</td><td>The 15 % rule holds.</td></tr>
+      <tr><td>c2</td><td><code>env HOME=$S HF_HUB_OFFLINE=1 .venv/bin/python -m pytest -q -ra -p no:cacheprovider</code> with <code>S=$(mktemp -d)</code></td><td>15:55:29 to 15:57:19 (lock)</td><td>75 %</td><td>582 passed, 480 skipped, 0 failed in 103.26 s. The skips name the missing weights, coremltools (not in the dev group) and the slow session.</td></tr>
+      <tr><td>c3</td><td><code>uv run ruff format --check</code></td><td>15:58</td><td>–</td><td>138 files already formatted</td></tr>
+      <tr><td>c4</td><td><code>uv run ruff check</code></td><td>15:58</td><td>–</td><td>All checks passed</td></tr>
+      <tr><td>c5</td><td><code>uv lock --check</code></td><td>15:58</td><td>–</td><td>Resolved 68 packages; the lock file matches</td></tr>
+      <tr><td>c6</td><td><code>bench_api.write_table(results/api-overhead.jsonl, &lt;scratch&gt;/api-table.md)</code>, then <code>diff</code></td><td>15:59</td><td>–</td><td>Equal to <code>results/api-table.md</code> except the date in line 3</td></tr>
+      <tr><td>c7</td><td><code>.venv/bin/python scripts/make_site.py --out &lt;scratch&gt;/_site</code>, then <code>broken_links</code> and <code>page_links</code> of <code>tests/test_release.py</code></td><td>15:59</td><td>–</td><td>54 HTML pages, 0 broken links; the index has 70 links (52 pages, 17 ADRs, the repo)</td></tr>
+      <tr><td>c8</td><td>Own scripts in the scratchpad (<code>python3 -I</code>, no GPU): the object scan, the cited ids, the tree compare, the parity records of kind <code>api</code></td><td>15:50 to 16:00</td><td>–</td><td>Sections 3 and 5</td></tr>
+      <tr><td>c10</td><td><code>env HF_HUB_OFFLINE=1 .venv/bin/python -m pytest -q -p no:cacheprovider tests/test_release.py</code> on the changed working tree</td><td>16:05</td><td>77 %</td><td>8 passed in 0.46 s (T10 to T13, the home folder guard, B1 table)</td></tr>
+      <tr><td>c11</td><td><code>dinov3_mlx.flops.image_flops</code> for ViT-S/16 at 224 px and ViT-H+/16 at 512 px (no mlx import)</td><td>16:08</td><td>–</td><td>9.4 and 1,901.9 GFLOP (Section 6.2)</td></tr>
+      <tr><td>c9</td><td>Reads only: <code>git log</code>, <code>git grep</code>, <code>git ls-remote origin</code>, the lock log, the rewrite report, the result files</td><td>15:45 to 16:05</td><td>64 % at 16:02</td><td>Sections 3 to 7</td></tr>
+    </tbody>
+  </table>
+</div>
+  <p class="caption"><b>Table 9.</b> The Verify commands. No command loaded model weights, ran a benchmark or built a wheel.</p>
+</section>
+
+<section id="reruns">
+  <h2>10 Reruns pending</h2>
+  <p>The main session runs these commands when the Mac is free: no training job of the other project, AC power, and more than 15 % free memory by <code>memory_pressure</code>. One command at a time, from the repo root.</p>
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>No.</th><th>For</th><th>Command</th><th>Reason</th><th>Time</th><th>Memory</th></tr></thead>
+    <tbody>
+      <tr><td>R1</td><td>AC14 (also AC12 of Step 6e)</td><td>The default session with weights, at HEAD.</td><td>0 failed is the target; the summary line and the fingerprint line go into the release notes.</td><td>1 to 4 min (W8: 62 s; the Step 6e build: 3 min 48 s)</td><td>ViT-S/16, ViT-S+/16 and ViT-B/16, one at a time; estimate below 4 GB</td></tr>
+      <tr><td>R2</td><td>AC1, AC4, AC11, AC14</td><td>The slow session of T1 and T5.</td><td>ViT-7B/16 in T1 (12 rows) and a record of T5. T5 builds a wheel and a venv in a temporary folder.</td><td>1 to 3 min (W8 without ViT-7B/16: 16 s)</td><td>ViT-7B/16 needs 20.1 GB by the memory check (W8: 17.4 GB available). Run it only after the other training job ends.</td></tr>
+      <tr><td>R3</td><td>AC9 (optional)</td><td>B1 again at HEAD.</td><td>Only if the main session wants B1 at the released commit. The graph with the joins off is the same.</td><td>About 7 min (W8: 23:44:37 to 23:51:31)</td><td>Driver check: 4.1 GB (P1), 6.9 GB (P2)</td></tr>
+    </tbody>
+  </table>
+</div>
+  <p class="caption"><b>Table 10.</b> The reruns.</p>
+<pre><code># R1 (AC14): the default session with weights; keep the summary
+memory_pressure | tail -1
+uv run python -m dinov3_mlx.gpu_lock -- uv run pytest -q -ra -p no:cacheprovider 2&gt;&amp;1 | tail -40
+
+# R2 (AC1, AC4, AC11, AC14): slow T1 for all six model sizes, and T5
+memory_pressure | tail -1
+DINOV3_SLOW=1 uv run python -m dinov3_mlx.gpu_lock -- uv run pytest -q -ra -p no:cacheprovider tests/test_api_parity.py tests/test_api.py::test_wheel_installs_without_torch
+
+# R3 (AC9, optional): B1 at HEAD, then the table
+uv run python -m dinov3_mlx.gpu_lock -- uv run python scripts/bench_api.py</code></pre>
+</section>
+
+<section id="user">
+  <h2>11 What the user must do</h2>
+  <ol>
+    <li>Open the Actions run of <code>55f8120</code> on <code>github.com/oilst/dinov3-mlx</code> and give its result and link to the main session (AC12). If the mlx tests fail because the runner has no Metal GPU, decide the CI option again.</li>
+    <li>Let the main session run R1 and R2 after the training job ends (AC1, AC4, AC11, AC14).</li>
+    <li>Decide on the fixes of V1 and V3 before G3, and on the low findings. The 4 README claims of Table 5b (V6) and the sentence of V12 are text fixes in the short README before it is committed.</li>
+    <li>G1: do the legal check.</li>
+    <li>G3: turn the repo public. Set GitHub Pages to the source «GitHub Actions», run the pages workflow once, and open the index (AC18).</li>
+    <li>Say yes to the tag v0.1.0 and the GitHub release; the notes give the result of R1 and R2 (AC20). Then try the install line of the README.</li>
+  </ol>
+</section>
+</main>
+</body>
+</html>
