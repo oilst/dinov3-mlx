@@ -1,16 +1,22 @@
 """Write docs/learn/06-5-roofline.html: the roofline of one block of ViT-H+/16 at 512 px.
 
-The inputs are two result files: the part times of the P2 profile (scripts/bench_speed.py profile
---priority P2) and the roofs of this Mac (scripts/probe_roofs.py). The FLOPs and the bytes of each
-part come from dinov3_mlx.flops. No GPU, no model.
+The inputs are four result files: the part times of the P2 profile (scripts/bench_speed.py profile
+--priority P2), the roofs of this Mac (scripts/probe_roofs.py), the paired run of the joined
+projections (results/speed-joined.jsonl, Step 6e) and the C1 tile probe (results/kernels-c1.jsonl,
+Step 6e). The FLOPs and the bytes of each part come from dinov3_mlx.flops. No GPU, no model.
 
     uv run python scripts/roofline_page.py
 """
 
 import argparse
+import html
 import json
 import math
 from pathlib import Path
+
+import joined_table
+import numpy as np
+import probe_kernels
 
 from dinov3_mlx.flops import MODEL_SHAPES, PART_NAMES, image_flops, part_bytes, part_flops, tokens
 
@@ -19,6 +25,38 @@ MODEL_SIZE, SIDE, BATCH_SIZE, BYTES_PER_VALUE = "ViT-H+/16", 512, 8, 2
 MODES = {"fp16-cast": ("fp16", "s1", "circle"), "bf16-cast": ("bf16", "s2", "square")}
 MATMUL_PARTS = ["qkv_proj", "sdpa", "o_proj", "ff_in", "ff_out"]
 POINTS = [*PART_NAMES, "block"]
+# The configurations of B1 of Step 6e in the order of Table 6: (priority, batch size, dtype mode).
+JOINED_CELLS = [
+    *(("P2", 8, m) for m in ("fp32", "fp16-cast", "bf16-cast", "fp16-autocast", "bf16-autocast")),
+    *(("P2", 1, m) for m in ("fp16-cast", "bf16-cast")),
+    *(("P1", 8, m) for m in ("fp32", "fp16-cast", "bf16-cast")),
+]
+# The parts of block 1 in fp16-cast that run the shapes of the C1 targets T1 (1,280 → 1,280) and T3
+# (SDPA). T2 is the joined gate and up, which the default form does not run (D6 of Step 6e).
+TILE_PARTS = {"T1": ["qkv_proj", "o_proj"], "T3": ["sdpa"]}
+JOINED_CODE = """\
+# src/dinov3_mlx/mlx_model.py (Step 6e)
+def _joined(layers: list[nn.Linear], x: mx.array) -> mx.array:
+    weight = mx.concatenate([layer.weight for layer in layers])  # (3D, D): at each call (D1)
+    return joined_linear(x, weight, _joined_bias(layers))  # zeros for a missing bias (D3)
+
+def joined_linear(x: mx.array, weight: mx.array, bias: mx.array | None) -> mx.array:
+    if bias is None:
+        return x @ weight.T  # the call of nn.Linear without a bias
+    return mx.addmm(bias, x, weight.T)  # the call of nn.Linear with a bias: bit equal (D5)
+
+# Attention.qkv, joined form
+y = _joined([self.q_proj, self.k_proj, self.v_proj], x)  # (B, T, 3D)
+y = y.reshape(b, t, 3, self.heads, -1).transpose(2, 0, 3, 1, 4)  # (3, B, heads, T, head_dim)
+return y[0], y[1], y[2]  # q, k, v
+
+# SwiGLU.hidden, joined form
+gate, up = mx.split(_joined([self.gate_proj, self.up_proj], x), 2, axis=-1)  # (B, T, F) each
+
+# Select the form before compile_backbone: a trace reads the flags when it records (D2)
+set_joined_projections(model, qkv=True, ff=True)  # ValueError for a quantized model (D4)
+forward = compile_backbone(model)
+"""
 # Element-wise FLOPs for each value: an estimate for the parts that flops.py counts as 0 FLOPs.
 # Layer norm: mean, variance, normalize, scale and bias. RoPE: 2 multiplies and 1 add on q and k.
 # LayerScale: 1 multiply and the residual add. SwiGLU: silu(gate) · up.
@@ -305,6 +343,159 @@ def linear_time(line: dict, dtype: str, k: int, n: int) -> float:
     )
 
 
+def linear_rate(line: dict, dtype: str, k: int, n: int) -> float:
+    """Return the TFLOP/s of one nn.Linear of the roof probe."""
+    return next(
+        r["tflops"] for r in line["linear"] if (r["dtype"], r["in"], r["out"]) == (dtype, k, n)
+    )
+
+
+def joined_cells(lines: list[dict]) -> dict[tuple[str, int, str], dict[str, dict]]:
+    """Return the rows of results/joined-table.md by configuration and joined form.
+
+    Args:
+        lines: The lines of results/speed-joined.jsonl.
+
+    Returns:
+        For each (priority, batch size, dtype mode) of B1, the row of joined_table.joined_rows of
+        each joined form (R-J, R-Jqkv and R-Jff).
+    """
+    cells: dict[tuple[str, int, str], dict[str, dict]] = {}
+    for row in joined_table.joined_rows(lines):
+        priority, _, _, batch_size, mode = row["cell"]
+        cells.setdefault((priority, batch_size, mode), {})[row["form"]] = row
+    return cells
+
+
+def tile_rows(lines: list[dict]) -> tuple[list[dict], list[dict], list[dict]]:
+    """Return the control rows (B3), the sweep rows (B4) and the best valid row of each target of
+    results/kernels-c1.md, with the functions of scripts/probe_kernels.py."""
+    control = probe_kernels.control_rows(lines)
+    newest = {line["target"]: line for line in lines if line.get("kind") == "sweep"}
+    rows = probe_kernels.sweep_rows(list(newest.values()), control)
+    return control, rows, probe_kernels.best_rows(rows)
+
+
+def flag_cost(lines: list[dict]) -> tuple[float, float]:
+    """Return the cost of the flag switch of the C7 harness at P1 and the batch time of R there.
+
+    ViT-S/16 has no gate, so at P1 the form R-Jff runs the same graph as R. The difference of their
+    batch times is the cost outside the graph: _JoinedForm of mlx_bench.py calls
+    set_joined_projections before and after each batch.
+
+    Args:
+        lines: The lines of results/speed-joined.jsonl.
+
+    Returns:
+        The median difference and the median batch time of R, in seconds, over the rounds of the
+        P1 lines of both runs.
+    """
+    costs, batch_times = [], []
+    for line in lines:
+        if line.get("change") != "C7" or line["status"] != "done" or line["priority"] != "P1":
+            continue
+        b, throughput = line["batch_size"], line["throughput"]
+        for r, jff in zip(throughput["R"]["frame"], throughput["R-Jff"]["frame"], strict=True):
+            costs.append(b / jff - b / r)
+            batch_times.append(b / r)
+    return float(np.median(costs)), float(np.median(batch_times))
+
+
+def concat_seconds(roofs: dict) -> float:
+    """Return the time of the weight concat of both joins in one block in fp16-cast at the memory
+    roof: the q, k and v weights (3 D²) and the gate and up weights (2 D F), each read once and
+    written once (D1 of specs/06e-kernels/plan.html)."""
+    shape = MODEL_SHAPES[MODEL_SIZE]
+    values = 3 * shape.dim**2 + 2 * shape.dim * shape.ff
+    return 2 * values * BYTES_PER_VALUE / (roofs["memory_gbs"] * 1e9)
+
+
+def tile_gain(by: dict, best: list[dict]) -> float:
+    """Return the time that the best valid tile sizes of T1 and T3 save in block 1 in fp16-cast.
+
+    Each part time shrinks by the ratio of its target to the wheel. The part times come from the
+    P2 profile, where each part runs alone, so the value is an estimate.
+
+    Args:
+        by: The points of block 1 by (dtype mode, part).
+        best: The rows of probe_kernels.best_rows.
+
+    Returns:
+        The saved time in seconds.
+    """
+    ratios = {row["target"]: row["ratio_to_wheel"] for row in best}
+    return sum(
+        by[("fp16-cast", part)]["seconds"] * (1 - 1 / ratios[target])
+        for target, parts in TILE_PARTS.items()
+        for part in parts
+    )
+
+
+def _box(x: int, y: int, w: int, h: int, text: str, css: str = "box") -> str:
+    """Return a box with one or two centered lines of text (split at |)."""
+    lines = text.split("|")
+    first = y + h / 2 - (len(lines) - 1) * 8 + 4
+    labels = "".join(
+        f'<text x="{x + w / 2:.0f}" y="{first + 16 * i:.0f}" class="lab" text-anchor="middle">{t}</text>'
+        for i, t in enumerate(lines)
+    )
+    return f'<rect x="{x}" y="{y}" width="{w}" height="{h}" rx="5" class="{css}"/>{labels}'
+
+
+def _flow(x1: int, y1: int, x2: int, y2: int) -> str:
+    """Return an arrow from (x1, y1) to (x2, y2)."""
+    return f'<line x1="{x1}" y1="{y1}" x2="{x2}" y2="{y2}" class="flow" marker-end="url(#head)"/>'
+
+
+def figure_joined(line: dict) -> str:
+    """Return Figure 3: the separate and the joined projection of q, k and v."""
+    d = MODEL_SHAPES[MODEL_SIZE].dim
+    one, three = linear_rate(line, "fp16", d, d), linear_rate(line, "fp16", d, 3 * d)
+    parts = [
+        (
+            '<defs><marker id="head" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" '
+            'markerHeight="7" orient="auto"><path d="M0,0 L8,4 L0,8 z" class="headk"/></marker>'
+            "</defs>"
+        ),
+        '<text x="20" y="28" class="axt">R: separate projections (Step 6)</text>',
+        _box(30, 125, 100, 40, "x|(B, T, D)"),
+    ]
+    for i, name in enumerate("qkv"):
+        y = 55 + 70 * i
+        parts += [
+            _box(190, y, 130, 40, f"{name}_proj|D → D", "box mm"),
+            _flow(130, 145, 188, y + 20),
+            _flow(320, y + 20, 348, y + 20),
+            f'<text x="356" y="{y + 25}" class="lab">{name}</text>',
+        ]
+    parts += [
+        (
+            f'<text x="20" y="266" class="note">3 matmuls of {d:,} → {d:,}: {one:.1f} TFLOP/s '
+            "each (fp16, Table 1)</text>"
+        ),
+        '<line x1="410" y1="40" x2="410" y2="250" class="grid"/>',
+        '<text x="430" y="28" class="axt">R-Jqkv: joined projection (Step 6e)</text>',
+    ]
+    for i, name in enumerate(("Wq", "Wk", "Wv")):
+        y = 45 + 35 * i
+        parts += [_box(440, y, 56, 26, name), _flow(496, y + 13, 528, 80 + 8 * i)]
+    parts += [
+        _box(530, 68, 130, 40, "concatenate|(3D, D)", "box dash"),
+        _box(440, 185, 90, 40, "x|(B, T, D)"),
+        _box(560, 180, 110, 50, "one matmul|D → 3D", "box mm"),
+        _box(700, 180, 110, 50, "split into|q, k, v"),
+        _flow(600, 108, 610, 178),
+        _flow(530, 205, 558, 205),
+        _flow(670, 205, 698, 205),
+        (
+            f'<text x="430" y="266" class="note">1 matmul of {d:,} → {3 * d:,}: {three:.1f} '
+            "TFLOP/s (fp16, Table 1)</text>"
+        ),
+        '<text x="430" y="284" class="note">Dashed: inside the trace, at each call (D1)</text>',
+    ]
+    return "".join(parts)
+
+
 def fusion_rows(by: dict, line: dict) -> list[dict]:
     """Return the projection fusion estimate of each dtype mode (D6 b of Step 6).
 
@@ -387,6 +578,11 @@ a { color: var(--accent); }
 .hit { fill: transparent; }
 #tip { position: fixed; pointer-events: none; background: var(--bg); color: var(--fg); border: 1px solid var(--rule); border-radius: 6px; padding: 0.45rem 0.6rem; font-size: 0.82rem; line-height: 1.4; box-shadow: 0 2px 10px rgba(17, 20, 20, 0.12); font-variant-numeric: tabular-nums; z-index: 5; }
 #tip b { display: block; }
+.box { fill: var(--panel); stroke: var(--muted); stroke-width: 1; }
+.box.mm { stroke: var(--accent); stroke-width: 1.5; }
+.box.dash { stroke-dasharray: 4 3; }
+.flow { stroke: var(--muted); stroke-width: 1.2; }
+.headk { fill: var(--muted); }
 """
 
 SCRIPT = """
@@ -413,12 +609,23 @@ SCRIPT = """
 """
 
 
-def page(profiles: list[dict], line: dict) -> str:
+def _d6(cell: dict[str, dict]) -> str:
+    """Return the D6 decision of one configuration of Table 6: the forms that are on, or off."""
+    rows = list(cell.values())
+    if not rows[0]["rule_applies"]:
+        return "–"
+    on = [row["form"] for row in rows if row["on"]]
+    return "on: " + ", ".join(on) if on else "off"
+
+
+def page(profiles: list[dict], line: dict, joined: list[dict], kernels: list[dict]) -> str:
     """Return the explainer page.
 
     Args:
         profiles: The two lines of the P2 profile, fp16-cast and bf16-cast.
         line: The line of the roof probe.
+        joined: The lines of results/speed-joined.jsonl (Step 6e, B1 and B2).
+        kernels: The lines of results/kernels-c1.jsonl (Step 6e, B3 and B4).
 
     Returns:
         The HTML text.
@@ -497,6 +704,43 @@ def page(profiles: list[dict], line: dict) -> str:
     plain32 = [r["tflops"] for r in line["plain"] if r["dtype"] == "fp32"]
     f16, fb = fusion[0], fusion[1]
 
+    cells = joined_cells(joined)
+    joined_rows = [row for c in JOINED_CELLS for row in cells[c].values()]
+    p2 = {
+        form: [cells[c][form]["pooled"] for c in JOINED_CELLS[:5]] for form in joined_table.JOINED
+    }
+    peak_mb = max(row["peak_above_r_bytes"] for row in joined_rows) / 1e6
+    all_equal = all(row["bit_equal"] for row in joined_rows)
+    cost, p1_batch = flag_cost(joined)
+    p2_batch = min(BATCH_SIZE / ips[m] for m in MODES)
+    concat16 = concat_seconds(roofs)
+    labels = {"P2": f"P2, {MODEL_SIZE}, {SIDE} px", "P1": "P1, ViT-S/16, 224 px"}
+    joined_rows_html = "".join(
+        f"<tr><td>{labels[p]}</td><td class='num'>{b}</td><td>{m}</td>"
+        + "".join(
+            f'<td class="num">{cells[(p, b, m)][f]["pooled"]:.3f}</td>' for f in joined_table.JOINED
+        )
+        + f'<td class="num">{cells[(p, b, m)]["R-J"]["peak_above_r_bytes"] / 1e6:,.0f}</td>'
+        + f"<td>{'bit equal' if all(r['bit_equal'] for r in cells[(p, b, m)].values()) else 'differs'}</td>"
+        + f"<td>{_d6(cells[(p, b, m)])}</td></tr>"
+        for p, b, m in JOINED_CELLS
+    )
+
+    control, sweep, best = tile_rows(kernels)
+    choice = {target: configs[0] for target, (_, _, configs) in probe_kernels.TARGETS.items()}
+    noise = max(abs(1 - r["ratio"]) for r in sweep if r["config"] == choice[r["target"]])
+    invalid = [r for r in sweep if not r["valid"]]
+    saved_tiles = tile_gain(by, best)
+    tile_rows_html = "".join(
+        f"<tr><td>{r['target']}</td><td>{r['probe']}</td><td>{choice[r['target']]}</td>"
+        f'<td>{r["config"]}</td><td class="num">{fmt(r["tflops"])}</td>'
+        f'<td class="num">{r["ratio_to_wheel"]:.3f}</td>'
+        f'<td class="num">{sum(s["valid"] for s in sweep if s["target"] == r["target"])} of '
+        f"{sum(s['target'] == r['target'] for s in sweep)}</td></tr>"
+        for r in best
+    )
+    best_by = {r["target"]: r for r in best}
+
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -509,8 +753,8 @@ def page(profiles: list[dict], line: dict) -> str:
 <main>
 <header>
   <h1>The Roofline of a ViT-H+/16 Block</h1>
-  <p>Explainer for roadmap Step 6. Date: 2026-11-10.</p>
-  <p class="steps">Step 6 explainers: <a href="06-1-compiled-forward-pass.html">1 Compiled forward pass</a> · <a href="06-2-attention-and-batch-size.html">2 Attention and batch size</a> · <a href="06-3-quantized-weights.html">3 Quantized weights</a> · <a href="06-4-preprocessing.html">4 Preprocessing</a> · 5 Roofline (this page). Step 3: <a href="03-where-the-compute-goes.html">Where the compute goes</a>.</p>
+  <p>Explainer for roadmap Step 6. Date: 2026-11-10. Sections 7 and 8: Step 6e, 2026-11-14.</p>
+  <p class="steps">Step 6 explainers: <a href="06-1-compiled-forward-pass.html">1 Compiled forward pass</a> · <a href="06-2-attention-and-batch-size.html">2 Attention and batch size</a> · <a href="06-3-quantized-weights.html">3 Quantized weights</a> · <a href="06-4-preprocessing.html">4 Preprocessing</a> · 5 Roofline (this page). Step 3: <a href="03-where-the-compute-goes.html">Where the compute goes</a>. Step 6e: <a href="#joined">Section 7</a> and <a href="#tiles">Section 8</a>.</p>
   <p class="steps">Previous: <a href="06-4-preprocessing.html">06-4 Preprocessing</a></p>
 </header>
 
@@ -523,6 +767,8 @@ def page(profiles: list[dict], line: dict) -> str:
     <li><a href="#plot">The roofline of one block</a></li>
     <li><a href="#values">The values of each part</a></li>
     <li><a href="#fusion">What the roofline says about fusion</a></li>
+    <li><a href="#joined">The joined projections, measured</a></li>
+    <li><a href="#tiles">Other tile sizes in a source build</a></li>
     <li><a href="#count">How the page counts FLOPs and bytes</a></li>
     <li><a href="#measure">How we measured</a></li>
     <li><a href="#surprises">Surprises</a></li>
@@ -544,7 +790,7 @@ def page(profiles: list[dict], line: dict) -> str:
 
 <section id="roofs">
   <h2>3 The roofs of this Mac</h2>
-  <p>The matmul roof is {fmt(roofs["fp16"])} TFLOP/s in fp16 and {fmt(roofs["bf16"])} TFLOP/s in bf16. The memory roof is {bw:.0f} GB/s. So the ridge point is {ridge:.0f} FLOP/B in fp16. These are the highest rates of <code>scripts/probe_roofs.py</code>, not the peaks of a data sheet (Section 8).</p>
+  <p>The matmul roof is {fmt(roofs["fp16"])} TFLOP/s in fp16 and {fmt(roofs["bf16"])} TFLOP/s in bf16. The memory roof is {bw:.0f} GB/s. So the ridge point is {ridge:.0f} FLOP/B in fp16. These are the highest rates of <code>scripts/probe_roofs.py</code>, not the peaks of a data sheet (Section 10).</p>
   <div class="table-wrap"><table>
     <thead><tr><th>Dtype</th><th class="num">nn.Linear, in → out</th><th class="num">ms</th><th class="num">TFLOP/s</th></tr></thead>
     <tbody>{linear_rows}</tbody>
@@ -590,7 +836,7 @@ def page(profiles: list[dict], line: dict) -> str:
     </thead>
     <tbody>{"".join(rows)}</tbody>
   </table></div>
-  <p class="caption">Table 4. Each part of block 1, timed alone (field <code>parts_s</code>), and block 1 as one compiled function (<code>block_s</code>). GB/s = bytes / time. "Of roof" = reached TFLOP/s / attainable rate. * The FLOPs of the element-wise parts are an estimate (Section 7). The 11 part times add up to {fmt(parts16 * 1e3, 2)} ms in fp16-cast; block 1 takes {fmt(block16["seconds"] * 1e3, 2)} ms, because the compiled block fuses the element-wise chains.</p>
+  <p class="caption">Table 4. Each part of block 1, timed alone (field <code>parts_s</code>), and block 1 as one compiled function (<code>block_s</code>). GB/s = bytes / time. "Of roof" = reached TFLOP/s / attainable rate. * The FLOPs of the element-wise parts are an estimate (Section 9). The 11 part times add up to {fmt(parts16 * 1e3, 2)} ms in fp16-cast; block 1 takes {fmt(block16["seconds"] * 1e3, 2)} ms, because the compiled block fuses the element-wise chains.</p>
 </section>
 
 <section id="fusion">
@@ -606,11 +852,61 @@ def page(profiles: list[dict], line: dict) -> str:
     <tbody>{fusion_table}</tbody>
   </table></div>
   <p class="caption">Table 5. Estimate of the projection fusion at P2: the profile time of the part (three or two matmuls) against the probe time of one fused linear layer (Table 1). The two times come from different processes, so the estimate has the noise of two runs. Step 6 measured only 0 to 2 % with compile at 224 px and batch size 1 (D6 of <code>specs/06-speed/explore.html</code>).</p>
-  <p class="note-box">The estimate is {fmt(f16["share"] * 100)} % of the block time in fp16-cast and {fmt(fb["share"] * 100)} % in bf16-cast. Only a paired run of both forms at P2 can show the real gain.</p>
+  <p class="note-box">The estimate is {fmt(f16["share"] * 100)} % of the block time in fp16-cast and {fmt(fb["share"] * 100)} % in bf16-cast. Only a paired run of both forms at P2 can show the real gain. Section 7 gives this paired run.</p>
+</section>
+
+<section id="joined">
+  <h2>7 The joined projections, measured</h2>
+  <p>Step 6e built the projection fusion of Table 5 as the joined projection and measured it in a paired run (change C7 of <code>specs/06e-kernels/plan.html</code>). Figure 3 shows the separate form R and the joined projection of q, k and v. The joined projection of gate and up has the same structure, with two weights.</p>
+  <figure>
+    <div class="fig"><svg viewBox="0 0 820 290" role="img" aria-label="The separate and the joined projection of q, k and v">{figure_joined(line)}</svg></div>
+    <figcaption>Figure 3. The separate form R (left) and the joined projection of q, k and v (right). Teal: matmul kernels. The weights stay three parameters. The forward pass joins them inside the trace, at each call (D1).</figcaption>
+  </figure>
+  <figure>
+    <pre><code>{html.escape(JOINED_CODE)}</code></pre>
+    <figcaption>Listing 1. The joined form in <code>src/dinov3_mlx/mlx_model.py</code>, shortened. The D numbers are the decisions of <code>specs/06e-kernels/plan.html</code>.</figcaption>
+  </figure>
+  <ul>
+    <li><code>set_joined_projections(model, qkv, ff)</code> sets the plain attribute <code>joined</code> of each <code>Attention</code> and <code>SwiGLU</code> module. A plain attribute is not a parameter. So <code>load_weights</code>, <code>set_dtype</code> and <code>nn.quantize</code> do not see it. A trace reads the attribute when it records, so call the function before <code>compile_backbone</code>. The function raises <code>ValueError</code> for a model with quantized weights, because packed weights, scales and offsets need their own join.</li>
+    <li><code>_joined(layers, x)</code> joins the weights with <code>mx.concatenate</code> inside the trace, at each call. The weights stay inputs of the trace. So a weight change reaches the output, and no second copy of the weights stays in memory between calls.</li>
+    <li><code>_joined_bias(layers)</code> joins the biases. A layer without a bias gets a bias of zeros. {MODEL_SIZE} has a bias on q_proj and v_proj, but not on k_proj.</li>
+    <li><code>joined_linear(x, weight, bias)</code> makes the same calls as <code>nn.Linear</code>: <code>mx.addmm</code> with a bias, else a matmul.</li>
+    <li><code>Attention.qkv</code> splits the joined output (B, T, 3D) into q, k and v with one reshape and one transpose. <code>SwiGLU.hidden</code> splits its joined output (B, T, 2F) with <code>mx.split</code>.</li>
+  </ul>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Configuration</th><th class="num">Batch size</th><th>Dtype mode</th><th class="num">R-J</th><th class="num">R-Jqkv</th><th class="num">R-Jff</th><th class="num">R-J peak − R (MB)</th><th>First batch</th><th>D6</th></tr></thead>
+    <tbody>{joined_rows_html}</tbody>
+  </table></div>
+  <p class="caption">Table 6. The paired ratio of each joined form to R: the throughput of the form ÷ the throughput of R in the same round. Each value is the pooled median of two runs of 5 rounds (<code>results/joined-table.md</code>). Below 1: the joined form is slower. R-J joins both, R-Jqkv joins only q, k and v, R-Jff joins only gate and up. Peak: the MLX peak of the timed batches of R-J minus that of R. D6: a join is on only if its pooled median at P2 with batch size 8 is at least 1.03 and the median of each run is above 1.</p>
+  <ul>
+    <li><b>Equal outputs.</b> {"In all rows, the first batch of each joined form is equal to R, bit for bit." if all_equal else "Not all rows are bit equal (Table 6)."}</li>
+    <li><b>Slower at P2.</b> At P2 with batch size 8, R-Jqkv gives {min(p2["R-Jqkv"]):.3f} to {max(p2["R-Jqkv"]):.3f}, R-Jff {min(p2["R-Jff"]):.3f} to {max(p2["R-Jff"]):.3f} and R-J {min(p2["R-J"]):.3f} to {max(p2["R-J"]):.3f}. No join reaches the limit 1.03 of D6. So both joins stay off in every dtype mode, and the compiled path of the package does not change.</li>
+    <li><b>More memory.</b> The joined forms need up to {peak_mb:,.0f} MB more MLX peak memory than R.</li>
+    <li><b>A cost outside the graph at P1.</b> ViT-S/16 has no gate. So at P1 the form R-Jff runs the same graph as R. Its ratio is still below 1, because the harness switches the flags before and after each batch (<code>_JoinedForm</code> in <code>mlx_bench.py</code>): <code>set_joined_projections</code> visits each block and checks the model for quantized weights. This costs {cost * 1e3:.2f} ms per batch: {cost / p1_batch * 100:.0f} % of a P1 batch of {p1_batch * 1e3:.1f} ms. All joined forms pay this cost at P1, so the P1 rows of Table 6 read low by about that share. At P2 a batch takes at least {p2_batch * 1e3:,.0f} ms, so the same cost stays below 0.1 %.</li>
+  </ul>
+  <p class="note-box">Why is the joined form slower at P2? Table 1 shows that one {shape.dim:,} → {3 * shape.dim:,} matmul is faster than three {shape.dim:,} → {shape.dim:,} matmuls, and Table 5 estimates a saving of {fmt(f16["share"] * 100)} % of the block time in fp16-cast. The concat of the weights of both joins moves {fmt(concat16 * 1e6)} µs of bytes per block at the memory roof: {fmt(concat16 / block16["seconds"] * 100, 2)} % of block 1. These effects predict a gain, not a loss of {(1 - max(p2["R-Jqkv"])) * 100:.0f} to {(1 - min(p2["R-Jqkv"])) * 100:.0f} % for R-Jqkv. The paired run measures only the whole forward pass. It does not show where the joined form loses the time. A profile of the parts of the joined form can show it.</p>
+</section>
+
+<section id="tiles">
+  <h2>8 Other tile sizes in a source build</h2>
+  <p>A matmul kernel computes its output in tiles. One threadgroup computes one tile of bm × bn output values and steps through the sum over K in parts of bk. wm × wn simdgroups share the tile. The attention kernel uses tiles of bq queries and bk keys. MLX selects the tile size from the device and the shape. MLX 0.32.4 does this in <code>steel_matmul_regular_axpby_nax</code> (<code>mlx/backend/metal/matmul.cpp</code>) and in <code>sdpa_full_self_attention_nax</code> (<code>mlx/backend/metal/scaled_dot_product_attention.cpp</code>).</p>
+  <p>The probe C1 of Step 6e built MLX 0.32.4 from its source code, outside the repo, in its own venv (ADR 0013). A patch reads a tile size from an environment variable at each dispatch (the tile override) and adds the kernels of the other tile sizes. The package keeps the released MLX.</p>
+  <ul>
+    <li><b>Control.</b> The unchanged source build has the speed of the wheel: {sum(r["within"] for r in control)} of {len(control)} shapes are within ± 3 % (Table 1 of <code>results/kernels-c1.md</code>). So a ratio in the source build is also a ratio for the wheel.</li>
+    <li><b>Noise.</b> Each target ran 12 tile sizes. One of them is the choice of MLX, the same tile size as the control. Its ratio to the control is within ± {noise * 100:.1f} %. This is the noise of one sweep.</li>
+    <li><b>Wrong outputs.</b> {len(invalid)} attention tile sizes with bk = 16 run without an error, but give wrong outputs (smallest row cosine {min(r["cosine"] for r in invalid):.2f}). MLX does not ship these tile sizes; the patch added them. Only the cosine check found them.</li>
+    <li><b>Effect on the block.</b> T1 and T3 are shapes of the default form. With the best tile sizes, qkv_proj, o_proj and sdpa of block 1 in fp16-cast would save about {fmt(saved_tiles * 1e3, 2)} ms of {fmt(block16["seconds"] * 1e3, 2)} ms: {saved_tiles / block16["seconds"] * 100:.1f} %. This is below the noise of one paired run (V17 of Step 6). T2 is the joined gate and up, which D6 keeps off.</li>
+  </ul>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Target</th><th>Probe</th><th>Choice of MLX</th><th>Best tile size</th><th class="num">TFLOP/s</th><th class="num">Ratio to the wheel</th><th class="num">Valid</th></tr></thead>
+    <tbody>{tile_rows_html}</tbody>
+  </table></div>
+  <p class="caption">Table 7. The best valid tile size of each target of C1, at the shapes of {MODEL_SIZE}, {SIDE} px, batch size {BATCH_SIZE}. Matmul tile sizes: bm, bn, bk, wm, wn. Attention tile sizes: bq, bk, wm, wn. Ratio to the wheel: above 1 is faster. Valid: the smallest row cosine to a NumPy float32 result is at least 0.99999. Source: Table 3 of <code>results/kernels-c1.md</code>.</p>
+  <p class="note-box">The tile sizes that MLX selects are close to the best for these shapes. Another tile size gains at most {(max(r["ratio_to_wheel"] for r in best) - 1) * 100:.1f} % on one kernel (T1: {(best_by["T1"]["ratio_to_wheel"] - 1) * 100:.1f} %, near the noise). So only a small part of the gap to the matmul roof (Section 6) is in the choice of the tile size. Verify found a drift in the sweep (V2 of <code>specs/06e-kernels/verify.html</code>): the T2 gain is an artifact, and T3 needs a confirmation run.</p>
 </section>
 
 <section id="count">
-  <h2>7 How the page counts FLOPs and bytes</h2>
+  <h2>9 How the page counts FLOPs and bytes</h2>
   <ul>
     <li>The FLOPs of the matmul parts come from <code>flops.part_flops</code>. One multiply-add counts as 2 FLOPs. SDPA counts 4 B T² D.</li>
     <li>The bytes come from <code>flops.part_bytes</code> with 2 bytes for each value: each part reads its inputs and its weights once and writes its outputs once. A real kernel can move more bytes, so the true intensity can be lower.</li>
@@ -620,28 +916,34 @@ def page(profiles: list[dict], line: dict) -> str:
 </section>
 
 <section id="measure">
-  <h2>8 How we measured</h2>
+  <h2>10 How we measured</h2>
   <ul>
     <li><b>Part times.</b> <code>scripts/bench_speed.py profile --priority P2</code> runs <code>mlx_bench.run_profile_worker</code> in one subprocess for each dtype mode, through the GPU lock, on AC power (<code>results/speed-profile-p2.jsonl</code>). Each part runs alone and compiled: 3 warm-up calls, then the median of 20 calls with one <code>mx.eval</code> after each call.</li>
     <li><b>The fixed cost of each call.</b> At P1 each part takes at least about 0.17 ms, also the smallest part. So the element-wise times of this page include a fixed cost, and their GB/s values are lower limits.</li>
     <li><b>Roofs.</b> <code>scripts/probe_roofs.py</code> with <code>MLX_ENABLE_TF32=0</code> (<code>results/roofs.jsonl</code>). The values of this page come from the first form of the probe: two scripts with the same probes. That run did not record the machine state (field <code>note</code>).</li>
     <li>The plain <code>a @ b</code> reached only {min(plain16):.1f} to {max(plain16):.1f} TFLOP/s in fp16, and {min(plain32):.1f} to {max(plain32):.1f} TFLOP/s in fp32.</li>
+    <li><b>Joined projections (Section 7).</b> <code>scripts/bench_speed.py change --change joined</code> runs the four forms R, R-J, R-Jqkv and R-Jff in one worker process for each configuration (<code>mlx_bench.run_change_worker</code>). <code>change_forms</code> gives each joined form its own compiled forward pass, which <code>_JoinedForm</code> wraps: it sets the flags with <code>set_joined_projections</code> before each batch and clears them after it. <code>run_forms</code> runs 5 rounds; the order of the forms rotates by one from round to round, and each form gets its own warm-up and timed batches in each round. The ratio of a form is its throughput ÷ the throughput of R in the same round. <code>first_batch_check</code> compares the first batch of each form with R, bit for bit, and records the largest differences. Two runs at different times give <code>results/speed-joined.jsonl</code>.</li>
+    <li><b>Tile sizes (Section 8).</b> <code>scripts/probe_kernels.py</code> starts <code>scripts/probe_kernels_worker.py</code> with <code>python -I</code> in the venv of the wheel or of the source build, one worker at a time, through the GPU lock. Each probe time is the median of 20 calls with one <code>mx.eval</code> after each call. The control alternates the two venvs for 5 rounds; the sweep compares each tile size with the control build (<code>results/kernels-c1.jsonl</code>).</li>
   </ul>
 </section>
 
 <section id="surprises">
-  <h2>9 Surprises</h2>
+  <h2>11 Surprises</h2>
   <ul>
     <li>The first matmul roof came from a square 8,192 matmul. It was lower than the rate of the ff_in part. The linear layout, with the weight stored as (out, in), is faster on this Mac than <code>a @ b</code>. So the roof must come from the same layout as the model.</li>
     <li>In bf16 the fused 1,280 → 10,240 layer is not faster than two 1,280 → 5,120 layers (Table 1). In fp16 it is.</li>
     <li>The compiled block is faster than the sum of its parts. A part alone pays a fixed cost and writes its output to memory; inside the block the element-wise chains are fused.</li>
+    <li>The joined projection is slower than R at P2, although its one matmul is faster than the separate matmuls alone (Sections 6 and 7).</li>
+    <li>At P1 one Python call for each batch costs about {cost / p1_batch * 100:.0f} % of the throughput (Section 7). A harness that switches a form at each call must count this cost.</li>
+    <li>{len(invalid)} attention tile sizes give wrong outputs without an error (Section 8).</li>
   </ul>
 </section>
 
 <section id="sources">
-  <h2>10 Sources</h2>
+  <h2>12 Sources</h2>
   <ul>
-    <li><code>scripts/roofline_page.py</code> writes this page from <code>results/speed-profile-p2.jsonl</code> and <code>results/roofs.jsonl</code>.</li>
+    <li><code>scripts/roofline_page.py</code> writes this page from <code>results/speed-profile-p2.jsonl</code>, <code>results/roofs.jsonl</code>, <code>results/speed-joined.jsonl</code> and <code>results/kernels-c1.jsonl</code>.</li>
+    <li>Step 6e: <code>specs/06e-kernels/plan.html</code>; the tables <code>results/joined-table.md</code> (<code>scripts/joined_table.py</code>) and <code>results/kernels-c1.md</code> (<code>scripts/probe_kernels.py</code>); <code>set_joined_projections</code> in <code>src/dinov3_mlx/mlx_model.py</code>.</li>
     <li><code>scripts/probe_roofs.py</code>: the roof probe. <code>src/dinov3_mlx/flops.py</code>: FLOPs and bytes. <code>src/dinov3_mlx/mlx_bench.py</code>: <code>run_profile_worker</code> and <code>mlx_block_parts</code>.</li>
     <li>S. Williams, A. Waterman, D. Patterson: <a href="https://doi.org/10.1145/1498765.1498785">Roofline: an insightful visual performance model for multicore architectures</a>, Communications of the ACM 52 (4), 2009.</li>
   </ul>
@@ -659,12 +961,17 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--profile", type=Path, default=ROOT / "results/speed-profile-p2.jsonl")
     parser.add_argument("--roofs", type=Path, default=ROOT / "results/roofs.jsonl")
+    parser.add_argument("--joined", type=Path, default=joined_table.RESULTS)
+    parser.add_argument("--kernels", type=Path, default=probe_kernels.RESULTS)
     parser.add_argument("--out", type=Path, default=ROOT / "docs/learn/06-5-roofline.html")
     args = parser.parse_args()
     profiles = [
         p for p in read_lines(args.profile) if p["dtype_mode"] in MODES and p["status"] == "done"
     ]
-    args.out.write_text(page(profiles, read_lines(args.roofs)[-1]))
+    text = page(
+        profiles, read_lines(args.roofs)[-1], read_lines(args.joined), read_lines(args.kernels)
+    )
+    args.out.write_text(text)
     print(args.out)
 
 

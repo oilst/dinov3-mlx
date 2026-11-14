@@ -57,14 +57,19 @@ a { color: var(--accent); }
 .hit { fill: transparent; }
 #tip { position: fixed; pointer-events: none; background: var(--bg); color: var(--fg); border: 1px solid var(--rule); border-radius: 6px; padding: 0.45rem 0.6rem; font-size: 0.82rem; line-height: 1.4; box-shadow: 0 2px 10px rgba(17, 20, 20, 0.12); font-variant-numeric: tabular-nums; z-index: 5; }
 #tip b { display: block; }
+.box { fill: var(--panel); stroke: var(--muted); stroke-width: 1; }
+.box.mm { stroke: var(--accent); stroke-width: 1.5; }
+.box.dash { stroke-dasharray: 4 3; }
+.flow { stroke: var(--muted); stroke-width: 1.2; }
+.headk { fill: var(--muted); }
 </style>
 </head>
 <body>
 <main>
 <header>
   <h1>The Roofline of a ViT-H+/16 Block</h1>
-  <p>Explainer for roadmap Step 6. Date: 2026-11-10.</p>
-  <p class="steps">Step 6 explainers: <a href="06-1-compiled-forward-pass.html">1 Compiled forward pass</a> · <a href="06-2-attention-and-batch-size.html">2 Attention and batch size</a> · <a href="06-3-quantized-weights.html">3 Quantized weights</a> · <a href="06-4-preprocessing.html">4 Preprocessing</a> · 5 Roofline (this page). Step 3: <a href="03-where-the-compute-goes.html">Where the compute goes</a>.</p>
+  <p>Explainer for roadmap Step 6. Date: 2026-11-10. Sections 7 and 8: Step 6e, 2026-11-14.</p>
+  <p class="steps">Step 6 explainers: <a href="06-1-compiled-forward-pass.html">1 Compiled forward pass</a> · <a href="06-2-attention-and-batch-size.html">2 Attention and batch size</a> · <a href="06-3-quantized-weights.html">3 Quantized weights</a> · <a href="06-4-preprocessing.html">4 Preprocessing</a> · 5 Roofline (this page). Step 3: <a href="03-where-the-compute-goes.html">Where the compute goes</a>. Step 6e: <a href="#joined">Section 7</a> and <a href="#tiles">Section 8</a>.</p>
   <p class="steps">Previous: <a href="06-4-preprocessing.html">06-4 Preprocessing</a></p>
 </header>
 
@@ -77,6 +82,8 @@ a { color: var(--accent); }
     <li><a href="#plot">The roofline of one block</a></li>
     <li><a href="#values">The values of each part</a></li>
     <li><a href="#fusion">What the roofline says about fusion</a></li>
+    <li><a href="#joined">The joined projections, measured</a></li>
+    <li><a href="#tiles">Other tile sizes in a source build</a></li>
     <li><a href="#count">How the page counts FLOPs and bytes</a></li>
     <li><a href="#measure">How we measured</a></li>
     <li><a href="#surprises">Surprises</a></li>
@@ -98,7 +105,7 @@ a { color: var(--accent); }
 
 <section id="roofs">
   <h2>3 The roofs of this Mac</h2>
-  <p>The matmul roof is 59.3 TFLOP/s in fp16 and 56.3 TFLOP/s in bf16. The memory roof is 528 GB/s. So the ridge point is 112 FLOP/B in fp16. These are the highest rates of <code>scripts/probe_roofs.py</code>, not the peaks of a data sheet (Section 8).</p>
+  <p>The matmul roof is 59.3 TFLOP/s in fp16 and 56.3 TFLOP/s in bf16. The memory roof is 528 GB/s. So the ridge point is 112 FLOP/B in fp16. These are the highest rates of <code>scripts/probe_roofs.py</code>, not the peaks of a data sheet (Section 10).</p>
   <div class="table-wrap"><table>
     <thead><tr><th>Dtype</th><th class="num">nn.Linear, in → out</th><th class="num">ms</th><th class="num">TFLOP/s</th></tr></thead>
     <tbody><tr><td>fp16</td><td class="num">1,280 → 3,840</td><td class="num">1.511</td><td class="num">53.6</td></tr><tr><td>fp16</td><td class="num">1,280 → 1,280</td><td class="num">0.627</td><td class="num">43.0</td></tr><tr><td>fp16</td><td class="num">1,280 → 5,120</td><td class="num">1.917</td><td class="num">56.3</td></tr><tr><td>fp16</td><td class="num">5,120 → 1,280</td><td class="num">1.999</td><td class="num">54.0</td></tr><tr><td>fp16</td><td class="num">1,280 → 10,240</td><td class="num">3.642</td><td class="num">59.3</td></tr><tr><td>fp16</td><td class="num">4,096 → 4,096</td><td class="num">4.667</td><td class="num">59.2</td></tr><tr><td>bf16</td><td class="num">1,280 → 3,840</td><td class="num">1.492</td><td class="num">54.2</td></tr><tr><td>bf16</td><td class="num">1,280 → 1,280</td><td class="num">0.649</td><td class="num">41.6</td></tr><tr><td>bf16</td><td class="num">1,280 → 5,120</td><td class="num">1.917</td><td class="num">56.3</td></tr><tr><td>bf16</td><td class="num">5,120 → 1,280</td><td class="num">2.347</td><td class="num">46.0</td></tr><tr><td>bf16</td><td class="num">1,280 → 10,240</td><td class="num">4.780</td><td class="num">45.1</td></tr><tr><td>bf16</td><td class="num">4,096 → 4,096</td><td class="num">8.101</td><td class="num">34.1</td></tr></tbody>
@@ -144,7 +151,7 @@ a { color: var(--accent); }
     </thead>
     <tbody><tr><td>norm1</td><td>element-wise</td><td class="num">2.00*</td><td class="num">0.247</td><td class="num">0.34</td><td class="num">170.9</td><td class="num">32.4 %</td><td class="num">0.262</td><td class="num">0.32</td><td class="num">160.8</td><td class="num">30.5 %</td></tr><tr><td>qkv_proj</td><td>matmul</td><td class="num">859.74</td><td class="num">1.876</td><td class="num">43.14</td><td class="num">50.2</td><td class="num">72.8 %</td><td class="num">1.879</td><td class="num">43.07</td><td class="num">50.1</td><td class="num">76.5 %</td></tr><tr><td>rope</td><td>element-wise</td><td class="num">0.50*</td><td class="num">0.836</td><td class="num">0.08</td><td class="num">151.3</td><td class="num">28.7 %</td><td class="num">0.858</td><td class="num">0.07</td><td class="num">147.4</td><td class="num">27.9 %</td></tr><tr><td>sdpa</td><td>matmul</td><td class="num">514.50</td><td class="num">1.187</td><td class="num">36.52</td><td class="num">71.0</td><td class="num">61.6 %</td><td class="num">1.242</td><td class="num">34.91</td><td class="num">67.9</td><td class="num">62.0 %</td></tr><tr><td>o_proj</td><td>matmul</td><td class="num">593.83</td><td class="num">0.755</td><td class="num">35.74</td><td class="num">60.2</td><td class="num">60.3 %</td><td class="num">0.773</td><td class="num">34.89</td><td class="num">58.8</td><td class="num">62.0 %</td></tr><tr><td>layer_scale1</td><td>element-wise</td><td class="num">0.33*</td><td class="num">0.339</td><td class="num">0.06</td><td class="num">186.4</td><td class="num">35.3 %</td><td class="num">0.331</td><td class="num">0.06</td><td class="num">190.9</td><td class="num">36.2 %</td></tr><tr><td>norm2</td><td>element-wise</td><td class="num">2.00*</td><td class="num">0.258</td><td class="num">0.33</td><td class="num">163.6</td><td class="num">31.0 %</td><td class="num">0.283</td><td class="num">0.30</td><td class="num">149.0</td><td class="num">28.2 %</td></tr><tr><td>ff_in</td><td>matmul</td><td class="num">999.62</td><td class="num">4.291</td><td class="num">50.29</td><td class="num">50.3</td><td class="num">84.9 %</td><td class="num">4.708</td><td class="num">45.84</td><td class="num">45.9</td><td class="num">81.4 %</td></tr><tr><td>activation</td><td>element-wise</td><td class="num">1.00*</td><td class="num">0.683</td><td class="num">0.37</td><td class="num">370.2</td><td class="num">70.1 %</td><td class="num">0.676</td><td class="num">0.37</td><td class="num">373.9</td><td class="num">70.8 %</td></tr><tr><td>ff_out</td><td>matmul</td><td class="num">910.71</td><td class="num">2.310</td><td class="num">46.71</td><td class="num">51.3</td><td class="num">78.8 %</td><td class="num">2.490</td><td class="num">43.34</td><td class="num">47.6</td><td class="num">77.0 %</td></tr><tr><td>layer_scale2</td><td>element-wise</td><td class="num">0.33*</td><td class="num">0.304</td><td class="num">0.07</td><td class="num">208.3</td><td class="num">39.5 %</td><td class="num">0.297</td><td class="num">0.07</td><td class="num">212.6</td><td class="num">40.3 %</td></tr><tr class="total"><td>block 1</td><td>all parts</td><td class="num">414.09</td><td class="num">11.934</td><td class="num">39.84</td><td class="num">96.2</td><td class="num">67.2 %</td><td class="num">12.391</td><td class="num">38.37</td><td class="num">92.7</td><td class="num">68.2 %</td></tr></tbody>
   </table></div>
-  <p class="caption">Table 4. Each part of block 1, timed alone (field <code>parts_s</code>), and block 1 as one compiled function (<code>block_s</code>). GB/s = bytes / time. "Of roof" = reached TFLOP/s / attainable rate. * The FLOPs of the element-wise parts are an estimate (Section 7). The 11 part times add up to 13.09 ms in fp16-cast; block 1 takes 11.93 ms, because the compiled block fuses the element-wise chains.</p>
+  <p class="caption">Table 4. Each part of block 1, timed alone (field <code>parts_s</code>), and block 1 as one compiled function (<code>block_s</code>). GB/s = bytes / time. "Of roof" = reached TFLOP/s / attainable rate. * The FLOPs of the element-wise parts are an estimate (Section 9). The 11 part times add up to 13.09 ms in fp16-cast; block 1 takes 11.93 ms, because the compiled block fuses the element-wise chains.</p>
 </section>
 
 <section id="fusion">
@@ -160,11 +167,82 @@ a { color: var(--accent); }
     <tbody><tr><td>fp16-cast</td><td class="num">1.876</td><td class="num">1.511</td><td class="num">4.291</td><td class="num">3.642</td><td class="num">1.014</td><td class="num">8.5 %</td></tr><tr><td>bf16-cast</td><td class="num">1.879</td><td class="num">1.492</td><td class="num">4.708</td><td class="num">4.780</td><td class="num">0.314</td><td class="num">2.5 %</td></tr></tbody>
   </table></div>
   <p class="caption">Table 5. Estimate of the projection fusion at P2: the profile time of the part (three or two matmuls) against the probe time of one fused linear layer (Table 1). The two times come from different processes, so the estimate has the noise of two runs. Step 6 measured only 0 to 2 % with compile at 224 px and batch size 1 (D6 of <code>specs/06-speed/explore.html</code>).</p>
-  <p class="note-box">The estimate is 8.5 % of the block time in fp16-cast and 2.5 % in bf16-cast. Only a paired run of both forms at P2 can show the real gain.</p>
+  <p class="note-box">The estimate is 8.5 % of the block time in fp16-cast and 2.5 % in bf16-cast. Only a paired run of both forms at P2 can show the real gain. Section 7 gives this paired run.</p>
+</section>
+
+<section id="joined">
+  <h2>7 The joined projections, measured</h2>
+  <p>Step 6e built the projection fusion of Table 5 as the joined projection and measured it in a paired run (change C7 of <code>specs/06e-kernels/plan.html</code>). Figure 3 shows the separate form R and the joined projection of q, k and v. The joined projection of gate and up has the same structure, with two weights.</p>
+  <figure>
+    <div class="fig"><svg viewBox="0 0 820 290" role="img" aria-label="The separate and the joined projection of q, k and v"><defs><marker id="head" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L8,4 L0,8 z" class="headk"/></marker></defs><text x="20" y="28" class="axt">R: separate projections (Step 6)</text><rect x="30" y="125" width="100" height="40" rx="5" class="box"/><text x="80" y="141" class="lab" text-anchor="middle">x</text><text x="80" y="157" class="lab" text-anchor="middle">(B, T, D)</text><rect x="190" y="55" width="130" height="40" rx="5" class="box mm"/><text x="255" y="71" class="lab" text-anchor="middle">q_proj</text><text x="255" y="87" class="lab" text-anchor="middle">D → D</text><line x1="130" y1="145" x2="188" y2="75" class="flow" marker-end="url(#head)"/><line x1="320" y1="75" x2="348" y2="75" class="flow" marker-end="url(#head)"/><text x="356" y="80" class="lab">q</text><rect x="190" y="125" width="130" height="40" rx="5" class="box mm"/><text x="255" y="141" class="lab" text-anchor="middle">k_proj</text><text x="255" y="157" class="lab" text-anchor="middle">D → D</text><line x1="130" y1="145" x2="188" y2="145" class="flow" marker-end="url(#head)"/><line x1="320" y1="145" x2="348" y2="145" class="flow" marker-end="url(#head)"/><text x="356" y="150" class="lab">k</text><rect x="190" y="195" width="130" height="40" rx="5" class="box mm"/><text x="255" y="211" class="lab" text-anchor="middle">v_proj</text><text x="255" y="227" class="lab" text-anchor="middle">D → D</text><line x1="130" y1="145" x2="188" y2="215" class="flow" marker-end="url(#head)"/><line x1="320" y1="215" x2="348" y2="215" class="flow" marker-end="url(#head)"/><text x="356" y="220" class="lab">v</text><text x="20" y="266" class="note">3 matmuls of 1,280 → 1,280: 43.0 TFLOP/s each (fp16, Table 1)</text><line x1="410" y1="40" x2="410" y2="250" class="grid"/><text x="430" y="28" class="axt">R-Jqkv: joined projection (Step 6e)</text><rect x="440" y="45" width="56" height="26" rx="5" class="box"/><text x="468" y="62" class="lab" text-anchor="middle">Wq</text><line x1="496" y1="58" x2="528" y2="80" class="flow" marker-end="url(#head)"/><rect x="440" y="80" width="56" height="26" rx="5" class="box"/><text x="468" y="97" class="lab" text-anchor="middle">Wk</text><line x1="496" y1="93" x2="528" y2="88" class="flow" marker-end="url(#head)"/><rect x="440" y="115" width="56" height="26" rx="5" class="box"/><text x="468" y="132" class="lab" text-anchor="middle">Wv</text><line x1="496" y1="128" x2="528" y2="96" class="flow" marker-end="url(#head)"/><rect x="530" y="68" width="130" height="40" rx="5" class="box dash"/><text x="595" y="84" class="lab" text-anchor="middle">concatenate</text><text x="595" y="100" class="lab" text-anchor="middle">(3D, D)</text><rect x="440" y="185" width="90" height="40" rx="5" class="box"/><text x="485" y="201" class="lab" text-anchor="middle">x</text><text x="485" y="217" class="lab" text-anchor="middle">(B, T, D)</text><rect x="560" y="180" width="110" height="50" rx="5" class="box mm"/><text x="615" y="201" class="lab" text-anchor="middle">one matmul</text><text x="615" y="217" class="lab" text-anchor="middle">D → 3D</text><rect x="700" y="180" width="110" height="50" rx="5" class="box"/><text x="755" y="201" class="lab" text-anchor="middle">split into</text><text x="755" y="217" class="lab" text-anchor="middle">q, k, v</text><line x1="600" y1="108" x2="610" y2="178" class="flow" marker-end="url(#head)"/><line x1="530" y1="205" x2="558" y2="205" class="flow" marker-end="url(#head)"/><line x1="670" y1="205" x2="698" y2="205" class="flow" marker-end="url(#head)"/><text x="430" y="266" class="note">1 matmul of 1,280 → 3,840: 53.6 TFLOP/s (fp16, Table 1)</text><text x="430" y="284" class="note">Dashed: inside the trace, at each call (D1)</text></svg></div>
+    <figcaption>Figure 3. The separate form R (left) and the joined projection of q, k and v (right). Teal: matmul kernels. The weights stay three parameters. The forward pass joins them inside the trace, at each call (D1).</figcaption>
+  </figure>
+  <figure>
+    <pre><code># src/dinov3_mlx/mlx_model.py (Step 6e)
+def _joined(layers: list[nn.Linear], x: mx.array) -&gt; mx.array:
+    weight = mx.concatenate([layer.weight for layer in layers])  # (3D, D): at each call (D1)
+    return joined_linear(x, weight, _joined_bias(layers))  # zeros for a missing bias (D3)
+
+def joined_linear(x: mx.array, weight: mx.array, bias: mx.array | None) -&gt; mx.array:
+    if bias is None:
+        return x @ weight.T  # the call of nn.Linear without a bias
+    return mx.addmm(bias, x, weight.T)  # the call of nn.Linear with a bias: bit equal (D5)
+
+# Attention.qkv, joined form
+y = _joined([self.q_proj, self.k_proj, self.v_proj], x)  # (B, T, 3D)
+y = y.reshape(b, t, 3, self.heads, -1).transpose(2, 0, 3, 1, 4)  # (3, B, heads, T, head_dim)
+return y[0], y[1], y[2]  # q, k, v
+
+# SwiGLU.hidden, joined form
+gate, up = mx.split(_joined([self.gate_proj, self.up_proj], x), 2, axis=-1)  # (B, T, F) each
+
+# Select the form before compile_backbone: a trace reads the flags when it records (D2)
+set_joined_projections(model, qkv=True, ff=True)  # ValueError for a quantized model (D4)
+forward = compile_backbone(model)
+</code></pre>
+    <figcaption>Listing 1. The joined form in <code>src/dinov3_mlx/mlx_model.py</code>, shortened. The D numbers are the decisions of <code>specs/06e-kernels/plan.html</code>.</figcaption>
+  </figure>
+  <ul>
+    <li><code>set_joined_projections(model, qkv, ff)</code> sets the plain attribute <code>joined</code> of each <code>Attention</code> and <code>SwiGLU</code> module. A plain attribute is not a parameter. So <code>load_weights</code>, <code>set_dtype</code> and <code>nn.quantize</code> do not see it. A trace reads the attribute when it records, so call the function before <code>compile_backbone</code>. The function raises <code>ValueError</code> for a model with quantized weights, because packed weights, scales and offsets need their own join.</li>
+    <li><code>_joined(layers, x)</code> joins the weights with <code>mx.concatenate</code> inside the trace, at each call. The weights stay inputs of the trace. So a weight change reaches the output, and no second copy of the weights stays in memory between calls.</li>
+    <li><code>_joined_bias(layers)</code> joins the biases. A layer without a bias gets a bias of zeros. ViT-H+/16 has a bias on q_proj and v_proj, but not on k_proj.</li>
+    <li><code>joined_linear(x, weight, bias)</code> makes the same calls as <code>nn.Linear</code>: <code>mx.addmm</code> with a bias, else a matmul.</li>
+    <li><code>Attention.qkv</code> splits the joined output (B, T, 3D) into q, k and v with one reshape and one transpose. <code>SwiGLU.hidden</code> splits its joined output (B, T, 2F) with <code>mx.split</code>.</li>
+  </ul>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Configuration</th><th class="num">Batch size</th><th>Dtype mode</th><th class="num">R-J</th><th class="num">R-Jqkv</th><th class="num">R-Jff</th><th class="num">R-J peak − R (MB)</th><th>First batch</th><th>D6</th></tr></thead>
+    <tbody><tr><td>P2, ViT-H+/16, 512 px</td><td class='num'>8</td><td>fp32</td><td class="num">0.954</td><td class="num">0.961</td><td class="num">0.990</td><td class="num">546</td><td>bit equal</td><td>off</td></tr><tr><td>P2, ViT-H+/16, 512 px</td><td class='num'>8</td><td>fp16-cast</td><td class="num">0.950</td><td class="num">0.959</td><td class="num">0.995</td><td class="num">147</td><td>bit equal</td><td>off</td></tr><tr><td>P2, ViT-H+/16, 512 px</td><td class='num'>8</td><td>bf16-cast</td><td class="num">0.943</td><td class="num">0.957</td><td class="num">0.997</td><td class="num">147</td><td>bit equal</td><td>off</td></tr><tr><td>P2, ViT-H+/16, 512 px</td><td class='num'>8</td><td>fp16-autocast</td><td class="num">0.954</td><td class="num">0.952</td><td class="num">0.992</td><td class="num">125</td><td>bit equal</td><td>off</td></tr><tr><td>P2, ViT-H+/16, 512 px</td><td class='num'>8</td><td>bf16-autocast</td><td class="num">0.940</td><td class="num">0.956</td><td class="num">0.989</td><td class="num">125</td><td>bit equal</td><td>off</td></tr><tr><td>P2, ViT-H+/16, 512 px</td><td class='num'>1</td><td>fp16-cast</td><td class="num">0.921</td><td class="num">0.953</td><td class="num">0.963</td><td class="num">183</td><td>bit equal</td><td>–</td></tr><tr><td>P2, ViT-H+/16, 512 px</td><td class='num'>1</td><td>bf16-cast</td><td class="num">0.917</td><td class="num">0.947</td><td class="num">0.955</td><td class="num">183</td><td>bit equal</td><td>–</td></tr><tr><td>P1, ViT-S/16, 224 px</td><td class='num'>8</td><td>fp32</td><td class="num">0.937</td><td class="num">0.938</td><td class="num">0.981</td><td class="num">110</td><td>bit equal</td><td>–</td></tr><tr><td>P1, ViT-S/16, 224 px</td><td class='num'>8</td><td>fp16-cast</td><td class="num">0.882</td><td class="num">0.882</td><td class="num">0.964</td><td class="num">55</td><td>bit equal</td><td>–</td></tr><tr><td>P1, ViT-S/16, 224 px</td><td class='num'>8</td><td>bf16-cast</td><td class="num">0.883</td><td class="num">0.882</td><td class="num">0.964</td><td class="num">55</td><td>bit equal</td><td>–</td></tr></tbody>
+  </table></div>
+  <p class="caption">Table 6. The paired ratio of each joined form to R: the throughput of the form ÷ the throughput of R in the same round. Each value is the pooled median of two runs of 5 rounds (<code>results/joined-table.md</code>). Below 1: the joined form is slower. R-J joins both, R-Jqkv joins only q, k and v, R-Jff joins only gate and up. Peak: the MLX peak of the timed batches of R-J minus that of R. D6: a join is on only if its pooled median at P2 with batch size 8 is at least 1.03 and the median of each run is above 1.</p>
+  <ul>
+    <li><b>Equal outputs.</b> In all rows, the first batch of each joined form is equal to R, bit for bit.</li>
+    <li><b>Slower at P2.</b> At P2 with batch size 8, R-Jqkv gives 0.952 to 0.961, R-Jff 0.989 to 0.997 and R-J 0.940 to 0.954. No join reaches the limit 1.03 of D6. So both joins stay off in every dtype mode, and the compiled path of the package does not change.</li>
+    <li><b>More memory.</b> The joined forms need up to 546 MB more MLX peak memory than R.</li>
+    <li><b>A cost outside the graph at P1.</b> ViT-S/16 has no gate. So at P1 the form R-Jff runs the same graph as R. Its ratio is still below 1, because the harness switches the flags before and after each batch (<code>_JoinedForm</code> in <code>mlx_bench.py</code>): <code>set_joined_projections</code> visits each block and checks the model for quantized weights. This costs 0.15 ms per batch: 4 % of a P1 batch of 4.0 ms. All joined forms pay this cost at P1, so the P1 rows of Table 6 read low by about that share. At P2 a batch takes at least 388 ms, so the same cost stays below 0.1 %.</li>
+  </ul>
+  <p class="note-box">Why is the joined form slower at P2? Table 1 shows that one 1,280 → 3,840 matmul is faster than three 1,280 → 1,280 matmuls, and Table 5 estimates a saving of 8.5 % of the block time in fp16-cast. The concat of the weights of both joins moves 136.6 µs of bytes per block at the memory roof: 1.14 % of block 1. These effects predict a gain, not a loss of 4 to 5 % for R-Jqkv. The paired run measures only the whole forward pass. It does not show where the joined form loses the time. A profile of the parts of the joined form can show it.</p>
+</section>
+
+<section id="tiles">
+  <h2>8 Other tile sizes in a source build</h2>
+  <p>A matmul kernel computes its output in tiles. One threadgroup computes one tile of bm × bn output values and steps through the sum over K in parts of bk. wm × wn simdgroups share the tile. The attention kernel uses tiles of bq queries and bk keys. MLX selects the tile size from the device and the shape. MLX 0.32.4 does this in <code>steel_matmul_regular_axpby_nax</code> (<code>mlx/backend/metal/matmul.cpp</code>) and in <code>sdpa_full_self_attention_nax</code> (<code>mlx/backend/metal/scaled_dot_product_attention.cpp</code>).</p>
+  <p>The probe C1 of Step 6e built MLX 0.32.4 from its source code, outside the repo, in its own venv (ADR 0013). A patch reads a tile size from an environment variable at each dispatch (the tile override) and adds the kernels of the other tile sizes. The package keeps the released MLX.</p>
+  <ul>
+    <li><b>Control.</b> The unchanged source build has the speed of the wheel: 14 of 14 shapes are within ± 3 % (Table 1 of <code>results/kernels-c1.md</code>). So a ratio in the source build is also a ratio for the wheel.</li>
+    <li><b>Noise.</b> Each target ran 12 tile sizes. One of them is the choice of MLX, the same tile size as the control. Its ratio to the control is within ± 0.7 %. This is the noise of one sweep.</li>
+    <li><b>Wrong outputs.</b> 3 attention tile sizes with bk = 16 run without an error, but give wrong outputs (smallest row cosine -0.28). MLX does not ship these tile sizes; the patch added them. Only the cosine check found them.</li>
+    <li><b>Effect on the block.</b> T1 and T3 are shapes of the default form. With the best tile sizes, qkv_proj, o_proj and sdpa of block 1 in fp16-cast would save about 0.10 ms of 11.93 ms: 0.8 %. This is below the noise of one paired run (V17 of Step 6). T2 is the joined gate and up, which D6 keeps off.</li>
+  </ul>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Target</th><th>Probe</th><th>Choice of MLX</th><th>Best tile size</th><th class="num">TFLOP/s</th><th class="num">Ratio to the wheel</th><th class="num">Valid</th></tr></thead>
+    <tbody><tr><td>T1</td><td>linear fp16 1280->1280</td><td>64,128,256,2,4</td><td>64,64,256,2,2</td><td class="num">45.6</td><td class="num">1.016</td><td class="num">12 of 12</td></tr><tr><td>T2</td><td>linear bf16 1280->10240</td><td>64,128,256,2,4</td><td>128,64,256,4,2</td><td class="num">60.0</td><td class="num">1.036</td><td class="num">12 of 12</td></tr><tr><td>T3</td><td>sdpa fp16 T1029 D64</td><td>64,32,4,1</td><td>32,32,2,1</td><td class="num">43.9</td><td class="num">1.050</td><td class="num">9 of 12</td></tr></tbody>
+  </table></div>
+  <p class="caption">Table 7. The best valid tile size of each target of C1, at the shapes of ViT-H+/16, 512 px, batch size 8. Matmul tile sizes: bm, bn, bk, wm, wn. Attention tile sizes: bq, bk, wm, wn. Ratio to the wheel: above 1 is faster. Valid: the smallest row cosine to a NumPy float32 result is at least 0.99999. Source: Table 3 of <code>results/kernels-c1.md</code>.</p>
+  <p class="note-box">The tile sizes that MLX selects are close to the best for these shapes. Another tile size gains at most 5.0 % on one kernel (T1: 1.6 %, near the noise). So only a small part of the gap to the matmul roof (Section 6) is in the choice of the tile size. Verify found a drift in the sweep (V2 of <code>specs/06e-kernels/verify.html</code>): the T2 gain is an artifact, and T3 needs a confirmation run.</p>
 </section>
 
 <section id="count">
-  <h2>7 How the page counts FLOPs and bytes</h2>
+  <h2>9 How the page counts FLOPs and bytes</h2>
   <ul>
     <li>The FLOPs of the matmul parts come from <code>flops.part_flops</code>. One multiply-add counts as 2 FLOPs. SDPA counts 4 B T² D.</li>
     <li>The bytes come from <code>flops.part_bytes</code> with 2 bytes for each value: each part reads its inputs and its weights once and writes its outputs once. A real kernel can move more bytes, so the true intensity can be lower.</li>
@@ -174,28 +252,34 @@ a { color: var(--accent); }
 </section>
 
 <section id="measure">
-  <h2>8 How we measured</h2>
+  <h2>10 How we measured</h2>
   <ul>
     <li><b>Part times.</b> <code>scripts/bench_speed.py profile --priority P2</code> runs <code>mlx_bench.run_profile_worker</code> in one subprocess for each dtype mode, through the GPU lock, on AC power (<code>results/speed-profile-p2.jsonl</code>). Each part runs alone and compiled: 3 warm-up calls, then the median of 20 calls with one <code>mx.eval</code> after each call.</li>
     <li><b>The fixed cost of each call.</b> At P1 each part takes at least about 0.17 ms, also the smallest part. So the element-wise times of this page include a fixed cost, and their GB/s values are lower limits.</li>
     <li><b>Roofs.</b> <code>scripts/probe_roofs.py</code> with <code>MLX_ENABLE_TF32=0</code> (<code>results/roofs.jsonl</code>). The values of this page come from the first form of the probe: two scripts with the same probes. That run did not record the machine state (field <code>note</code>).</li>
     <li>The plain <code>a @ b</code> reached only 26.1 to 41.4 TFLOP/s in fp16, and 8.7 to 14.4 TFLOP/s in fp32.</li>
+    <li><b>Joined projections (Section 7).</b> <code>scripts/bench_speed.py change --change joined</code> runs the four forms R, R-J, R-Jqkv and R-Jff in one worker process for each configuration (<code>mlx_bench.run_change_worker</code>). <code>change_forms</code> gives each joined form its own compiled forward pass, which <code>_JoinedForm</code> wraps: it sets the flags with <code>set_joined_projections</code> before each batch and clears them after it. <code>run_forms</code> runs 5 rounds; the order of the forms rotates by one from round to round, and each form gets its own warm-up and timed batches in each round. The ratio of a form is its throughput ÷ the throughput of R in the same round. <code>first_batch_check</code> compares the first batch of each form with R, bit for bit, and records the largest differences. Two runs at different times give <code>results/speed-joined.jsonl</code>.</li>
+    <li><b>Tile sizes (Section 8).</b> <code>scripts/probe_kernels.py</code> starts <code>scripts/probe_kernels_worker.py</code> with <code>python -I</code> in the venv of the wheel or of the source build, one worker at a time, through the GPU lock. Each probe time is the median of 20 calls with one <code>mx.eval</code> after each call. The control alternates the two venvs for 5 rounds; the sweep compares each tile size with the control build (<code>results/kernels-c1.jsonl</code>).</li>
   </ul>
 </section>
 
 <section id="surprises">
-  <h2>9 Surprises</h2>
+  <h2>11 Surprises</h2>
   <ul>
     <li>The first matmul roof came from a square 8,192 matmul. It was lower than the rate of the ff_in part. The linear layout, with the weight stored as (out, in), is faster on this Mac than <code>a @ b</code>. So the roof must come from the same layout as the model.</li>
     <li>In bf16 the fused 1,280 → 10,240 layer is not faster than two 1,280 → 5,120 layers (Table 1). In fp16 it is.</li>
     <li>The compiled block is faster than the sum of its parts. A part alone pays a fixed cost and writes its output to memory; inside the block the element-wise chains are fused.</li>
+    <li>The joined projection is slower than R at P2, although its one matmul is faster than the separate matmuls alone (Sections 6 and 7).</li>
+    <li>At P1 one Python call for each batch costs about 4 % of the throughput (Section 7). A harness that switches a form at each call must count this cost.</li>
+    <li>3 attention tile sizes give wrong outputs without an error (Section 8).</li>
   </ul>
 </section>
 
 <section id="sources">
-  <h2>10 Sources</h2>
+  <h2>12 Sources</h2>
   <ul>
-    <li><code>scripts/roofline_page.py</code> writes this page from <code>results/speed-profile-p2.jsonl</code> and <code>results/roofs.jsonl</code>.</li>
+    <li><code>scripts/roofline_page.py</code> writes this page from <code>results/speed-profile-p2.jsonl</code>, <code>results/roofs.jsonl</code>, <code>results/speed-joined.jsonl</code> and <code>results/kernels-c1.jsonl</code>.</li>
+    <li>Step 6e: <code>specs/06e-kernels/plan.html</code>; the tables <code>results/joined-table.md</code> (<code>scripts/joined_table.py</code>) and <code>results/kernels-c1.md</code> (<code>scripts/probe_kernels.py</code>); <code>set_joined_projections</code> in <code>src/dinov3_mlx/mlx_model.py</code>.</li>
     <li><code>scripts/probe_roofs.py</code>: the roof probe. <code>src/dinov3_mlx/flops.py</code>: FLOPs and bytes. <code>src/dinov3_mlx/mlx_bench.py</code>: <code>run_profile_worker</code> and <code>mlx_block_parts</code>.</li>
     <li>S. Williams, A. Waterman, D. Patterson: <a href="https://doi.org/10.1145/1498765.1498785">Roofline: an insightful visual performance model for multicore architectures</a>, Communications of the ACM 52 (4), 2009.</li>
   </ul>

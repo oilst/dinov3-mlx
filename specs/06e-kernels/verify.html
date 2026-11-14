@@ -1,0 +1,385 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Step 6e Kernels: Verify</title>
+<style>
+/* Spec page. White page, black text, no dark mode. */
+:root { --bg: #ffffff; --fg: #111414; --muted: #4a5655; --rule: #d6dedd; --panel: #f5f8f7; --accent: #057379; --pass: #1d7a3a; --fail: #b3261e; --partial: #8a5a00; --pending: #4a5655; color-scheme: light; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif; }
+main { max-width: 64rem; margin: 0 auto; padding: 40px 16px 64px; display: grid; gap: 1.75rem; }
+main > *, section > * { min-width: 0; }
+h1 { font-size: 1.9rem; line-height: 1.15; margin: 0; }
+h2 { font-size: 1.3rem; margin: 0; }
+h3 { font-size: 1.05rem; margin: 0; }
+section { display: grid; gap: 0.8rem; min-width: 0; }
+p, ul, ol { margin: 0; max-width: 48rem; }
+li + li { margin-top: 0.25rem; }
+code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.86em; }
+p code, li code, td code { overflow-wrap: anywhere; }
+pre { margin: 0; background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 0.8rem 1rem; overflow-x: auto; }
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 0.92rem; }
+th, td { text-align: left; vertical-align: top; padding: 0.45rem 0.7rem 0.45rem 0; border-bottom: 1px solid var(--rule); }
+th { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); border-bottom: 1.5px solid var(--fg); }
+td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.caption { font-size: 0.88rem; color: var(--muted); }
+.pass { color: var(--pass); font-weight: 600; }
+.fail { color: var(--fail); font-weight: 600; }
+.partial { color: var(--partial); font-weight: 600; }
+.pending { color: var(--pending); font-weight: 600; font-style: italic; }
+figure { margin: 0; display: grid; gap: 0.5rem; }
+.fig { overflow-x: auto; }
+.fig svg { display: block; width: 100%; height: auto; min-width: 600px; max-width: 760px; border: 1px solid var(--rule); border-radius: 6px; background: #ffffff; }
+a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+<header>
+  <h1>Step 6e Kernels: Verify</h1>
+  <p>Roadmap step 6e. Status: Verify done on 2026-11-14 by a separate agent. Build commit: <code>dca5a6e</code> on branch <code>step-6e-kernels</code>. The commit <code>cd18c6e</code> before it adds only <code>explore.html</code>, <code>plan.html</code> and the roadmap row. The diff of this page is <code>git diff fb5bd7c dca5a6e</code>. The main session writes the Learn stage at the same time; this page does not judge the Learn files.</p>
+</header>
+
+<section id="summary">
+  <h2>1 Summary</h2>
+  <p>This page checks the 13 acceptance criteria of <code>plan.html</code> (Section 8, Table 3) against the code, the result lines, the lock log and the MLX source of the clone. The agent did not build the step. It changed no code and no result file. It ran ruff, the test session without weights and the two table writers, each through the GPU lock, after a memory check. It ran no model load, no benchmark and no build. It recomputed the key numbers from <code>results/speed-joined.jsonl</code> and <code>results/kernels-c1.jsonl</code> with its own scripts.</p>
+  <p><b>Result:</b> 7 rows pass, 3 rows are partial, 1 row fails, 2 rows are open. Open: AC12 (rerun pending: the default session with weights) and AC13 (checked after Learn).</p>
+  <ul>
+    <li><b>Part A is correct.</b> The joined form gives the same tokens bit for bit as the separate form in all 20 B1 lines (60 of 60 form checks, largest difference 0.0). On the small models it is bit equal in 66 of 70 test cases. The 4 other cases (fp32, batch size 1, few tokens) differ by 1.9e-6 at most, because MLX takes another fp32 kernel for the separate matmul (AC1 partial).</li>
+    <li><b>The joins are slower everywhere.</b> At P2 the pooled ratio to R is 0.940 to 0.997 in all 15 rows. No run median is above 1. D6 keeps all joins off, so no default changes (AC6 pass, AC8 has nothing to check).</li>
+    <li><b>The peak rule fails, with a low weight.</b> R-J needs 125.5 to 546.1 MB more MLX peak than R at P2 (target ≤ 100 MB). Because the joins stay off, no default path pays this peak (AC7 fail).</li>
+    <li><b>The P1 rows read low.</b> The bench harness switches the flags inside the timed batch. At P1, R-Jff runs the same graph as R and still reads 0.964 to 0.981 (V1, AC5 partial). The P2 decision does not change.</li>
+    <li><b>C1: the control holds, the sweep gain does not.</b> The source build runs at the speed of the wheel (14 of 14 shapes within ± 1.7 %, AC9 pass). The best T1 and T2 ratios (1.015 and 1.036) come from a cold first round and a drift inside the T2 sweep, not from the tile sizes (V2, AC10 partial). The T3 gain (32,32,2,1: 1.022 to 1.045 in the warm rounds) needs a confirmation run. The T2 gap of the plan (45.1 TFLOP/s) does not exist: the wheel reaches 60.1 TFLOP/s (V3).</li>
+    <li><b>The three SDPA configurations with bk = 16 (cosine −0.2807) are a fault of the probe patch, not of MLX.</b> The NAX attention kernel steps over the keys in pairs of 16-row fragments, so bk must be a multiple of 32. MLX ships only bk 32 and 64 (Section 5.3).</li>
+    <li><b>Findings.</b> Section 8 gives 14 findings: 0 high, 3 medium, 11 low. Section 11 gives the commands of the reruns that the main session runs when the Mac is free.</li>
+  </ul>
+</section>
+
+<section id="method">
+  <h2>2 Method</h2>
+  <p>The agent read <code>CLAUDE.md</code>, <code>GLOSSARY.md</code>, <code>explore.html</code> and <code>plan.html</code> of this folder, the build diff of <code>src/dinov3_mlx/mlx_model.py</code>, <code>src/dinov3_mlx/mlx_bench.py</code>, <code>scripts/bench_speed.py</code>, <code>scripts/joined_table.py</code>, <code>scripts/probe_kernels.py</code>, <code>scripts/probe_kernels_worker.py</code> and the three test files, and the four result files. It treated each number of the result tables as a claim to check. It read <code>~/.cache/dinov3-mlx/gpu-lock.log</code>, the probe patch, the build log and the MLX source of the clone in <code>~/.cache/dinov3-mlx/mlx-src/</code>.</p>
+  <p>Machine: Apple M5 Max (<code>applegpu_g17s</code>), 64 GB. Versions in the result lines: macOS 26.5.2, Python 3.12.14, mlx 0.32.4, numpy 2.5.4; source build <code>0.32.4.dev20261111+36969c0</code>. Times on this page are UTC.</p>
+  <p>Memory: a training job of another project runs on this Mac, and the GPU lock does not see it. Before each Verify command, <code>memory_pressure</code> gave 75 % to 78 % free. Every command passed the 15 % rule.</p>
+  <p>Working tree: during Verify the main session changed <code>docs/learn/06-5-roofline.html</code>, <code>scripts/roofline_page.py</code> and <code>tests/test_roofline_page.py</code>, and added <code>docs/adr/0017-…</code>. The ruff run and the test session ran on this tree. The 3 new tests of <code>tests/test_roofline_page.py</code> explain the 3 extra passes against the build count (Section 10).</p>
+</section>
+
+<section id="criteria">
+  <h2>3 Acceptance criteria</h2>
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>No.</th><th>Criterion</th><th>Target</th><th>Measured</th><th>Evidence</th><th>Result</th></tr></thead>
+    <tbody>
+      <tr><td>AC1</td><td>The joined form equals the separate form on the small models, eager and compiled, in the five dtype modes</td><td>bit equal</td><td>T1: 15 of 15 cases bit equal (3 small models × 5 dtype modes; q, k and v, eager and compiled). <code>vits16</code> and <code>vits16plus</code> have a q and a v bias and no k bias, so the zero k bias of D3 runs. T2: 10 of 10 cases bit equal (<code>SwiGLU.hidden</code>, eager and compiled). T3: 41 of 45 cases bit equal. 4 cases differ by 1.19e-6 to 1.91e-6 (<code>vits16</code> and <code>vits16plus</code>, fp32, batch size 1, 224 × 304 and 304 × 224 px; the same values in 6 recorded runs). Cause, checked in <code>mlx/backend/metal/matmul.cpp</code> (Case 1): with TF32 off MLX takes the fp32 split-K kernel for the separate matmul (M = 271, K = N = 384) and the regular kernel for the joined matmul (N = 1,152 &gt; K). The test accepts ≤ 1e-5 for these cases; the plan has no such exception (V14).</td><td><code>tests/test_mlx_joined.py:65</code>, <code>:86</code>, <code>:102</code>; <code>tests/fixtures/generated/mlx/report.jsonl</code></td><td><span class="partial">partial</span></td></tr>
+      <tr><td>AC2</td><td>Parameter names, shapes and the strict load do not change; quantized models refuse the joined form</td><td>same keys; <code>ValueError</code></td><td>T4: the same keys, shapes and dtypes for 3 small models in bf16-cast after <code>set_joined_projections</code>; <code>load_weights(strict=True)</code> passes, and a missing key raises. T5: <code>ValueError</code> («quantized») after <code>nn.quantize(bits=8)</code> for qkv only and for ff only; (False, False) is allowed.</td><td><code>tests/test_mlx_joined.py:149</code>, <code>:162</code></td><td><span class="pass">pass</span></td></tr>
+      <tr><td>AC3</td><td>A compiled joined forward pass follows a weight change</td><td>new output equals the eager output</td><td>T6: <code>vits16plus</code>, fp32, both joins, compiled. After +0.01 on <code>k_proj.weight</code> and <code>up_proj.weight</code> of block 0, the compiled output equals the eager output bit for bit and differs from the old output.</td><td><code>tests/test_mlx_joined.py:173</code></td><td><span class="pass">pass</span></td></tr>
+      <tr><td>AC4</td><td>B1 first batch: the joined forms equal the separate form at P1 and P2</td><td>bit equal, or a recorded difference and parity</td><td>20 of 20 lines, 60 of 60 form checks: the frame and the patch embeddings of the whole first batch are bit equal (largest difference 0.0). Validity of image 0 against the reference: R and the 3 joined forms valid in 20 of 20 lines, with the same parity values.</td><td><code>results/speed-joined.jsonl</code>, fields <code>first_batch</code> and <code>validity</code></td><td><span class="pass">pass</span></td></tr>
+      <tr><td>AC5</td><td>Paired ratio of each joined form to R, for each configuration of B1, two runs</td><td>measured; one row for each configuration and form</td><td>30 rows: 10 configurations × 3 forms, each with 2 runs of 5 rounds. The agent's script gives each ratio again from the throughput fields, and the table writer gives a byte-equal table. Run 1: 00:35 to 00:46, run 2: 01:35 to 01:48 on 2026-11-11 (1 h apart; B3 ran between them). AC power, Low Power Mode off, no thermal warning and an empty <code>other_heavy_jobs_seen</code> in 20 of 20 lines. Limit: the P1 rows include a cost of the bench harness (V1). R-Jff runs the same graph as R at P1 and reads 0.964 to 0.981.</td><td><code>results/joined-table.md</code>; Section 4</td><td><span class="partial">partial</span></td></tr>
+      <tr><td>AC6</td><td>The defaults follow the rule of D6</td><td>a join is on only where the pooled median at P2 ≥ 1.03 and each run &gt; 1</td><td>15 of 15 P2 rows (batch size 8) are off: pooled 0.940 to 0.997, largest run median 0.9988. The lower median of ADR 0004 gives 0.939 to 0.997 and the same decision. The defaults stay: <code>Attention.joined</code> and <code>SwiGLU.joined</code> are False after <code>__init__</code>, and only the bench harness calls <code>set_joined_projections</code>. No default reverses D6 of Step 6, so D6 asks for no ADR; the Close stage decides.</td><td><code>results/joined-table.md</code>; <code>mlx_model.py:376</code>, <code>:471</code>; <code>mlx_bench.py:327</code></td><td><span class="pass">pass</span></td></tr>
+      <tr><td>AC7</td><td>MLX peak of R-J at P2 against R</td><td>≤ R + 0.10 GB</td><td>R-J − R at P2, batch size 8: fp32 +546.1 MB; fp16-cast and bf16-cast +146.6 MB; fp16-autocast and bf16-autocast +125.5 MB. The same value in both runs. 0 of 5 rows meet the target. Batch size 1: +183.1 MB. The second copy of 1.15 GB of option A1 does not occur (D1). Weight: low. D6 keeps all joins off, so no default path pays this peak.</td><td><code>results/speed-joined.jsonl</code>, field <code>mlx_timed_peak_bytes</code></td><td><span class="fail">fail</span></td></tr>
+      <tr><td>AC8</td><td>If a default changes: the parity tests pass with the new default</td><td>0 failed</td><td>No default changed (AC6). The criterion has nothing to check.</td><td>AC6</td><td><span class="pass">pass</span> (not applicable)</td></tr>
+      <tr><td>AC9</td><td>C1a: the source build has the speed of the wheel</td><td>each shape within ± 3 % (median of 5 rounds)</td><td>14 of 14 probes within the target: ratio (wheel time ÷ source time) 0.992 to 1.017; the largest deviation is sdpa bf16 (+1.7 %). Single rounds range from 0.784 to 1.421 (a cold first probe in a process). The cosines of the wheel and the source build differ by 2.6e-8 at most. The control is the patched build without a tile override (deviation 1).</td><td><code>results/kernels-c1.md</code> Table 1; <code>kernels-c1.jsonl</code> lines 1 to 10</td><td><span class="pass">pass</span></td></tr>
+      <tr><td>AC10</td><td>C1c: for each target, the best tile configuration and its ratio to the control build, with valid outputs</td><td>one row for each target; cosine ≥ 0.99999</td><td>Table 3 of the results has one valid row for each target: T1 64,64,256,2,2 1.015; T2 128,64,256,4,2 1.036; T3 32,32,2,1 1.043. The protocol biases these ratios (V2). In rounds 1 and 2 of T2, before the drift, 128,64,256,4,2 gives 1.001 and 0.997. In the warm rounds 2 to 5 of T1, 64,64,256,2,2 gives 0.997 to 1.018 (lower median 1.005), inside the noise. T3 32,32,2,1 gives 1.022 to 1.045 in rounds 2 to 5 (lower median 1.032); a confirmation run is pending (R3). 3 SDPA configurations with bk = 16 are not valid (cosine −0.2807): a tile size that the kernel does not support (Section 5.3).</td><td><code>results/kernels-c1.md</code> Tables 2 and 3; <code>kernels-c1.jsonl</code> lines 11 to 13; Section 5</td><td><span class="partial">partial</span></td></tr>
+      <tr><td>AC11</td><td>The C1 setup follows ADR 0013</td><td>worker with <code>-I</code>, outside the repo; no change of <code>pyproject.toml</code> or <code>uv.lock</code></td><td><code>worker_command</code> gives <code>[python, -I, scripts/probe_kernels_worker.py, spec]</code>; the lock log shows the source runs with <code>-I</code>. The clone, the patch, the build log and <code>venv-build</code> are in <code>~/.cache/dinov3-mlx/mlx-src/</code>; <code>venv-build</code> has an editable install of the clone. The diff of the clone equals <code>probe.patch</code>. Its SHA-256 (<code>49f6295b…</code>) and the commit <code>36969c0</code> (tag v0.32.4) equal the field <code>build</code> of all 13 lines. <code>git diff fb5bd7c dca5a6e</code> changes neither <code>pyproject.toml</code> nor <code>uv.lock</code>. T9 and T10 pass. The result files hold no local path.</td><td><code>scripts/probe_kernels.py:102</code> to <code>:164</code>; <code>tests/test_probe_kernels.py</code></td><td><span class="pass">pass</span></td></tr>
+      <tr><td>AC12</td><td>Code quality</td><td>ruff format and ruff check clean; 0 failed in <code>uv run pytest</code></td><td><code>ruff format --check</code>: 137 files already formatted. <code>ruff check</code>: all checks passed. Test session without weights: 582 passed, 480 skipped, 0 failed in 98.1 s (579 of the build commit and 3 new tests of the Learn work). The default session with weights is a rerun (R1).</td><td>Section 10, c2 to c4</td><td><span class="pending">open: rerun pending</span></td></tr>
+      <tr><td>AC13</td><td>Learn: the explainer covers each new function of <code>src/</code></td><td><code>set_joined_projections</code>, the joined <code>qkv</code> and <code>hidden</code>, and the C1 results</td><td>Checked after Learn. The build adds these names to <code>src/</code>: in <code>mlx_model.py</code> <code>joined_linear</code>, <code>_joined_bias</code>, <code>_joined</code>, the attribute <code>joined</code> and the joined branch of <code>Attention.qkv</code> and <code>SwiGLU.hidden</code>, <code>set_joined_projections</code>; in <code>mlx_bench.py</code> <code>_JoinedForm</code>, <code>JOINED_FORMS</code>, the C7 forms of <code>change_forms</code>, <code>Timer</code>, <code>run_forms</code>, <code>first_batch_check</code> and the C7 branch of <code>run_change_worker</code>.</td><td>–</td><td><span class="pending">open: checked after Learn</span></td></tr>
+    </tbody>
+  </table>
+</div>
+  <p class="caption"><b>Table 1.</b> The 13 acceptance criteria of plan Table 3 with the measured values. «Partial» means that a part of the target is not met or that a bias limits the value. «Open» means that a check waits for a rerun or for the Learn stage. Line numbers of the jsonl files are 1-based.</p>
+</section>
+
+<section id="part-a">
+  <h2>4 Part A: B1 and B2 again from the lines</h2>
+  <p>The agent's script reads the 20 lines of <code>results/speed-joined.jsonl</code>. It computes each paired ratio again from the field <code>throughput</code> (throughput of the form ÷ throughput of R in the same round). All 900 ratios (20 lines × 3 forms × 3 outputs × 5 rounds) equal the field <code>form_ratios</code>. The run medians, the pooled medians, the extremes, the first-batch check, the validity and the peak differences equal <code>results/joined-table.md</code> in all 30 rows.</p>
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>Dtype mode</th><th>Form</th><th>Run 1</th><th>Run 2</th><th>Pooled (table)</th><th>Pooled (ADR 0004)</th><th>Min</th><th>Max</th><th>Peak − R, MB (run 1 / 2)</th><th>D6</th></tr></thead>
+    <tbody>
+<tr><td>fp32</td><td>R-J</td><td class="num">0.968</td><td class="num">0.947</td><td class="num">0.954</td><td class="num">0.947</td><td class="num">0.928</td><td class="num">0.987</td><td class="num">546.1 / 546.1</td><td>off</td></tr>
+<tr><td>fp32</td><td>R-Jqkv</td><td class="num">0.966</td><td class="num">0.933</td><td class="num">0.961</td><td class="num">0.956</td><td class="num">0.871</td><td class="num">1.058</td><td class="num">230.4 / 230.4</td><td>off</td></tr>
+<tr><td>fp32</td><td>R-Jff</td><td class="num">0.994</td><td class="num">0.985</td><td class="num">0.990</td><td class="num">0.985</td><td class="num">0.893</td><td class="num">1.042</td><td class="num">534.4 / 534.4</td><td>off</td></tr>
+<tr><td>fp16-cast</td><td>R-J</td><td class="num">0.948</td><td class="num">0.953</td><td class="num">0.950</td><td class="num">0.948</td><td class="num">0.874</td><td class="num">0.964</td><td class="num">146.6 / 146.6</td><td>off</td></tr>
+<tr><td>fp16-cast</td><td>R-Jqkv</td><td class="num">0.964</td><td class="num">0.947</td><td class="num">0.959</td><td class="num">0.954</td><td class="num">0.852</td><td class="num">0.974</td><td class="num">9.8 / 9.8</td><td>off</td></tr>
+<tr><td>fp16-cast</td><td>R-Jff</td><td class="num">0.997</td><td class="num">0.992</td><td class="num">0.995</td><td class="num">0.992</td><td class="num">0.888</td><td class="num">1.003</td><td class="num">157.8 / 157.8</td><td>off</td></tr>
+<tr><td>bf16-cast</td><td>R-J</td><td class="num">0.942</td><td class="num">0.955</td><td class="num">0.943</td><td class="num">0.942</td><td class="num">0.924</td><td class="num">0.961</td><td class="num">146.6 / 146.6</td><td>off</td></tr>
+<tr><td>bf16-cast</td><td>R-Jqkv</td><td class="num">0.955</td><td class="num">0.967</td><td class="num">0.957</td><td class="num">0.955</td><td class="num">0.935</td><td class="num">0.975</td><td class="num">9.8 / 73.0</td><td>off</td></tr>
+<tr><td>bf16-cast</td><td>R-Jff</td><td class="num">0.997</td><td class="num">0.997</td><td class="num">0.997</td><td class="num">0.997</td><td class="num">0.981</td><td class="num">1.038</td><td class="num">157.8 / 157.8</td><td>off</td></tr>
+<tr><td>fp16-autocast</td><td>R-J</td><td class="num">0.953</td><td class="num">0.954</td><td class="num">0.954</td><td class="num">0.953</td><td class="num">0.941</td><td class="num">0.973</td><td class="num">125.5 / 125.5</td><td>off</td></tr>
+<tr><td>fp16-autocast</td><td>R-Jqkv</td><td class="num">0.952</td><td class="num">0.952</td><td class="num">0.952</td><td class="num">0.952</td><td class="num">0.944</td><td class="num">0.990</td><td class="num">−137.7 / −137.7</td><td>off</td></tr>
+<tr><td>fp16-autocast</td><td>R-Jff</td><td class="num">0.992</td><td class="num">0.999</td><td class="num">0.992</td><td class="num">0.992</td><td class="num">0.979</td><td class="num">1.015</td><td class="num">305.4 / 305.4</td><td>off</td></tr>
+<tr><td>bf16-autocast</td><td>R-J</td><td class="num">0.942</td><td class="num">0.936</td><td class="num">0.940</td><td class="num">0.939</td><td class="num">0.916</td><td class="num">0.960</td><td class="num">125.5 / 125.5</td><td>off</td></tr>
+<tr><td>bf16-autocast</td><td>R-Jqkv</td><td class="num">0.957</td><td class="num">0.955</td><td class="num">0.956</td><td class="num">0.955</td><td class="num">0.943</td><td class="num">0.981</td><td class="num">−137.7 / −137.7</td><td>off</td></tr>
+<tr><td>bf16-autocast</td><td>R-Jff</td><td class="num">0.998</td><td class="num">0.986</td><td class="num">0.989</td><td class="num">0.988</td><td class="num">0.980</td><td class="num">1.004</td><td class="num">305.4 / 305.4</td><td>off</td></tr>
+    </tbody>
+  </table>
+</div>
+  <p class="caption"><b>Table 2.</b> B1 and B2 at P2: ViT-H+/16, 512 px, batch size 8, patch embedding. Run 1 and run 2: the median of the 5 paired ratios of each run. «Pooled (table)» is <code>np.median</code> of the 10 ratios, as in <code>joined-table.md</code>. «Pooled (ADR 0004)» is the lower of the two middle values, the rule of D21 of Step 6 (V5). Peak − R: the MLX peak of the timed batches of the form minus that of R.</p>
+  <figure>
+    <div class="fig">
+<svg viewBox="0 0 760 300" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Pooled ratio of each joined form to R at P2, by dtype mode">
+<rect x="0" y="0" width="760" height="300" fill="#ffffff"/>
+<g stroke="#d6dedd" stroke-width="1">
+<line x1="80" y1="30" x2="640" y2="30"/><line x1="80" y1="176.7" x2="640" y2="176.7"/><line x1="80" y1="250" x2="640" y2="250"/>
+</g>
+<g font-size="12" fill="#4a5655" text-anchor="end" font-family="-apple-system, Helvetica Neue, Arial, sans-serif">
+<text x="72" y="34">1.05</text><text x="72" y="107.3">1.00</text><text x="72" y="180.7">0.95</text><text x="72" y="254">0.90</text>
+</g>
+<text x="20" y="140" font-size="12" fill="#4a5655" text-anchor="middle" transform="rotate(-90 20 140)" font-family="-apple-system, Helvetica Neue, Arial, sans-serif">pooled ratio to R</text>
+<g>
+<rect x="94" y="103.3" width="24" height="67.5" fill="#057379"/><rect x="124" y="103.3" width="24" height="57.2" fill="#7fb9bc"/><rect x="154" y="103.3" width="24" height="14.7" fill="#e0a336"/>
+<rect x="206" y="103.3" width="24" height="73.4" fill="#057379"/><rect x="236" y="103.3" width="24" height="60.2" fill="#7fb9bc"/><rect x="266" y="103.3" width="24" height="7.4" fill="#e0a336"/>
+<rect x="318" y="103.3" width="24" height="83.6" fill="#057379"/><rect x="348" y="103.3" width="24" height="63.1" fill="#7fb9bc"/><rect x="378" y="103.3" width="24" height="4.4" fill="#e0a336"/>
+<rect x="430" y="103.3" width="24" height="67.5" fill="#057379"/><rect x="460" y="103.3" width="24" height="70.4" fill="#7fb9bc"/><rect x="490" y="103.3" width="24" height="11.8" fill="#e0a336"/>
+<rect x="542" y="103.3" width="24" height="88.0" fill="#057379"/><rect x="572" y="103.3" width="24" height="64.6" fill="#7fb9bc"/><rect x="602" y="103.3" width="24" height="16.2" fill="#e0a336"/>
+</g>
+<line x1="80" y1="103.3" x2="640" y2="103.3" stroke="#4a5655" stroke-width="1.5"/>
+<line x1="80" y1="59.3" x2="640" y2="59.3" stroke="#b3261e" stroke-width="2" stroke-dasharray="6 4"/>
+<g font-size="8.5" fill="#111414" text-anchor="middle" font-family="ui-monospace, Menlo, monospace">
+<text x="106" y="183">0.954</text><text x="136" y="172.5">0.961</text><text x="166" y="130">0.990</text>
+<text x="218" y="188.7">0.950</text><text x="248" y="175.5">0.959</text><text x="278" y="122.7">0.995</text>
+<text x="330" y="198.9">0.943</text><text x="360" y="178.4">0.957</text><text x="390" y="119.7">0.997</text>
+<text x="442" y="182.8">0.954</text><text x="472" y="185.7">0.952</text><text x="502" y="127.1">0.992</text>
+<text x="554" y="203.3">0.940</text><text x="584" y="179.9">0.956</text><text x="614" y="131.5">0.989</text>
+</g>
+<g font-size="12" fill="#111414" text-anchor="middle" font-family="-apple-system, Helvetica Neue, Arial, sans-serif">
+<text x="136" y="274">fp32</text><text x="248" y="274">fp16-cast</text><text x="360" y="274">bf16-cast</text><text x="472" y="274">fp16-autocast</text><text x="584" y="274">bf16-autocast</text>
+</g>
+<g font-size="12" fill="#111414" font-family="-apple-system, Helvetica Neue, Arial, sans-serif">
+<rect x="652" y="110" width="14" height="14" fill="#057379"/><text x="672" y="122">R-J</text>
+<rect x="652" y="132" width="14" height="14" fill="#7fb9bc"/><text x="672" y="144">R-Jqkv</text>
+<rect x="652" y="154" width="14" height="14" fill="#e0a336"/><text x="672" y="166">R-Jff</text>
+<line x1="652" y1="59.3" x2="668" y2="59.3" stroke="#b3261e" stroke-width="2" stroke-dasharray="4 3"/><text x="672" y="63" fill="#b3261e">D6 limit 1.03</text>
+</g>
+</svg>
+    </div>
+    <figcaption class="caption"><b>Figure 1.</b> B1 at P2: the pooled ratio of each joined form to R over two runs of 5 rounds. A bar goes down from 1.00: the form is slower than R. The dashed line is the limit 1.03 of D6. No form reaches 1.00. The qkv join costs about 4 to 5 %; the gate and up join costs 0.3 to 1.1 %.</figcaption>
+  </figure>
+  <h3>4.1 The cost of the bench harness at P1 (V1)</h3>
+  <p><code>change_forms</code> wraps each joined form in <code>_JoinedForm</code>. The wrapper calls <code>set_joined_projections</code> before and after each call of the forward pass. <code>time_batch_mlx</code> starts its clock before this call (<code>mlx_bench.py:93</code>). So the timed batch includes the flag switch and the walk over all modules in <code>quantized_weight_names</code>. R has no wrapper.</p>
+  <p>ViT-S/16 has no gate. So at P1 the form R-Jff runs the same graph as R. Table 3 shows that R-Jff still needs 0.14 to 0.19 ms more for each batch. This is the cost of the harness. All three joined forms pay it, because each sets a join to True.</p>
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>Configuration</th><th>R batch time (ms)</th><th>R-Jff − R (ms)</th><th>R-Jqkv − R (ms)</th><th>R-J − R (ms)</th><th>R-J ratio (table)</th><th>R-J ratio without the harness cost (estimate)</th></tr></thead>
+    <tbody>
+      <tr><td>P1 fp32, b8</td><td class="num">8.01 / 7.99</td><td class="num">0.190 / 0.154</td><td class="num">0.515 / 0.537</td><td class="num">0.526 / 0.543</td><td class="num">0.937</td><td class="num">about 0.96</td></tr>
+      <tr><td>P1 fp16-cast, b8</td><td class="num">3.95 / 3.96</td><td class="num">0.160 / 0.142</td><td class="num">0.528 / 0.540</td><td class="num">0.531 / 0.539</td><td class="num">0.882</td><td class="num">about 0.91</td></tr>
+      <tr><td>P1 bf16-cast, b8</td><td class="num">3.97 / 3.97</td><td class="num">0.163 / 0.138</td><td class="num">0.555 / 0.536</td><td class="num">0.537 / 0.536</td><td class="num">0.883</td><td class="num">about 0.91</td></tr>
+      <tr><td>P2 fp16-cast, b1</td><td class="num">77.4 / 82.0</td><td class="num">2.93 / 3.42</td><td class="num">4.03 / 4.45</td><td class="num">6.99 / 7.39</td><td class="num">0.921</td><td class="num">–</td></tr>
+      <tr><td>P2 bf16-cast, b1</td><td class="num">76.5 / 81.9</td><td class="num">3.77 / 3.63</td><td class="num">4.84 / 4.79</td><td class="num">8.88 / 6.69</td><td class="num">0.917</td><td class="num">–</td></tr>
+      <tr><td>P2 fp16-cast, b8</td><td class="num">664 / 705</td><td class="num">−0.3 / 16.9</td><td class="num">21.0 / 49.1</td><td class="num">36.6 / 30.8</td><td class="num">0.950</td><td class="num">–</td></tr>
+    </tbody>
+  </table>
+</div>
+  <p class="caption"><b>Table 3.</b> The batch time of R and the extra time of each joined form, run 1 / run 2. Batch time: the median over the 5 rounds of the mean patch time (P2) or frame time (P1) of a batch, from the field <code>throughput</code>. The estimate removes the R-Jff − R time from the R-J time; it is not a measured value. ViT-H+/16 has 32 blocks against 12, so its harness cost is about 0.4 to 0.5 ms (an estimate): below 0.1 % of a P2 batch at batch size 8 (620 ms or more), about 0.6 % at batch size 1.</p>
+  <p>Two more facts from Table 3. First, the qkv join at P1 costs about 0.37 ms on top of the harness for 12 blocks, the same in fp32 and in the half dtypes. A cost that does not scale with the bytes points to more kernels or copies, not to the concat bandwidth. Second, at P2 the qkv join costs 21 to 49 ms for each batch, but the concat of the q, k and v weights reads and writes only about 0.63 GB (about 1.2 ms at the memory roof of 528 GB/s). So the concat of D1 does not explain the loss. B1 does not measure where the loss comes from.</p>
+</section>
+
+<section id="part-c">
+  <h2>5 Part C1: B3 and B4 again from the lines</h2>
+  <h3>5.1 B3: the source build against the wheel</h3>
+  <p>The agent's script reads the 10 control lines (5 rounds × 2 sides, the order alternates). It gives all 14 ratios, extremes and rates of Table 1 of <code>kernels-c1.md</code> again. All 14 are within ± 3 %. Table 4 puts the B3 rates next to the rates that the plan used as the starting point.</p>
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>Probe</th><th>Plan or roofs.jsonl (TFLOP/s)</th><th>B3 wheel (TFLOP/s)</th><th>B3 source (TFLOP/s)</th><th>Ratio (median of 5)</th><th>Min</th><th>Max</th></tr></thead>
+    <tbody>
+      <tr><td>linear fp16 1,280 → 1,280 (T1)</td><td class="num">43.0</td><td class="num">44.5</td><td class="num">44.5</td><td class="num">1.001</td><td class="num">0.989</td><td class="num">1.010</td></tr>
+      <tr><td>linear fp16 1,280 → 3,840</td><td class="num">53.6</td><td class="num">54.3</td><td class="num">54.1</td><td class="num">0.996</td><td class="num">0.784</td><td class="num">1.009</td></tr>
+      <tr><td>linear fp16 1,280 → 10,240</td><td class="num">59.3</td><td class="num">60.1</td><td class="num">60.1</td><td class="num">0.999</td><td class="num">0.993</td><td class="num">1.000</td></tr>
+      <tr><td>linear bf16 1,280 → 1,280</td><td class="num">41.6</td><td class="num">44.3</td><td class="num">44.7</td><td class="num">0.999</td><td class="num">0.933</td><td class="num">1.058</td></tr>
+      <tr><td>linear bf16 5,120 → 1,280</td><td class="num">46.0</td><td class="num">54.8</td><td class="num">54.7</td><td class="num">0.999</td><td class="num">0.976</td><td class="num">1.002</td></tr>
+      <tr><td>linear bf16 1,280 → 10,240 (T2)</td><td class="num">45.1</td><td class="num">60.1</td><td class="num">60.1</td><td class="num">1.000</td><td class="num">0.998</td><td class="num">1.001</td></tr>
+      <tr><td>linear bf16 4,096 → 4,096</td><td class="num">34.1</td><td class="num">60.1</td><td class="num">60.1</td><td class="num">1.002</td><td class="num">0.996</td><td class="num">1.008</td></tr>
+      <tr><td>sdpa fp16, T 1,029, D 64 (T3)</td><td class="num">36.5 (in the block)</td><td class="num">42.6</td><td class="num">42.7</td><td class="num">1.006</td><td class="num">1.000</td><td class="num">1.019</td></tr>
+      <tr><td>sdpa bf16, T 1,029, D 64</td><td class="num">–</td><td class="num">42.6</td><td class="num">43.0</td><td class="num">1.017</td><td class="num">0.991</td><td class="num">1.421</td></tr>
+    </tbody>
+  </table>
+</div>
+  <p class="caption"><b>Table 4.</b> B3 for 9 of the 14 probes. «Plan or roofs.jsonl»: the linear rates of <code>results/roofs.jsonl</code> (2026-11-10, one sample, machine state not recorded), which explore Section 2 and plan Section 3.3 use; for SDPA the in-block rate of <code>results/speed-profile-p2.jsonl</code> (1.187 ms). Ratio: wheel time ÷ source time. The bf16 rows of roofs.jsonl are up to 43 % below B3 (bf16 4,096 → 4,096; V3).</p>
+
+  <h3>5.2 B4: the sweep, round by round</h3>
+  <p>The worker runs the control (no override) and the 12 configurations of a target in one process, in 5 rounds; the order rotates by one each round. Table 5 shows the ratio to the control in each round for the best configuration and for the choice of MLX. The choice of MLX runs the same kernel as the control, so its ratio shows the noise.</p>
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>Target</th><th>Configuration</th><th>Round 1</th><th>Round 2</th><th>Round 3</th><th>Round 4</th><th>Round 5</th><th>Median of 5 (table)</th></tr></thead>
+    <tbody>
+      <tr><td>T1</td><td>control time (ms)</td><td class="num">1.609</td><td class="num">0.598</td><td class="num">0.596</td><td class="num">0.596</td><td class="num">0.594</td><td class="num">–</td></tr>
+      <tr><td>T1</td><td>64,128,256,2,4 (choice of MLX)</td><td class="num">1.692</td><td class="num">0.989</td><td class="num">0.993</td><td class="num">0.997</td><td class="num">0.993</td><td class="num">0.993</td></tr>
+      <tr><td>T1</td><td>64,64,256,2,2 (best)</td><td class="num">2.709</td><td class="num">1.015</td><td class="num">0.997</td><td class="num">1.018</td><td class="num">1.005</td><td class="num">1.015</td></tr>
+      <tr><td>T2</td><td>control time (ms)</td><td class="num">3.598</td><td class="num">3.585</td><td class="num">3.724</td><td class="num">4.040</td><td class="num">4.347</td><td class="num">–</td></tr>
+      <tr><td>T2</td><td>64,128,256,2,4 (choice of MLX)</td><td class="num">1.000</td><td class="num">0.998</td><td class="num">0.990</td><td class="num">0.997</td><td class="num">0.996</td><td class="num">0.997</td></tr>
+      <tr><td>T2</td><td>128,64,256,4,2 (best)</td><td class="num">1.001</td><td class="num">0.997</td><td class="num">1.036</td><td class="num">1.043</td><td class="num">1.045</td><td class="num">1.036</td></tr>
+      <tr><td>T2</td><td>64,64,256,2,2</td><td class="num">1.009</td><td class="num">1.006</td><td class="num">1.028</td><td class="num">1.028</td><td class="num">1.025</td><td class="num">1.025</td></tr>
+      <tr><td>T3</td><td>control time (ms)</td><td class="num">1.807</td><td class="num">1.005</td><td class="num">1.011</td><td class="num">1.033</td><td class="num">1.032</td><td class="num">–</td></tr>
+      <tr><td>T3</td><td>64,32,4,1 (choice of MLX)</td><td class="num">1.412</td><td class="num">0.967</td><td class="num">0.992</td><td class="num">1.006</td><td class="num">0.996</td><td class="num">0.996</td></tr>
+      <tr><td>T3</td><td>32,32,2,1 (best)</td><td class="num">1.846</td><td class="num">1.032</td><td class="num">1.022</td><td class="num">1.045</td><td class="num">1.043</td><td class="num">1.043</td></tr>
+    </tbody>
+  </table>
+</div>
+  <p class="caption"><b>Table 5.</b> B4 round by round: control time ÷ configuration time. Source: <code>kernels-c1.jsonl</code> lines 11 to 13.</p>
+  <ul>
+    <li><b>Cold first round (T1, T3).</b> In round 1 the control runs first, after the NumPy checks of all configurations. Its time is 2.7 times (T1) and 1.8 times (T3) its later time. The next configurations of round 1 get faster one by one. The 3 warm-up calls of <code>median_time</code> take only about 2 ms at T1, which does not bring the GPU to its clock. So each round-1 ratio reads 1.4 to 2.7. The median of 5 then takes the second-highest of the 4 warm rounds.</li>
+    <li><b>Drift in T2.</b> From round 3 on, every time rises: in round 5 the times are 16 to 24 % above round 2. Inside rounds 3 to 5 the times also rise from the first to the last position. The control runs late in these rounds (positions 11, 10 and 9 of 13), and 128,64,256,4,2 runs early (positions 3, 2 and 1). The choice of MLX runs next to the control and stays at 0.990 to 1.000. So the T2 «gain» comes from the drift. Before the drift (rounds 1 and 2) no configuration is more than 1 % faster than the control.</li>
+    <li><b>T3.</b> 32,32,2,1 is the fastest configuration in every warm round (0.973 to 0.989 ms). But the choice of MLX, which is the same kernel as the control, reads 0.967 to 1.006 against the control. The noise is about ± 3 %. A short confirmation run decides (R3).</li>
+  </ul>
+
+  <h3>5.3 The SDPA configurations with bk = 16</h3>
+  <p>Three configurations give the same smallest row cosine −0.2807072: 64,16,4,1, 32,16,2,1 and 128,16,8,1. The agent read <code>probe.patch</code> and the MLX source of the clone. The fault is in the probe patch: it adds tile sizes that the NAX attention kernel does not support.</p>
+<pre><code>// mlx/backend/metal/kernels/steel/attn/kernels/steel_attention_nax.h (MLX 0.32.4)
+constexpr short kU = 16;                        // line 138: one fragment is 16 rows
+constexpr short TK = BK / kU;                   // line 152: bk = 16 gives TK = 1
+for (short ik = 0; ik &lt; TK; ik += 2) {          // line 221: two fragments per step
+  NAXTile&lt;T, 2, 1&gt; Ktile;                       // line 229: loads 32 key rows
+  ... mma(Stile.frag_at(iq, ik), Stile.frag_at(iq, ik + 1), ...)   // line 254
+}</code></pre>
+  <ul>
+    <li>The kernel computes Q · Kᵀ for two 16-row key fragments in each step. With bk = 16 the score tile has one fragment (TK = 1), but the step writes <code>frag_at(iq, 1)</code>: a fragment outside the tile, in thread memory. The result is wrong. All three configurations share bk = 16, so they give the same wrong values.</li>
+    <li>The kernel has <code>static_assert</code> checks for BQ, BD and BV (lines 141 and 150), but none for BK. So the build does not stop. A check <code>BK % (2 * kU) == 0</code> would stop it.</li>
+    <li>MLX 0.32.4 instantiates the non-split kernel only with bk 32 and bk 64 (<code>steel_attention_nax.metal</code>, lines 23 to 29 before the patch), and <code>sdpa_full_self_attention_nax</code> selects bk = 32 (<code>scaled_dot_product_attention.cpp:223</code>). The released MLX never runs bk = 16. So this is not a fault of MLX as shipped. A missing <code>static_assert</code> is a small hardening for an upstream change, if the user wants one (Q3).</li>
+    <li>bk = 128 gives valid output but runs at 12.5 to 12.8 TFLOP/s (ratio about 0.30): the score tile of 8 fragments is too large for the registers.</li>
+  </ul>
+</section>
+
+<section id="deviations">
+  <h2>6 Deviations of the build from the plan</h2>
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>No.</th><th>Deviation</th><th>Check</th><th>Result</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td>D8, B4: one patched source build instead of one build for each configuration. The patch reads a tile override from <code>DINOV3_PROBE_GEMM_NAX</code> or <code>DINOV3_PROBE_SDPA_NAX</code> at each dispatch and instantiates the extra tile sizes. The control of B3 is this patched build without an override, not the «unchanged» build.</td><td>The clone diff equals <code>probe.patch</code> (4 files, 29 lines). One build of 2 min 39 s (<code>build.log</code>); the sweep took 17 s. AC9 shows the patched build at the speed of the wheel.</td><td>Accepted improvement. It changes the protocol of B4 (deviation 2).</td></tr>
+      <tr><td>2</td><td>B4: all configurations of a target in one process, in 5 rotated rounds, against an in-process control.</td><td>Section 5.2.</td><td>The protocol gives a cold first round and is open to drift (V2).</td></tr>
+      <tr><td>3</td><td>AC1, T3: the test accepts a difference ≤ 1e-5 where the separate matmul takes the fp32 split-K kernel (4 of 45 cases).</td><td>Cause confirmed in <code>matmul.cpp</code>, Case 1. Measured largest difference 1.91e-6.</td><td>Changes an approved target; needs the user's yes (V14).</td></tr>
+      <tr><td>4</td><td>D4: <code>set_joined_projections</code> raises only when a join is on, and it checks the whole model.</td><td>T5 covers both cases.</td><td>Sensible; the reverse order (join, then quantize) is not guarded (V9).</td></tr>
+      <tr><td>5</td><td>Plan Section 5 names the methods <code>_qkv_bias</code> and <code>_gate_up_bias</code>. The build uses the module functions <code>joined_linear</code>, <code>_joined_bias</code> and <code>_joined</code>.</td><td>Same behaviour; T1 to T3.</td><td>No effect.</td></tr>
+      <tr><td>6</td><td>Extra tests: <code>test_set_joined_projections_sets_each_block</code> (D2) and <code>test_joined_table_default_rule</code> (D6). T8 lives in <code>tests/test_mlx_joined.py</code>.</td><td>Both pass.</td><td>No effect.</td></tr>
+      <tr><td>7</td><td>New code that the plan does not name: <code>run_forms</code> and <code>first_batch_check</code> in <code>mlx_bench.py</code> (taken out of <code>run_change_worker</code>), <code>scripts/joined_table.py</code>, the option <code>--run</code> of <code>bench_speed.py change</code> and the default results file <code>speed-joined.jsonl</code> for <code>--change joined</code>.</td><td>T7, T8 and <code>test_joined_table_default_rule</code> cover them.</td><td>No effect. AC13 must cover the new functions of <code>src/</code>.</td></tr>
+      <tr><td>8</td><td>Field names of a C7 line: <code>form_ratios</code>, <code>form_ratio</code>, <code>first_batch</code> (frame_equal, patches_equal, frame_difference, patch_difference for each form), <code>validity</code> (valid, parity for each form), <code>mlx_timed_peak_bytes</code> (for each form). <code>ratios</code>, <code>ratio</code>, <code>frame_equal</code> and <code>patches_equal</code> repeat the values of R-J. The fields <code>valid</code>, <code>validity_note</code> and <code>parity</code> of Table 7 of Step 3 are null.</td><td>All 20 lines have these fields.</td><td>The plan names only <code>mlx_timed_peak_bytes</code>. No effect.</td></tr>
+      <tr><td>9</td><td>The batch-size-1 cells at P2 use the P1 budget (3 warm-up, 20 timed batches).</td><td>The comment above <code>JOINED_EXTRA</code> gives the reason: 4 batches of about 50 ms would give a timed phase of 0.2 s. B1 measured about 80 ms per batch.</td><td>Reasonable.</td></tr>
+      <tr><td>10</td><td>C1b: the plan asks to record the tile parameters and where MLX selects them in the results. The build records them in a comment of <code>probe_kernels.py</code> (lines 56 to 58) and in <code>GLOSSARY.md</code>.</td><td>The comment is correct for <code>applegpu_g17s</code> (bm 64, bn 128, bk 256, wm 2, wn 4 for K = 1,280; bq 64, bk 32, wm 4, wn 1).</td><td>Not in the results (V11).</td></tr>
+      <tr><td>11</td><td>An unplanned probe <code>stored_join.py</code> in a scratchpad ran three times under the GPU lock (2026-11-11, 01:56 to 02:08).</td><td>Lock log lines 824 to 832. No script and no result in the repo.</td><td>V12.</td></tr>
+      <tr><td>12</td><td>GLOSSARY: 5 new terms. «Split-K kernel» and «Tile override» are not in the list of explore Section 6; «Epilogue fusion» is not added (option B was not picked).</td><td>The terms appear in the code and the tests.</td><td>Correct use; two definitions need a fix (V8).</td></tr>
+      <tr><td>13</td><td>Red before green: the step is one commit, so the red runs are not in the history.</td><td>The lock log shows 12 runs of the new test files between 23:40 and 23:51 on 2026-11-10, before B1. The first two end within 0.2 s, which fits a failed import (red).</td><td>Not verifiable; no effect on a result.</td></tr>
+    </tbody>
+  </table>
+</div>
+  <p class="caption"><b>Table 6.</b> The deviations of the build from the plan and their check.</p>
+</section>
+
+<section id="code">
+  <h2>7 Code check</h2>
+  <ul>
+    <li><code>_joined</code> (<code>mlx_model.py:356</code>) joins the weights with <code>mx.concatenate</code> inside the trace at each call (D1). <code>_joined_bias</code> (<code>:341</code>) adds zeros of the weight dtype for a layer without a bias (D3) and gives None if no layer has a bias. <code>joined_linear</code> (<code>:325</code>) calls <code>mx.addmm</code> with a bias, else a matmul, as <code>nn.Linear</code>.</li>
+    <li>The joined <code>qkv</code> reshapes the output to (B, T, 3, H, hd) and transposes it to (3, B, H, T, hd); head h holds the same channels as in the separate form. T1 shows bit equality.</li>
+    <li><code>set_joined_projections</code> (<code>:601</code>) sets plain attributes, so <code>model.parameters()</code> and the strict load do not change (T4). <code>compile_backbone</code> passes <code>inputs=model.state</code>, so the weights stay implicit inputs (T6).</li>
+    <li><code>change_forms</code> gives each joined form its own <code>compile_backbone</code>. The trace records on the first call inside <code>_JoinedForm</code>, so each form keeps its graph. R records first, with the flags off. The wrapper also runs on each timed call (V1).</li>
+    <li><code>run_forms</code> resets the MLX peak before the timed batches of each form and keeps the largest peak of the rounds (B2). <code>first_batch_check</code> compares the full first batch; the C7 branch records the differences and the validity and does not stop (D5).</li>
+    <li>The C1 driver refuses the source build without <code>--allow-source-build</code> and refuses a worker file inside the source folder (T10). <code>build_info</code> checks that <code>venv-build</code> imports mlx from the source folder. <code>worker_env</code> removes the overrides and sets <code>MLX_ENABLE_TF32=0</code>; the worker removes the overrides again at start.</li>
+    <li>The worker measures each configuration with 3 warm-up calls and the median of 20 calls (V2). Its NumPy checks use float32 on the same rounded inputs; the cosine threshold 0.99999 holds for all valid rows (smallest 0.9999985 in bf16).</li>
+  </ul>
+</section>
+
+<section id="findings">
+  <h2>8 Findings</h2>
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>ID</th><th>Severity</th><th>Finding</th><th>Location</th><th>Fix</th></tr></thead>
+    <tbody>
+      <tr><td>V1</td><td>medium</td><td>The bench harness puts a cost inside the timed batch of each joined form: <code>_JoinedForm</code> calls <code>set_joined_projections</code> before and after each forward call, and the enter call walks all modules in <code>quantized_weight_names</code>. At P1, R-Jff runs the same graph as R but reads 0.964 to 0.981; the extra time is 0.14 to 0.19 ms per batch (2 to 4 % of a P1 batch). Without it the P1 R-J ratio would be about 0.91 to 0.96, still below 1. At P2 with batch size 8 the cost stays below 0.1 % of a batch (an estimate), so D6 does not change.</td><td><code>src/dinov3_mlx/mlx_bench.py:327</code> to <code>:343</code>, <code>:378</code> to <code>:385</code></td><td>Set the flags only when a trace records (the first call of each shape), or set them before each phase, outside <code>time_batch_mlx</code>. Then run the P1 rows again (R2) and use the new values in the Learn page.</td></tr>
+      <tr><td>V2</td><td>medium</td><td>The B4 protocol biases the ratio to the control. Round 1 starts cold with the control first (T1, T3: round-1 ratios 1.4 to 2.7). In T2 all times rise by up to 24 % from round 3 on, and the control runs late in those rounds. The median of 5 does not remove these effects. The best T2 ratio 1.036 comes from the drift (rounds 1 and 2: 1.001 and 0.997); the best T1 ratio 1.015 has a lower median of 1.005 in the warm rounds. Table 2 of <code>kernels-c1.md</code> shows no per-round spread.</td><td><code>scripts/probe_kernels_worker.py:51</code> to <code>:60</code>, <code>:170</code> to <code>:190</code>; <code>results/kernels-c1.md</code> Table 3</td><td>Warm up by time (for example 0.5 s of calls) and run one untimed round; measure the control next to each configuration (control, configuration, configuration, control); add min, max and the round values to Table 2. Confirm each best configuration with a short run of 9 rounds (R3) before the Learn page or a pull request (Q3) uses it.</td></tr>
+      <tr><td>V3</td><td>medium</td><td>The T2 gap of the plan does not exist. Plan Section 3.3 and explore Section 2.3 give 45.1 TFLOP/s for bf16 1,280 → 10,240 (<code>roofs.jsonl</code>, one sample). B3 gives 60.1 TFLOP/s on the wheel. Also bf16 4,096 → 4,096: 34.1 against 60.1; bf16 5,120 → 1,280: 46.0 against 54.8. The bf16 matmul roof of <code>roofs.jsonl</code> (56.3 TFLOP/s) is below the B3 rates, so the bf16 gaps of explore Table 1 rest on a low roof.</td><td><code>results/roofs.jsonl</code>; plan Section 3.3; explore Sections 2.2 and 2.3</td><td>Measure the roofs again with the 5-round protocol of B3. Correct the bf16 roof and the bf16 rows wherever the Learn page uses them. Say in the Learn section that T2 had no gap to close.</td></tr>
+      <tr><td>V4</td><td>low</td><td>The plan's T3 rate (36.5 TFLOP/s) is the in-block rate of the P2 profile. The isolated SDPA probe runs at 42.6 TFLOP/s. So a part of the SDPA gap in the block is not a question of tile sizes (for example the layout of q, k and v after RoPE).</td><td><code>results/speed-profile-p2.jsonl</code>; B3</td><td>Say this in the Learn section; probe SDPA with the in-block layout if the gap matters.</td></tr>
+      <tr><td>V5</td><td>low</td><td><code>joined_table.py</code> takes <code>np.median</code> of the 10 pooled ratios, not the lower median of ADR 0004 and D21 of Step 6 (<code>speedup._lower_median</code>). The table header says «(ADR 0004)». The pooled values change by up to 0.007 (P2 fp32 R-J 0.954 → 0.947). No D6 decision changes.</td><td><code>scripts/joined_table.py:59</code></td><td>Use <code>_lower_median</code> for the pooled value and make the table again.</td></tr>
+      <tr><td>V6</td><td>low</td><td>AC7 has no verdict in the table. <code>PEAK_LIMIT_BYTES</code> is defined but no code uses it.</td><td><code>scripts/joined_table.py:25</code></td><td>Add an AC7 column for R-J at P2, or remove the constant.</td></tr>
+      <tr><td>V7</td><td>low</td><td>The comment of T3 says «The largest difference on the small models is 4.8e-6». The test report of 6 runs (2026-11-10 to 2026-11-14) gives 1.91e-6 at most.</td><td><code>tests/test_mlx_joined.py:33</code></td><td>Write 1.9e-6.</td></tr>
+      <tr><td>V8</td><td>low</td><td>Two glossary definitions are not exact. «Split-K kernel» gives only Case 1 of the dispatch and omits two of its conditions ((M/16) · (N/16) ≤ 2,048 on this GPU and K ≥ 128); MLX 0.32.4 also has a NAX split-K kernel (Case 3) for the half dtypes. «Tile size» calls bk a size of the output block; bk is the depth of one step over K (or over the keys).</td><td><code>GLOSSARY.md</code>, «Split-K kernel», «Tile size»</td><td>Correct both definitions.</td></tr>
+      <tr><td>V9</td><td>low</td><td>The D4 guard runs only in <code>set_joined_projections</code>. After a join, <code>nn.quantize</code> keeps <code>joined = True</code>; the forward pass then joins packed weights and stops with a shape error, not with the message of D4.</td><td><code>src/dinov3_mlx/mlx_model.py:356</code>, <code>:617</code></td><td>Raise <code>ValueError</code> in <code>_joined</code> for an <code>nn.QuantizedLinear</code> layer, and add a case to T5.</td></tr>
+      <tr><td>V10</td><td>low</td><td>T10 asserts <code>calls == []</code>, but no code appends to <code>calls</code> (the stubs raise). The assertion checks nothing.</td><td><code>tests/test_probe_kernels.py:52</code>, <code>:64</code></td><td>Remove it, or let the stubs append and assert an empty list.</td></tr>
+      <tr><td>V11</td><td>low</td><td>C1b is not in the results. The rule that the NAX attention kernel needs bk as a multiple of 32 is not recorded anywhere.</td><td><code>results/kernels-c1.md</code></td><td>Let the table writer add a C1b section: the two dispatch functions, the default tiles on <code>applegpu_g17s</code> and the bk rule (Section 5.3).</td></tr>
+      <tr><td>V12</td><td>low</td><td>An unplanned probe (<code>stored_join.py</code>, a scratchpad file) ran three times under the GPU lock. Its script and its numbers are not in the repo.</td><td><code>~/.cache/dinov3-mlx/gpu-lock.log</code> lines 824 to 832</td><td>If ADR 0017 or the Learn page uses its numbers, commit the probe and its result lines as the other benchmarks; else say that it is not a result.</td></tr>
+      <tr><td>V13</td><td>low</td><td>B1 measured R slower than earlier runs: at P2 fp16-cast 664 and 705 ms per batch (12.1 and 11.3 img/s). The P2 profile of 2026-11-09 gives 388 ms (20.6 img/s), and the D1 cost estimate of the plan uses it. The paired ratios are not affected (V2 of Step 6).</td><td><code>results/speed-joined.jsonl</code>; <code>results/speed-profile-p2.jsonl</code></td><td>None for this step. Give the concat share of D1 against the B1 batch time (about 0.3 %) where the Learn page uses it.</td></tr>
+      <tr><td>V14</td><td>low</td><td>The build changed the target of AC1 in T3 (a tolerance of 1e-5 in 4 of 45 cases) without the user's yes. The cause is the kernel choice of MLX, and the joins stay off, so no user path has a difference.</td><td><code>tests/test_mlx_joined.py:30</code> to <code>:34</code>, <code>:124</code></td><td>The user confirms the exception; then AC1 passes. Record it in the Close notes.</td></tr>
+    </tbody>
+  </table>
+</div>
+  <p class="caption"><b>Table 7.</b> Findings: 0 high, 3 medium, 11 low. No finding changes the D6 decision: all joins stay off.</p>
+</section>
+
+<section id="numbers">
+  <h2>9 Numbers that do not match the data</h2>
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>Place</th><th>Number</th><th>Data</th><th>Finding</th></tr></thead>
+    <tbody>
+      <tr><td><code>results/kernels-c1.md</code> Table 3</td><td>T1 1.015, T2 1.036 (ratio to the control)</td><td>Warm rounds of T1: lower median 1.005. T2 before the drift: 1.001 and 0.997.</td><td>V2</td></tr>
+      <tr><td><code>results/joined-table.md</code> header</td><td>«Pooled: the median of the 10 ratios (ADR 0004)»</td><td>The table uses the mean of the two middle values; ADR 0004 asks for the lower one. Up to 0.007 lower.</td><td>V5</td></tr>
+      <tr><td><code>results/joined-table.md</code>, P1 rows</td><td>R-J 0.882 to 0.937; R-Jff 0.964 to 0.981</td><td>Include 0.14 to 0.19 ms of harness time per batch.</td><td>V1</td></tr>
+      <tr><td>Plan Section 3.3, explore Section 2.3</td><td>T2: 45.1 TFLOP/s</td><td>B3 wheel: 60.1 TFLOP/s.</td><td>V3</td></tr>
+      <tr><td>Plan Section 3.3</td><td>T3: 36.5 TFLOP/s</td><td>The in-block rate; in isolation 42.6 TFLOP/s.</td><td>V4</td></tr>
+      <tr><td>Plan D1</td><td>a batch time of 388 ms at P2</td><td>B1 R: 664 and 705 ms (fp16-cast).</td><td>V13</td></tr>
+      <tr><td>Plan Table 2</td><td>B1 about 20 min per run; B4 up to about 3 hours</td><td>B1: 11.6 and 12.5 min. B4: one build of 2 min 39 s and a sweep of 17 s.</td><td>Estimates only (deviation 1)</td></tr>
+      <tr><td><code>tests/test_mlx_joined.py:33</code></td><td>4.8e-6</td><td>1.91e-6</td><td>V7</td></tr>
+      <tr><td><code>GLOSSARY.md</code></td><td>Split-K condition «K ≥ max(M, N)»; bk as an output size</td><td><code>matmul.cpp</code>: two more conditions and a NAX split-K; bk is a step depth.</td><td>V8</td></tr>
+      <tr><td><code>roadmap.md</code>, row 6e</td><td>«Build next, in a new session»</td><td>The build commit does not change the row; it holds no number of the build. The Close stage sets it.</td><td>–</td></tr>
+    </tbody>
+  </table>
+</div>
+  <p class="caption"><b>Table 8.</b> Numbers in the result tables, the plan, the glossary and the roadmap row against the data. All other numbers of <code>joined-table.md</code> and <code>kernels-c1.md</code> equal the lines: both table writers give byte-equal tables (Section 10, c5 and c6).</p>
+</section>
+
+<section id="commands">
+  <h2>10 Commands</h2>
+  <p>Each command ran from the repo root through <code>uv run python -m dinov3_mlx.gpu_lock -- &lt;command&gt;</code>, one at a time, after <code>memory_pressure | tail -1</code>.</p>
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>No.</th><th>Command</th><th>Time (UTC, 2026-11-14)</th><th>Free memory before</th><th>Result</th></tr></thead>
+    <tbody>
+      <tr><td>c1</td><td><code>memory_pressure | tail -1</code></td><td>15:28</td><td>77 %</td><td>The 15 % rule holds.</td></tr>
+      <tr><td>c2</td><td><code>uv run ruff format --check</code></td><td>15:28</td><td>75 %</td><td>137 files already formatted</td></tr>
+      <tr><td>c3</td><td><code>uv run ruff check</code></td><td>15:28</td><td>75 %</td><td>All checks passed</td></tr>
+      <tr><td>c4</td><td><code>env HOME=$S HF_HUB_OFFLINE=1 .venv/bin/python -m pytest -q -ra -p no:cacheprovider</code> with <code>S=$(mktemp -d)</code></td><td>15:28:42 to 15:30:26</td><td>75 %</td><td>582 passed, 480 skipped, 0 failed in 98.09 s. No weights: the skips name the missing model sizes. At <code>dca5a6e</code> the file <code>tests/test_roofline_page.py</code> has 3 tests, in the working tree 6: so the build commit gives 579 passed, as the build says.</td></tr>
+      <tr><td>c5</td><td><code>uv run python scripts/joined_table.py --table &lt;scratch&gt;/joined-table.md</code>, then <code>diff</code></td><td>15:31</td><td>78 %</td><td>Byte-equal to <code>results/joined-table.md</code></td></tr>
+      <tr><td>c6</td><td><code>uv run python scripts/probe_kernels.py table --table &lt;scratch&gt;/kernels-c1.md</code>, then <code>diff</code></td><td>15:31</td><td>78 %</td><td>Byte-equal to <code>results/kernels-c1.md</code></td></tr>
+      <tr><td>c7</td><td>Own scripts in the scratchpad, plain Python, no GPU: the ratios, medians, peaks and batch times of B1; the ratios, extremes and round values of B3 and B4; the order of the sweep</td><td>15:20 to 15:45</td><td>–</td><td>The values of Tables 2 to 5</td></tr>
+      <tr><td>c8</td><td>Reads only: <code>git diff</code> of the clone against <code>probe.patch</code>; <code>shasum -a 256 probe.patch</code>; <code>venv-build/…/direct_url.json</code>; <code>matmul.cpp</code>, <code>scaled_dot_product_attention.cpp</code>, <code>steel_attention_nax.h</code>, <code>steel_attention_nax.metal</code>, <code>steel_gemm_fused_nax.metal</code>; <code>gpu-lock.log</code></td><td>15:15 to 15:45</td><td>–</td><td>Sections 3, 5.3 and 6</td></tr>
+    </tbody>
+  </table>
+</div>
+  <p class="caption"><b>Table 9.</b> The Verify commands. No command loaded model weights, ran a benchmark or built MLX.</p>
+</section>
+
+<section id="reruns">
+  <h2>11 Reruns pending</h2>
+  <p>The main session runs these commands when the Mac is free: no training job of the other project, AC power, and more than 15 % free memory by <code>memory_pressure</code>. One command at a time, from the repo root.</p>
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>No.</th><th>For</th><th>Command</th><th>Reason</th><th>Time</th><th>Memory</th></tr></thead>
+    <tbody>
+      <tr><td>R1</td><td>AC12</td><td>The default session with weights.</td><td>It loads model weights. AC12 passes with 0 failed.</td><td>1 to 4 min (Step 6d: 54 s; the build's run on 2026-11-11 held the lock 3 min 48 s)</td><td>The small model sizes, one at a time; estimate below 4 GB</td></tr>
+      <tr><td>R2</td><td>AC5, V1</td><td>After the fix of V1: the P1 rows of B1, two runs at different times, then the table.</td><td>The P1 rows without the harness cost. The table writer keeps the newest line of each run and cell, so the new lines replace the old P1 lines.</td><td>Under 1 min per run (run 1 of the build: 11 s for the 3 P1 workers)</td><td>Need 4.1 GB per worker by the driver check; MLX peak 0.6 GB (ViT-S/16)</td></tr>
+      <tr><td>R3</td><td>AC10, V2</td><td>Three short confirmation runs of the source build (T2, T1, T3), in the form of the build's own smoke runs (lock log lines 809 to 814).</td><td>Decide whether any tile configuration beats the control. Few configurations keep each round short, so a drift has little effect; 9 rounds dilute the cold round 1; the choice of MLX runs as a second control. Each run prints one JSON line on stdout; record it in the Verify notes. The source build runs under the user's yes to Q1 of the plan.</td><td>Under 30 s each</td><td>Below 2 GB each (worker limit 12 GiB; the driver rule asks for 4 GB available). Check AC power first: a direct worker call skips the machine check of the driver.</td></tr>
+    </tbody>
+  </table>
+</div>
+  <p class="caption"><b>Table 10.</b> The reruns. No rerun of B1 at P2 is needed: the largest pooled ratio is 0.997 against the limit 1.03, and the two runs agree within 0.034.</p>
+  <p>The exact commands. Run each one alone, after <code>memory_pressure | tail -1</code>.</p>
+<pre><code># R1 (AC12): the default session with weights
+uv run python -m dinov3_mlx.gpu_lock -- uv run pytest -q -ra -p no:cacheprovider
+
+# R2 (AC5, V1): after the fix of V1; run 2 at a later time
+uv run python -m dinov3_mlx.gpu_lock -- uv run python scripts/bench_speed.py change --change joined --priority P1 --run 1
+uv run python -m dinov3_mlx.gpu_lock -- uv run python scripts/bench_speed.py change --change joined --priority P1 --run 2
+uv run python scripts/joined_table.py
+
+# R3 (AC10, V2): confirmation runs of the source build, 9 rounds each
+uv run python -m dinov3_mlx.gpu_lock -- env MLX_ENABLE_TF32=0 ~/.cache/dinov3-mlx/mlx-src/venv-build/bin/python -I scripts/probe_kernels_worker.py '{"mode":"sweep","probe":"linear bf16 1280-&gt;10240","variable":"DINOV3_PROBE_GEMM_NAX","configs":["64,128,256,2,4","128,64,256,4,2","64,64,256,2,2"],"rounds":9}'
+uv run python -m dinov3_mlx.gpu_lock -- env MLX_ENABLE_TF32=0 ~/.cache/dinov3-mlx/mlx-src/venv-build/bin/python -I scripts/probe_kernels_worker.py '{"mode":"sweep","probe":"linear fp16 1280-&gt;1280","variable":"DINOV3_PROBE_GEMM_NAX","configs":["64,128,256,2,4","64,64,256,2,2","128,64,256,4,2"],"rounds":9}'
+uv run python -m dinov3_mlx.gpu_lock -- env MLX_ENABLE_TF32=0 ~/.cache/dinov3-mlx/mlx-src/venv-build/bin/python -I scripts/probe_kernels_worker.py '{"mode":"sweep","probe":"sdpa fp16","variable":"DINOV3_PROBE_SDPA_NAX","configs":["64,32,4,1","32,32,2,1"],"rounds":9}'
+
+# After the fix of V2: the full sweep (17 s in the build)
+uv run python -m dinov3_mlx.gpu_lock -- uv run python scripts/probe_kernels.py sweep --target T1 T2 T3 --rounds 5 --allow-source-build</code></pre>
+</section>
+</main>
+</body>
+</html>
