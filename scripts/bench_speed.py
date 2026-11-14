@@ -80,6 +80,9 @@ RESULTS = {
     "profile": RESULTS_DIR / "speed-profile-p1.jsonl",
 }
 JOINED_RESULTS = RESULTS_DIR / "speed-joined.jsonl"
+# The paired run of compiled mlx against eager torch-mps (W11 of Step 7, the user's request of
+# 2026-11-14).
+EAGER_PAIRS_RESULTS = RESULTS_DIR / "speed-pairs-eager.jsonl"
 LOG_FORMAT = "%(asctime)s %(name)s %(message)s"
 RUN = "S6"  # the run of the Step 6 lines; the torch-mps rows of ViT-7B/16 keep "B4" (B4)
 WORKER_TIMEOUT_S = {"mlx": 900, "torch-mps": 3600, "cpu": 900}
@@ -256,10 +259,20 @@ def follow_up_plan(listed: list[tuple[str, int, int, str]], matrix_lines: list[d
     return specs
 
 
-def pairs_plan(priorities: list[str], rounds: int, run_id: str) -> list[Spec]:
+def pairs_plan(
+    priorities: list[str], rounds: int, run_id: str, torch_compile: bool = True
+) -> list[Spec]:
     """Return the workers of one paired run at P1 and P2 (Section 3.11): in each round and dtype
-    mode one compiled mlx worker and one torch.compile worker; the order of the two alternates
-    from round to round, and the order of the dtype modes rotates by one."""
+    mode one compiled mlx worker and one torch-mps worker; the order of the two alternates
+    from round to round, and the order of the dtype modes rotates by one.
+
+    Args:
+        priorities: Keys of PRIORITY.
+        rounds: The number of rounds.
+        run_id: The run: "1" or "2".
+        torch_compile: False runs the torch-mps side eager, as transformers runs without
+            torch.compile (W11 of Step 7). The mlx side stays compiled.
+    """
     specs = []
     for priority in priorities:
         model_size, side, batch_size, _ = PRIORITY[priority]
@@ -269,7 +282,8 @@ def pairs_plan(priorities: list[str], rounds: int, run_id: str) -> list[Spec]:
             for mode in _rotate(DTYPE_MODE_NAMES, r):
                 for backend in backends:
                     position += 1
-                    config = BenchConfig(RUN, model_size, mode, side, batch_size, True)
+                    compiled = backend == "mlx" or torch_compile
+                    config = BenchConfig(RUN, model_size, mode, side, batch_size, compiled)
                     specs.append(
                         make_spec(
                             "bench",
@@ -652,6 +666,8 @@ def bench_dir_of(results: Path, subcommand: str) -> Path:
         return BENCH_ROOT / subcommand
     if results.resolve() == JOINED_RESULTS.resolve():
         return BENCH_ROOT / "joined"
+    if results.resolve() == EAGER_PAIRS_RESULTS.resolve():
+        return BENCH_ROOT / "pairs-eager"
     return results.with_name(f"{results.stem}-batches")
 
 
@@ -660,7 +676,7 @@ def plan_of(args: argparse.Namespace) -> list[Spec]:
     if args.subcommand == "change":
         return change_plan(args.change, args.priority, args.rounds, args.run)
     if args.subcommand == "pairs":
-        return pairs_plan(args.priority, args.rounds, str(args.run))
+        return pairs_plan(args.priority, args.rounds, str(args.run), not args.torch_eager)
     if args.subcommand == "sweep":
         return sweep_plan(args.rounds)
     if args.subcommand == "learn":
@@ -713,6 +729,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     commands["change"].add_argument("--change", nargs="+", choices=CHANGES, required=True)
     commands["change"].add_argument("--run", help="the run of C7: 1 or 2")
     commands["pairs"].add_argument("--run", type=int, required=True, help="the run: 1 or 2")
+    commands["pairs"].add_argument(
+        "--torch-eager", action="store_true", help="eager torch-mps against compiled mlx (W11)"
+    )
     matrix = commands["matrix"]
     matrix.add_argument("--model-sizes", nargs="+", choices=list(MODEL_IDS))
     matrix.add_argument("--quantized", action="store_true", help="the quantized rows (Table 11)")
@@ -726,6 +745,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error("give a subcommand")
     if args.subcommand == "change" and args.change == ["joined"] and "--results" not in argv_list:
         args.results = JOINED_RESULTS
+    if args.subcommand == "pairs" and args.torch_eager and "--results" not in argv_list:
+        args.results = EAGER_PAIRS_RESULTS
     return args
 
 

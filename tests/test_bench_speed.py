@@ -413,3 +413,16 @@ def test_bench_speed_worker_memory_check_reaches_the_driver_log(
     assert result["status"] == "error"
     records = [r for r in caplog.records if r.name == "dinov3_mlx.memory"]
     assert len(records) == 1 and label in records[0].getMessage()
+
+
+def test_pairs_plan_torch_eager(counts: None) -> None:
+    """Step 7 W11: --torch-eager pairs compiled mlx with eager torch-mps, in its own file."""
+    import bench_speed
+
+    specs = bench_speed.pairs_plan(["P1"], 2, "1", torch_compile=False)
+    assert len(specs) == 20
+    assert {s["config"]["compile"] for s in specs if s["backend"] == "torch-mps"} == {False}
+    assert {s["config"]["compile"] for s in specs if s["backend"] == "mlx"} == {True}
+    args = bench_speed.parse_args(["pairs", "--run", "1", "--torch-eager", "--dry-run"])
+    assert args.torch_eager and args.results == bench_speed.EAGER_PAIRS_RESULTS
+    assert bench_speed.parse_args(["pairs", "--run", "1"]).results == bench_speed.RESULTS["pairs"]
