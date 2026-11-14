@@ -103,3 +103,23 @@ DINOV3_SLOW=1 uv run pytest   # all six model sizes
 ## License
 
 The code is MIT ([LICENSE](LICENSE)). The DINOv3 weights are under the [DINOv3 License](LICENSE-DINOv3.md); this repo holds no weights. If you publish research results that use DINOv3 through this package, clause 1.b.ii of the DINOv3 License asks you to acknowledge the use of the DINO Materials.
+
+## Related work
+
+DINOv3:
+
+- [facebookresearch/dinov3](https://github.com/facebookresearch/dinov3): the official code and the paper of Meta.
+- [DINOv3 on Hugging Face](https://huggingface.co/facebook/dinov3-vits16-pretrain-lvd1689m): the weights of each model size, and `DINOv3ViTModel` in [huggingface/transformers](https://github.com/huggingface/transformers), the reference of our parity tests.
+
+MLX:
+
+- [ml-explore/mlx](https://github.com/ml-explore/mlx): the array framework of Apple. Its official repos have no DINOv3 model that we know of (search of Step 6b, 2026-11-08).
+
+Other ports of DINOv3 to Apple silicon (compared in [results/prior-art-table.md](results/prior-art-table.md)):
+
+- [riccardomusmeci/mlx-image](https://github.com/riccardomusmeci/mlx-image): MLX, Python, many vision models with DINOv3 among them.
+- [etornam45/mlx_dinov3](https://github.com/etornam45/mlx_dinov3): MLX, Python.
+- [vincentamato/MLXDINOv3](https://github.com/vincentamato/MLXDINOv3): MLX, Swift.
+- [sarveshmayil/mlx-dinov3](https://github.com/sarveshmayil/mlx-dinov3): MLX, Python (no ViT model when we checked).
+- [rinpatch/dinov3-coreml](https://huggingface.co/rinpatch/dinov3-coreml) and the [SharpAI](https://huggingface.co/SharpAI) exports: Core ML packages with fixed input shapes.
+- [VimalMollyn/dinov2-coreml](https://github.com/VimalMollyn/dinov2-coreml): Core ML export of DINOv2.

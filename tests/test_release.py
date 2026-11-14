@@ -147,6 +147,7 @@ README_SECTIONS = [
     "Limits",
     "Tests",
     "License",
+    "Related work",
 ]
 
 
