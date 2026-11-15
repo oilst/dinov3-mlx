@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Step 7b Neural Engine backend: Plan</title>
+<style>
+/* Spec page. White page, black text, no dark mode. */
+:root { --bg: #ffffff; --fg: #111414; --muted: #4a5655; --rule: #d6dedd; --panel: #f5f8f7; --accent: #057379; --pass: #1d7a3a; --fail: #b3261e; color-scheme: light; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif; }
+main { max-width: 60rem; margin: 0 auto; padding: 40px 20px 64px; display: grid; gap: 1.75rem; }
+main > *, section > * { min-width: 0; }
+h1 { font-size: 1.9rem; line-height: 1.15; margin: 0; }
+h2 { font-size: 1.3rem; margin: 0; }
+h3 { font-size: 1.05rem; margin: 0; }
+section { display: grid; gap: 0.8rem; }
+p, ul, ol { margin: 0; max-width: 46rem; }
+li + li { margin-top: 0.25rem; }
+code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.86em; }
+p code, li code, td code { overflow-wrap: anywhere; }
+pre { margin: 0; background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 0.8rem 1rem; overflow-x: auto; }
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 0.92rem; }
+th, td { text-align: left; vertical-align: top; padding: 0.45rem 0.7rem 0.45rem 0; border-bottom: 1px solid var(--rule); }
+th { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); border-bottom: 1.5px solid var(--fg); }
+td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.caption { font-size: 0.88rem; color: var(--muted); }
+.box { border: 1.5px solid var(--accent); border-radius: 6px; padding: 0.8rem 1rem; display: grid; gap: 0.5rem; }
+.warn { border: 1.5px solid var(--fail); border-radius: 6px; padding: 0.8rem 1rem; display: grid; gap: 0.5rem; }
+figure { margin: 0; display: grid; gap: 0.4rem; }
+.fig { border: 1px solid var(--rule); border-radius: 6px; padding: 0.5rem; overflow-x: auto; }
+.fig svg { display: block; width: 100%; height: auto; min-width: 720px; }
+figcaption { font-size: 0.88rem; color: var(--muted); }
+a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+<header>
+<h1>Step 7b Neural Engine backend: Plan</h1>
+<p>Roadmap step 7b. Status: draft. Date: 2026-11-15.</p>
+</header>
+
+<section id="goal">
+<h2>1 Goal</h2>
+<p>Step 7b adds the backend <code>"mlx+ne"</code> to <code>Embedder</code>. Compiled mlx runs on the GPU in the process of the user. Core ML runs on the Neural Engine in one worker process. A work queue gives each batch to the stream that is free, and the outputs come back in the order of the input frames. The backend gives the same outputs as <code>"mlx"</code>, within the fp16 thresholds of ADR 0003. Through the public API, it reaches the stream ratio of Step 6d: 1.32 at P1 in the probe of <code>explore.html</code>. mlx stays the default backend, and the core of the package stays free of <code>torch</code>.</p>
+</section>
+
+<section id="dinov3">
+<h2>2 DINOv3 topic</h2>
+<p>How one workload is split between two accelerators, and what a fixed-shape package costs: the conversion time, the first load and the disk. The step writes the explainer <code>docs/learn/07b-neural-engine-backend.html</code>. It covers the work queue, the tail rule, the worker process and why two threads fail (Table 6 of <code>explore.html</code>: the stream ratio drops to 0.52).</p>
+</section>
+
+<section id="design">
+<h2>3 Design</h2>
+<p>The user picked D1 A, D2 C, D3 B and D4 A in <code>explore.html</code>. The probe D2 C chose the worker process. This section gives the details.</p>
+
+<h3>3.1 The public API</h3>
+<ul>
+<li><code>Embedder(model_size, dtype_mode, batch_size, bits, backend="mlx+ne")</code>. The signature, the methods and the outputs stay as in ADR 0019: frame embeddings (B, D) in fp32, patch embeddings (B, H/16, W/16, D) in fp16 in the half dtype modes.</li>
+<li>New methods: <code>close()</code>, and <code>__enter__</code> and <code>__exit__</code>, so <code>with Embedder(...) as model:</code> ends the worker. <code>close()</code> on the backend <code>"mlx"</code> does nothing.</li>
+<li>The constructor checks these items before any weight look-up, in this order, with one specific error each:
+<ol>
+<li>ViT-7B/16: <code>ValueError</code>. Step 6d made no package for it.</li>
+<li><code>dtype_mode="fp32"</code>: <code>ValueError</code>. The Neural Engine runs in fp16, so its frames cannot pass the fp32 thresholds. The four half dtype modes are valid: an fp16 frame also passes the bf16 thresholds.</li>
+<li>The Neural Engine extra is missing: <code>NeuralEngineExtraError</code> (a subclass of <code>ImportError</code>) with the command <code>uv add "dinov3-mlx[ne]"</code>.</li>
+<li>macOS older than 15 (the deployment target of the packages): <code>NeuralEngineExtraError</code>.</li>
+</ol></li>
+<li><code>bits=8</code> stays valid. It changes the mlx stream only; the Neural Engine stream runs the unquantized package.</li>
+</ul>
+
+<h3>3.2 The Core ML packages</h3>
+<ul>
+<li>One package for each model size and input resolution: the ne3 package of batch size 1 (ADR 0014, ADR 0016). The Neural Engine stream calls it with the batch API: one <code>predict</code> call with a list of <code>batch_size</code> inputs. In Step 6d the batch API was as fast as the package of batch size 8, or faster (P1: 666 against 494 img/s).</li>
+<li>The cache stays <code>~/.cache/dinov3-mlx/coreml/</code> (ADR 0015). <code>package_path</code> takes (H, W). A square size keeps its old name, for example <code>vits16-224-b1-ne3-s256-r1-ct9.0</code>, so the 25 packages of Step 6d stay valid. A non-square size gets <code>{H}x{W}</code> in the name.</li>
+<li>The first <code>embed</code> call with a new input resolution converts its package, if the cache does not hold it. The conversion runs in a subprocess, <code>python -m dinov3_mlx.ne_convert</code>, after a memory check with <code>convert_need_bytes</code>. So <code>torch</code> and <code>transformers</code> never load into the process of the user, and their memory goes back to the system when the conversion ends.</li>
+<li>Step 6d costs at batch size 1 (Tables 1 and 2 of <code>results/coreml-6d-table.md</code>): conversion 2.7 s (ViT-S/16, 224 px) to 24 s (ViT-H+/16, 512 px), plus the model load; first load on the Neural Engine 1.7 to 16.9 s; cached load 0.04 to 0.09 s; disk 44 MB (ViT-S/16) to 1.7 GB (ViT-H+/16) for each package.</li>
+</ul>
+
+<h3>3.3 The worker process</h3>
+<ul>
+<li>The constructor starts the worker with <code>subprocess.Popen([sys.executable, "-m", "dinov3_mlx.ne_worker"])</code>. It does not use <code>multiprocessing</code>: its spawn start imports the <code>__main__</code> module of the user again.</li>
+<li>The worker imports only <code>numpy</code> and <code>coremltools</code>. It never imports <code>torch</code> or <code>mlx</code>.</li>
+<li>Control messages are JSON lines on stdin and stdout: <code>load</code>, <code>run</code>, <code>close</code>, and the replies <code>loaded</code>, <code>done</code> and <code>error</code>. The pixels and the tokens go through shared memory: two slots, each with one input buffer and one output buffer.</li>
+<li>The worker ends when its stdin closes. So it also ends when the process of the user dies.</li>
+<li>Python 3.12 has no <code>track=False</code> for <code>SharedMemory</code>. The worker removes its buffers from the resource tracker after it attaches them, so its exit does not unlink the buffers of the parent. A test checks this.</li>
+<li>A worker error, an exit or a reply timeout raises <code>NeuralEngineError</code> with the last 2,000 characters of the stderr of the worker. There is no silent fall-back to mlx.</li>
+</ul>
+
+<h3>3.4 The work queue and the tail rule</h3>
+<ul>
+<li>One scheduler loop in the main thread. It needs no second thread, so the GIL result of the probe does not apply.</li>
+<li>The main thread preprocesses every batch on the GPU with <code>preprocess_frames</code>, so both streams see the same pixels. For the Neural Engine stream it copies the fp32 pixels into a free slot and sends <code>run</code>. The copy is 4.8 MB for each batch at P1 and 25 MB at P2.</li>
+<li>The worker can hold two batches, one in each slot, so it does not wait while the main thread runs an mlx batch.</li>
+<li><b>Tail rule:</b> the worker takes the next batch only if (k + 1) × t<sub>ne</sub> ≤ (q − 1) × t<sub>mlx</sub>. Here k is the number of batches that the worker holds, q the number of batches in the queue, and t<sub>ne</sub> and t<sub>mlx</sub> the estimated seconds per batch of each stream. So the worker never finishes after the mlx stream would finish alone. A call with one batch runs on mlx only.</li>
+<li>The estimates start from the warm-up batch of each stream for each input resolution. After each batch they move with an exponential average (weight 0.2).</li>
+</ul>
+
+<h3>3.5 Memory</h3>
+<ul>
+<li>The constructor checks the free memory for the mlx load plus the worker. In Step 6d the peak footprint of a Neural Engine process was 0.38 to 0.48 GB, so the plan adds 1 GB for the worker and its four buffers.</li>
+<li>The conversion subprocess checks its own need, up to 5.0 GB for ViT-H+/16 at 512 px and batch size 1 (Table 1 of the Step 6d table), before it loads <code>torch</code>.</li>
+</ul>
+
+<h3>3.6 The Neural Engine extra</h3>
+<pre><code>[project.optional-dependencies]
+ne = [
+    "torch>=2.15.0,&lt;2.16",
+    "transformers>=5.22.1,&lt;6",
+    "coremltools==9.0",  # the cast patch of ADR 0015 fits this version only
+]</code></pre>
+<p>The dependency group <code>coreml</code> of the benchmarks stays. The wheel test of Step 7 checks again that the core installs without <code>torch</code> and <code>coremltools</code>.</p>
+</section>
+
+<section id="flow">
+<h2>4 Data flow</h2>
+<figure>
+<div class="fig">
+<svg viewBox="0 0 960 400" role="img" aria-label="Data flow of the backend mlx+ne" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system, Helvetica, Arial, sans-serif" font-size="13">
+<rect width="960" height="400" fill="#ffffff"/>
+<defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#111414"/></marker></defs>
+<rect x="10" y="20" width="620" height="250" rx="8" fill="none" stroke="#4a5655" stroke-dasharray="5 4"/>
+<text x="20" y="40" fill="#4a5655">process of the user (main thread)</text>
+<rect x="660" y="20" width="290" height="250" rx="8" fill="none" stroke="#4a5655" stroke-dasharray="5 4"/>
+<text x="670" y="40" fill="#4a5655">worker process: python -m dinov3_mlx.ne_worker</text>
+<rect x="25" y="110" width="105" height="56" rx="6" fill="#f5f8f7" stroke="#111414"/>
+<text x="77" y="134" text-anchor="middle">uint8 frames</text><text x="77" y="152" text-anchor="middle">(B, h, w, 3)</text>
+<rect x="155" y="110" width="120" height="56" rx="6" fill="#f5f8f7" stroke="#111414"/>
+<text x="215" y="134" text-anchor="middle">preprocess_frames</text><text x="215" y="152" text-anchor="middle">GPU, fp32 pixels</text>
+<rect x="300" y="105" width="135" height="66" rx="6" fill="#f5f8f7" stroke="#057379" stroke-width="2"/>
+<text x="367" y="128" text-anchor="middle">work queue</text><text x="367" y="146" text-anchor="middle">tail rule</text><text x="367" y="162" text-anchor="middle">(Section 3.4)</text>
+<rect x="465" y="55" width="150" height="56" rx="6" fill="#f5f8f7" stroke="#111414"/>
+<text x="540" y="78" text-anchor="middle">mlx stream (GPU)</text><text x="540" y="96" text-anchor="middle">compiled forward pass</text>
+<rect x="465" y="175" width="150" height="56" rx="6" fill="#f5f8f7" stroke="#111414"/>
+<text x="540" y="198" text-anchor="middle">shared memory</text><text x="540" y="216" text-anchor="middle">2 slots: pixels, tokens</text>
+<rect x="690" y="165" width="240" height="76" rx="6" fill="#f5f8f7" stroke="#111414"/>
+<text x="810" y="190" text-anchor="middle">Core ML on the Neural Engine</text><text x="810" y="208" text-anchor="middle">ne3 package, batch size 1</text><text x="810" y="226" text-anchor="middle">batch API: B inputs per call</text>
+<rect x="690" y="65" width="240" height="56" rx="6" fill="#f5f8f7" stroke="#111414"/>
+<text x="810" y="88" text-anchor="middle">JSON lines on stdin and stdout</text><text x="810" y="106" text-anchor="middle">load, run, close / done, error</text>
+<rect x="300" y="300" width="300" height="80" rx="6" fill="#f5f8f7" stroke="#057379" stroke-width="2"/>
+<text x="450" y="325" text-anchor="middle">put each batch back at its start index</text><text x="450" y="345" text-anchor="middle">frame: tokens[:, 0] in fp32</text><text x="450" y="363" text-anchor="middle">patch: tokens[:, 5:] in fp16, (H/16, W/16)</text>
+<rect x="690" y="300" width="240" height="80" rx="6" fill="#ffffff" stroke="#4a5655" stroke-dasharray="4 3"/>
+<text x="810" y="322" text-anchor="middle">first use of an input resolution:</text><text x="810" y="340" text-anchor="middle">python -m dinov3_mlx.ne_convert</text><text x="810" y="358" text-anchor="middle">torch, transformers, coremltools</text><text x="810" y="374" text-anchor="middle">→ ~/.cache/dinov3-mlx/coreml/</text>
+<line x1="130" y1="138" x2="153" y2="138" stroke="#111414" marker-end="url(#a)"/>
+<line x1="275" y1="138" x2="298" y2="138" stroke="#111414" marker-end="url(#a)"/>
+<line x1="435" y1="125" x2="463" y2="90" stroke="#111414" marker-end="url(#a)"/>
+<line x1="435" y1="152" x2="463" y2="195" stroke="#111414" marker-end="url(#a)"/>
+<line x1="615" y1="203" x2="688" y2="203" stroke="#111414" marker-end="url(#a)"/>
+<line x1="688" y1="215" x2="617" y2="215" stroke="#111414" marker-end="url(#a)"/>
+<line x1="435" y1="118" x2="688" y2="93" stroke="#4a5655" stroke-dasharray="3 3" marker-end="url(#a)"/>
+<line x1="540" y1="111" x2="470" y2="298" stroke="#111414" marker-end="url(#a)"/>
+<line x1="540" y1="231" x2="500" y2="298" stroke="#111414" marker-end="url(#a)"/>
+<line x1="810" y1="298" x2="810" y2="243" stroke="#4a5655" stroke-dasharray="3 3" marker-end="url(#a)"/>
+</svg>
+</div>
+<figcaption><b>Figure 1.</b> The backend <code>"mlx+ne"</code>. The main thread preprocesses each batch on the GPU, then the work queue gives it to the mlx stream or to the worker. The worker gets its pixels and returns its tokens through shared memory; the control messages go through stdin and stdout (dashed). The conversion runs once for each model size and input resolution, in its own subprocess.</figcaption>
+</figure>
+</section>
+
+<section id="code">
+<h2>5 Key code</h2>
+<h3>5.1 Usage</h3>
+<pre><code>from dinov3_mlx import Embedder
+
+with Embedder("ViT-S/16", backend="mlx+ne") as model:  # needs dinov3-mlx[ne]
+    frame = model.embed_frames(frames, size=224)  # first call of a size: may convert a package</code></pre>
+
+<h3>5.2 The scheduler loop (in <code>src/dinov3_mlx/streams.py</code>)</h3>
+<pre><code>def run_queue(batches: list[Batch], mlx: MlxStream, ne: NeuralEngineStream, rates: Rates) -> list[Tokens]:
+    """Give each batch to the free stream and return the tokens in the order of the batches."""
+    queue = deque(range(len(batches)))
+    tokens: list[Tokens | None] = [None] * len(batches)
+    while queue or ne.held:
+        while queue and ne.free_slot() and takes_next(ne.held, len(queue), rates):
+            index = queue.popleft()
+            ne.submit(index, batches[index])               # copy pixels to a slot, send "run"
+        if queue:
+            index = queue.popleft()
+            tokens[index] = mlx.run(batches[index])        # mx.eval: the worker runs meanwhile
+            rates.update("mlx", mlx.last_seconds)
+        for index, result, seconds in ne.poll(block=not queue):
+            tokens[index] = result
+            rates.update("ne", seconds)
+    return tokens
+
+
+def takes_next(held: int, queued: int, rates: Rates) -> bool:
+    """The tail rule: the worker finishes no later than the mlx stream alone would."""
+    return (held + 1) * rates.ne <= (queued - 1) * rates.mlx</code></pre>
+
+<h3>5.3 The worker loop (in <code>src/dinov3_mlx/ne_worker.py</code>)</h3>
+<pre><code>def serve(model: Predictor, slots: list[Slot], read: Callable[[], dict | None], write: Callable[[dict], None]) -> None:
+    """Run each "run" message with the batch API until "close" or the end of stdin."""
+    while (message := read()) is not None and message["op"] != "close":
+        slot = slots[message["slot"]]
+        start = time.perf_counter()
+        feed = [{"pixels": slot.pixels[i : i + 1]} for i in range(message["used"])]
+        for i, result in enumerate(model.predict(feed)):
+            slot.tokens[i] = result["tokens"][0]
+        write({"op": "done", "slot": message["slot"], "seconds": time.perf_counter() - start})</code></pre>
+<p>The Neural Engine stream sends only the used frames of a padded last batch, so the worker does not run the zero frames.</p>
+</section>
+
+<section id="tests">
+<h2>6 Tests</h2>
+<p>Light tests load no model. They use fake streams and a fake predictor, and they run in the default session without weights.</p>
+<ol>
+<li><code>test_run_queue_keeps_the_order</code>: 200 random calls with fake streams of random speed and random batch counts. The tokens of each batch come back at its index. Exact.</li>
+<li><code>test_tail_rule_one_batch_runs_on_mlx</code>, <code>test_tail_rule_slow_ne_takes_no_batch</code>, <code>test_tail_rule_equal_rates_share</code>: the rule of Section 3.4 on fixed rates.</li>
+<li><code>test_rates_start_from_warm_up_and_move</code>: the exponential average with weight 0.2.</li>
+<li><code>test_mlx_ne_refuses_vit7b</code>, <code>test_mlx_ne_refuses_fp32</code>, <code>test_mlx_ne_needs_the_extra</code>, <code>test_mlx_ne_needs_macos15</code>: the error and its text, and no call of <code>ensure_weights</code>.</li>
+<li><code>test_package_path_square_keeps_the_name</code>, <code>test_package_path_non_square</code>.</li>
+<li><code>test_serve_runs_the_used_frames</code>, <code>test_serve_ends_at_close_and_at_eof</code>: the worker loop with a fake predictor.</li>
+<li><code>test_worker_exit_keeps_shared_memory</code>: a real worker process with a fake predictor (a test switch of <code>ne_worker</code>) attaches the buffers and exits; the parent can still read them.</li>
+<li><code>test_worker_crash_raises</code>: the fake predictor raises; the call raises <code>NeuralEngineError</code> with the stderr text.</li>
+<li><code>test_close_ends_the_worker</code>: <code>close()</code> ends the worker within 2 s and unlinks the buffers. <code>test_no_orphan_worker</code>: after the session, no <code>dinov3_mlx.ne_worker</code> process is left.</li>
+<li><code>test_wheel_installs_without_torch</code> (Step 7, extended): the wheel without the extra has no <code>torch</code> and no <code>coremltools</code>, and <code>Embedder("ViT-S/16")</code> on <code>"mlx"</code> works.</li>
+</ol>
+<p>Tests with the weights and a package. The default session uses ViT-S/16; <code>DINOV3_SLOW=1</code> adds ViT-S+/16 to ViT-H+/16.</p>
+<ol start="11">
+<li><code>test_mlx_ne_parity</code>: each frame passes the fp16 thresholds of ADR 0003 against the reference: frame ≥ 0.999, patch mean ≥ 0.999, patch 1st percentile ≥ 0.99. Input resolutions 224, 448 and 512 px, and one non-square size (224 × 320 px) for ViT-S/16. A test switch sends half of the batches to each stream, so both streams are tested.</li>
+<li><code>test_mlx_ne_equals_each_stream</code>: the frames of the mlx stream equal the backend <code>"mlx"</code>, and the frames of the Neural Engine stream equal the package alone. Largest difference 0.</li>
+<li><code>test_mlx_ne_padded_last_batch</code>: 13 frames at batch size 8 give 13 rows, in order.</li>
+</ol>
+</section>
+
+<section id="benchmarks">
+<h2>7 Benchmarks</h2>
+<p>A new option <code>--streams</code> of <code>scripts/bench_api.py</code>, with its own results file <code>results/api-streams-7b.jsonl</code> and table <code>results/api-streams-7b-table.md</code>. Each worker runs one <code>Embedder</code> in its own subprocess: <code>"mlx"</code> or <code>"mlx+ne"</code>, in paired rounds that alternate the order. Both backends get the same frames, in the default dtype mode fp16-autocast at batch size 8. A warm-up call comes first, so the conversion and the first load are not in the timed calls. Five rounds in each run, and two runs at least 2 h apart (F2 of Step 6).</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Point</th><th>Model size</th><th>Input resolution</th><th>Output</th><th>Frames per call</th><th>Step 6d stream ratio</th><th>Load</th></tr></thead>
+<tbody>
+<tr><td>P1</td><td>ViT-S/16</td><td class="num">224 px</td><td>frame</td><td class="num">512</td><td class="num">1.324 / 1.318</td><td>light</td></tr>
+<tr><td>P1-small</td><td>ViT-S/16</td><td class="num">224 px</td><td>frame</td><td class="num">8</td><td class="num">–</td><td>light</td></tr>
+<tr><td>P3</td><td>ViT-L/16</td><td class="num">224 px</td><td>patch</td><td class="num">256</td><td class="num">1.122 / 1.184</td><td>heavy</td></tr>
+<tr><td>P2</td><td>ViT-H+/16</td><td class="num">512 px</td><td>patch</td><td class="num">64</td><td class="num">1.081 / –</td><td>heavy</td></tr>
+</tbody>
+</table>
+</div>
+<p class="caption">Table 1. The benchmark points. API stream ratio = throughput of <code>"mlx+ne"</code> ÷ throughput of <code>"mlx"</code> in the same round.</p>
+<p>The bench also writes the cost of the first use of each model size at 224 px: conversion time, first load time and disk size. All runs go through the GPU lock, with a memory check before each worker. P3 and P2 are heavy jobs: they run only on a free Mac and after a yes of the user.</p>
+</section>
+
+<section id="criteria">
+<h2>8 Acceptance criteria</h2>
+<div class="table-wrap">
+<table>
+<thead><tr><th>No.</th><th>Criterion</th><th>Target</th><th>Checked by</th></tr></thead>
+<tbody>
+<tr><td>AC1</td><td>The backend <code>"mlx+ne"</code> gives the outputs of <code>"mlx"</code>: the same shapes and dtypes, for ViT-S/16 to ViT-H+/16</td><td>exact shapes and dtypes</td><td>tests 11 and 13</td></tr>
+<tr><td>AC2</td><td>The refusals come before any weight look-up</td><td>4 of 4 errors, no <code>ensure_weights</code> call</td><td>test 4</td></tr>
+<tr><td>AC3</td><td>The outputs come back in the input order for any split</td><td>200 of 200 calls exact</td><td>test 1</td></tr>
+<tr><td>AC4</td><td>The tail rule</td><td>3 of 3 cases</td><td>tests 2 and 3</td></tr>
+<tr><td>AC5</td><td>Parity of each frame against the reference</td><td>frame ≥ 0.999, patch mean ≥ 0.999, patch 1st percentile ≥ 0.99</td><td>test 11</td></tr>
+<tr><td>AC6</td><td>Each stream gives the output of its backend alone</td><td>largest difference 0</td><td>test 12</td></tr>
+<tr><td>AC7</td><td>The worker life cycle: <code>close()</code>, the end of stdin, a crash, the shared memory</td><td>worker gone within 2 s; no orphan process; buffers unlinked</td><td>tests 6 to 9</td></tr>
+<tr><td>AC8</td><td>The core stays free of <code>torch</code> and <code>coremltools</code></td><td>the wheel test passes</td><td>test 10</td></tr>
+<tr><td>AC9</td><td>API stream ratio at P1</td><td>pooled median ≥ 1.25 in both runs (0.95 of Step 6d)</td><td>bench P1</td></tr>
+<tr><td>AC10</td><td>API stream ratio at P1-small (one batch)</td><td>≥ 0.97 (the tail rule keeps it on mlx)</td><td>bench P1-small</td></tr>
+<tr><td>AC11</td><td>API stream ratio at P3</td><td>pooled median ≥ 1.10 in both runs</td><td>bench P3</td></tr>
+<tr><td>AC12</td><td>API stream ratio at P2</td><td>pooled median ≥ 1.00 in both runs (no slowdown)</td><td>bench P2</td></tr>
+<tr><td>AC13</td><td>The cost of the first use of each model size at 224 px</td><td>report only: conversion s, first load s, disk MB</td><td>bench</td></tr>
+<tr><td>AC14</td><td>The README states the backend, the extra, the first-use cost and where the gain is small</td><td>one section, links to the result table</td><td>review in Verify</td></tr>
+</tbody>
+</table>
+</div>
+<p class="caption">Table 2. The acceptance criteria. The test numbers refer to Section 6.</p>
+</section>
+
+<section id="terms">
+<h2>9 New terms</h2>
+<ul>
+<li><b>Core ML worker</b>: the process <code>python -m dinov3_mlx.ne_worker</code> that runs the Neural Engine stream of the backend <code>"mlx+ne"</code>.</li>
+<li><b>Tail rule</b>: the Core ML worker takes the next batch of the work queue only if it finishes its batches no later than the mlx stream would finish the queue alone.</li>
+<li><b>API stream ratio</b>: the throughput of <code>"mlx+ne"</code> divided by the throughput of <code>"mlx"</code> in the same round, through the public API.</li>
+</ul>
+<p class="caption">These terms go into <code>GLOSSARY.md</code> when the user approves the plan.</p>
+</section>
+
+<section id="open">
+<h2>10 Open questions</h2>
+<ul>
+<li><b>Q1 (the user): the dtype modes.</b> The plan refuses only fp32. The other choice is fp16-autocast only: one precision for all frames, but a smaller contract. Recommendation: refuse only fp32.</li>
+<li><b>Q2 (the user): the time of the conversion.</b> The plan converts at the first <code>embed</code> call with a new input resolution. The other choice is a constructor parameter <code>sizes=[224, ...]</code> that converts and loads at once, so no call is slow. Recommendation: the first call, plus a README note. A later version can add <code>sizes</code>.</li>
+<li><b>Q3 (the user): the heavy benchmarks.</b> P3 and P2 need a free Mac. The Build can finish with the light tests and P1. P3 and P2 then run on a free night, after your yes.</li>
+<li><b>Q4 (the user): the cache size.</b> One package for each model size and input resolution can fill many GB, and Core ML keeps its own bundle cache. The plan only documents the folder. A clean-up command is out of scope.</li>
+</ul>
+</section>
+</main>
+</body>
+</html>
