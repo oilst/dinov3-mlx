@@ -8,6 +8,7 @@ By Ueli Peter. The code is MIT; the weights stay under the DINOv3 License.
 | --- | --- |
 | Model sizes | ViT-S/16, ViT-S+/16, ViT-B/16, ViT-L/16, ViT-H+/16, ViT-7B/16 (ViT-7B/16 in bf16: 13.5 GB) |
 | Parity | In the default dtype mode, the compiled forward pass of all six model sizes passes the fp16 parity thresholds against Hugging Face `transformers` in all 12 tested configurations. Worst frame cosine: 0.999986 |
+| Speed against eager PyTorch | 1.17 to 1.68 at batch size 8, in every tested dtype and both priority configurations |
 | Speed against `torch.compile` | 1.41 at batch size 1 (ViT-S/16, fp16 autocast); 1.07 to 1.09 in fp32; 0.87 to 1.03 at batch size 8 in fp16 and bf16 |
 | Distance to the optimum | ViT-H+/16 at 512 px reaches about 61 % of the matmul roof of the Mac; ViT-S/16 at 224 px about 36 % |
 | Core | Five packages: mlx, numpy, safetensors, huggingface-hub, pillow |
@@ -41,6 +42,7 @@ Ratio = throughput of this package ÷ throughput of the other option, on the sam
 
 | Other option | Ratio | Where | Parity of the other option |
 | --- | --- | --- | --- |
+| PyTorch MPS, eager (as `transformers` runs by default), fp32 / fp16 / bf16 | 1.39 / 1.64 to 1.68 / 1.65 at P1; 1.17 / 1.28 / 1.28 at P2 | P1 / P2 | passes |
 | PyTorch MPS, `torch.compile`, fp16 autocast | 1.41 | ViT-S/16, 224 px, batch size 1 | passes |
 | PyTorch MPS, `torch.compile`, fp32 | 1.07 / 1.09 | P1 / P2 | passes |
 | PyTorch MPS, `torch.compile`, fp16 and bf16 | 0.87 to 0.90 / 1.01 to 1.03 | P1 / P2 | passes |
@@ -49,7 +51,7 @@ Ratio = throughput of this package ÷ throughput of the other option, on the sam
 | Core ML exports of DINOv3 on the GPU, FP32 | 1.06 to 1.09; 1.54 at ViT-S/16, batch size 8 | the fixed shape of each export | passes |
 | Core ML exports of DINOv3 on the GPU, FP16 | 0.93 to 0.99 | the fixed shape of each export | passes; the INT8 export fails |
 
-Source: [results/speedup-table.md](results/speedup-table.md) (PyTorch rows), [results/prior-art-table.md](results/prior-art-table.md) (MLX ports and Core ML exports).
+Source: [results/eager-pairs-table.md](results/eager-pairs-table.md) (eager row), [results/speedup-table.md](results/speedup-table.md) (`torch.compile` rows), [results/prior-art-table.md](results/prior-art-table.md) (MLX ports and Core ML exports).
 
 - On MPS, `torch.compile` and this package reach the same matmul rate in fp16 and bf16. A small model at batch size 8 stays faster on PyTorch; large models are equal. At batch size 1 and in fp32, this package is faster.
 - The other MLX ports lose 10 to 24 % of the throughput to unfused attention, and their bf16 RoPE misses the fp32 thresholds.
