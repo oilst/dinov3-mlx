@@ -148,6 +148,20 @@ a { color: var(--accent); }
 <div class="box">
 <p><b>Decision of the user, 2026-11-15:</b> D1 A, D2 C, D3 B, D4 A, as recommended.</p>
 </div>
+<div class="box">
+<p><b>Result of the probe D2 C, 2026-11-15</b> (<code>scripts/bench_streams.py</code>, <code>results/streams-7b.jsonl</code>; ViT-S/16, 224 px, batch size 8, mlx in fp16-autocast, 3 rounds of 10 s):</p>
+<div class="table-wrap">
+<table>
+<tr><th>Case</th><th>mlx (img/s)</th><th>Neural Engine (img/s)</th><th>Stream ratio of each round</th><th>Median</th></tr>
+<tr><td>mlx alone</td><td class="num">1,840 to 1,913</td><td class="num">–</td><td class="num">–</td><td class="num">–</td></tr>
+<tr><td>Neural Engine alone</td><td class="num">–</td><td class="num">673 to 680</td><td class="num">–</td><td class="num">–</td></tr>
+<tr><td>Two threads</td><td class="num">325 to 329</td><td class="num">665 to 670</td><td class="num">0.522, 0.521, 0.538</td><td class="num">0.522</td></tr>
+<tr><td>Two processes</td><td class="num">1,838 to 1,858</td><td class="num">640 to 671</td><td class="num">1.322, 1.322, 1.347</td><td class="num">1.322</td></tr>
+</table>
+</div>
+<p class="caption">Table 6. The probe D2 C. Stream ratio = (both streams) / (mlx alone in the same round).</p>
+<p>With two threads, the mlx stream drops to about 17 % of its throughput, while the Neural Engine stream keeps its throughput. The likely cause: the <code>predict</code> call of Core ML holds the Python GIL, so the mlx thread cannot send its next batch. Two processes reach the stream ratio of Step 6d (1.32). The threads reach 0.39 of it, below the limit of 0.95. <b>The plan uses a worker process for Core ML (D2 B).</b></p>
+</div>
 <div class="warn">
 <p>The acceptance benchmarks of Step 7b are heavy jobs (P1, P3 and P2, each in two runs). The user stopped the heavy runs on 2026-11-15. The plan can be written now. The Build can run the light tests on ViT-S/16. The benchmarks wait for a free Mac and a yes from the user.</p>
 </div>
