@@ -623,3 +623,12 @@ The list of batches of one call of the backend `"mlx+ne"`, from which each strea
 
 **Neural Engine extra**:
 The optional dependency set `dinov3-mlx[ne]` that the conversion of the Core ML packages needs.
+
+**Core ML worker**:
+The process `python -m dinov3_mlx.ne_worker` that runs the Neural Engine stream of the backend `"mlx+ne"`.
+
+**Tail rule**:
+The Core ML worker takes the next batch of the work queue only if it finishes its batches no later than the mlx stream would finish the queue alone.
+
+**API stream ratio**:
+The throughput of the backend `"mlx+ne"` divided by the throughput of the backend `"mlx"` in the same round, through the public API.

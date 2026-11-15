@@ -39,7 +39,7 @@ a { color: var(--accent); }
 <main>
 <header>
 <h1>Step 7b Neural Engine backend: Plan</h1>
-<p>Roadmap step 7b. Status: draft. Date: 2026-11-15.</p>
+<p>Roadmap step 7b. Status: approved by the user on 2026-11-15, with the recommended answers to Q1 to Q4 (Section 10). Date: 2026-11-15.</p>
 </header>
 
 <section id="goal">
@@ -276,11 +276,14 @@ def takes_next(held: int, queued: int, rates: Rates) -> bool:
 <li><b>Tail rule</b>: the Core ML worker takes the next batch of the work queue only if it finishes its batches no later than the mlx stream would finish the queue alone.</li>
 <li><b>API stream ratio</b>: the throughput of <code>"mlx+ne"</code> divided by the throughput of <code>"mlx"</code> in the same round, through the public API.</li>
 </ul>
-<p class="caption">These terms go into <code>GLOSSARY.md</code> when the user approves the plan.</p>
+<p class="caption">The three terms are in <code>GLOSSARY.md</code> since the approval of the plan.</p>
 </section>
 
 <section id="open">
 <h2>10 Open questions</h2>
+<div class="box">
+<p><b>Decision of the user, 2026-11-15:</b> the recommendation for each question. Q1: refuse only fp32. Q2: convert at the first call. Q3: the Build ends with the light tests and P1; P3 and P2 wait for a free Mac and a yes. Q4: document the cache folder only.</p>
+</div>
 <ul>
 <li><b>Q1 (the user): the dtype modes.</b> The plan refuses only fp32. The other choice is fp16-autocast only: one precision for all frames, but a smaller contract. Recommendation: refuse only fp32.</li>
 <li><b>Q2 (the user): the time of the conversion.</b> The plan converts at the first <code>embed</code> call with a new input resolution. The other choice is a constructor parameter <code>sizes=[224, ...]</code> that converts and loads at once, so no call is slow. Recommendation: the first call, plus a README note. A later version can add <code>sizes</code>.</li>
