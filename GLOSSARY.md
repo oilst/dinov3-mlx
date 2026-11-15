@@ -617,3 +617,9 @@ Core ML on the Neural Engine and compiled mlx on the GPU at the same time, in tw
 
 **Stream ratio**:
 The summed throughput of both sides of a two-stream run divided by the throughput of mlx alone in the same round.
+
+**Work queue**:
+The list of batches of one call of the backend `"mlx+ne"`, from which each stream takes the next batch when it is free.
+
+**Neural Engine extra**:
+The optional dependency set `dinov3-mlx[ne]` that the conversion of the Core ML packages needs.

@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Step 7b Neural Engine backend: Explore</title>
+<style>
+/* Spec page. White page, black text, no dark mode. */
+:root { --bg: #ffffff; --fg: #111414; --muted: #4a5655; --rule: #d6dedd; --panel: #f5f8f7; --accent: #057379; --pass: #1d7a3a; --fail: #b3261e; color-scheme: light; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif; }
+main { max-width: 64rem; margin: 0 auto; padding: 40px 20px 64px; display: grid; gap: 1.75rem; }
+main > *, section > * { min-width: 0; }
+h1 { font-size: 1.9rem; line-height: 1.15; margin: 0; }
+h2 { font-size: 1.3rem; margin: 0; }
+h3 { font-size: 1.05rem; margin: 0; }
+section { display: grid; gap: 0.8rem; }
+p, ul, ol { margin: 0; max-width: 46rem; }
+li + li { margin-top: 0.25rem; }
+code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.86em; }
+p code, li code, td code { overflow-wrap: anywhere; }
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+th, td { text-align: left; vertical-align: top; padding: 0.45rem 0.7rem 0.45rem 0; border-bottom: 1px solid var(--rule); }
+th { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); border-bottom: 1.5px solid var(--fg); }
+td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.caption { font-size: 0.88rem; color: var(--muted); }
+.rec { color: var(--accent); font-weight: 600; }
+.box { border: 1.5px solid var(--accent); border-radius: 6px; padding: 0.8rem 1rem; display: grid; gap: 0.5rem; }
+.warn { border: 1.5px solid var(--fail); border-radius: 6px; padding: 0.8rem 1rem; display: grid; gap: 0.5rem; }
+figure { margin: 0; display: grid; gap: 0.4rem; }
+.fig { border: 1px solid var(--rule); border-radius: 6px; padding: 0.5rem; overflow-x: auto; }
+.fig svg { display: block; width: 100%; height: auto; min-width: 640px; }
+figcaption { font-size: 0.88rem; color: var(--muted); }
+a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+<header>
+<h1>Step 7b Neural Engine backend: Explore</h1>
+<p class="caption">Spec folder <code>specs/07b-neural-engine-backend/</code>. Written on 2026-11-15. Stage 1 of the spec loop: the user picks an option for each decision.</p>
+</header>
+
+<section>
+<h2>1 What Step 7b must do and the starting point</h2>
+<p>Step 7b adds the backend <code>"mlx+ne"</code> to <code>Embedder</code>. Core ML runs on the Neural Engine and compiled mlx runs on the GPU at the same time. mlx stays the default backend. The backend is for inference only.</p>
+<p>Step 6d measured the two-stream run in two processes. Table 1 gives the result. The target of Step 7b is the same stream ratio through the public API, with valid outputs.</p>
+<div class="table-wrap">
+<table>
+<tr><th>Group</th><th>Configuration</th><th>Neural Engine alone (img/s)</th><th>mlx alone (img/s)</th><th>Stream ratio, run 1 / run 2</th></tr>
+<tr><td>P1-b8</td><td>ViT-S/16, 224 px, frame</td><td class="num">677</td><td class="num">1,543 / 1,940</td><td class="num">1.324 / 1.318</td></tr>
+<tr><td>P3-b8</td><td>ViT-L/16, 224 px, patch</td><td class="num">66</td><td class="num">234 / 247</td><td class="num">1.122 / 1.184</td></tr>
+<tr><td>P2-b8</td><td>ViT-H+/16, 512 px, patch</td><td class="num">2.8</td><td class="num">19.7</td><td class="num">1.081 / –</td></tr>
+</table>
+</div>
+<p class="caption">Table 1. The two-stream run of Step 6d (Table 6 of <code>results/coreml-6d-table.md</code>). The Neural Engine side used the batch API with the ne3 rewrite.</p>
+<p>Facts that limit the options:</p>
+<ul>
+<li>The conversion needs <code>torch</code>, <code>transformers</code> and <code>coremltools==9.0</code> with the cast patch (ADR 0015). The core of the package has five dependencies and no <code>torch</code> (ADR 0020).</li>
+<li>A Core ML package has one fixed input shape. Each model size, input resolution and batch size needs its own package. The conversion takes 3 to 76 s; the ViT-H+/16 package is 1.7 GB, and its conversion needs up to 5.6 GB.</li>
+<li>The first load on the Neural Engine takes 1.7 to 119 s. A cached load takes about 0.04 s.</li>
+<li>The Neural Engine gain is large only for small models at 224 px. At 512 px the Neural Engine gives 0.10 to 0.16 of the mlx throughput.</li>
+<li>Step 6d ran the two streams in two processes. One process with two threads was not measured.</li>
+</ul>
+</section>
+
+<section>
+<h2>2 Data flow</h2>
+<figure>
+<div class="fig">
+<svg viewBox="0 0 900 260" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system, Helvetica, Arial, sans-serif" font-size="14">
+<defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#111414"/></marker></defs>
+<rect x="10" y="100" width="130" height="60" rx="6" fill="#f5f8f7" stroke="#111414"/>
+<text x="75" y="125" text-anchor="middle">uint8 frames</text><text x="75" y="145" text-anchor="middle">(B, h, w, 3)</text>
+<rect x="190" y="100" width="150" height="60" rx="6" fill="#f5f8f7" stroke="#057379" stroke-width="2"/>
+<text x="265" y="125" text-anchor="middle">split into batches</text><text x="265" y="145" text-anchor="middle">(D3)</text>
+<rect x="400" y="30" width="200" height="70" rx="6" fill="#f5f8f7" stroke="#111414"/>
+<text x="500" y="58" text-anchor="middle">mlx stream (GPU)</text><text x="500" y="80" text-anchor="middle">compiled forward pass</text>
+<rect x="400" y="160" width="200" height="70" rx="6" fill="#f5f8f7" stroke="#111414"/>
+<text x="500" y="188" text-anchor="middle">Core ML stream (NE)</text><text x="500" y="210" text-anchor="middle">package (D1), thread or process (D2)</text>
+<rect x="660" y="100" width="130" height="60" rx="6" fill="#f5f8f7" stroke="#057379" stroke-width="2"/>
+<text x="725" y="125" text-anchor="middle">put back in</text><text x="725" y="145" text-anchor="middle">input order</text>
+<text x="845" y="135" text-anchor="middle">outputs</text>
+<line x1="140" y1="130" x2="188" y2="130" stroke="#111414" marker-end="url(#a)"/>
+<line x1="340" y1="120" x2="398" y2="70" stroke="#111414" marker-end="url(#a)"/>
+<line x1="340" y1="140" x2="398" y2="190" stroke="#111414" marker-end="url(#a)"/>
+<line x1="600" y1="70" x2="658" y2="120" stroke="#111414" marker-end="url(#a)"/>
+<line x1="600" y1="190" x2="658" y2="140" stroke="#111414" marker-end="url(#a)"/>
+<line x1="790" y1="130" x2="812" y2="130" stroke="#111414" marker-end="url(#a)"/>
+</svg>
+</div>
+<figcaption>Figure 1. The path of the frames through the backend <code>"mlx+ne"</code>. The labels D1 to D3 refer to the decisions in Section 3.</figcaption>
+</figure>
+</section>
+
+<section>
+<h2>3 Decisions and options</h2>
+
+<h3>3.1 D1: Where the Core ML packages come from</h3>
+<div class="table-wrap">
+<table>
+<tr><th>Option</th><th>What it does</th><th>For</th><th>Against</th></tr>
+<tr><td>D1 A <span class="rec">(recommended)</span></td><td>An optional extra <code>dinov3-mlx[ne]</code> with <code>torch</code>, <code>transformers</code> and <code>coremltools==9.0</code>. The constructor converts a missing package on first use, with the ne3 rewrite of Step 6d, and caches it in <code>~/.cache/dinov3-mlx/coreml/</code>.</td><td>The conversion and its parity are tested on 25 packages. The core stays free of <code>torch</code>. Little new code.</td><td>The extra is large (<code>torch</code> is about 1 GB). The first call of each shape takes up to about 3 min (conversion plus first load).</td></tr>
+<tr><td>D1 B</td><td>A new converter without <code>torch</code>: it builds the Core ML program with the MIL builder of <code>coremltools</code> directly from the safetensors weights. The extra holds only <code>coremltools</code>.</td><td>A small extra. No <code>torch</code> at any time.</td><td>A second implementation of the ne3 rewrite, with a new parity risk. Much more work than A.</td></tr>
+<tr><td>D1 C</td><td>Ready-made packages in a Hugging Face repo of the author. The constructor downloads them.</td><td>No conversion for the user. Fast first call.</td><td>The packages hold the DINOv3 weights: a new distribution of DINO Materials needs the legal check (G1). A fixed set of shapes only. The author must keep the repo up to date.</td></tr>
+</table>
+</div>
+<p class="caption">Table 2. The options for D1.</p>
+
+<h3>3.2 D2: How the two streams run at the same time</h3>
+<div class="table-wrap">
+<table>
+<tr><th>Option</th><th>What it does</th><th>For</th><th>Against</th></tr>
+<tr><td>D2 A</td><td>Two threads in the process of the user. One thread calls <code>mx.eval</code>, the other calls <code>predict</code> of Core ML.</td><td>No copy of frames or outputs between processes. Simple life cycle.</td><td>It works only if both calls release the Python GIL. Not measured: Step 6d used two processes.</td></tr>
+<tr><td>D2 B</td><td>One worker process for Core ML. The frames go to it and the tokens come back through shared memory.</td><td>The setup of Step 6d: it gave the stream ratios of Table 1.</td><td>A process start, a copy of each batch, and the clean-up of a worker process when the user stops or the worker fails.</td></tr>
+<tr><td>D2 C <span class="rec">(recommended)</span></td><td>A probe first: ViT-S/16 at 224 px with two threads against two processes (light, about 1 min). The plan then takes A if A reaches at least 0.95 of the stream ratio of B, else B.</td><td>The decision rests on a measurement. A is simpler if it is fast enough.</td><td>One more probe before the plan.</td></tr>
+</table>
+</div>
+<p class="caption">Table 3. The options for D2.</p>
+
+<h3>3.3 D3: How the frames are split between the streams</h3>
+<div class="table-wrap">
+<table>
+<tr><th>Option</th><th>What it does</th><th>For</th><th>Against</th></tr>
+<tr><td>D3 A</td><td>A fixed share: the constructor measures both streams for a few seconds and sets the share of the Neural Engine.</td><td>A known split. Easy to test.</td><td>The throughput drifts by up to 53 % between jobs (V2 of Step 6). A fixed share then leaves one stream idle at the end.</td></tr>
+<tr><td>D3 B <span class="rec">(recommended)</span></td><td>A work queue: each stream takes the next batch when it is free. Each batch keeps its start index, so the outputs go back in the input order.</td><td>It adapts to drift and to other jobs on the GPU. No measurement in the constructor.</td><td>The split changes from call to call, so a test must check the order, not the split.</td></tr>
+</table>
+</div>
+<p class="caption">Table 4. The options for D3.</p>
+
+<h3>3.4 D4: Which configurations the backend accepts</h3>
+<div class="table-wrap">
+<table>
+<tr><th>Option</th><th>What it does</th><th>For</th><th>Against</th></tr>
+<tr><td>D4 A <span class="rec">(recommended)</span></td><td>All model sizes that Step 6d converted (all except ViT-7B/16), each input resolution that is a multiple of 16, frame and patch embeddings. The README states where the gain is small (512 px, ViT-H+/16).</td><td>The same contract as <code>"mlx"</code>. The user decides with the stream ratio table.</td><td>A user can pick a configuration with almost no gain and pay the conversion.</td></tr>
+<tr><td>D4 B</td><td>Only the configurations with a measured stream ratio of at least 1.10 (for example up to ViT-L/16 at 224 px). Other configurations raise <code>ValueError</code>.</td><td>No slow surprise.</td><td>A second contract inside the API. The limit rests on few measured cells.</td></tr>
+</table>
+</div>
+<p class="caption">Table 5. The options for D4.</p>
+</section>
+
+<section>
+<h2>4 Recommendation</h2>
+<div class="box">
+<p><b>D1 A, D2 C, D3 B, D4 A.</b> The extra <code>[ne]</code> reuses the tested ne3 conversion and keeps the core free of <code>torch</code>. A short probe decides between threads and a worker process. A work queue keeps both streams busy and gives the outputs back in the input order. The backend accepts the same inputs as <code>"mlx"</code>.</p>
+</div>
+<div class="box">
+<p><b>Decision of the user, 2026-11-15:</b> D1 A, D2 C, D3 B, D4 A, as recommended.</p>
+</div>
+<div class="warn">
+<p>The acceptance benchmarks of Step 7b are heavy jobs (P1, P3 and P2, each in two runs). The user stopped the heavy runs on 2026-11-15. The plan can be written now. The Build can run the light tests on ViT-S/16. The benchmarks wait for a free Mac and a yes from the user.</p>
+</div>
+</section>
+
+<section>
+<h2>5 Questions for the user</h2>
+<ol>
+<li>D1: Is an extra with <code>torch</code> acceptable, or must the backend work without <code>torch</code> (D1 B)?</li>
+<li>D2: May the light probe of D2 C run (ViT-S/16, 224 px, about 1 min, through the GPU lock and after a memory check)?</li>
+<li>D4: Do you want the full contract (D4 A) or only the configurations with a clear gain (D4 B)?</li>
+</ol>
+</section>
+
+<section>
+<h2>6 New terms</h2>
+<ul>
+<li><b>Work queue</b>: the list of batches of one call, from which each stream takes the next batch when it is free.</li>
+<li><b>Neural Engine extra</b>: the optional dependency set <code>dinov3-mlx[ne]</code> that the conversion of the Core ML packages needs.</li>
+</ul>
+<p class="caption">Both terms are in <code>GLOSSARY.md</code> since the decision of the user.</p>
+</section>
+
+<section>
+<h2>7 Sources</h2>
+<ul>
+<li><code>roadmap.md</code>, row 7b; <code>docs/plan.html</code>, Step 7b.</li>
+<li><code>results/coreml-6d-table.md</code>: Tables 1, 2, 4, 5 and 6.</li>
+<li>ADR 0014 (ne3 rewrite), ADR 0015 (fixed shapes, cache outside the repo, coremltools 9.0), ADR 0016 (constant prefix and concat guard), ADR 0019 (the public API), ADR 0020 (a core of five packages).</li>
+<li><code>src/dinov3_mlx/coreml.py</code>, <code>scripts/bench_coreml.py</code> (the two-stream run in <code>run_streams_case</code>).</li>
+</ul>
+</section>
+</main>
+</body>
+</html>
