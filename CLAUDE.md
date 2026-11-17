@@ -21,6 +21,10 @@ Work on one roadmap step at a time, in its folder `specs/NN-slug/`. Each stage e
 
 White background, black text, no dark mode. Numbered sections, figures and tables. Inline CSS and inline SVG, so each file stands alone. Write in ASD STE100 style: short sentences, active voice, one word for one meaning.
 
+## Papers
+
+`papers/` holds interesting papers as PDF files. `papers/README.md` lists them. When you add or use a new paper or reference, copy the PDF into `papers/` and add a row to `papers/README.md`.
+
 ## Run rules
 
 This Mac crashed from out-of-memory before.
