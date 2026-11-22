@@ -537,6 +537,29 @@ The LoRA settings of our production video classifier. Step 8a reproduces it in M
 The metric of the downstream task on its evaluation data, for example the accuracy.
 _Avoid_: performance (for quality)
 
+**FINO**:
+A method that adapts a backbone to a new domain without task labels. It adds metadata guidance to the DINO and iBOT losses (arXiv 2606.05107).
+
+**Metadata guidance**:
+A training loss that pulls the embeddings toward informative metadata (for example the anatomy site) or, with gradient reversal, pushes them away from spurious metadata (for example the hospital or the scanner).
+
+**Mask propagation**:
+Carrying an object mask from one frame to the next by matching patch embeddings.
+_Avoid_: label propagation (alone)
+
+**Mask decoder**:
+A small trained network that turns patch embeddings and a coarse mask into a mask for each pixel.
+
+**Token reuse**:
+Computing again only the tokens whose input changed between frames, and reusing the cached results of the other tokens, as in Eventful Transformers.
+_Avoid_: delta computation
+
+**Streaming backbone**:
+A backbone with causal attention over time. Each frame attends to the cached keys and values of earlier frames.
+
+**KV-cache**:
+The stored keys and values of earlier frames in a streaming backbone.
+
 ## Workflow
 
 **Step**:
